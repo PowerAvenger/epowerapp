@@ -51,7 +51,12 @@ def leer_json(file_id):
         )   
         .loc[:,['datetime','value']]
     )
-    
+    datos['fecha']=datos['datetime'].dt.date
+    datos['hora']=datos['datetime'].dt.hour
+    datos['dia']=datos['datetime'].dt.day
+    datos['mes']=datos['datetime'].dt.month
+    datos['año']=datos['datetime'].dt.year
+    datos.set_index('datetime', inplace=True)
 
     fecha_ini = datos['fecha'].min()
     fecha_fin = datos['fecha'].max()
