@@ -39,11 +39,6 @@ def leer_json(file_id):
     response = requests.get(url)
     datos_json = response.json()
     
-    #column_mapping = {
-    #    "estructura-generacion": {"valor": "gen_GWh_dia", "porcentaje": "porc_gen", "coef":1000},
-    #    "potencia-instalada": {"valor": "pot_GW", "porcentaje": "porc_pot", "coef": 1000}
-    #}
-    
     # Convertir a DataFrame
     datos = pd.DataFrame(datos_json)
     datos = (datos
@@ -56,12 +51,7 @@ def leer_json(file_id):
         )   
         .loc[:,['datetime','value']]
     )
-    datos['fecha']=datos['datetime'].dt.date
-    datos['hora']=datos['datetime'].dt.hour
-    datos['dia']=datos['datetime'].dt.day
-    datos['mes']=datos['datetime'].dt.month
-    datos['año']=datos['datetime'].dt.year
-    datos.set_index('datetime', inplace=True)
+    
 
     fecha_ini = datos['fecha'].min()
     fecha_fin = datos['fecha'].max()

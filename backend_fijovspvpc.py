@@ -32,6 +32,9 @@ def obtener_datos_horarios():
     df_historicos = pd.read_csv('local_bbdd/pvpc_data.csv', sep = ';', index_col = 0)
     #obtenemos el último registro
     ultimo_registro_pvpc = df_historicos['datetime'].iloc[-1]
+
+    print(f'ultimo registro pvpc {ultimo_registro_pvpc}')
+
     #lo pasamos a datetime date
     ultimo_registro_pvpc_fecha = pd.to_datetime(ultimo_registro_pvpc).date()
     #descargar datos de REE nuevos si necesario

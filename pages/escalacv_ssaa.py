@@ -20,8 +20,6 @@ if 'año_seleccionado_esc' not in st.session_state:
 
 #provisional para leer el json 'spot'
 FILE_ID_SPOT = st.secrets['FILE_ID_SPOT']
-FILE_ID_SSAA = st.secrets['FILE_ID_SSAA']
-
 
 datos_total, fecha_ini, fecha_fin = leer_json(FILE_ID_SPOT) 
 ultimo_registro = datos_total['fecha'].max()

@@ -5,4 +5,5 @@ streamlit
 google-auth
 gspread
 xlrd
+matplotlib
 

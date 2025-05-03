@@ -477,11 +477,14 @@ def diferencias_mes(datos_mensual_tabla, datos_mensual_tabla_mostrar, año_actua
     df_diferencias_mes_completo=df_diferencias_mes_completo.rename(columns={st.session_state.mes_seleccionado_nombre:'Dif. GWh'})
     #df_diferencias_mes_completo=df_diferencias_mes_completo.rename(columns={mes_previsto_nombre:'Dif. GWh'})
     df_diferencias_mes_completo['%']=df_diferencias_mes_completo['%'].round(2)
+
+    print ('diferencias mes completo')
+    print (df_diferencias_mes_completo)
     def format_value(val):
         if pd.isna(val):  # Maneja valores NaN
             return ''
         return f'+{val}' if val > 0 else f'{val}'
-    diferencias_mes_completo_mostrar=df_diferencias_mes_completo.style.background_gradient(cmap='RdYlGn',axis=0)
+    diferencias_mes_completo_mostrar = df_diferencias_mes_completo.style.background_gradient(cmap='RdYlGn',axis=0)
     diferencias_mes_completo_mostrar = diferencias_mes_completo_mostrar.format(formatter=format_value)
 
     df_diferencias_mes_completo_graf=df_diferencias_mes_completo.reset_index()

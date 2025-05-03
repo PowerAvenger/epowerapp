@@ -288,6 +288,10 @@ diferencia_porc_mostrar = "{:,.1f}%".format(diferencia_porc).replace(",", "X").r
 
 
 df_diferencias_mes_completo_graf, diferencias_mes_completo_mostrar = diferencias_mes(datos_mensual_tabla, datos_mensual_tabla_mostrar, año_actual)
+
+print('diferencias mes completo mostrar')
+print(diferencias_mes_completo_mostrar)
+
 graf_diferencias = graf_diferencias(df_diferencias_mes_completo_graf, año_actual)
 
 datos_mensual_mes_encurso_ordenado = ranking_mensual(datos_mensual_tabla, año_actual)
