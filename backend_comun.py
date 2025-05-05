@@ -2,9 +2,27 @@ import pandas as pd
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
+import streamlit as st
+
 
 
 colores_precios = {'precio_2.0': 'goldenrod', 'precio_3.0': 'darkred', 'precio_6.1': '#1C83E1'}
+
+def rango_componentes():
+    #if st.session_state.componente == 'SPOT':
+    if st.session_state.get('componente', 'SPOT') == 'SPOT':
+        #datos_limites = {
+        return {
+                'rango': [-20, 20.01, 40.01, 60.01, 80.01, 100.01, 120.01, 140.01, 10000], #9 elementos
+                'valor_asignado': ['muy bajo', 'bajo', 'medio', 'alto', 'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2'],
+        }
+    else:
+        #datos_limites = {
+        return {
+                'rango': [-20, 4.01, 8.01, 16.01, 20.01, 24.01, 28.01, 32.01, 10000], #9 elementos
+                'valor_asignado': ['muy bajo', 'bajo', 'medio', 'alto', 'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2'],
+        }
+    #return datos_limites
 
 @st.cache_resource
 def autenticar_google_sheets():

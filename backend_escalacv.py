@@ -4,18 +4,37 @@ import plotly.express as px
 import plotly.graph_objects as go 
 import streamlit as st
 
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+import io
+from googleapiclient.http import MediaIoBaseDownload
+import json
+
+
+if 'componente' not in st.session_state:
+        st.session_state.componente = 'SPOT'
 
 meses_español = {1: "ene", 2: "feb", 3: "mar", 4: "abr", 5: "may", 6: "jun",
     7: "jul", 8: "ago", 9: "sep", 10: "oct", 11: "nov", 12: "dic"
     }
 
-datos_limites = {
-        'rango': [-10, 20.01, 40.01, 60.01, 80.01, 100.01, 120.01, 140.01, 10000], #9 elementos
-        'valor_asignado': ['muy bajo', 'bajo', 'medio', 'alto', 'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2'],
+from backend_comun import rango_componentes
+
+def get_limites_componentes():
+    datos_limites = rango_componentes()
+    df_limites = pd.DataFrame(datos_limites)
+    etiquetas = df_limites['valor_asignado'][:-1]
+    valor_asignado_a_rango = {
+        row['valor_asignado']: row['rango'] for _, row in df_limites.iterrows()
     }
-df_limites = pd.DataFrame(datos_limites)
-etiquetas = df_limites['valor_asignado'][:-1]
-valor_asignado_a_rango = {row['valor_asignado']: row['rango'] for _, row in df_limites.iterrows()}
+    return df_limites, etiquetas, valor_asignado_a_rango
+
+#datos_limites = rango_componentes()
+#df_limites = pd.DataFrame(datos_limites)
+#print('df limites')
+#print(df_limites)
+#etiquetas = df_limites['valor_asignado'][:-1]
+#valor_asignado_a_rango = {row['valor_asignado']: row['rango'] for _, row in df_limites.iterrows()}
 
 colores = {
         'muy bajo': '#90EE90',  # Verde claro (fácil y suave a la vista)
@@ -34,23 +53,41 @@ colores = {
 
 
 @st.cache_data
-def leer_json(file_id):
-    url = f"https://drive.google.com/uc?export=download&id={file_id}"
-    response = requests.get(url)
-    datos_json = response.json()
+#def leer_json(file_id):
+def leer_json(file_id, _creds_dict):
+    #url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
+    creds = Credentials.from_service_account_info(_creds_dict, scopes=SCOPES)
+    service = build('drive', 'v3', credentials=creds)
+
+    request = service.files().get_media(fileId=file_id)
+    buffer = io.BytesIO()
+    downloader = MediaIoBaseDownload(buffer, request)
+
+    done = False
+    while not done:
+        status, done = downloader.next_chunk()
+    buffer.seek(0)
+    datos_json = json.load(buffer)
+
+
+    #response = requests.get(url)
+    #datos_json = response.json()
     
     # Convertir a DataFrame
     datos = pd.DataFrame(datos_json)
-    datos = (datos
-        .assign(datetime=lambda vh_: pd #formateamos campo fecha, desde un str con diferencia horaria a un naive
-            .to_datetime(vh_['datetime'],utc=True)  # con la fecha local
-            .dt
-            .tz_convert('Europe/Madrid')
-            .dt
-            .tz_localize(None)
-        )   
-        .loc[:,['datetime','value']]
-    )
+    datos['datetime'] = pd.to_datetime(datos['datetime'], utc=True)
+    datos['datetime'] = datos['datetime'].dt.tz_convert('Europe/Madrid').dt.tz_localize(None)
+    
+    #datos = datos[['datetime', 'value']]
+    if 'id' in datos.columns and 'name' in datos.columns:
+        # Datos de SSAA
+        datos = datos[['datetime', 'id', 'value', 'name']]
+        datos = datos.groupby('datetime', as_index=False)['value'].sum()
+    else:
+        # Datos tipo spot
+        datos = datos[['datetime', 'value']]
+        
     datos['fecha']=datos['datetime'].dt.date
     datos['hora']=datos['datetime'].dt.hour
     datos['dia']=datos['datetime'].dt.day
@@ -80,7 +117,7 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
     #datos_dia['media'] = datos_dia['value'].expanding().mean()
     datos_dia.reset_index(inplace=True)
 
-
+    df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes()
     datos_dia['escala']=pd.cut(datos_dia['value'],bins=df_limites['rango'],labels=etiquetas,right=False)
     datos_dia['color']=datos_dia['escala'].map(colores)
     escala_dia=datos_dia['escala'].unique()
@@ -93,13 +130,21 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
     print('datos_dia')
     print(datos_dia)
 
-    #GRÁFICO PRINCIPAL CON LOS PRECIOS MEDIOS DIARIOS DEL AÑO. ecv es escala cavero vidal-----------------------------------------------------------
+    #GRÁFICO PRINCIPAL CON LOS PRECIOS MEDIOS DIARIOS DE TODOS LOS AÑOS. ecv es escala cavero vidal-----------------------------------------------------------
+    if st.session_state.get('componente', 'SPOT') == 'SPOT':
+        title = f'Precios del mercado diario OMIE. 2018-2025'
+        tick_y = 20
+    else:
+        title = f'Precios medios de los servicios de ajuste OMIE. 2018-2025'
+        tick_y = 4
+
     graf_ecv_diario = px.bar(datos_dia, x='fecha', y='value', 
         color = 'escala',
         color_discrete_map = colores,
         category_orders = {'escala':escala_ordenada_dia},
         labels = {'fecha':'fecha','value':'precio medio diario €/MWh', 'escala':'escala_cv'},
-        title = f'Precios del mercado diario OMIE. 2018-2025',
+        #title = f'Precios del mercado diario OMIE. 2018-2025',
+        title=title,
         hover_name = 'escala'
     )
 
@@ -120,12 +165,12 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
         )
 
     graf_ecv_diario.update_xaxes(
-        tickformat = "%b",  # Mostrar sólo el mes abreviado (Ej: Jan, Feb)
+        tickformat = "%Y",  # Mostrar sólo el mes abreviado (Ej: Jan, Feb)
         tickvals = pd.date_range(
             start = datos_dia['fecha'].min(),
             #end=datos_dia['fecha'].max(),
             end = fecha_fin,
-            freq = 'YS'  # Generar ticks al inicio de cada mes
+            freq = 'YS'  # Generar ticks al inicio de cada AÑO
         ),
         showgrid=True
     )
@@ -142,6 +187,7 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
 
     ymax = datos_dia['value'].max()
 
+    
     graf_ecv_diario.update_layout(
         title={'x':0.5,'xanchor':'center'},
         xaxis=dict(
@@ -162,7 +208,7 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
             range=[0, ymax],             # Forzar el rango del eje Y
             tickmode="linear",            # Escala lineal
             tick0=0,                      # Comenzar en 0
-            dtick=20                      # Incrementos de 20
+            dtick=tick_y                      # Incrementos de 20
         ),
     )
     
@@ -171,7 +217,7 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
 
 
 
-#creamos df y grafico con las medias diarias--------------------------------------------------------
+#CREAMOS DF Y GRAF CON LOS VALORES MEDIOS DIARIOS DEL AÑO SELECCIONADO---------------------------------------
 def diarios(datos, fecha_ini, fecha_fin):    
     datos_dia = datos.copy()
     datos_dia = datos_dia.drop(columns=['hora'])
@@ -190,6 +236,7 @@ def diarios(datos, fecha_ini, fecha_fin):
     datos_dia['media'] = datos_dia['value'].expanding().mean()
     datos_dia.reset_index(inplace=True)
 
+    df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes()
     datos_dia['escala']=pd.cut(datos_dia['value'],bins=df_limites['rango'],labels=etiquetas,right=False)
     datos_dia['color']=datos_dia['escala'].map(colores)
     escala_dia=datos_dia['escala'].unique()
@@ -197,12 +244,20 @@ def diarios(datos, fecha_ini, fecha_fin):
     datos_dia['escala']=pd.Categorical(datos_dia['escala'],categories=escala_ordenada_dia, ordered=True)
 
     #GRÁFICO PRINCIPAL CON LOS PRECIOS MEDIOS DIARIOS DEL AÑO. ecv es escala cavero vidal-----------------------------------------------------------
+    if st.session_state.get('componente', 'SPOT') == 'SPOT':
+        title = f'Precios medios del mercado diario OMIE. Año {st.session_state.año_seleccionado_esc}'
+        tick_y = 20
+    else:
+        title = f'Precios medios de los servicios de ajuste OMIE. Año {st.session_state.año_seleccionado_esc}'
+        tick_y = 4
+
     graf_ecv_diario = px.bar(datos_dia, x='fecha', y='value', 
         color = 'escala',
         color_discrete_map = colores,
         category_orders = {'escala':escala_ordenada_dia},
         labels = {'fecha':'fecha','value':'precio medio diario €/MWh', 'escala':'escala_cv'},
-        title = f'Precios medios del mercado diario OMIE. Año {st.session_state.año_seleccionado_esc}',
+        #title = f'Precios medios del mercado diario OMIE. Año {st.session_state.año_seleccionado_esc}',
+        title=title,
         hover_name = 'escala'
     )
 
@@ -260,7 +315,7 @@ def diarios(datos, fecha_ini, fecha_fin):
             range=[0, ymax],             # Forzar el rango del eje Y
             tickmode="linear",            # Escala lineal
             tick0=0,                      # Comenzar en 0
-            dtick=20                      # Incrementos de 20
+            dtick=tick_y                      # Incrementos de 20
         ),
     )
     
@@ -302,7 +357,7 @@ def mensuales(datos_dia):
     #print('datos_mes')
     #print(datos_mes)
    
-    
+    df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes()
     datos_mes['escala']=pd.cut(datos_mes['value'],bins=df_limites['rango'],labels=etiquetas,right=False)
     datos_mes['color']=datos_mes['escala'].map(colores)
     escala_mes = datos_mes['escala'].dropna().unique()
@@ -311,13 +366,21 @@ def mensuales(datos_dia):
 
     #print(datos_mes)
     #GRAFICO DE BARRAS CON MEDIAS MENSUALES------------------------------------------------------------------------------------------------------------
+    if st.session_state.componente == 'SPOT':
+        title = f'Precios medios mensuales SPOT'
+        tick_y = 20
+    else:
+        title = f'Precios medios mesuales SSAA'
+        tick_y = 4
+
     graf_ecv_mensual = px.bar(datos_mes, x = 'mes_nombre', y = 'value',
         color = 'escala',
         color_discrete_map = colores,
         #category_orders={'escala':escala_ordenada_mes},
         category_orders = {'mes_nombre':datos_mes['mes_nombre'], 'escala':escala_ordenada_mes},
         labels = {'value':'€/MWh', 'escala':'escala_cv','mes_nombre':'mes'},
-        title = f'Precios medios mensuales. Año {st.session_state.año_seleccionado_esc}',
+        #title = f'Precios medios mensuales. Año {st.session_state.año_seleccionado_esc}',
+        title=title,
         text = 'value'
 
         )
@@ -354,6 +417,8 @@ def mensuales(datos_dia):
 def horarios(datos):
     datos_horarios = datos.copy()
     #datos_horarios['fecha'] = pd.to_datetime(datos_horarios['fecha'], format='%d/%m/%Y')
+
+    df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes()
     datos_horarios['escala']=pd.cut(datos_horarios['value'],bins=df_limites['rango'],labels=etiquetas,right=True)
     lista_escala=datos_horarios['escala'].unique()
     datos_horarios['color']=datos_horarios['escala'].map(colores)
@@ -366,7 +431,12 @@ def horarios(datos):
 
     print(datos_horarios.dtypes)
 
-    datos_horarios_filtrado = datos_horarios[datos_horarios['fecha'] == st.session_state.dia_seleccionado_esc]
+    fecha_max = datos_horarios['fecha'].max()
+    if st.session_state.dia_seleccionado_esc > fecha_max:
+        datos_horarios_filtrado = datos_horarios[datos_horarios['fecha'] == fecha_max]
+    else:
+        datos_horarios_filtrado = datos_horarios[datos_horarios['fecha'] == st.session_state.dia_seleccionado_esc]
+    
 
     print(datos_horarios_filtrado)
 
@@ -378,11 +448,19 @@ def horarios(datos):
     pt_curva_horaria=pt_curva_horaria.reset_index()
 
     #GRAFICO DE VALORES HORARIOS POR DIA FILTRADO
+    if st.session_state.componente == 'SPOT':
+        title = f'Perfil horario de precios SPOT. Día {st.session_state.dia_seleccionado_esc.strftime("%d/%m/%Y")}'
+        tick_y = 20
+    else:
+        title = f'Perfil horario de precios de los SSAA. Día {st.session_state.dia_seleccionado_esc.strftime("%d/%m/%Y")}'
+        tick_y = 4
+
     graf_horaria_dia = px.bar(
         datos_horarios_filtrado,
         x='hora',
         y='value',
-        title = f'Perfil diario de precios spot. Día {st.session_state.dia_seleccionado_esc.strftime("%d/%m/%Y")}',
+        #title = f'Perfil diario de precios spot. Día {st.session_state.dia_seleccionado_esc.strftime("%d/%m/%Y")}',
+        title=title,
         #animation_frame='fecha',
         #width=800,
         labels={'value': '€/MWh', 'escala':'escala_cv'},
@@ -414,7 +492,7 @@ def horarios(datos):
             autorange = True,
             tickmode="linear",            # Escala lineal
             tick0=0,                      # Comenzar en 0
-            dtick=20                      # Incrementos de 20
+            dtick=tick_y                     # Incrementos de 20
        
         ),
         title={'x': 0.5, 'xanchor': 'center'},

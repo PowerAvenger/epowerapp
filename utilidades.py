@@ -43,7 +43,10 @@ def init_app():
     if 'texto_precios' not in st.session_state:
         st.session_state.texto_precios = f'Día seleccionado: {st.session_state.ultima_fecha_sheets}'
 
-    # Para DEMANDA
+    # Para ESCALA CV
+    
+    
+
     
     
     

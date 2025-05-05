@@ -1,11 +1,16 @@
 import streamlit as st
+from utilidades import generar_menu, init_app
+
+
+
 from backend_escalacv import leer_json, diarios_totales, diarios, mensuales, horarios
 import datetime
 from datetime import datetime
-from utilidades import generar_menu
+
 
 
 generar_menu()
+
 
 
 
@@ -18,12 +23,16 @@ if 'año_seleccionado_esc' not in st.session_state:
     st.session_state.año_seleccionado_esc = 2025
     st.session_state.año_anterior_esc = 2025
 
-#provisional para leer el json 'spot'
-FILE_ID_SPOT = st.secrets['FILE_ID_SPOT']
-FILE_ID_SSAA = st.secrets['FILE_ID_SSAA']
 
 
-datos_total, fecha_ini, fecha_fin = leer_json(FILE_ID_SPOT) 
+if st.session_state.get('componente', 'SPOT') == 'SPOT':
+    FILE_ID = st.secrets['FILE_ID_SPOT']
+else:
+    FILE_ID = st.secrets['FILE_ID_SSAA']
+
+CREDENTIALS = st.secrets['GOOGLE_SHEETS_CREDENTIALS']
+
+datos_total, fecha_ini, fecha_fin = leer_json(FILE_ID, CREDENTIALS) 
 ultimo_registro = datos_total['fecha'].max()
 valor_minimo_horario_total = datos_total['value'].min()
 valor_maximo_horario_total = datos_total['value'].max()
@@ -91,8 +100,12 @@ fecha_max_horario = datos_horarios.loc[datos_horarios['value'].idxmax(), 'fecha'
 años_lista = list(range(2018, 2026))
 
 
+
 st.sidebar.selectbox('Selecciona el año', options = años_lista, key = 'año_seleccionado_esc')
 st.sidebar.slider('Selecciona el día', min_value= fecha_min_select_dia, max_value=fecha_max_select_dia, key = 'dia_seleccionado_esc')
+st.sidebar.radio('Selecciona el componente de mercado', options=['SPOT', 'SSAA'], key = 'componente')
+
+
 
 
 
