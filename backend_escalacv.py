@@ -366,7 +366,7 @@ def mensuales(datos_dia):
 
     #print(datos_mes)
     #GRAFICO DE BARRAS CON MEDIAS MENSUALES------------------------------------------------------------------------------------------------------------
-    if st.session_state.componente == 'SPOT':
+    if st.session_state.get('componente', 'SPOT') == 'SPOT':
         title = f'Precios medios mensuales SPOT'
         tick_y = 20
     else:
