@@ -96,8 +96,8 @@ graf_efi = graficar_efi_evol(df_efi_evol)
 
 
 with st.sidebar:
-    st.title('Infografías REData :orange[e]PowerAPP©')
-    st.caption("Copyright by Jose Vidal :ok_hand:")
+    st.header('Infografías REData')
+    #st.caption("Copyright by Jose Vidal :ok_hand:")
     #st.write("Visita mi página de [PowerAPPs](%s) con un montón de utilidades" % url_apps)
     #st.markdown(f"Visita mi página de [ePowerAPPs]({url_apps}) con un montón de utilidades. Deja tus comentarios y propuestas en mi perfil de [Linkedin]({url_linkedin}) - ¡Sígueme en [Bluesky]({url_bluesky})!")
     st.info('Todos los datos son elaborados a partir de REData / Generación / Estructura generación y Potencia instalada (sistema eléctrico nacional todas las tecnologías). Rango temporal: Diario, siendo los datos agrupados por años.',icon="ℹ️")
