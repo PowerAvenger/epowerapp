@@ -3,7 +3,7 @@ from backend_comun import autenticar_google_sheets, carga_rapida_sheets, carga_t
 
 def generar_menu():
     with st.sidebar:
-        st.title('MEGA :orange[e]PowerAPP©')
+        st.title('TOTALPOWER :orange[e]PowerAPP©')
         st.image('images/banner.png')
         st.caption("Copyright by Jose Vidal :ok_hand:")
         #url_apps = "https://powerappspy-josevidal.streamlit.app/"

@@ -448,7 +448,7 @@ def horarios(datos):
     pt_curva_horaria=pt_curva_horaria.reset_index()
 
     #GRAFICO DE VALORES HORARIOS POR DIA FILTRADO
-    if st.session_state.componente == 'SPOT':
+    if st.session_state.get('componente', 'SPOT') == 'SPOT':
         title = f'Perfil horario de precios SPOT. Día {st.session_state.dia_seleccionado_esc.strftime("%d/%m/%Y")}'
         tick_y = 20
     else:
