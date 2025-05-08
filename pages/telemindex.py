@@ -13,6 +13,7 @@ from utilidades import generar_menu, init_app
 
 #inicializamos variables de sesión
 init_app()
+
 zona_mensajes = st.sidebar.empty() 
 
 df_filtrado, lista_meses = filtrar_datos()

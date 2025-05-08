@@ -13,7 +13,7 @@ st.set_page_config(
 c1, c2, c3 = st.columns(3)
 
 with c2:
-    st.title(':orange[e]PowerAPP© TOTALPOWER')
+    st.title(':orange[e]PowerAPP© ⚡️:rainbow[TOTALPOWER]⚡️')
     st.header('Todo lo que necesitas para energizarte.')
     st.caption("Copyright by Jose Vidal 2024-2025 :ok_hand:")
     

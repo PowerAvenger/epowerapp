@@ -9,6 +9,7 @@ from googleapiclient.discovery import build
 import io
 from googleapiclient.http import MediaIoBaseDownload
 import json
+import numpy as np
 
 
 if 'componente' not in st.session_state:
@@ -105,17 +106,53 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
     datos_dia = datos.copy()
     datos_dia = datos_dia.drop(columns=['hora'])
     datos_dia['mes_nombre']=datos_dia['mes'].map(meses_español)
-    datos_dia=datos_dia.groupby('fecha').agg({
-        'value':'mean',
-        'dia':'first',
-        'mes':'first',
-        'año':'first',
-        'mes_nombre':'first'
-    })
+
+    #print('datos dia de datos diarios totales')
+    #print(datos_dia)
+
+    
+
+    componente = st.session_state.get('componente', 'SPOT')
+    dos_colores = st.session_state.get('dos_colores', False)
+    if componente in ['SPOT+SSAA'] and dos_colores:
+        datos_dia=datos_dia.groupby('fecha').agg({
+            'value_spot':'mean',
+            'value_ssaa':'mean',
+            'dia':'first',
+            'mes':'first',
+            'año':'first',
+            'mes_nombre':'first'
+        }).reset_index()
+        datos_dia = datos_dia.melt(id_vars=['fecha', 'año', 'mes', 'mes_nombre', 'dia'], var_name='componente', value_name='value')
+        # 1. Agrupamos para recomponer la suma por fecha
+        valor_total_diario = datos_dia.groupby(['fecha', 'año'])['value'].sum().reset_index(name='value_total')
+
+        # 2. Calculamos la media anual de esa suma
+        media_anual = valor_total_diario.groupby('año')['value_total'].mean()
+
+        # 3. Asociamos esa media anual a cada año original en datos_dia
+        datos_dia['media_anual'] = datos_dia['año'].map(media_anual)
+
+
+    
+    else:
+        datos_dia=datos_dia.groupby('fecha').agg({
+            'value':'mean',
+            'dia':'first',
+            'mes':'first',
+            'año':'first',
+            'mes_nombre':'first'
+        }).reset_index()
+
+        media_anual = datos_dia.groupby('año')['value'].mean()
+        datos_dia['media_anual'] = datos_dia['año'].map(media_anual)
+
+    
+    
     datos_dia['value'] = datos_dia['value'].round(2)
     datos_dia[['dia','mes','año']] = datos_dia[['dia','mes','año']].astype(int)
     #datos_dia['media'] = datos_dia['value'].expanding().mean()
-    datos_dia.reset_index(inplace=True)
+    #datos_dia.reset_index(inplace=True)
 
     df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes()
     datos_dia['escala']=pd.cut(datos_dia['value'],bins=df_limites['rango'],labels=etiquetas,right=False)
@@ -124,29 +161,44 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
     escala_ordenada_dia = sorted(escala_dia, key=lambda x: valor_asignado_a_rango[x], reverse=True)
     datos_dia['escala']=pd.Categorical(datos_dia['escala'],categories=escala_ordenada_dia, ordered=True)
 
-    media_anual = datos_dia.groupby('año')['value'].mean()
-    datos_dia['media_anual'] = datos_dia['año'].map(media_anual)
+    
 
-    print('datos_dia')
-    print(datos_dia)
+    #print('datos_dia')
+    #print(datos_dia)
 
     #GRÁFICO PRINCIPAL CON LOS PRECIOS MEDIOS DIARIOS DE TODOS LOS AÑOS. ecv es escala cavero vidal-----------------------------------------------------------
-    if st.session_state.get('componente', 'SPOT') == 'SPOT':
-        title = f'Precios del mercado diario OMIE. 2018-2025'
+    componente = st.session_state.get('componente', 'SPOT')
+    
+    if componente in ['SPOT']:
+        title = f'Precios medios diarios del SPOT. 2018-2025'
+        tick_y = 20
+    elif componente in ['SPOT+SSAA']:
+        title = f'Precios medios diarios del SPOT+SSAA. 2018-2025'
         tick_y = 20
     else:
-        title = f'Precios medios de los servicios de ajuste OMIE. 2018-2025'
+        title = f'Precios medios diarios de los SSAA. 2018-2025'
         tick_y = 4
 
-    graf_ecv_diario = px.bar(datos_dia, x='fecha', y='value', 
-        color = 'escala',
-        color_discrete_map = colores,
-        category_orders = {'escala':escala_ordenada_dia},
-        labels = {'fecha':'fecha','value':'precio medio diario €/MWh', 'escala':'escala_cv'},
-        #title = f'Precios del mercado diario OMIE. 2018-2025',
-        title=title,
-        hover_name = 'escala'
-    )
+    if componente == 'SPOT+SSAA' and dos_colores:
+        graf_ecv_diario = px.bar(datos_dia, x='fecha', y='value', 
+            color = 'componente',
+            color_discrete_map={'value_spot': 'green', 'value_ssaa': 'lightgreen'},
+            #category_orders = {'escala':escala_ordenada_dia},
+            labels = {'fecha':'fecha','value':'precio medio diario €/MWh'}, #, 'escala':'escala_cv'},
+            #title = f'Precios del mercado diario OMIE. 2018-2025',
+            title=title,
+            #hover_name = 'escala'
+        )
+    else:
+        graf_ecv_diario = px.bar(datos_dia, x='fecha', y='value', 
+            color = 'escala',
+            color_discrete_map = colores,
+            category_orders = {'escala':escala_ordenada_dia},
+            labels = {'fecha':'fecha','value':'€/MWh', 'escala':'escala_cv'},
+            #title = f'Precios del mercado diario OMIE. 2018-2025',
+            title=title,
+            hover_name = 'escala'
+        )
 
     # añadimos gráficos de línea para la medias anuales
     for año in datos_dia['año'].unique():
@@ -159,8 +211,9 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
                 x=[fecha_inicio, fecha_final],
                 y=[media_valor, media_valor],
                 mode = 'lines',
-                name = 'media',
-                line = dict(color = 'yellow', dash = 'dot')
+                name = 'media anual',
+                line = dict(color = 'yellow', dash = 'dot'),
+                showlegend = bool(año == datos_dia['año'].unique()[0])
             )
         )
 
@@ -177,7 +230,7 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
 
     graf_ecv_diario.update_traces(
         marker_line_width = 0,
-        customdata = datos_dia['escala'],
+        #customdata = datos_dia['escala'],
         hovertemplate = (
             #"<b>Escala:</b> %{customdata}<br>"
             "<b>Fecha:</b> %{x|%d-%m-%Y}<br>"  # Formato DD-MM-YYYY
@@ -205,7 +258,7 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
             ),
         ),
         yaxis=dict(
-            range=[0, ymax],             # Forzar el rango del eje Y
+            #range=[0, ymax],             # Forzar el rango del eje Y
             tickmode="linear",            # Escala lineal
             tick0=0,                      # Comenzar en 0
             dtick=tick_y                      # Incrementos de 20
@@ -217,24 +270,43 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
 
 
 
-#CREAMOS DF Y GRAF CON LOS VALORES MEDIOS DIARIOS DEL AÑO SELECCIONADO---------------------------------------
+# VALORES MEDIOS DIARIOS DEL AÑO SELECCIONADO+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 def diarios(datos, fecha_ini, fecha_fin):    
     datos_dia = datos.copy()
     datos_dia = datos_dia.drop(columns=['hora'])
-    #datos_dia['fecha'] = pd.to_datetime(datos_dia['fecha'], format='%d/%m/%Y')
-    
     datos_dia['mes_nombre']=datos_dia['mes'].map(meses_español)
-    datos_dia=datos_dia.groupby('fecha').agg({
-        'value':'mean',
-        'dia':'first',
-        'mes':'first',
-        'año':'first',
-        'mes_nombre':'first'
-    })
+
+    
+    componente = st.session_state.get('componente', 'SPOT')
+    dos_colores = st.session_state.get('dos_colores', False)
+    if componente in ['SPOT+SSAA'] and dos_colores:
+        datos_dia=datos_dia.groupby('fecha').agg({
+            'value_spot':'mean',
+            'value_ssaa':'mean',
+            'dia':'first',
+            'mes':'first',
+            'año':'first',
+            'mes_nombre':'first'
+        }).reset_index()
+        datos_dia = datos_dia.melt(id_vars=['fecha', 'año', 'mes', 'mes_nombre', 'dia'], var_name='componente', value_name='value')
+        datos_dia['media'] = datos_dia.groupby('componente')['value'].expanding().mean().reset_index(level=0, drop=True)
+        
+    
+    else:
+        datos_dia=datos_dia.groupby('fecha').agg({
+            'value':'mean',
+            'dia':'first',
+            'mes':'first',
+            'año':'first',
+            'mes_nombre':'first'
+        }).reset_index()   
+
+        datos_dia['media'] = datos_dia['value'].expanding().mean()
+            
     datos_dia['value'] = datos_dia['value'].round(2)
     datos_dia[['dia','mes','año']] = datos_dia[['dia','mes','año']].astype(int)
-    datos_dia['media'] = datos_dia['value'].expanding().mean()
-    datos_dia.reset_index(inplace=True)
+    
 
     df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes()
     datos_dia['escala']=pd.cut(datos_dia['value'],bins=df_limites['rango'],labels=etiquetas,right=False)
@@ -242,35 +314,69 @@ def diarios(datos, fecha_ini, fecha_fin):
     escala_dia=datos_dia['escala'].unique()
     escala_ordenada_dia = sorted(escala_dia, key=lambda x: valor_asignado_a_rango[x], reverse=True)
     datos_dia['escala']=pd.Categorical(datos_dia['escala'],categories=escala_ordenada_dia, ordered=True)
+    
+    #datos_dia['media'] = datos_dia['value'].expanding().mean()
+    #datos_dia.reset_index(inplace=True)
 
-    #GRÁFICO PRINCIPAL CON LOS PRECIOS MEDIOS DIARIOS DEL AÑO. ecv es escala cavero vidal-----------------------------------------------------------
-    if st.session_state.get('componente', 'SPOT') == 'SPOT':
-        title = f'Precios medios del mercado diario OMIE. Año {st.session_state.año_seleccionado_esc}'
+    #GRÁFICO PRINCIPAL CON LOS PRECIOS MEDIOS DIARIOS DEL AÑO. ecv es escala cavero vidal------------------
+    componente = st.session_state.get('componente', 'SPOT')
+    if componente in ['SPOT']:
+        title = f'Precios medios diarios del SPOT. Año {st.session_state.año_seleccionado_esc}'
+        tick_y = 20
+    elif componente in ['SPOT+SSAA']:
+        title = f'Precios medios diarios del SPOT+SSAA. Año {st.session_state.año_seleccionado_esc}'
         tick_y = 20
     else:
-        title = f'Precios medios de los servicios de ajuste OMIE. Año {st.session_state.año_seleccionado_esc}'
+        title = f'Precios medios diarios de los SSAA. Año {st.session_state.año_seleccionado_esc}'
         tick_y = 4
 
-    graf_ecv_diario = px.bar(datos_dia, x='fecha', y='value', 
-        color = 'escala',
-        color_discrete_map = colores,
-        category_orders = {'escala':escala_ordenada_dia},
-        labels = {'fecha':'fecha','value':'precio medio diario €/MWh', 'escala':'escala_cv'},
-        #title = f'Precios medios del mercado diario OMIE. Año {st.session_state.año_seleccionado_esc}',
-        title=title,
-        hover_name = 'escala'
-    )
+    if componente in ['SPOT+SSAA'] and dos_colores:
+        graf_ecv_diario = px.bar(datos_dia, x='fecha', y='value', 
+            color = 'componente',
+            color_discrete_map={'value_spot': 'green', 'value_ssaa': 'lightgreen'},
+            #category_orders = {'escala':escala_ordenada_dia},
+            labels = {'fecha':'fecha','value':'€/MWh'}, #, 'escala':'escala_cv'},
+            #title = f'Precios medios del mercado diario OMIE. Año {st.session_state.año_seleccionado_esc}',
+            title=title,
+            #hover_name = 'escala'
+        )
+        for comp in ['value_spot', 'value_ssaa']:
+            df_comp = datos_dia[datos_dia['componente'] == comp]
+            graf_ecv_diario.add_trace(
+                go.Scatter(
+                    x = df_comp['fecha'],
+                    y = df_comp['media'],
+                    mode = 'lines',
+                    name = f'media {comp}',
+                    line = dict(color = 'yellow', dash = 'dot')
+                )
+            )
+            
+    else:    
+
+        graf_ecv_diario = px.bar(datos_dia, x='fecha', y='value', 
+            color = 'escala',
+            color_discrete_map = colores,
+            category_orders = {'escala':escala_ordenada_dia},
+            labels = {'fecha':'fecha','value':'precio medio diario €/MWh', 'escala':'escala_cv'},
+            #title = f'Precios medios del mercado diario OMIE. Año {st.session_state.año_seleccionado_esc}',
+            title=title,
+            hover_name = 'escala'
+        )
+
+        # añadimos gráfico de línea para la media
+        graf_ecv_diario.add_trace(
+            go.Scatter(
+                x = datos_dia['fecha'],
+                y = datos_dia['media'],
+                mode = 'lines',
+                name = 'media',
+                line = dict(color = 'yellow', dash = 'dot')
+            )
+        )
 
     # añadimos gráfico de línea para la media
-    graf_ecv_diario.add_trace(
-        go.Scatter(
-            x = datos_dia['fecha'],
-            y = datos_dia['media'],
-            mode = 'lines',
-            name = 'media',
-            line = dict(color = 'yellow', dash = 'dot')
-        )
-    )
+    
 
     graf_ecv_diario.update_xaxes(
         tickformat = "%b",  # Mostrar sólo el mes abreviado (Ej: Jan, Feb)
@@ -285,7 +391,7 @@ def diarios(datos, fecha_ini, fecha_fin):
 
     graf_ecv_diario.update_traces(
         marker_line_width = 0,
-        customdata = datos_dia['escala'],
+        #customdata = datos_dia['escala'],
         hovertemplate = (
             #"<b>Escala:</b> %{customdata}<br>"
             "<b>Fecha:</b> %{x|%d-%m-%Y}<br>"  # Formato DD-MM-YYYY
@@ -312,7 +418,7 @@ def diarios(datos, fecha_ini, fecha_fin):
             ),
         ),
         yaxis=dict(
-            range=[0, ymax],             # Forzar el rango del eje Y
+            #range=[0, ymax],             # Forzar el rango del eje Y
             tickmode="linear",            # Escala lineal
             tick0=0,                      # Comenzar en 0
             dtick=tick_y                      # Incrementos de 20
@@ -322,19 +428,44 @@ def diarios(datos, fecha_ini, fecha_fin):
     return datos_dia, graf_ecv_diario
 
 
-#calculams medias mensuales---------------------------------------------
+# MEDIAS MENSUALES +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 def mensuales(datos_dia):    
-    
+    #print('datos dia para tratar mes')
+    #print(datos_dia)
+
     datos_mes = datos_dia.copy()
-    datos_mes = datos_mes.drop(columns=['fecha', 'dia'])
-    datos_mes = datos_mes.groupby('mes').agg({
-        'value':'mean',
-        'año':'first',
-        'mes_nombre':'first'
-    }).reset_index()
+    datos_mes = datos_mes.drop(columns=['fecha','dia'])
+
+    componente = st.session_state.get('componente', 'SPOT')
+    dos_colores = st.session_state.get('dos_colores', False)
+    if componente in ['SPOT+SSAA'] and dos_colores:
+        datos_mes = datos_mes.groupby(['mes','componente']).agg({
+            'value':'mean',
+            'año':'first',
+            'mes_nombre':'first'
+        }).reset_index()
+
+        print('datos mes antes de media')
+        print(datos_mes)
+        #datos_dia = datos_dia.melt(id_vars=['año', 'mes_nombre'], var_name='componente', value_name='value')
+        datos_mes['media'] = datos_mes.groupby('componente')['value'].expanding().mean().reset_index(level=0, drop=True)
+        
+    
+    else:
+        datos_mes = datos_mes.groupby('mes').agg({
+            'value':'mean',
+            'año':'first',
+            'mes_nombre':'first'
+        }).reset_index()   
+
+        datos_mes['media'] = datos_mes['value'].expanding().mean()
+
+
+    
     datos_mes['value'] = datos_mes['value'].round(2)
     datos_mes[['mes','año']] = datos_mes[['mes','año']].astype(int)
-    datos_mes['media'] = datos_mes['value'].expanding().mean()
+    #datos_mes['media'] = datos_mes['value'].expanding().mean()
     
     media_mensual=round(datos_dia['value'].mean(),2)
     
@@ -346,6 +477,7 @@ def mensuales(datos_dia):
     # Unir con tus datos por mes (asumiendo que sólo falta alguno)
     datos_mes = pd.merge(meses_completos, datos_mes, on=['mes', 'mes_nombre'], how='left')
 
+    datos_mes['media'] = round(datos_mes['media'], 2)
 
     df_fila_espacio = pd.DataFrame({'mes': [13], 'value': [0], 'año': [None], 'mes_nombre': ['']})
     df_fila_media = pd.DataFrame({'mes': [14], 'value':[media_mensual], 'año':[None], 'mes_nombre':['media']})
@@ -354,8 +486,7 @@ def mensuales(datos_dia):
     datos_mes['mes_nombre'] = pd.Categorical(datos_mes['mes_nombre'], categories = orden_meses, ordered = True)
     datos_mes = datos_mes.sort_values(by='mes_nombre')
     
-    #print('datos_mes')
-    #print(datos_mes)
+    
    
     df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes()
     datos_mes['escala']=pd.cut(datos_mes['value'],bins=df_limites['rango'],labels=etiquetas,right=False)
@@ -364,57 +495,106 @@ def mensuales(datos_dia):
     escala_ordenada_mes = sorted(escala_mes, key=lambda x: valor_asignado_a_rango[x], reverse=True)
     datos_mes['escala']=pd.Categorical(datos_mes['escala'],categories=escala_ordenada_mes, ordered=True)
 
+
+    if componente in ['SPOT+SSAA'] and dos_colores:
+        componentes = ['value_spot', 'value_ssaa']
+        meses_extra = [('', 13), ('media', 14)]
+
+        for comp in componentes:
+            for nombre, num in meses_extra:
+                if not ((datos_mes['mes'] == num) & (datos_mes['componente'] == comp)).any():
+                    fila_extra = {
+                        'mes': num,
+                        'mes_nombre': nombre,
+                        'componente': comp,
+                        'value': 0 if nombre == '' else datos_mes[datos_mes['componente'] == comp]['value'].mean(),
+                        'año': np.nan,
+                        'media': np.nan
+                    }
+                    datos_mes = pd.concat([datos_mes, pd.DataFrame([fila_extra])], ignore_index=True)   
+
+    datos_mes['value'] = round(datos_mes['value'], 2)
+    print('datos_mes')
+    print(datos_mes)
+
     #print(datos_mes)
-    #GRAFICO DE BARRAS CON MEDIAS MENSUALES------------------------------------------------------------------------------------------------------------
-    if st.session_state.get('componente', 'SPOT') == 'SPOT':
-        title = f'Precios medios mensuales SPOT. Año {st.session_state.año_seleccionado_esc}'
+    #GRAFICO DE BARRAS CON MEDIAS MENSUALES---------------------
+    componente = st.session_state.get('componente', 'SPOT')
+    if componente in ['SPOT']:
+        title = f'Precios medios mensuales del SPOT. Año {st.session_state.año_seleccionado_esc}'
+        tick_y = 20
+    elif componente in ['SPOT+SSAA']:
+        title = f'Precios medios mensuales del SPOT+SSAA. Año {st.session_state.año_seleccionado_esc}'
         tick_y = 20
     else:
-        title = f'Precios medios mesuales SSAA. Año {st.session_state.año_seleccionado_esc}'
+        title = f'Precios medios mensuales de los SSAA. Año {st.session_state.año_seleccionado_esc}'
         tick_y = 4
-
-    graf_ecv_mensual = px.bar(datos_mes, x = 'mes_nombre', y = 'value',
-        color = 'escala',
-        color_discrete_map = colores,
-        #category_orders={'escala':escala_ordenada_mes},
-        category_orders = {'mes_nombre':datos_mes['mes_nombre'], 'escala':escala_ordenada_mes},
-        labels = {'value':'€/MWh', 'escala':'escala_cv','mes_nombre':'mes'},
-        #title = f'Precios medios mensuales. Año {st.session_state.año_seleccionado_esc}',
-        title=title,
-        text = 'value'
-
-        )
-    # añadimos gráfico de línea para la media
-    graf_ecv_mensual.add_trace(
-        go.Scatter(
-            x = datos_mes['mes_nombre'],
-            y = datos_mes['media'],
-            mode = 'lines',
-            name = 'media',
-            line = dict(color = 'yellow', dash = 'dot')
-        )
-    )
     
+    if componente == 'SPOT+SSAA' and dos_colores:
+        graf_ecv_mensual = px.bar(datos_mes, x = 'mes_nombre', y = 'value',
+            color = 'componente',
+            color_discrete_map={'value_spot': 'green', 'value_ssaa': 'lightgreen'},
+            #color_discrete_map = colores,
+            #category_orders={'escala':escala_ordenada_mes},
+            category_orders = {'mes_nombre': orden_meses},
+            
+            labels = {'value':'€/MWh', 'escala':'escala_cv','mes_nombre':'mes'},
+            #title = f'Precios medios mensuales. Año {st.session_state.año_seleccionado_esc}',
+            title=title,
+            text = 'value'
+        )
+    else:
+        graf_ecv_mensual = px.bar(datos_mes, x = 'mes_nombre', y = 'value',
+            color = 'escala',
+            color_discrete_map = colores,
+            #category_orders={'escala':escala_ordenada_mes},
+            category_orders = {'mes_nombre':datos_mes['mes_nombre'], 'escala':escala_ordenada_mes},
+            labels = {'value':'€/MWh', 'escala':'escala_cv','mes_nombre':'mes'},
+            #title = f'Precios medios mensuales. Año {st.session_state.año_seleccionado_esc}',
+            title=title,
+            text = 'value'
+        )
+        # añadimos gráfico de línea para la media
+        graf_ecv_mensual.add_trace(
+            go.Scatter(
+                x = datos_mes['mes_nombre'],
+                y = datos_mes['media'],
+                mode = 'lines',
+                name = 'media',
+                line = dict(color = 'yellow', dash = 'dot')
+            )
+        )
+        graf_ecv_mensual.add_trace(
+            go.Scatter(
+                x=datos_mes['mes_nombre'],
+                y=[media_mensual]*len(datos_mes),
+                mode='lines',
+                line=dict(color='yellow',width=2, dash='dash'),
+                name='media'
+            )
+        )
+        
     graf_ecv_mensual.update_layout(
         title={'x':0.5,'xanchor':'center'},
         xaxis = dict(
             tickmode = 'array',
             tickvals = orden_meses,
             ticktext = orden_meses
-        )   
+        ),
+        yaxis=dict(
+            #range=[0, ymax],             # Forzar el rango del eje Y
+            tickmode="linear",            # Escala lineal
+            tick0=0,                      # Comenzar en 0
+            dtick=tick_y                      # Incrementos de 20
+        ),   
     )
-    graf_ecv_mensual.add_trace(go.Scatter(
-        x=datos_mes['mes_nombre'],
-        y=[media_mensual]*len(datos_mes),
-        mode='lines',
-        line=dict(color='yellow',width=2, dash='dash'),
-        name='media'
-    ))
-
+    
+    
     return graf_ecv_mensual
     
-
+# DATOS HORARIOS PARA UN DÍA SELECCIONADO+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 def horarios(datos):
+    #datos_horarios = datos[datos['año'] == st.session_state.get('año_seleccionado_esc', 2025)] #.copy()
     datos_horarios = datos.copy()
     #datos_horarios['fecha'] = pd.to_datetime(datos_horarios['fecha'], format='%d/%m/%Y')
 
@@ -429,7 +609,7 @@ def horarios(datos):
     escala_ordenada_hora = sorted(escala_horaria, key=lambda x: valor_asignado_a_rango[x], reverse=True)
     datos_horarios['escala']=pd.Categorical(datos_horarios['escala'],categories=escala_ordenada_hora, ordered=True)
 
-    print(datos_horarios.dtypes)
+    #print(datos_horarios.dtypes)
 
     fecha_max = datos_horarios['fecha'].max()
     if st.session_state.dia_seleccionado_esc > fecha_max:
@@ -437,54 +617,92 @@ def horarios(datos):
     else:
         datos_horarios_filtrado = datos_horarios[datos_horarios['fecha'] == st.session_state.dia_seleccionado_esc]
     
-
+    print('datos horarios filtrado')
     print(datos_horarios_filtrado)
 
-    pt_curva_horaria=datos.pivot_table(
-        values='value',
-        index='hora'
-    )
-    pt_curva_horaria=pt_curva_horaria['value'].round(2)
-    pt_curva_horaria=pt_curva_horaria.reset_index()
 
-    #GRAFICO DE VALORES HORARIOS POR DIA FILTRADO
-    if st.session_state.get('componente', 'SPOT') == 'SPOT':
-        title = f'Perfil horario de precios SPOT. Día {st.session_state.dia_seleccionado_esc.strftime("%d/%m/%Y")}'
+    """
+    Esto es para la curva de precios medios horarios del año seleccionado
+    """
+    componente = st.session_state.get('componente', 'SPOT')
+    dos_colores = st.session_state.get('dos_colores', False)
+    if componente in ['SPOT+SSAA'] and dos_colores:
+        datos_horarios_filtrado = datos_horarios_filtrado.melt(id_vars='hora', value_vars=['value_spot', 'value_ssaa'], var_name='componente', value_name='value_bis')
+        datos_horarios_filtrado = datos_horarios_filtrado.rename(columns={'value_bis': 'value'})
+
+    #    pt_curva_horaria = datos.pivot_table(
+    #        values = ['value_spot','value_ssaa'],
+    #        index = 'hora'
+    #    )
+    #    pt_curva_horaria = pt_curva_horaria.melt(id_vars='hora', var_name='componente', value_name='value')
+    #    pt_curva_horaria = pt_curva_horaria.reset_index()
+        
+    #else:    
+    #    pt_curva_horaria = datos.pivot_table(
+    #        values = 'value',
+    #        index = 'hora'
+    #    ).reset_index()
+
+
+    #pt_curva_horaria = pt_curva_horaria['value'].round(2)
+    print('datos horarios filtrado')
+    print(datos_horarios_filtrado)
+
+    print('curva horaria')
+    #print(pt_curva_horaria)
+
+    # GRAFICO DE VALORES HORARIOS POR DIA FILTRADO----------------------------------------------
+    componente = st.session_state.get('componente', 'SPOT')
+    if componente in ['SPOT']:
+        title = f'Perfil horario del SPOT. Día {st.session_state.dia_seleccionado_esc.strftime("%d/%m/%Y")}'
+        tick_y = 20
+    elif componente in ['SPOT+SSAA']:
+        title = f'Perfil horario del SPOT+SSAA. Día {st.session_state.dia_seleccionado_esc.strftime("%d/%m/%Y")}'
         tick_y = 20
     else:
-        title = f'Perfil horario de precios de los SSAA. Día {st.session_state.dia_seleccionado_esc.strftime("%d/%m/%Y")}'
+        title = f'Perfil horario de los SSAA. Día {st.session_state.dia_seleccionado_esc.strftime("%d/%m/%Y")}'
         tick_y = 4
 
-    graf_horaria_dia = px.bar(
-        datos_horarios_filtrado,
-        x='hora',
-        y='value',
-        #title = f'Perfil diario de precios spot. Día {st.session_state.dia_seleccionado_esc.strftime("%d/%m/%Y")}',
-        title=title,
-        #animation_frame='fecha',
-        #width=800,
-        labels={'value': '€/MWh', 'escala':'escala_cv'},
-        color='escala',
-        color_discrete_map=colores,
-        category_orders = {'escala':escala_ordenada_hora},
-    )
+    if componente == 'SPOT+SSAA' and dos_colores:
+        graf_horaria_dia = px.bar(
+            datos_horarios_filtrado,
+            x = 'hora',
+            y = 'value',
+            title = title,
+            labels = {'value': '€/MWh', 'escala':'escala_cv'},
+            color='componente',
+            color_discrete_map={'value_spot': 'green', 'value_ssaa': 'lightgreen'}
+            #category_orders = {'escala':escala_ordenada_hora},
+        )
+    else:
 
-    graf_horaria_linea = go.Scatter(
-        x=pt_curva_horaria['hora'],
-        y=pt_curva_horaria['value'],
-        name='Media Anual',
-        mode='lines',
-        line=dict(color='yellow', width=3),  # opcional: dar estilo a la línea
-    )
+        graf_horaria_dia = px.bar(
+            datos_horarios_filtrado,
+            x='hora',
+            y='value',
+            title=title,
+            labels={'value': '€/MWh', 'escala':'escala_cv'},
+            color='escala',
+            color_discrete_map=colores,
+            category_orders = {'escala':escala_ordenada_hora},
+        )
 
-    graf_horaria_dia.add_trace(graf_horaria_linea)
+    #graf_horaria_linea = go.Scatter(
+    #    x=pt_curva_horaria['hora'],
+    #    y=pt_curva_horaria['value'],
+    #    name='Media Anual',
+    #    mode='lines',
+    #    line=dict(color='yellow', width=3),  # opcional: dar estilo a la línea
+    #)
+
+    #graf_horaria_dia.add_trace(graf_horaria_linea)
 
     min_horarios = datos_horarios['value'].min()
     max_horarios = datos_horarios['value'].max()
-    min_media = pt_curva_horaria['value'].min()
-    max_media = pt_curva_horaria['value'].max()
-    min_y = min(min_horarios,min_media)
-    max_y = max(max_horarios, max_media)
+    #min_media = pt_curva_horaria['value'].min()
+    #max_media = pt_curva_horaria['value'].max()
+    #min_y = min(min_horarios,min_media)
+    #max_y = max(max_horarios, max_media)
     
     graf_horaria_dia.update_layout(
         yaxis=dict(

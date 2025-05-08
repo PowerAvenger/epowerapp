@@ -6,14 +6,11 @@ from utilidades import generar_menu, init_app
 from backend_escalacv import leer_json, diarios_totales, diarios, mensuales, horarios
 import datetime
 from datetime import datetime
+import pandas as pd
 
 
 
 generar_menu()
-
-
-
-
 
 
 
@@ -23,16 +20,40 @@ if 'año_seleccionado_esc' not in st.session_state:
     st.session_state.año_seleccionado_esc = 2025
     st.session_state.año_anterior_esc = 2025
 
-
+CREDENTIALS = st.secrets['GOOGLE_SHEETS_CREDENTIALS']
 
 if st.session_state.get('componente', 'SPOT') == 'SPOT':
     FILE_ID = st.secrets['FILE_ID_SPOT']
-else:
+    datos_total, fecha_ini, fecha_fin = leer_json(FILE_ID, CREDENTIALS)
+elif st.session_state.get('componente', 'SPOT') == 'SSAA':
     FILE_ID = st.secrets['FILE_ID_SSAA']
+    datos_total, fecha_ini, fecha_fin = leer_json(FILE_ID, CREDENTIALS)
+else:
+    FILE_ID_SPOT = st.secrets['FILE_ID_SPOT']
+    FILE_ID_SSAA = st.secrets['FILE_ID_SSAA']
+    datos_spot, fecha_ini_spot, fecha_fin_spot = leer_json(FILE_ID_SPOT, CREDENTIALS)
+    datos_ssaa, fecha_ini_ssaa, fecha_fin_ssaa = leer_json(FILE_ID_SSAA, CREDENTIALS)
 
-CREDENTIALS = st.secrets['GOOGLE_SHEETS_CREDENTIALS']
+    datos_spot = datos_spot.reset_index()
+    datos_ssaa = datos_ssaa.reset_index()
+    datos_total = pd.merge(
+        datos_spot[['datetime', 'value']].rename(columns={'value': 'value_spot'}),
+        datos_ssaa[['datetime', 'value']].rename(columns={'value': 'value_ssaa'}),
+        on='datetime',
+        how='inner'
+    )
+    datos_total['value'] = datos_total['value_spot'] + datos_total['value_ssaa']
 
-datos_total, fecha_ini, fecha_fin = leer_json(FILE_ID, CREDENTIALS) 
+    datos_total['fecha'] = datos_total['datetime'].dt.date
+    datos_total['hora'] = datos_total['datetime'].dt.hour
+    datos_total['dia'] = datos_total['datetime'].dt.day
+    datos_total['mes'] = datos_total['datetime'].dt.month
+    datos_total['año'] = datos_total['datetime'].dt.year
+    datos_total.set_index('datetime', inplace=True)
+    fecha_ini = datos_total['fecha'].min()
+    fecha_fin = datos_total['fecha'].max()
+
+
 ultimo_registro = datos_total['fecha'].max()
 valor_minimo_horario_total = datos_total['value'].min()
 valor_maximo_horario_total = datos_total['value'].max()
@@ -40,7 +61,7 @@ fecha_min_horario_total = datos_total.loc[datos_total['value'].idxmin(), 'fecha'
 fecha_max_horario_total = datos_total.loc[datos_total['value'].idxmax(), 'fecha'] 
 
 #DATOS DIARIOS DESDE 2018
-datos_totales, graf_ecv_total = diarios_totales(datos_total,fecha_ini,fecha_fin)
+datos_totales, graf_ecv_total = diarios_totales(datos_total, fecha_ini, fecha_fin)
 valor_minimo_diario_total = datos_totales['value'].min()
 valor_maximo_diario_total = datos_totales['value'].max()
 fecha_min_diario_total = datos_totales.loc[datos_totales['value'].idxmin(), 'fecha'] 
@@ -79,7 +100,12 @@ if isinstance(st.session_state.dia_seleccionado_esc, datetime):
     st.session_state.dia_seleccionado_esc = st.session_state.dia_seleccionado_esc.date()
 
 
-datos_horarios, graf_horario_dia, datos_horarios_filtrado = horarios(datos_total)
+#datos_horarios, graf_horario_dia, datos_horarios_filtrado = horarios(datos_total)
+
+print('datos año filtrado')
+print(datos_año_filtrado)
+
+datos_horarios, graf_horario_dia, datos_horarios_filtrado = horarios(datos_año_filtrado)
 #valores del dia seleccionado
 valor_medio_diario_select = round(datos_horarios_filtrado['value'].mean(),2)
 valor_minimo_horario_select = datos_horarios_filtrado['value'].min()
@@ -103,9 +129,10 @@ años_lista = list(range(2018, 2026))
 
 st.sidebar.selectbox('Selecciona el año', options = años_lista, key = 'año_seleccionado_esc')
 st.sidebar.slider('Selecciona el día', min_value= fecha_min_select_dia, max_value=fecha_max_select_dia, key = 'dia_seleccionado_esc')
-st.sidebar.radio('Selecciona el componente de mercado', options=['SPOT', 'SSAA'], key = 'componente')
+st.sidebar.radio('Selecciona el componente de mercado', options=['SPOT', 'SSAA', 'SPOT+SSAA'], key = 'componente')
 
-
+if st.session_state.componente == 'SPOT+SSAA':
+    st.sidebar.toggle('Mostrar dos colores', key = 'dos_colores')
 
 
 
