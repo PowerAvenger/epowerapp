@@ -87,6 +87,7 @@ print (f'fecha max dia select: {fecha_max_select_dia}')
 
 
 graf_ecv_mensual = mensuales(datos_dia)
+#graf_ecv_mensual = mensuales(datos_año_filtrado)
 
 
 

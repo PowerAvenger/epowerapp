@@ -18,6 +18,10 @@ if 'componente' not in st.session_state:
 meses_español = {1: "ene", 2: "feb", 3: "mar", 4: "abr", 5: "may", 6: "jun",
     7: "jul", 8: "ago", 9: "sep", 10: "oct", 11: "nov", 12: "dic"
     }
+meses_completos = pd.DataFrame({
+        'mes': range(1, 13),
+        'mes_nombre': [meses_español[m] for m in range(1, 13)]
+    })
 
 from backend_comun import rango_componentes
 
@@ -424,8 +428,8 @@ def diarios(datos, fecha_ini, fecha_fin):
 # MEDIAS MENSUALES +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 def mensuales(datos_dia):    
-    #print('datos dia para tratar mes')
-    #print(datos_dia)
+    print('datos dia para tratar mes')
+    print(datos_dia)
 
     datos_mes = datos_dia.copy()
     datos_mes = datos_mes.drop(columns=['fecha','dia'])
@@ -443,8 +447,8 @@ def mensuales(datos_dia):
         print(datos_mes)
         #datos_dia = datos_dia.melt(id_vars=['año', 'mes_nombre'], var_name='componente', value_name='value')
         datos_mes['media'] = datos_mes.groupby('componente')['value'].expanding().mean().reset_index(level=0, drop=True)
-        
-    
+        media_spot = datos_dia[datos_dia['componente'] == 'value_spot'].sort_values('fecha')['media'].iloc[-1]
+        media_ssaa = datos_dia[datos_dia['componente'] == 'value_ssaa'].sort_values('fecha')['media'].iloc[-1]
     else:
         datos_mes = datos_mes.groupby('mes').agg({
             'value':'mean',
@@ -453,6 +457,7 @@ def mensuales(datos_dia):
         }).reset_index()   
 
         datos_mes['media'] = datos_mes['value'].expanding().mean()
+        
 
 
     
@@ -460,12 +465,13 @@ def mensuales(datos_dia):
     datos_mes[['mes','año']] = datos_mes[['mes','año']].astype(int)
     #datos_mes['media'] = datos_mes['value'].expanding().mean()
     
+
     media_mensual=round(datos_dia['value'].mean(),2)
     
-    meses_completos = pd.DataFrame({
-        'mes': range(1, 13),
-        'mes_nombre': [meses_español[m] for m in range(1, 13)]
-    })
+    
+
+
+    
 
     # Unir con tus datos por mes (asumiendo que sólo falta alguno)
     datos_mes = pd.merge(meses_completos, datos_mes, on=['mes', 'mes_nombre'], how='left')
@@ -478,8 +484,9 @@ def mensuales(datos_dia):
     orden_meses = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic', '', 'media']
     datos_mes['mes_nombre'] = pd.Categorical(datos_mes['mes_nombre'], categories = orden_meses, ordered = True)
     datos_mes = datos_mes.sort_values(by='mes_nombre')
+
     
-    
+     
    
     df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes()
     datos_mes['escala']=pd.cut(datos_mes['value'],bins=df_limites['rango'],labels=etiquetas,right=False)
@@ -504,7 +511,9 @@ def mensuales(datos_dia):
                         'año': np.nan,
                         'media': np.nan
                     }
-                    datos_mes = pd.concat([datos_mes, pd.DataFrame([fila_extra])], ignore_index=True)   
+                    datos_mes = pd.concat([datos_mes, pd.DataFrame([fila_extra])], ignore_index=True) 
+                    datos_mes.loc[(datos_mes['mes'] == 14) & (datos_mes['componente'] == 'value_spot'), 'value'] = media_spot
+                    datos_mes.loc[(datos_mes['mes'] == 14) & (datos_mes['componente'] == 'value_ssaa'), 'value'] = media_ssaa    
 
     datos_mes['value'] = round(datos_mes['value'], 2)
     print('datos_mes')
