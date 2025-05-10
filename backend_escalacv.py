@@ -54,9 +54,7 @@ colores = {
 
 
 @st.cache_data
-#def leer_json(file_id):
 def leer_json(file_id, _creds_dict):
-    #url = f"https://drive.google.com/uc?export=download&id={file_id}"
     SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
     creds = Credentials.from_service_account_info(_creds_dict, scopes=SCOPES)
     service = build('drive', 'v3', credentials=creds)
@@ -70,17 +68,12 @@ def leer_json(file_id, _creds_dict):
         status, done = downloader.next_chunk()
     buffer.seek(0)
     datos_json = json.load(buffer)
-
-
-    #response = requests.get(url)
-    #datos_json = response.json()
     
     # Convertir a DataFrame
     datos = pd.DataFrame(datos_json)
     datos['datetime'] = pd.to_datetime(datos['datetime'], utc=True)
     datos['datetime'] = datos['datetime'].dt.tz_convert('Europe/Madrid').dt.tz_localize(None)
     
-    #datos = datos[['datetime', 'value']]
     if 'id' in datos.columns and 'name' in datos.columns:
         # Datos de SSAA
         datos = datos[['datetime', 'id', 'value', 'name']]

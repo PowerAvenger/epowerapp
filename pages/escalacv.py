@@ -132,7 +132,7 @@ st.sidebar.slider('Selecciona el día', min_value= fecha_min_select_dia, max_val
 st.sidebar.radio('Selecciona el componente de mercado', options=['SPOT', 'SSAA', 'SPOT+SSAA'], key = 'componente')
 
 if st.session_state.componente == 'SPOT+SSAA':
-    st.sidebar.toggle('Mostrar dos colores', key = 'dos_colores')
+    st.sidebar.toggle('Predator Mode', key = 'dos_colores')
 
 
 
