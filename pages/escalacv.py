@@ -12,6 +12,8 @@ import pandas as pd
 
 generar_menu()
 
+
+
 if 'inicio' not in st.session_state:
     st.cache_data.clear()
     st.session_state.inicio = True
