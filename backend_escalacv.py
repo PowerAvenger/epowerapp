@@ -436,6 +436,7 @@ def mensuales(datos_dia):
 
     componente = st.session_state.get('componente', 'SPOT')
     dos_colores = st.session_state.get('dos_colores', False)
+    peso_comp = st.session_state.get('peso_comp', False)
     if componente in ['SPOT+SSAA'] and dos_colores:
         datos_mes = datos_mes.groupby(['mes','componente']).agg({
             'value':'mean',
@@ -513,7 +514,11 @@ def mensuales(datos_dia):
                     }
                     datos_mes = pd.concat([datos_mes, pd.DataFrame([fila_extra])], ignore_index=True) 
                     datos_mes.loc[(datos_mes['mes'] == 14) & (datos_mes['componente'] == 'value_spot'), 'value'] = media_spot
-                    datos_mes.loc[(datos_mes['mes'] == 14) & (datos_mes['componente'] == 'value_ssaa'), 'value'] = media_ssaa    
+                    datos_mes.loc[(datos_mes['mes'] == 14) & (datos_mes['componente'] == 'value_ssaa'), 'value'] = media_ssaa
+
+        totales_mes = datos_mes.dropna(subset=['componente', 'value']) \
+            .groupby('mes')['value'].transform('sum')
+        datos_mes['peso_%'] = (datos_mes['value'] / totales_mes * 100).round(2)                
 
     datos_mes['value'] = round(datos_mes['value'], 2)
     print('datos_mes')
@@ -532,7 +537,20 @@ def mensuales(datos_dia):
         title = f'Precios medios mensuales de los SSAA. Año {st.session_state.año_seleccionado_esc}'
         tick_y = 4
     
-    if componente == 'SPOT+SSAA' and dos_colores:
+    if componente == 'SPOT+SSAA' and dos_colores and peso_comp:
+        graf_ecv_mensual = px.bar(datos_mes, x = 'mes_nombre', y = 'peso_%',
+            color = 'componente',
+            color_discrete_map={'value_spot': 'green', 'value_ssaa': 'lightgreen'},
+            #color_discrete_map = colores,
+            #category_orders={'escala':escala_ordenada_mes},
+            category_orders = {'mes_nombre': orden_meses},
+            
+            labels = {'value':'€/MWh', 'escala':'escala_cv','mes_nombre':'mes'},
+            title = f'Peso en % del SPOT y de los SSAA. Año {st.session_state.año_seleccionado_esc}',
+            #title=title,
+            text = 'peso_%'
+        ) 
+    elif componente == 'SPOT+SSAA' and dos_colores:
         graf_ecv_mensual = px.bar(datos_mes, x = 'mes_nombre', y = 'value',
             color = 'componente',
             color_discrete_map={'value_spot': 'green', 'value_ssaa': 'lightgreen'},
@@ -545,6 +563,7 @@ def mensuales(datos_dia):
             title=title,
             text = 'value'
         )
+    
     else:
         graf_ecv_mensual = px.bar(datos_mes, x = 'mes_nombre', y = 'value',
             color = 'escala',

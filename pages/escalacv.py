@@ -12,7 +12,9 @@ import pandas as pd
 
 generar_menu()
 
-
+if 'inicio' not in st.session_state:
+    st.cache_data.clear()
+    st.session_state.inicio = True
 
 fecha_hoy=datetime.today().date()
 
@@ -134,6 +136,8 @@ st.sidebar.radio('Selecciona el componente de mercado', options=['SPOT', 'SSAA',
 
 if st.session_state.componente == 'SPOT+SSAA':
     st.sidebar.toggle('Predator Mode', key = 'dos_colores')
+if 'dos_colores' in st.session_state and st.session_state.dos_colores:
+    st.sidebar.toggle('Peso componentes', key = 'peso_comp')
 
 
 
