@@ -13,7 +13,8 @@ st.set_page_config(
 
 c1, c2, c3 = st.columns(3)
 
-
+if 'acceso' not in st.session_state:
+    st.session_state.acceso = ""
 
 
 with c2:
@@ -52,17 +53,23 @@ with c2:
                 , icon="ℹ️")
         
         
-        
-        acceso = st.button('🚀 Acceder a la aplicación', type='primary', use_container_width=True)
+        st.text_input('Introduce provisionalmente el código de acceso', type='password', key='acceso')
+        if st.session_state.acceso == st.secrets['KEY_ACCESS']:
+
+            acceso = st.button('🚀 Acceder a la aplicación', type='primary', use_container_width=True, disabled=False)
+        else:
+            acceso = st.button('🚀 Acceder a la aplicación', type='primary', use_container_width=True, disabled=True)
+
         #acceso_simulindex = st.button('🔮 Acceder a **Simulindex**', type='primary', use_container_width=True)
-if acceso:
-    zona_objetos.empty()
-    zona_predator.image('images/predator.png')
-    time.sleep(2)
-    st.switch_page('pages/powerapps.py')
-    #if acceso_simulindex:
-    #   st.switch_page('pages/simulindex.py')
-    # bla
+    if acceso:
+        zona_objetos.empty()
+        zona_predator.image('images/predator.png')
+        #zona_predator.video('images/predator1.mp4', autoplay=True)
+        time.sleep(2)
+        st.switch_page('pages/powerapps.py')
+    
+
+
     
 
 
