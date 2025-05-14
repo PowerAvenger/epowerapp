@@ -4,6 +4,9 @@ from utilidades import generar_menu
 
 generar_menu()
 
+if not st.session_state.get('usuario_autenticado', False):
+    st.switch_page('epowerapp.py')
+
 
 col11,col12,col13,col14,col15=st.columns(5)
 with col11:

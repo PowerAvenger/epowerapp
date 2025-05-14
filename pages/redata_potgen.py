@@ -8,6 +8,9 @@ from backend_redata_potgen import (
 
 from utilidades import generar_menu
 
+if not st.session_state.get('usuario_autenticado', False):
+    st.switch_page('epowerapp.py')
+
 generar_menu()
 
 #constantes para la descarga de REData. son la de la #category = 'generacion' usadas en la API

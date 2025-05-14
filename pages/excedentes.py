@@ -5,6 +5,8 @@ from backend_excedentes import obtener_file, graf_no_neteo_total, graf_neteo_tot
 
 from utilidades import generar_menu
 
+if not st.session_state.get('usuario_autenticado', False):
+    st.switch_page('epowerapp.py')
 
 generar_menu()
 

@@ -10,7 +10,10 @@ import plotly.express as px
 
 from utilidades import generar_menu
 
+if not st.session_state.get('usuario_autenticado', False):
+    st.switch_page('epowerapp.py')
 
+    
 generar_menu()
 
 fecha_hoy = date.today()    #date. fecha de hoy, en formato aaaa-mm-dd

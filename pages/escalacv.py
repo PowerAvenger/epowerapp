@@ -8,7 +8,8 @@ import datetime
 from datetime import datetime
 import pandas as pd
 
-
+if not st.session_state.get('usuario_autenticado', False):
+    st.switch_page('epowerapp.py')
 
 generar_menu()
 
