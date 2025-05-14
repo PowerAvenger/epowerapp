@@ -23,7 +23,7 @@ url_bluesky = "https://bsky.app/profile/poweravenger.bsky.social"
 
 
 if 'acceso' not in st.session_state:
-    st.switch_page('../epowerapp.py')
+    st.switch_page('epowerapp.py')
 
 
 #DEFINIMOS CONSTANTES
