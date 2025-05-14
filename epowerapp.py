@@ -57,6 +57,7 @@ with c2:
         if st.session_state.acceso == st.secrets['KEY_ACCESS']:
 
             acceso = st.button('🚀 Acceder a la aplicación', type='primary', use_container_width=True, disabled=False)
+            st.session_state.usuario_autenticado = True
         else:
             acceso = st.button('🚀 Acceder a la aplicación', type='primary', use_container_width=True, disabled=True)
 

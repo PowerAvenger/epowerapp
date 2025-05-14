@@ -22,7 +22,7 @@ url_bluesky = "https://bsky.app/profile/poweravenger.bsky.social"
 #st.markdown(f'Visita mi mini-web de [PowerAPPs]({url_apps}) con un montón de utilidades. Deja tus comentarios y propuestas en mi perfil de [LinkedIn]({url_linkedin}) - ¡Sígueme en [Bluesky]({url_bluesky})! Copyright by **Jose Vidal** :ok_hand:')
 
 
-if 'acceso' not in st.session_state:
+if not st.session_state.get('usuario_autenticado', False):
     st.switch_page('epowerapp.py')
 
 
