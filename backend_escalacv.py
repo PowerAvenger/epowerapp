@@ -262,7 +262,7 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
                 yanchor="top",
                 bgcolor="rgba(0,0,0,0)",
                 bordercolor="rgba(0,0,0,0)",
-                showactive=True,
+                showactive=False,
                 buttons=[
                     dict(
                         label="🔓 Escala automática",
