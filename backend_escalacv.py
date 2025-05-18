@@ -252,6 +252,29 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
             dtick=tick_y,
             rangemode="tozero",                      
         ),
+        updatemenus=[
+            dict(
+                type="buttons",
+                direction="right",
+                x=1,
+                y=1.15,
+                xanchor="right",
+                yanchor="top",
+                buttons=[
+                    dict(
+                        label="🔓 Escala automática",
+                        method="relayout",
+                        args=[{"yaxis.autorange": True}]
+                    ),
+                    dict(
+                        label="🔒 Fijar [0, 200]",
+                        method="relayout",
+                        args=[{"yaxis.range": [0, 200]}]
+                    )
+                ],
+                showactive=True
+            )
+        ]
 
     )
     
