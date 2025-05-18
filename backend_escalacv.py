@@ -1,4 +1,3 @@
-import requests
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go 
@@ -34,12 +33,6 @@ def get_limites_componentes():
     }
     return df_limites, etiquetas, valor_asignado_a_rango
 
-#datos_limites = rango_componentes()
-#df_limites = pd.DataFrame(datos_limites)
-#print('df limites')
-#print(df_limites)
-#etiquetas = df_limites['valor_asignado'][:-1]
-#valor_asignado_a_rango = {row['valor_asignado']: row['rango'] for _, row in df_limites.iterrows()}
 
 colores = {
         'muy bajo': '#90EE90',  # Verde claro (fácil y suave a la vista)
@@ -148,9 +141,7 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
     
     datos_dia['value'] = datos_dia['value'].round(2)
     datos_dia[['dia','mes','año']] = datos_dia[['dia','mes','año']].astype(int)
-    #datos_dia['media'] = datos_dia['value'].expanding().mean()
-    #datos_dia.reset_index(inplace=True)
-
+    
     df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes()
     datos_dia['escala']=pd.cut(datos_dia['value'],bins=df_limites['rango'],labels=etiquetas,right=False)
     datos_dia['color']=datos_dia['escala'].map(colores)
@@ -255,7 +246,7 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
             ),
         ),
         yaxis=dict(
-            #range=[0, ymax],             # Forzar el rango del eje Y
+            range=[0, 200],             # Forzar el rango del eje Y
             tickmode="linear",            # Escala lineal
             tick0=0,                      # Comenzar en 0
             dtick=tick_y                      # Incrementos de 20
