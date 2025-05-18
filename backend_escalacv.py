@@ -260,6 +260,9 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
                 y=1.15,
                 xanchor="right",
                 yanchor="top",
+                bgcolor="rgba(0,0,0,0)",
+                bordercolor="rgba(0,0,0,0)",
+                showactive=True,
                 buttons=[
                     dict(
                         label="🔓 Escala automática",
@@ -272,7 +275,7 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
                         args=[{"yaxis.range": [0, 200]}]
                     )
                 ],
-                showactive=True
+                
             )
         ]
 
