@@ -213,7 +213,7 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
             end = fecha_fin,
             freq = 'YS'  # Generar ticks al inicio de cada AÑO
         ),
-        showgrid=True
+        showgrid=True,
     )
 
     graf_ecv_diario.update_traces(
@@ -249,12 +249,14 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
             #range=[0, 200],             # Forzar el rango del eje Y
             tickmode="linear",            # Escala lineal
             tick0=0,                      # Comenzar en 0
-            dtick=tick_y                      # Incrementos de 20
+            dtick=tick_y,
+            rangemode="tozero",                      
         ),
 
     )
     
-    graf_ecv_diario.update_yaxes(autorange=True)
+    
+    
 
     return datos_dia, graf_ecv_diario
 
