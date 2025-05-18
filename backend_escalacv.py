@@ -254,7 +254,7 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
 
     )
     
-    fig.update_yaxes(autorange=True)
+    graf_ecv_diario.update_yaxes(autorange=True)
 
     return datos_dia, graf_ecv_diario
 
