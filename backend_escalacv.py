@@ -246,13 +246,16 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
             ),
         ),
         yaxis=dict(
-            range=[0, 200],             # Forzar el rango del eje Y
+            #range=[0, 200],             # Forzar el rango del eje Y
             tickmode="linear",            # Escala lineal
             tick0=0,                      # Comenzar en 0
             dtick=tick_y                      # Incrementos de 20
         ),
+
     )
     
+    fig.update_yaxes(autorange=True)
+
     return datos_dia, graf_ecv_diario
 
 
