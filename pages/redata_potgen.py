@@ -18,8 +18,11 @@ widget_gen = 'estructura-generacion'
 widget_pot = 'potencia-instalada'
 
 
-file_id_gen = '1IvYqrGzSvf5KDwCcl7e7KTKGVcvw9LLb'
-file_id_pot = '1UYWjjl7cnEOZSNitMdyWRQj5Vj27bSo4'
+#file_id_gen = '1IvYqrGzSvf5KDwCcl7e7KTKGVcvw9LLb'
+#file_id_pot = '1UYWjjl7cnEOZSNitMdyWRQj5Vj27bSo4'
+# identificadores de los sheets con los históricos de generación y potencia instalada
+file_id_gen = st.secrets['FILE_ID_GEN']
+file_id_pot = st.secrets['FILE_ID_POT']
 
 #horas equivalentes máximas anuales de cada tecnología. Visualización en la ePowerAPP
 horas_eq_max = {
@@ -52,7 +55,7 @@ if 'tec_seleccionadas' not in st.session_state:
 if 'opcion_evol' not in st.session_state:
     st.session_state.opcion_evol = 'FC'
 
-
+# descargamos datos históricos y montamos una tabla con datos diarios tratados (%mix, FC, heq, FU, heqmax)
 with st.spinner('Cargando datos de generación...'):
     df_in_gen = leer_json(file_id_gen, widget_gen)
 with st.spinner('Cargando datos de potencia instalada...'):
@@ -79,7 +82,27 @@ horas_2025_transcurridas = ((ultima_fecha_registro - date(2025, 1, 1)).days + 1)
 coef_horas = horas_año / horas_2025_transcurridas
 print(f'coef horas =  {coef_horas}')
 
+
+
 df_out_filtrado = df_out[df_out['año'] == st.session_state.año_seleccionado]
+
+#'''CODIGO AÑADIDO PARA INTENTAR FILTRAR LOS AÑOS HASTA FECHA SIMILAR A LA DEL ÚLTIMO REGISTRO DEL AÑO EN CURSO'''
+# Obtener día y mes del último registro
+dia_ult = ultima_fecha_registro.day
+mes_ult = ultima_fecha_registro.month
+
+# Año actual (por ejemplo, 2025)
+año_actual = ultima_fecha_registro.year
+
+# Filtro adicional si el toggle está activado y el año seleccionado es anterior al actual
+if st.session_state.get('dias_filtrados',False) and st.session_state.año_seleccionado < año_actual:
+    df_out_filtrado = df_out_filtrado[
+        (df_out_filtrado['mes_num'] < mes_ult) |
+        ((df_out_filtrado['mes_num'] == mes_ult) & (df_out_filtrado['fecha'].dt.day <= dia_ult))
+    ]
+
+'''--------------------------------------------------------------------------------------------------------------'''
+
 df_out_bolas, df_out_fc, df_out_fu, df_out_mix  = tablas_salida(df_out_filtrado, tec_filtro) 
 
 graf_bolas = graficar_bolas(df_out_bolas, colores_tec)
@@ -99,20 +122,21 @@ graf_efi = graficar_efi_evol(df_efi_evol)
 
 
 with st.sidebar:
-    st.header('Infografías REData')
+    st.header('Infografías REData', help=' ℹ️ Todos los datos son elaborados a partir de REData / Generación / Estructura generación y Potencia instalada (sistema eléctrico nacional todas las tecnologías).')
     #st.caption("Copyright by Jose Vidal :ok_hand:")
     #st.write("Visita mi página de [PowerAPPs](%s) con un montón de utilidades" % url_apps)
     #st.markdown(f"Visita mi página de [ePowerAPPs]({url_apps}) con un montón de utilidades. Deja tus comentarios y propuestas en mi perfil de [Linkedin]({url_linkedin}) - ¡Sígueme en [Bluesky]({url_bluesky})!")
-    st.info('Todos los datos son elaborados a partir de REData / Generación / Estructura generación y Potencia instalada (sistema eléctrico nacional todas las tecnologías).',icon="ℹ️")
+    #st.info('Todos los datos son elaborados a partir de REData / Generación / Estructura generación y Potencia instalada (sistema eléctrico nacional todas las tecnologías).',icon="ℹ️")
     
+    st.write(f'Datos disponibles hasta el {ultima_fecha_registro.strftime("%d.%m.%Y")}')
+    st.selectbox('Selecciona un año', options = lista_años, key = 'año_seleccionado')
+    st.toggle('Equiparar años anteriores al actual', key = 'dias_filtrados')
+        
+    st.text ('Datos para el Gráfico 3 - Factor de Uso')
+    st.code(code_heqmax, language='python')
 
-st.sidebar.selectbox('Selecciona un año', options = lista_años, key = 'año_seleccionado')
-st.sidebar.markdown(f'Último día del que se disponen datos: {ultima_fecha_registro}')
-st.sidebar.text ('Datos para el Gráfico 3 - Factor de Uso')
-st.sidebar.code(code_heqmax, language='python')
-
-st.sidebar.radio('Selecciona el párametro a visualizar en el Gráfico 5:', ['FC', '%_mix'], key = 'opcion_evol')
-st.sidebar.multiselect('Selecciona y compara tecnologías', options = tec_filtro, key = 'tec_seleccionadas')
+    st.radio('Selecciona el párametro a visualizar en el Gráfico 5:', ['FC', '%_mix'], key = 'opcion_evol')
+    st.multiselect('Selecciona y compara tecnologías', options = tec_filtro, key = 'tec_seleccionadas')
 
 # VISUALIZACION EN EL TABLERO++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 c1, c2, c3 = st.columns(3)

@@ -5,38 +5,6 @@ import plotly.graph_objects as go
 import streamlit as st
 import numpy as np
 
-# NO USADO++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-@st.cache_data
-def download_redata(category, widget, start_date, end_date, time_trunc):
-    column_mapping = {
-        "estructura-generacion": {"valor": "gen_GWh_dia", "porcentaje": "porc_gen", "coef":1000},
-        "potencia-instalada": {"valor": "pot_GW", "porcentaje": "porc_pot", "coef": 1000}
-    }
-    end_point = 'https://apidatos.ree.es/es/datos'
-    url = f'{end_point}/{category}/{widget}?start_date={start_date}T00:00&end_date={end_date}T23:59&time_trunc={time_trunc}'
-    request = requests.get(url, headers = {'User-Agent': 'Mozilla/5.0'})
-    data = request.json()
-    datos = []
-    for tech in data["included"]:
-        tech_name = tech["attributes"]["title"]
-        for entry in tech["attributes"]["values"]:
-            datos.append({"fecha": entry["datetime"], "tecnologia": tech_name, "valor": entry["value"],"porcentaje":entry["percentage"]})
-
-    # Convertir a DataFrame
-    df_in = pd.DataFrame(datos)
-    df_in['fecha'] = pd.to_datetime(df_in['fecha'], utc=True).dt.tz_convert('Europe/Madrid').dt.tz_localize(None)
-    df_in['mes_num'] = df_in['fecha'].dt.month
-    df_in['año'] = df_in['fecha'].dt.year
-    coef = column_mapping[widget]["coef"]
-    df_in['valor'] = df_in['valor']/coef
-    if widget in column_mapping:
-        df_in.rename(columns={
-            "valor": column_mapping[widget]["valor"],
-            "porcentaje": column_mapping[widget]["porcentaje"]
-        }, inplace=True)
-    
-    return df_in
-
 # LECTURA DE LOS JSON CON LOS DATOS DE ESTRUCTURA DE LA GENERACIÓN Y POTENCIA INSTALADA
 @st.cache_data
 def leer_json(file_id, widget):
@@ -65,7 +33,7 @@ def leer_json(file_id, widget):
     return df_in
     
      
-
+# TABLA CON DATOS DIARIOS DE CADA TECNOLOGÍA
 @st.cache_data
 def tablas_diario(df_in_gen, df_in_pot, horas_eqmax):
     #montamos un dataframe de entrada con los datos de gen y pot. DIARIO
@@ -104,6 +72,7 @@ def tablas_diario(df_in_gen, df_in_pot, horas_eqmax):
 def tablas_salida(df, tec_filtro):
     #df es df_out_filtro
     #tec_filtro son las tecnologías que se muestran
+    
     #DATAFRAME PARA GRÁFICO FC DE DISPERSIÓN
     df_out_fc = df[df['tecnologia'].isin(tec_filtro)].copy()
 
@@ -133,6 +102,7 @@ def tablas_salida(df, tec_filtro):
     #creamos un df solo con las tecnologias seleccionadas
     df_anual_select = df_anual[df_anual['tecnologia'].isin(tec_filtro)].copy()
     df_anual_select['FNU'] = 1 - df_anual_select['FU']
+
     #DATAFRAMES PARA GRÁFICO DE BOLAS
     df_out_bolas = df_anual_select.sort_values(['FC'], ascending = False) 
     
