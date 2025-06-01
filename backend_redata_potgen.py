@@ -103,6 +103,9 @@ def tablas_salida(df, tec_filtro):
     df_anual_select = df_anual[df_anual['tecnologia'].isin(tec_filtro)].copy()
     df_anual_select['FNU'] = 1 - df_anual_select['FU']
 
+    print ('df para visualización bolas, fc, fu y mix')
+    print (df_anual_select)
+
     #DATAFRAMES PARA GRÁFICO DE BOLAS
     df_out_bolas = df_anual_select.sort_values(['FC'], ascending = False) 
     

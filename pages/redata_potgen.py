@@ -39,6 +39,8 @@ code_heqmax = f'''Horas equivalentes máximas: {horas_eq_max}'''
 # Usado para el select box de años
 lista_años = [2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018]
 
+
+
 # Usado para filtrar las tecnologías que vamos a visualizar
 tec_filtro = ['Ciclo combinado', 'Hidráulica', 'Nuclear', 'Solar fotovoltaica', 'Eólica', 'Cogeneración']
 colores = ["#555867", "#4be4ff", "#ff2b2b", "#ff8700", "#09ab3b", "#6d3fc0"]
@@ -101,7 +103,21 @@ if st.session_state.get('dias_filtrados',False) and st.session_state.año_selecc
         ((df_out_filtrado['mes_num'] == mes_ult) & (df_out_filtrado['fecha'].dt.day <= dia_ult))
     ]
 
-'''--------------------------------------------------------------------------------------------------------------'''
+# CÓDIGO AÑADIDO PARA PODER FILTRAR POR MES
+nombres_meses = {
+    1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+    5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+    9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+}
+meses_disponibles = sorted(df_out_filtrado['mes_num'].unique())
+meses_nombres = ["TODOS"] + [nombres_meses[m] for m in meses_disponibles]
+
+# Aplicar filtro solo si no es 'TODOS'
+if st.session_state.get('mes_seleccionado', 'TODOS') != "TODOS":
+    num_mes_seleccionado = {v: k for k, v in nombres_meses.items()}[st.session_state.mes_seleccionado]
+    df_out_filtrado = df_out_filtrado[df_out_filtrado['mes_num'] == num_mes_seleccionado]
+
+
 
 df_out_bolas, df_out_fc, df_out_fu, df_out_mix  = tablas_salida(df_out_filtrado, tec_filtro) 
 
@@ -131,6 +147,7 @@ with st.sidebar:
     st.write(f'Datos disponibles hasta el {ultima_fecha_registro.strftime("%d.%m.%Y")}')
     st.selectbox('Selecciona un año', options = lista_años, key = 'año_seleccionado')
     st.toggle('Equiparar años anteriores al actual', key = 'dias_filtrados')
+    st.selectbox('Selecciona un mes', options = meses_nombres, key = 'mes_seleccionado')
         
     st.text ('Datos para el Gráfico 3 - Factor de Uso')
     st.code(code_heqmax, language='python')
