@@ -435,21 +435,29 @@ def calc_efi(df, coef):
     df_pot = df_pot_media.groupby('año')['pot_GW'].sum().reset_index(name='pot_GW')
 
     df_out = pd.merge(df_pot, df_gen, on='año')
-    df_out.loc[df_out['año'] == 2025, 'gen_GWh'] *= coef
-
-    horas_anuales = {
-        2018: 365 * 24,  # 8760
-        2019: 365 * 24,  # 8760
-        2020: 366 * 24,  # 8784 (bisiesto)
-        2021: 365 * 24,  # 8760
-        2022: 365 * 24,  # 8760
-        2023: 365 * 24,  # 8760
-        2024: 366 * 24,  # 8784 (bisiesto)
-        2025: 365 * 24   # 8760
-    }
     
-    df_out['gen_max'] = df_out['pot_GW'] * df_out['año'].map(horas_anuales)
-    #df_out['eficiencia'] = df_out['gen_GWh'] / df_out['pot_GW']
+    if not st.session_state.get('dias_filtrados', False):
+        df_out.loc[df_out['año'] == 2025, 'gen_GWh'] *= coef
+
+        horas_anuales = {
+            2018: 365 * 24,  # 8760
+            2019: 365 * 24,  # 8760
+            2020: 366 * 24,  # 8784 (bisiesto)
+            2021: 365 * 24,  # 8760
+            2022: 365 * 24,  # 8760
+            2023: 365 * 24,  # 8760
+            2024: 366 * 24,  # 8784 (bisiesto)
+            2025: 365 * 24   # 8760
+        }
+    
+        df_out['gen_max'] = df_out['pot_GW'] * df_out['año'].map(horas_anuales)
+    
+    else:
+        # Estás en modo truncado (dias_filtrados = True)
+        dias_por_año = df_in.groupby('año')['fecha'].nunique().reset_index(name='dias')
+        df_out = pd.merge(df_out, dias_por_año, on='año')
+        df_out['gen_max'] = df_out['pot_GW'] * df_out['dias'] * 24
+    
     df_out['eficiencia'] = df_out['gen_GWh'] / df_out['gen_max']
     
     print ('df_out_efi_evol')

@@ -570,7 +570,8 @@ def mensuales(datos_dia):
             labels = {'value':'€/MWh', 'escala':'escala_cv','mes_nombre':'mes'},
             title = f'Peso en % del SPOT y de los SSAA. Año {st.session_state.año_seleccionado_esc}',
             #title=title,
-            text = 'peso_%'
+            text = 'peso_%',
+            #text_auto=True
         ) 
     elif componente == 'SPOT+SSAA' and dos_colores:
         graf_ecv_mensual = px.bar(datos_mes, x = 'mes_nombre', y = 'value',
@@ -583,7 +584,8 @@ def mensuales(datos_dia):
             labels = {'value':'€/MWh', 'escala':'escala_cv','mes_nombre':'mes'},
             #title = f'Precios medios mensuales. Año {st.session_state.año_seleccionado_esc}',
             title=title,
-            text = 'value'
+            text = 'value',
+            #text_auto=True
         )
     
     else:
@@ -595,7 +597,8 @@ def mensuales(datos_dia):
             labels = {'value':'€/MWh', 'escala':'escala_cv','mes_nombre':'mes'},
             #title = f'Precios medios mensuales. Año {st.session_state.año_seleccionado_esc}',
             title=title,
-            text = 'value'
+            text = 'value',
+            #text_auto=True
         )
         # añadimos gráfico de línea para la media
         graf_ecv_mensual.add_trace(
@@ -632,7 +635,11 @@ def mensuales(datos_dia):
         ),   
     )
     
-    
+    graf_ecv_mensual.update_traces(
+        textangle=0,
+        textposition='inside',  # o 'outside' si prefieres fuera de la barra
+        insidetextanchor='start'  # o 'middle' o 'end' según alineación horizontal)
+    )
     return graf_ecv_mensual
     
 # DATOS HORARIOS PARA UN DÍA SELECCIONADO+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++

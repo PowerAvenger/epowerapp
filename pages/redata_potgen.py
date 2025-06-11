@@ -17,9 +17,6 @@ generar_menu()
 widget_gen = 'estructura-generacion'
 widget_pot = 'potencia-instalada'
 
-
-#file_id_gen = '1IvYqrGzSvf5KDwCcl7e7KTKGVcvw9LLb'
-#file_id_pot = '1UYWjjl7cnEOZSNitMdyWRQj5Vj27bSo4'
 # identificadores de los sheets con los históricos de generación y potencia instalada
 file_id_gen = st.secrets['FILE_ID_GEN']
 file_id_pot = st.secrets['FILE_ID_POT']
@@ -103,6 +100,15 @@ if st.session_state.get('dias_filtrados',False) and st.session_state.año_selecc
         ((df_out_filtrado['mes_num'] == mes_ult) & (df_out_filtrado['fecha'].dt.day <= dia_ult))
     ]
 
+# usado para los gráficos 5 y 6, 
+df_out_equiparado = df_out.copy()
+
+if st.session_state.get('dias_filtrados', False):
+    df_out_equiparado = df_out_equiparado[
+        (df_out_equiparado['mes_num'] < mes_ult) |
+        ((df_out_equiparado['mes_num'] == mes_ult) & (df_out_equiparado['fecha'].dt.day <= dia_ult))
+    ]
+
 # CÓDIGO AÑADIDO PARA PODER FILTRAR POR MES
 nombres_meses = {
     1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
@@ -116,6 +122,7 @@ meses_nombres = ["TODOS"] + [nombres_meses[m] for m in meses_disponibles]
 if st.session_state.get('mes_seleccionado', 'TODOS') != "TODOS":
     num_mes_seleccionado = {v: k for k, v in nombres_meses.items()}[st.session_state.mes_seleccionado]
     df_out_filtrado = df_out_filtrado[df_out_filtrado['mes_num'] == num_mes_seleccionado]
+    df_out_equiparado = df_out_equiparado[df_out_equiparado['mes_num'] == num_mes_seleccionado]
 
 
 
@@ -127,12 +134,14 @@ graf_fu = graficar_FU(df_out_fu, colores_tec)
 graf_mix = graficar_mix(df_out_mix, colores_tec)
 graf_mix_queso = graficar_mix_queso(df_out_mix, colores_tec)
 
-df_fc_evol = gen_evol(df_out)
+df_fc_evol = gen_evol(df_out_equiparado)
+#df_fc_evol = gen_evol(df_out)
 if not df_fc_evol.empty:
     graf_fc_evol = graficar_evol(df_fc_evol, colores_tec, 'FC')
     graf_mix_evol = graficar_evol(df_fc_evol, colores_tec, '%_mix_gen')
 
-df_efi_evol = calc_efi(df_out, coef_horas)
+#df_efi_evol = calc_efi(df_out, coef_horas)
+df_efi_evol = calc_efi(df_out_equiparado, coef_horas)
 graf_efi = graficar_efi_evol(df_efi_evol)
 
 
