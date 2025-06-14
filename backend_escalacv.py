@@ -635,11 +635,11 @@ def mensuales(datos_dia):
         ),   
     )
     
-    graf_ecv_mensual.update_traces(
-        textangle=0,
-        textposition='inside',  # o 'outside' si prefieres fuera de la barra
-        insidetextanchor='start'  # o 'middle' o 'end' según alineación horizontal)
-    )
+    #graf_ecv_mensual.update_traces(
+    #    textangle=0,
+    #    textposition='inside',  # o 'outside' si prefieres fuera de la barra
+    #    insidetextanchor='start'  # o 'middle' o 'end' según alineación horizontal)
+    #)
     return graf_ecv_mensual
     
 # DATOS HORARIOS PARA UN DÍA SELECCIONADO+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
