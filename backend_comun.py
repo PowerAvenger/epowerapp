@@ -12,12 +12,12 @@ def rango_componentes():
     componente = st.session_state.get('componente', 'SPOT')
     if componente in ['SPOT', 'SPOT+SSAA']:
         return {
-                'rango': [-20, 20.01, 40.01, 60.01, 80.01, 100.01, 120.01, 140.01, 10000], #9 elementos
+                'rango': [-50, 20.01, 40.01, 60.01, 80.01, 100.01, 120.01, 140.01, 10000], #9 elementos
                 'valor_asignado': ['muy bajo', 'bajo', 'medio', 'alto', 'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2'],
         }
     else:
         return {
-                'rango': [-20, 4.01, 8.01, 16.01, 20.01, 24.01, 28.01, 32.01, 10000], #9 elementos
+                'rango': [-50, 4.01, 8.01, 16.01, 20.01, 24.01, 28.01, 32.01, 10000], #9 elementos
                 'valor_asignado': ['muy bajo', 'bajo', 'medio', 'alto', 'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2'],
         }
     

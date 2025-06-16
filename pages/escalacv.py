@@ -114,14 +114,14 @@ print(datos_año_filtrado)
 datos_horarios, graf_horario_dia, datos_horarios_filtrado = horarios(datos_año_filtrado)
 #valores del dia seleccionado
 valor_medio_diario_select = round(datos_horarios_filtrado['value'].mean(),2)
-valor_minimo_horario_select = datos_horarios_filtrado['value'].min()
-valor_maximo_horario_select = datos_horarios_filtrado['value'].max()
+valor_minimo_horario_select = round(datos_horarios_filtrado['value'].min(),2)
+valor_maximo_horario_select = round(datos_horarios_filtrado['value'].max(),2)
 hora_min_select = datos_horarios_filtrado.loc[datos_horarios_filtrado['value'].idxmin(), 'hora']
 hora_max_select = datos_horarios_filtrado.loc[datos_horarios_filtrado['value'].idxmax(), 'hora']
 
 valor_medio_horario = round(datos_horarios['value'].mean(),2)
-valor_minimo_horario = datos_horarios['value'].min()
-valor_maximo_horario = datos_horarios['value'].max()
+valor_minimo_horario = round(datos_horarios['value'].min(),2)
+valor_maximo_horario = round(datos_horarios['value'].max(),2)
 fecha_min_horario = datos_horarios.loc[datos_horarios['value'].idxmin(), 'fecha']
 fecha_max_horario = datos_horarios.loc[datos_horarios['value'].idxmax(), 'fecha']
 

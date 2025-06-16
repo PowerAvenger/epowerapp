@@ -759,7 +759,7 @@ def horarios(datos):
             #range=[min_y,max_y],
             autorange = True,
             tickmode="linear",            # Escala lineal
-            tick0=0,                      # Comenzar en 0
+            #tick0=0,                      # Comenzar en 0
             dtick=tick_y                     # Incrementos de 20
        
         ),
