@@ -1,5 +1,5 @@
 import streamlit as st
-from backend_telemindex import filtrar_datos, aplicar_margen, graf_principal, pt5_trans, pt1, pt7_trans, costes_indexado 
+from backend_telemindex import filtrar_datos, aplicar_margen, graf_principal, pt5_trans, pt1, pt7_trans, costes_indexado, evol_mensual 
 from backend_comun import autenticar_google_sheets, carga_rapida_sheets, carga_total_sheets, colores_precios
 
 import pandas as pd
@@ -38,6 +38,8 @@ sobrecoste_ssaa = ((media_combo / media_spot) - 1) * 100
 #tabla resumen de costes ATR
 tabla_atr = pt7_trans(df_filtrado)
 tabla_costes = costes_indexado(df_filtrado)
+
+df_precios_mensuales, graf_mensual = evol_mensual(st.session_state.df_sheets, colores_precios)
 
 generar_menu()
 
@@ -109,8 +111,9 @@ with zona_grafica.container():
         with col11:
             st.write(graf30)
         with col12:
-            st.write(graf61)    
-
+            st.write(graf61)
+            
+        st.plotly_chart(graf_mensual)
 
     with col2:
         st.subheader("Tabla resumen de precios por peaje de acceso", divider='rainbow')
@@ -139,9 +142,9 @@ with zona_grafica.container():
             st.dataframe(tabla_margen, use_container_width=True )
 
 
-            print(tabla_precios)
-            print(tabla_costes)
-            print(tabla_atr)
+            #print(tabla_precios)
+            #print(tabla_costes)
+            #print(tabla_atr)
         
 
 

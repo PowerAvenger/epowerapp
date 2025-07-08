@@ -4,6 +4,8 @@ import pandas as pd
 import plotly.express as px
 import datetime
 from datetime import datetime
+import numpy as np
+import cvxpy as cp
 
 
 
@@ -141,6 +143,11 @@ def obtener_tabla_filtrada(df_datos_horarios_combo, fecha_ini, fecha_fin, consum
     suma_consumo=df_datos_horarios_combo_filtrado_consumo['consumo'].sum()
     #coste total del pvpc perfilado en el rango filtrado
     coste_pvpc_perfilado=df_datos_horarios_combo_filtrado_consumo['coste'].sum()
+
+    print('df horarios fecha filtrada y consumo perfilado')
+    print (df_datos_horarios_combo_filtrado_consumo)
+    #df_datos_horarios_combo_filtrado_consumo.to_csv('df.csv')
+
     media_precio_perfilado=coste_pvpc_perfilado/suma_consumo
 
     pt_horario_filtrado=pd.pivot_table(
@@ -162,6 +169,186 @@ def obtener_tabla_filtrada(df_datos_horarios_combo, fecha_ini, fecha_fin, consum
     return df_datos_horarios_combo_filtrado_consumo, pt_horario_filtrado, media_precio_perfilado,coste_pvpc_perfilado
 
 
+
+def optimizar_consumo_media_horaria(df: pd.DataFrame):
+    """
+    Optimiza el perfil medio horario (24h) redistribuyendo el consumo hacia las horas con menor precio medio.
+    Mantiene el consumo total constante.
+
+    Parámetros:
+    -----------
+    df : pd.DataFrame
+        DataFrame con al menos las columnas ['hora', 'precio', 'consumo']
+
+    Retorna:
+    --------
+    df_opt : pd.DataFrame
+        DataFrame con la curva media por hora y las columnas optimizadas
+
+    df_perfiles : pd.DataFrame
+        DataFrame comparativo con las curvas 'original' y 'optimizada' (por hora)
+
+    resumen : dict
+        Métricas de coste original, coste optimizado, ahorro absoluto y ahorro relativo (%)
+    """
+    if not all(col in df.columns for col in ['hora', 'precio', 'consumo']):
+        raise ValueError("El DataFrame debe contener las columnas: 'hora', 'precio', 'consumo'")
+
+    df = df.copy()
+
+    # Añadimos coste si no existe
+    if 'coste' not in df.columns:
+        df['coste'] = df['consumo'] * df['precio']
+
+    # Calculamos la curva media por hora
+    curva_media = df.groupby('hora')[['consumo', 'precio', 'coste']].mean().reset_index()
+
+    print ('curva_media')
+    print(curva_media)
+
+    # Ordenamos por precio medio
+    curva_ordenada = curva_media.sort_values('precio').copy()
+
+
+
+    # Redistribuimos los consumos más altos a precios más bajos
+    curva_ordenada['consumo_opt'] = np.sort(curva_media['consumo'])[::-1]
+    curva_ordenada['coste_opt'] = curva_ordenada['consumo_opt'] * curva_ordenada['precio']
+
+    # Reasignamos la hora original
+    curva_ordenada['hora'] = curva_media.sort_values('precio')['hora'].values
+
+    print ('curva_ordenada')
+    print(curva_ordenada)
+
+    df_opt = curva_ordenada.sort_values('hora').reset_index(drop=True)
+
+    print ('df_opt')
+    print (df_opt)
+
+    # Creamos el DataFrame de perfiles comparativos
+    df_perfiles = pd.DataFrame({
+        'hora': df_opt['hora'],
+        'original': curva_media.sort_values('hora')['consumo'].values,
+        'optimizado': df_opt['consumo_opt'].values
+    })
+
+    print ('df perfiles')
+    print(df_perfiles)
+
+    # COSTE REAL ANUAL ORIGINAL
+    coste_real_original = (df['consumo'] * df['precio']).sum()
+
+    # COSTE REAL ANUAL OPTIMIZADO: aplicamos curva optimizada al año completo
+    perfil_opt_dict = dict(zip(df_opt['hora'], df_opt['consumo_opt']))
+    df['consumo_opt_aplicado'] = df['hora'].map(perfil_opt_dict)
+    df['coste_opt_aplicado'] = df['consumo_opt_aplicado'] * df['precio']
+
+    print ('df')
+    print (df)
+    coste_real_optimizado = df['coste_opt_aplicado'].sum()
+
+    # Ahorros reales
+    ahorro_abs = coste_real_original - coste_real_optimizado
+    ahorro_pct = ahorro_abs / coste_real_original * 100
+
+    resumen = {
+        'coste_original': coste_real_original,
+        'coste_optimizado': coste_real_optimizado,
+        'ahorro_abs': ahorro_abs,
+        'ahorro_pct': ahorro_pct
+    }
+
+    return df_opt, df_perfiles, resumen
+
+
+def optimizar_consumo_suavizado(df: pd.DataFrame, consumo_total_anual: float, lambda_suavizado: float = 0.6): #0.6 
+    """
+    Optimiza el consumo horario suavizando la curva y minimizando el coste total.
+
+    Parámetros:
+    -----------
+    df : pd.DataFrame con columnas 'precio', 'hora', 'consumo'
+    consumo_total_anual : float, energía total anual a distribuir
+    lambda_suavizado : float, penalización por no suavidad
+
+    Retorna:
+    --------
+    df_suav : DataFrame con consumo y coste horario optimizado (8760 registros)
+    df_perfiles : DataFrame comparativo original vs optimizado (24 horas)
+    resumen : dict con costes y ahorro
+    """
+    if not all(col in df.columns for col in ['precio', 'hora', 'consumo']):
+        raise ValueError("El DataFrame debe tener columnas 'precio', 'hora' y 'consumo'.")
+
+    df = df[np.isfinite(df['precio'])].copy()
+    n = len(df)
+    precios = df['precio'].values
+
+    c = cp.Variable(n)  # consumo por hora
+
+    # Penalización por falta de suavidad (saltos horarios)
+    dif_c = c[1:] - c[:-1]
+    suavidad = cp.sum_squares(dif_c)
+
+    # Función objetivo = coste + penalización
+    objetivo = cp.Minimize(precios @ c + lambda_suavizado * suavidad)
+
+    consumo_minimo = 0.05  # kWh mínimo por hora (ajustable)
+    restricciones = [cp.sum(c) == consumo_total_anual, c >= consumo_minimo]
+
+    problema = cp.Problem(objetivo, restricciones)
+    problema.solve(solver=cp.SCS)
+
+    if c.value is None:
+        raise RuntimeError("La optimización no ha convergido.")
+
+    # Resultados
+    df['consumo_opt'] = c.value
+    df['consumo_opt'] = np.clip(df['consumo_opt'], 0, None)
+    df['coste_opt'] = df['consumo_opt'] * df['precio']
+    df['coste_real'] = df['consumo'] * df['precio']
+
+    print ('df suave')
+    print(df)
+
+    # Perfil medio horario
+    perfil_original = df.groupby('hora')['consumo'].mean().reset_index(name='original')
+    perfil_opt = df.groupby('hora')['consumo_opt'].mean().reset_index(name='optimizado')
+    df_perfiles = perfil_original.merge(perfil_opt, on='hora')
+
+    # Métricas
+    coste_original = df['coste_real'].sum()
+    coste_opt = df['coste_opt'].sum()
+    ahorro_abs = coste_original - coste_opt
+    ahorro_pct = (ahorro_abs / coste_original) * 100
+
+    resumen = {
+        'coste_original': coste_original,
+        'coste_optimizado': coste_opt,
+        'ahorro_abs': ahorro_abs,
+        'ahorro_pct': ahorro_pct
+    }
+
+    return df, df_perfiles, resumen
+
+def grafico_comparativo_perfiles(df_perfiles):
+    fig = px.line(df_perfiles.reset_index(),
+                  x='hora', 
+                  y=['original', 'optimizado'],
+                  title='Comparativa de perfiles horarios (kWh)',
+                  labels={'value': 'kWh', 'hora': 'Hora del día', 'variable': 'Perfil'},
+                  height=400)
+    
+    fig.update_layout(
+        xaxis=dict(tickmode='linear'),
+        title={'x': 0.5, 'xanchor': 'center'},
+        legend_title_text='Perfil'
+    )
+
+    return fig
+
+
 def grafico_horario_consumo(pt_horario_filtrado):
     grafico_horario_consumo=px.line(pt_horario_filtrado, 
                                 x='hora',y='consumo',
@@ -176,6 +363,8 @@ def grafico_horario_consumo(pt_horario_filtrado):
     )
 
     return grafico_horario_consumo
+
+
 
 
 def grafico_horario_coste(pt_horario_filtrado):

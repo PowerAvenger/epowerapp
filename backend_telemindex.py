@@ -10,18 +10,18 @@ def filtrar_datos():
     if st.session_state.rango_temporal == 'Por años': 
         df_filtrado = st.session_state.df_sheets[st.session_state.df_sheets['año'] == st.session_state.año_seleccionado]
         lista_meses = df_filtrado['mes_nombre'].unique().tolist()
-        print('1')
+        print('Filtrado por año')
     elif st.session_state.rango_temporal == 'Por meses': 
         df_filtrado_año = st.session_state.df_sheets[st.session_state.df_sheets['año'] == st.session_state.año_seleccionado]
         df_filtrado = st.session_state.df_sheets[(st.session_state.df_sheets['año'] == st.session_state.año_seleccionado) & (st.session_state.df_sheets['mes_nombre'] == st.session_state.mes_seleccionado)]
-        print('df_filtrado AÑO')
-        print(df_filtrado)
+        #print('df_filtrado AÑO')
+        #print(df_filtrado)
         lista_meses = df_filtrado_año['mes_nombre'].unique().tolist()
-        print('2')
+        print('Filtrado por mes')
     else:
         df_filtrado = st.session_state.df_sheets[(st.session_state.df_sheets['fecha'] == st.session_state.dia_seleccionado)]
         lista_meses = None
-        print('3')
+        print('Filtrado por dia')
 
     print('dia seleccionado')
     print(st.session_state.dia_seleccionado)
@@ -60,20 +60,20 @@ def pt1(df_filtrado):
     pt20['comp_perd'] = pt20['spot'] + pt20['ssaa'] + pt20['osom'] + pt20['otros'] + pt20['ppcc_2.0']
     pt20['perdidas_2.0'] = pt20['comp_perd'] * (pt20['perd_2.0'])
     pt20 = pt20.drop(columns = ['perd_2.0','comp_perd'])
-    print('pt20')
-    print(pt20)
+    #print('pt20')
+    #print(pt20)
     pt20_trans = pt20.transpose().reset_index()
     pt20_trans = pt20_trans.rename(columns  ={'index':'componente', pt20_trans.columns[1] :'valor'})
     pt20_trans['componente'] = pt20_trans['componente'].replace({'otros': 'otros'})
-    print('pt20_trans')
-    print(pt20_trans)
+    #print('pt20_trans')
+    #print(pt20_trans)
     pt20_trans = pt20_trans.sort_values(by='valor', ascending=False)
-    print('pt20_trans')
-    print(pt20_trans)
+    #print('pt20_trans')
+    #print(pt20_trans)
     #pt20_trans['valor'] = round(pt20_trans['valor'],2)
     #pt20_trans['valor'] = pt20_trans['valor'].round(2)
-    print('pt20_trans')
-    print(pt20_trans)
+    #print('pt20_trans')
+    #print(pt20_trans)
 
     graf20 = px.pie(pt20_trans,names='componente',values='valor', hole=.3, color_discrete_sequence=px.colors.sequential.Oranges_r)
     graf20.update_layout(
@@ -133,8 +133,8 @@ def pt1_trans(df_filtrado):
 # GRAFICO PRINCIPAL CON LAS BARRAS DE OMIE Y SSAA Y LAS LINEAS DE PRECIO FINAL. HORARIAS
 def graf_principal(df_filtrado, colores_precios):
     pt2 = pt1(df_filtrado)[0]
-    print('pt2')
-    print(pt2)
+    #print('pt2')
+    #print(pt2)
     #colores_precios = {'precio_2.0': 'goldenrod', 'precio_3.0': 'darkred', 'precio_6.1': '#1C83E1'}
     graf_pt1=px.line(pt2,x='hora',y=['precio_2.0','precio_3.0','precio_6.1'],
         height=600,
@@ -252,6 +252,71 @@ def pt7_trans(df_filtrado_final):
         return pt5_trans #, media_20,media_30,media_61,media_spot
 
         
+def evol_mensual (df, colores_precios):
 
+    dffm = aplicar_margen(df)
 
+    orden_meses = [
+        "enero", "febrero", "marzo", "abril", "mayo", "junio",
+        "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"
+    ]
 
+    mes_a_num = {
+        "enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
+        "mayo": 5, "junio": 6, "julio":7, "agosto":8,
+        "septiembre":9, "octubre":10, "noviembre":11, "diciembre":12
+    }
+
+    # Asegúrate de que los nombres de meses estén ordenados
+    dffm["mes_nombre"] = pd.Categorical(
+        dffm["mes_nombre"],
+        categories=orden_meses,
+        ordered=True
+    )
+    
+    df_precios_mensuales = dffm.pivot_table(
+        values = ['precio_2.0', 'precio_3.0', 'precio_6.1'],
+        index = ['año','mes_nombre'],
+        aggfunc = 'mean'
+    ).reset_index()
+
+    # Crear columna fecha
+    df_precios_mensuales["mes_num"] = df_precios_mensuales["mes_nombre"].map(mes_a_num)
+    df_precios_mensuales["fecha"] = pd.to_datetime(
+        df_precios_mensuales["año"].astype(str) + "-" + df_precios_mensuales["mes_num"].astype(str) + "-01"
+    )
+
+    # Convertir a formato largo
+    df_melted = df_precios_mensuales.melt(
+        #id_vars=['año','mes_nombre'],
+        id_vars=['fecha'],
+        value_vars=['precio_2.0','precio_3.0','precio_6.1'],
+        var_name='Tarifa',
+        value_name='Precio medio'
+    )
+
+    # Limpiar etiquetas
+    df_melted["Tarifa"] = df_melted["Tarifa"].str.replace("precio_", "Peaje ")
+
+    print('df medias mensuales')
+    print(df_melted)
+
+    colores_precios = {'Peaje 2.0': 'goldenrod', 'Peaje 3.0': 'darkred', 'Peaje 6.1': '#1C83E1'}
+
+    graf_mensual = px.line(df_melted, #df_precios_mensuales,
+        #x=[df_precios_mensuales["año"], df_precios_mensuales["mes_nombre"]],
+        #x = 'año_mes',
+        #x=['año','mes_nombre'],
+        x='fecha',
+        #y=['precio_2.0','precio_3.0','precio_6.1'],
+        y='Precio medio',
+        color='Tarifa',
+        #height=600,
+        #title=f'Telemindex {st.session_state.año_seleccionado}: Precios medios horarios de indexado según tarifas de acceso',
+        #labels={'value':'c€/kWh','variable':'Precios según ATR'},
+        color_discrete_map=colores_precios,
+    )
+    graf_mensual.update_yaxes(rangemode="tozero")
+    
+
+    return df_precios_mensuales, graf_mensual

@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 from backend_fijovspvpc import (obtener_datos_horarios, obtener_tabla_filtrada, grafico_horario_consumo, grafico_horario_coste, grafico_horario_precio, 
-                                obtener_datos_por_periodo,graf_consumos_queso,graf_costes_queso)
+                                obtener_datos_por_periodo,graf_consumos_queso,graf_costes_queso,
+                                optimizar_consumo_media_horaria, grafico_comparativo_perfiles, optimizar_consumo_suavizado)
 import datetime
 import numpy as np
 from dateutil.relativedelta import relativedelta
@@ -159,6 +160,10 @@ if 'precios_3p' not in st.session_state:
     st.session_state.precios_3p = False
     #st.session_state.porcentajes_consumo = [0.0, 0.0, 0.0]
 
+
+df_opt, df_perfiles, resumen = optimizar_consumo_media_horaria(df_datos_horarios_combo_filtrado_consumo)
+df_opt_2, df_perfiles_2, resumen_2 = optimizar_consumo_suavizado(df_datos_horarios_combo_filtrado_consumo, st.session_state.consumo_anual)
+
 # BARRA LATERAL-----------------------------------------------------------------------------
 st.sidebar.header('Herramientas adicionales')
 with st.sidebar.form('form2'):
@@ -309,6 +314,32 @@ with col3:
     #st.subheader('Gráfico del PVPC medio horario perfilado', divider = 'gray')
     st.write(grafico_precio)
 
+    st.header('Optimización burda del consumo', divider = 'gray')
+    st.plotly_chart(grafico_comparativo_perfiles(df_perfiles))
+
+    col31, col32, col33, col34 = st.columns(4)
+    with col31:
+        st.metric("Coste original", f"{resumen['coste_original']:.2f} €")
+    with col32:
+        st.metric("Coste optimizado", f"{resumen['coste_optimizado']:.2f} €")
+    with col33:
+        st.metric("Ahorro absoluto", f"{resumen['ahorro_abs']:.2f} €")
+    with col34:
+        st.metric("Ahorro relativo", f"{resumen['ahorro_pct']:.2f} %")
+
+    
+    st.header('Optimización del consumo (en pruebas)', divider = 'gray')
+    st.plotly_chart(grafico_comparativo_perfiles(df_perfiles_2))
+
+    col31, col32, col33, col34 = st.columns(4)
+    with col31:
+        st.metric("Coste original", f"{resumen_2['coste_original']:.2f} €")
+    with col32:
+        st.metric("Coste optimizado", f"{resumen_2['coste_optimizado']:.2f} €")
+    with col33:
+        st.metric("Ahorro absoluto", f"{resumen_2['ahorro_abs']:.2f} €")
+    with col34:
+        st.metric("Ahorro relativo", f"{resumen_2['ahorro_pct']:.2f} %")
 
         
 

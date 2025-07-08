@@ -322,6 +322,8 @@ def diarios(datos, fecha_ini, fecha_fin):
         }).reset_index()   
 
         datos_dia['media'] = datos_dia['value'].expanding().mean()
+        datos_dia['media_movil'] = datos_dia['value'].rolling(window=14, min_periods=1).mean()
+        
             
     datos_dia['value'] = datos_dia['value'].round(2)
     datos_dia[['dia','mes','año']] = datos_dia[['dia','mes','año']].astype(int)
@@ -390,6 +392,17 @@ def diarios(datos, fecha_ini, fecha_fin):
                 y = datos_dia['media'],
                 mode = 'lines',
                 name = 'media',
+                line = dict(color = 'yellow', dash = 'dot')
+            )
+        )
+
+        # añadimos gráfico de línea para la media
+        graf_ecv_diario.add_trace(
+            go.Scatter(
+                x = datos_dia['fecha'],
+                y = datos_dia['media_movil'],
+                mode = 'lines',
+                name = 'media_movil',
                 line = dict(color = 'yellow', dash = 'dot')
             )
         )
