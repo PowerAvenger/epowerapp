@@ -119,8 +119,8 @@ meses_disponibles = sorted(df_out_filtrado['mes_num'].unique())
 meses_nombres = ["TODOS"] + [nombres_meses[m] for m in meses_disponibles]
 
 # Aplicar filtro solo si no es 'TODOS'
-if st.session_state.get('mes_seleccionado', 'TODOS') != "TODOS":
-    num_mes_seleccionado = {v: k for k, v in nombres_meses.items()}[st.session_state.mes_seleccionado]
+if st.session_state.get('mes_seleccionado_redata', 'TODOS') != "TODOS":
+    num_mes_seleccionado = {v: k for k, v in nombres_meses.items()}[st.session_state.mes_seleccionado_redata]
     df_out_filtrado = df_out_filtrado[df_out_filtrado['mes_num'] == num_mes_seleccionado]
     df_out_equiparado = df_out_equiparado[df_out_equiparado['mes_num'] == num_mes_seleccionado]
 
