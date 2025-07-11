@@ -156,7 +156,7 @@ with st.sidebar:
     st.write(f'Datos disponibles hasta el {ultima_fecha_registro.strftime("%d.%m.%Y")}')
     st.selectbox('Selecciona un año', options = lista_años, key = 'año_seleccionado')
     st.toggle('Equiparar años anteriores al actual', key = 'dias_filtrados')
-    st.selectbox('Selecciona un mes', options = meses_nombres, key = 'mes_seleccionado')
+    st.selectbox('Selecciona un mes', options = meses_nombres, key = 'mes_seleccionado_redata')
         
     st.text ('Datos para el Gráfico 3 - Factor de Uso')
     st.code(code_heqmax, language='python')
