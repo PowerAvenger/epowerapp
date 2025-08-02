@@ -297,6 +297,8 @@ def evol_mensual (df, colores_precios):
 
     # Limpiar etiquetas
     df_melted["Tarifa"] = df_melted["Tarifa"].str.replace("precio_", "Peaje ")
+    df_melted['Precio medio'] /= 10
+    df_melted['Precio medio'] = df_melted['Precio medio'].round(1)
 
     print('df medias mensuales')
     print(df_melted)
@@ -315,8 +317,23 @@ def evol_mensual (df, colores_precios):
         #title=f'Telemindex {st.session_state.año_seleccionado}: Precios medios horarios de indexado según tarifas de acceso',
         #labels={'value':'c€/kWh','variable':'Precios según ATR'},
         color_discrete_map=colores_precios,
+        
     )
-    graf_mensual.update_yaxes(rangemode="tozero")
+    graf_mensual.update_yaxes(
+        rangemode="tozero",
+        showgrid = True,
+        title_text ='Precio medio c€/kWh'
+        )
+    
+    graf_mensual.update_xaxes(
+        showgrid = True,
+        dtick = 'M1', 
+        tickformat="%b%y",  # formato tipo Jan25
+        title_text ='Mes'
+        )
+    
+    # 🔥 Activar modo de hover unificado por eje X
+    graf_mensual.update_layout(hovermode="x unified")
     
 
     return df_precios_mensuales, graf_mensual

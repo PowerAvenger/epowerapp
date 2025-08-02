@@ -113,6 +113,8 @@ with zona_grafica.container():
         with col12:
             st.write(graf61)
             
+        # gráfico de evolución de los precios medios mensuales
+        st.subheader("Evolución de los precios medios de indexado", divider='rainbow')
         st.plotly_chart(graf_mensual)
 
     with col2:

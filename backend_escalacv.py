@@ -333,6 +333,9 @@ def diarios(datos, fecha_ini, fecha_fin):
     datos_dia['escala']=pd.cut(datos_dia['value'],bins=df_limites['rango'],labels=etiquetas,right=False)
     datos_dia['color']=datos_dia['escala'].map(colores)
     escala_dia=datos_dia['escala'].unique()
+
+   
+
     escala_ordenada_dia = sorted(escala_dia, key=lambda x: valor_asignado_a_rango[x], reverse=True)
     datos_dia['escala']=pd.Categorical(datos_dia['escala'],categories=escala_ordenada_dia, ordered=True)
     
