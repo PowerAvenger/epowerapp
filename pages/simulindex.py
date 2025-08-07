@@ -1,6 +1,6 @@
 import streamlit as st
 from backend_comun import autenticar_google_sheets
-from backend_simulindex import obtener_historicos_meff, obtener_meff_trimestral, obtener_grafico_meff, hist_mensual, graf_hist
+from backend_simulindex import obtener_historicos_meff, obtener_meff_trimestral, obtener_grafico_meff_simulindex, obtener_grafico_cober, obtener_meff_mensual, hist_mensual, graf_hist
 from backend_comun import carga_rapida_sheets, carga_total_sheets, colores_precios
 
 from utilidades import generar_menu, init_app
@@ -24,21 +24,41 @@ if 'df_sheets_full' not in st.session_state:
 #    carga_rapida_sheets()
 
 df_historicos_FTB, ultimo_registro = obtener_historicos_meff()
-df_FTB_trimestral_filtrado, fecha_ultimo_omip, media_omip_calc = obtener_meff_trimestral(df_historicos_FTB)
-graf_omip_trim = obtener_grafico_meff(df_FTB_trimestral_filtrado)
+df_FTB_trimestral, df_FTB_trimestral_simulindex, fecha_ultimo_omip, media_omip_simulindex, lista_trimestres_hist, trimestre_actual = obtener_meff_trimestral(df_historicos_FTB)
 
 if 'omip_slider' not in st.session_state:
-    st.session_state.omip_slider = round(media_omip_calc)
+    st.session_state.omip_slider = round(media_omip_simulindex)
 def reset_slider():
-    st.session_state.omip_slider = round(media_omip_calc)
+    st.session_state.omip_slider = round(media_omip_simulindex)
 
-#df_hist = leer_excel()
-df_hist = hist_mensual()
+if 'trimestre_cobertura' not in st.session_state:
+    st.session_state.trimestre_cobertura = trimestre_actual
+
+# obtenemos históricos de medias mensuales de omie df_mes y un filtrado hist de los últimos 12 meses 
+df_hist, df_mes = hist_mensual()
 grafico, simul20, simul30, simul61 = graf_hist(df_hist, st.session_state.omip_slider, colores_precios)
 # a los precios simulados resultantes le incrementamos el coste medio de los pyc 2025
 simul20 = round(simul20 + 0.38, 2)
 simul30 = round(simul30 + 0.18, 2)
 simul61 = round(simul61 + 0.1, 2)
+
+graf_omip_trim = obtener_grafico_meff_simulindex(df_FTB_trimestral_simulindex)
+
+df_FTB_trimestral_cobertura = df_FTB_trimestral[df_FTB_trimestral['Entrega'] == st.session_state.trimestre_cobertura]
+graf_omip_cober = obtener_grafico_cober(df_FTB_trimestral_cobertura, df_mes, st.session_state.trimestre_cobertura)
+
+
+
+
+
+
+
+df_FTB_mensual, fig = obtener_meff_mensual(df_historicos_FTB, df_mes)
+
+
+
+#df_hist = leer_excel()
+
 
 
 # Inicializamos margen a cero
@@ -85,7 +105,7 @@ simul61_margen = simul61 + st.session_state.margen / 10
 
 
 #PRIMERA TANDA DE GRÁFICOS. SIMULACION DE PRECIOS DE INDEXADO------------------------------------------------------------------------------------------------------------------
-st.session_state.ultima_fecha_sheets
+#st.session_state.ultima_fecha_sheets
 
 col1, col2 = st.columns([0.2, 0.8])
 with col1:
@@ -125,10 +145,20 @@ with col3:
         with col31:
             st.metric('Fecha', value = fecha_ultimo_omip)
         with col32:
-            st.metric(':green[OMIP] medio', value = media_omip_calc)
+            st.metric(':green[OMIP] medio', value = media_omip_simulindex)
 with col4:
     st.info('Aquí tienes la evolución de :green[OMIP] por trimestres', icon = "ℹ️")            
     st.write(graf_omip_trim)
+
+with st.container():
+    col5, col6 = st.columns([0.2, 0.8])
+    with col5:
+        lista_trimestres_hist = lista_trimestres_hist[::-1]  # invierte la lista
+        st.selectbox('Selecciona el trimestre', options=lista_trimestres_hist, key = 'trimestre_cobertura', index=0)
+    with col6:
+        st.plotly_chart(graf_omip_cober)
+        st.plotly_chart(fig)
+        
 
 
 
