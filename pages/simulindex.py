@@ -71,10 +71,10 @@ st.sidebar.header('', divider='rainbow')
 st.sidebar.header('Simulación de indexados')
 #st.sidebar.subheader('¡Personaliza la simulación!')
 with st.sidebar.expander('¡Personaliza la simulación!', icon = "ℹ️"):
-    st.sidebar.info('Usa el deslizador para modificar el valor de :green[OMIP]. No te preocupes, siempre puedes resetear al valor por defecto.', icon = "ℹ️")
+    st.sidebar.info('Usa el deslizador para modificar el valor de :green[OMIE] estimado. No te preocupes, siempre puedes resetear al valor por defecto.', icon = "ℹ️")
 with st.sidebar.container(border = True):
-    st.slider(':green[OMIP] en €/MWh', min_value = 30, max_value = 150, step = 1, key = 'omip_slider')
-    reset_omip = st.sidebar.button('Resetear OMIP', on_click = reset_slider)
+    st.slider(':green[OMIE] en €/MWh', min_value = 30, max_value = 150, step = 1, key = 'omip_slider')
+    reset_omip = st.sidebar.button('Resetear OMIE', on_click = reset_slider)
   
 
 
@@ -109,12 +109,12 @@ simul61_margen = simul61 + st.session_state.margen / 10
 
 col1, col2 = st.columns([0.2, 0.8])
 with col1:
-    st.info('A partir de :green[OMIP] y opcionalmente :violet[margen] añadido, obtendrás unos precios medios de indexado.', icon = "ℹ️")
+    st.info('A partir de :green[OMIE] estimado y opcionalmente :violet[margen] añadido, obtendrás unos precios medios de indexado.', icon = "ℹ️")
     with st.container(border = True):
         st.subheader(':blue-background[Datos de entrada]', divider = 'rainbow')
         col11, col12 = st.columns(2)
         with col11:
-            st.metric(':green[OMIP] (€/MWh)', value = st.session_state.omip_slider, help = 'Este es el valor OMIP de referencia que has utilizado como entrada')
+            st.metric(':green[OMIE] (€/MWh)', value = st.session_state.omip_slider, help = 'Este es el valor OMIE de referencia que has utilizado como entrada')
         with col12:
             st.metric(':violet[Margen] (€/MWh)', value = st.session_state.margen, help = 'Margen que añades para obtener un precio medio final más ajustado a tus necesidades')
     with st.container(border = True):

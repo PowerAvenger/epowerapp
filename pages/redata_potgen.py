@@ -49,10 +49,12 @@ if 'año_seleccionado' not in st.session_state:
     st.session_state.año_seleccionado = 2025
 # usado en el multiselect FC y %mix EVOL    
 if 'tec_seleccionadas' not in st.session_state:
-    st.session_state.tec_seleccionadas = ['Solar fotovoltaica', 'Eólica', 'Hidráulica']
+    #st.session_state.tec_seleccionadas = ['Solar fotovoltaica', 'Eólica', 'Hidráulica']
+    st.session_state.tec_seleccionadas = ['Solar fotovoltaica', 'Eólica']
+
 # usado para opciones de visualizacion en gráfico 5 
-if 'opcion_evol' not in st.session_state:
-    st.session_state.opcion_evol = 'FC'
+#if 'opcion_evol' not in st.session_state:
+#    st.session_state.opcion_evol = 'FC'
 
 # descargamos datos históricos y montamos una tabla con datos diarios tratados (%mix, FC, heq, FU, heqmax)
 with st.spinner('Cargando datos de generación...'):
@@ -134,11 +136,11 @@ graf_fu = graficar_FU(df_out_fu, colores_tec)
 graf_mix = graficar_mix(df_out_mix, colores_tec)
 graf_mix_queso = graficar_mix_queso(df_out_mix, colores_tec)
 
-df_fc_evol = gen_evol(df_out_equiparado)
+df_fc_mix_evol = gen_evol(df_out_equiparado)
 #df_fc_evol = gen_evol(df_out)
-if not df_fc_evol.empty:
-    graf_fc_evol = graficar_evol(df_fc_evol, colores_tec, 'FC')
-    graf_mix_evol = graficar_evol(df_fc_evol, colores_tec, '%_mix_gen')
+#if not df_fc_evol.empty:
+graf_fc_evol = graficar_evol(df_fc_mix_evol, colores_tec, 'FC')
+graf_mix_evol = graficar_evol(df_fc_mix_evol, colores_tec, '%_mix_gen')
 
 #df_efi_evol = calc_efi(df_out, coef_horas)
 df_efi_evol = calc_efi(df_out_equiparado, coef_horas)
@@ -161,18 +163,11 @@ with st.sidebar:
     st.text ('Datos para el Gráfico 3 - Factor de Uso')
     st.code(code_heqmax, language='python')
 
-    st.radio('Selecciona el párametro a visualizar en el Gráfico 5:', ['FC', '%_mix'], key = 'opcion_evol')
+    #st.radio('Selecciona el párametro a visualizar en el Gráfico 5:', ['FC', '%_mix'], key = 'opcion_evol')
     st.multiselect('Selecciona y compara tecnologías', options = tec_filtro, key = 'tec_seleccionadas')
 
 # VISUALIZACION EN EL TABLERO++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 c1, c2, c3 = st.columns(3)
-
-#st.header('Tecnologías de generación', divider='rainbow')
-#zona_mensajes = st.empty()
-#st.selectbox('Selecciona un año', options = lista_años, key = 'año_seleccionado')
-#st.markdown(f'Último día del que se disponen datos: {ultima_fecha_registro}')
-
-#zona_grafica = st.empty()
 
 help_graf1 = (
     "En el eje X, tienes la potencia instalada de cada tecnología.\n\n"
@@ -196,10 +191,14 @@ help_graf4 = (
     "Fíjate que cuanto más arriba esté la bola, el sector o barra son más grandes.\n\n"
 )
 help_graf5 = (
-    "Estos gráficos representan la evolución del FC y el % de generación medio anual para cada tecnología.\n\n"
-    "Nótese que el año 2025 sólo dispone datos hasta el día de hoy.\n\n"
+    "Este gráfico representa la evolución del FC Factor de Capacidad medio anual para cada tecnología.\n\n"
+    "Este valor variará según si el año seleccionado es completo o hasta el último día con registros del año en curso.\n\n"
 )
 help_graf6 = (
+    "Este gráfico representa la evolución del peso en el mix de generación medio para cada tecnología.\n\n"
+    "Este valor variará según si el año seleccionado es completo o hasta el último día con registros del año en curso.\n\n"
+)
+help_graf7 = (
     "Representa la relación entre la GENERACION y la POTENCIA INSTALADA. Es como un FC, pero de todo el sistema eléctrico nacional.\n\n"
     "A mayor relación, mayor eficiencia. El año 2025 es una proyección en base a la generación total a fecha de hoy.\n\n"
 )
@@ -208,46 +207,22 @@ help_graf6 = (
 with c1:
     #GRAFICO 1
     st.subheader(f'Gráfico 1: Factor de Capacidad medio en **:orange[{st.session_state.año_seleccionado}]**', divider = 'rainbow', help=help_graf1)
-    #with st.expander(f'Explicación ℹ️'):
-    #    st.info('En el eje Y tienes la generación de cada tecnología para el año seleccionado y hasta el último día disponible. En el eje X tienes la potencia instalada de cada tecnología.\n'
-    #            'La relación entre ambas magnitudes determina el **:orange[Factor de Capacidad (FC)]**. \n'   
-    #            'Las horas equivalentes es el tiempo que hubiera estado generando una tecnología a tope de su capacidad instalada. En principio, cuanto más gorda la bola, mejor.'
-    #            , icon="ℹ️"
-    #    )
-    #st.caption(f'Factor de Capacidad y horas equivalentes: Generación vs Potencia Instalada. Año {st.session_state.año_seleccionado}')
     st.write(graf_bolas)
 
     #GRAFICO 2
     st.subheader(f'Gráfico 2: Factores de Capacidad diarios en **:orange[{st.session_state.año_seleccionado}]**', divider = 'rainbow', help=help_graf2)
-    #with st.expander(f'Explicación ℹ️'):
-    #    st.info('Para el año seleccionado, se representan los FC diarios y medio para cada tecnología de generación.\n'
-    #            'Las tecnologías están ordenadas de mayor a menor FC medio. \n'
-    #            'Cada punto representa el FC diario de cada tecnología de generación'
-    #            , icon="ℹ️"
-    #    )
-    #st.caption(f'Factores de Capacidad diarios y medio anual. Año {st.session_state.año_seleccionado}')
     st.write(graf_fc)
+
+    st.subheader('Gráfico 7: Eficiencia del sistema', divider = 'rainbow', help=help_graf7)
+    st.write(graf_efi)
 
 with c2:
     #GRAFICO 3
     st.subheader(f'Gráfico 3: Factor de Uso en **:orange[{st.session_state.año_seleccionado}]**', divider = 'rainbow', help=help_graf3)
-    #with st.expander(f'Explicación ℹ️'):
-    #    st.info('Existe un límite teórico de generación en función del recurso disponible. No es lo mismo la disponibilidad de una central nuclear que la de un parque eólico.\n'
-    #        'Aquí es cuando entra en juego el :orange[FU o Factor de Uso] (en %), siendo éste un dato bastante subjetivo.\n'
-    #        'El FU es interesante porque nos da una idea del aprovechamiento **relativo** de dicho recurso disponible para cada una de las tecnologías de generación. \n'
-    #        , icon="ℹ️"
-    #    )
-    #st.code(code_heqmax, language='python')
-    #st.caption(f'Factor de Uso: Según horas equivalentes máximas. Año {st.session_state.año_seleccionado}')
     st.write(graf_fu)
 
     #GRAFICO 4
     st.subheader(f'Gráfico 4: Mix de generación en **:orange[{st.session_state.año_seleccionado}]**', divider = 'rainbow', help=help_graf4)
-    #with st.expander(f'Explicación ℹ️'):
-    #    st.info('Este gráfico está relacionado con el eje Y de las bolas. Generación pura y dura, con dos opciones de visualización.\n'
-    #        'Fíjate que cuanto más arriba esté la bola, el sector o barra son más grandes.\n'
-    #        , icon="ℹ️"
-    #    )
     tipo_mix = st.toggle('Cambiar de tipo de gráfico')
     espacio_mix = st.empty()
     if tipo_mix:
@@ -256,24 +231,15 @@ with c2:
         espacio_mix.write(graf_mix_queso)
 
 with c3:
-    st.subheader('Gráfico 5: FC y Mix de generación Evolution', divider = 'rainbow', help=help_graf5)
-    #with st.expander(f'Explicación ℹ️'):
-    #    st.info('Estos gráficos representan la evolución del FC y el % de generación medio anual para cada tecnología.\n'
-    #        'Nótese que el año 2025 sólo dispone datos hasta el día de hoy.\n'
-    #        , icon="ℹ️"
-    #    )
-    #st.multiselect('Selecciona y compara tecnologías', options = tec_filtro, key = 'tec_seleccionadas')
-    if not df_fc_evol.empty:
-        if st.session_state.opcion_evol == 'FC':
-            st.write(graf_fc_evol)
-        else:
-            st.write(graf_mix_evol)
+    st.subheader('Gráfico 5: Evolución del FC Factor de Capacidad', divider = 'rainbow', help=help_graf5)
+    if not df_fc_mix_evol.empty:
+        st.write(graf_fc_evol)
     else:
         st.warning('Selecciona al menos una tecnología', icon = '⚠️') 
 
-    st.subheader('Gráfico 6: Eficiencia del sistema', divider = 'rainbow', help=help_graf6)
-    #st.info('Representa la relación entre la GENERACION y la POTENCIA INSTALADA. Es como un FC, pero de todo el sistema eléctrico nacional.\n'
-    #    'A mayor relación, mayor eficiencia. El año 2025 es una proyección en base a la generación total a fecha de hoy.\n'
-    #    , icon="ℹ️"
-    #)
-    st.write(graf_efi)
+    st.subheader('Gráfico 6: Evolución del MIX de Generación', divider = 'rainbow', help=help_graf6)
+    if not df_fc_mix_evol.empty:
+        st.write(graf_mix_evol)
+    else:
+        st.warning('Selecciona al menos una tecnología', icon = '⚠️') 
+    

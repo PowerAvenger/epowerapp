@@ -116,6 +116,11 @@ te_fijo = st.session_state.precio_ene / 100
 te_coste_fijo = round(te_fijo * consumo_periodo, 2)
 coste_fijo = float(f"{round((tp_coste_fijo + te_coste_fijo) * (1 + iee) * (1 + iva), 2):.2f}")
 
+
+print(f'precio energía fijo €/kWh: {te_fijo}')
+print(f'coste energía fijo €: {te_coste_fijo}')
+print(f'coste total fijo €: {coste_fijo}')
+
 # Cálculo de la diferencia PVPC menos FIJO
 sobrecoste_tp = round(tp_coste_fijo - tp_coste_pvpc, 2)
 sobrecoste_tp_porc = round(100 * sobrecoste_tp / tp_pvpc, 2)
@@ -192,7 +197,7 @@ with col1:
         st.slider('Precio ofertado: término de potencia (€/kW año)', min_value = tp_boe_2025, max_value = 70.0, step =.1, key = 'tp_fijo')
 
 
-        st.toggle('Usar tres precios de energía', key = 'precios_3p')
+        st.toggle('Usar tres precios de energía (c€/kWh)', key = 'precios_3p')
         zona_precios = st.empty()
         
         if not st.session_state.precios_3p:
@@ -218,7 +223,7 @@ with col1:
         #if precio_ene != st.session_state.precio_ene:        
         #    st.session_state.precio_ene = precio_ene
         st.write(f'El precio fijo medio es :red[{st.session_state.precio_ene:.2f}]c€/kWh')
-        #else:
+        #st.rerun()  
         
     with st.form(border=True, key = 'form_fechas'):
         st.subheader('3.Introduce datos del periodo a analizar')
@@ -251,7 +256,7 @@ with col2:
          
     with col102:
         st.metric('Precio medio del PVPC (c€/kWh)', f"{te_pvpc * 100:,.2f}".replace('.', ','), help = 'Precio medio del PVPC perfilado en el periodo seleccionado (c€/kWh)')
-        st.metric('Coste del Te PVPC(€)', f'{te_coste_pvpc:0,.2f}'.replace('.', ','))
+        st.metric('Coste del Te PVPC(€)', f'{te_coste_pvpc:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.'))
 
     with col103:
         st.dataframe(pt_periodos_filtrado, hide_index=True, use_container_width=True)
@@ -262,9 +267,9 @@ with col2:
 
     col4, col5, col6 = st.columns(3)
     with col4:
-        st.metric('Coste factura PVPC (€)', f'{coste_pvpc:0,.2f}'.replace('.', ','))
+        st.metric('Coste factura PVPC (€)', f'{coste_pvpc:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.'))
     with col5: 
-        st.metric('Coste factura FIJO (€)', f'{coste_fijo:0,.2f}'.replace('.', ','))
+        st.metric('Coste factura FIJO (€)', f'{coste_fijo:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.'))
     with col6:
         with st.container(border = True):
             st.metric('Sobrecoste FIJO (€)', dif_pvpc_fijo, f'{dif_pvpc_fijo_porc} %', 'inverse')

@@ -391,7 +391,7 @@ def gen_evol(df_out):
     df_out_evol = pd.merge(df_fc, df_mix, on = ['año', 'tecnologia'])
     
     print ('df_out_evol')
-    #print (df_out_evol)
+    print (df_out_evol)
     return df_out_evol
 
 def graficar_evol(df, colores_tecnologia, param):
