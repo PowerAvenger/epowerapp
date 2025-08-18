@@ -145,7 +145,7 @@ with col3:
         with col31:
             st.metric('Fecha', value = fecha_ultimo_omip)
         with col32:
-            st.metric(':green[OMIP] medio', value = media_omip_simulindex)
+            st.metric(':blue[OMIP] medio', value = media_omip_simulindex)
 with col4:
     st.info('Aquí tienes la evolución de :blue[OMIP] por trimestres', icon = "ℹ️")
           
