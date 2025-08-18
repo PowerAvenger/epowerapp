@@ -147,14 +147,8 @@ with col3:
         with col32:
             st.metric(':green[OMIP] medio', value = media_omip_simulindex)
 with col4:
-    #st.info('Aquí tienes la evolución de :lightblue[OMIP] por trimestres', icon = "ℹ️")
-    st.markdown(
-        '<div style="background-color:#f0f8ff; padding:10px; border-radius:10px;">'
-        'ℹ️ Aquí tienes la evolución de '
-        '<span style="color:lightblue; font-weight:bold;">OMIP</span> por trimestres'
-        '</div>',
-        unsafe_allow_html=True
-    )         
+    st.info('Aquí tienes la evolución de :blue[OMIP] por trimestres', icon = "ℹ️")
+          
     st.write(graf_omip_trim)
 
 with st.container():
