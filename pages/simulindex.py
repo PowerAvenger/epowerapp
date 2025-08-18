@@ -139,7 +139,7 @@ with col2:
 col3, col4 = st.columns([0.2, 0.8])
 with col3:
     with st.container(border = True):
-        st.info('Aquí tienes el valor medio de :green[OMIP] en €/MWh a partir de los siguientes trimestres, así como la fecha del último registro.', icon = "ℹ️")
+        st.info('Aquí tienes el valor medio de :blue[OMIP] en €/MWh a partir de los siguientes trimestres, así como la fecha del último registro.', icon = "ℹ️")
         st.subheader('Datos de OMIP', divider = 'rainbow')
         col31, col32 = st.columns(2)
         with col31:
