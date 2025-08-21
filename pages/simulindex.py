@@ -71,7 +71,8 @@ st.sidebar.header('', divider='rainbow')
 st.sidebar.header('Simulación de indexados')
 #st.sidebar.subheader('¡Personaliza la simulación!')
 with st.sidebar.expander('¡Personaliza la simulación!', icon = "ℹ️"):
-    st.sidebar.info('Usa el deslizador para modificar el valor de :green[OMIE] estimado. No te preocupes, siempre puedes resetear al valor por defecto.', icon = "ℹ️")
+    #st.sidebar.info('Usa el deslizador para modificar el valor de :green[OMIE] estimado. No te preocupes, siempre puedes resetear al valor por defecto.', icon = "ℹ️")
+    st.write('Usa el deslizador para modificar el valor de :green[OMIE] estimado. No te preocupes, siempre puedes resetear al valor por defecto.')
 with st.sidebar.container(border = True):
     st.slider(':green[OMIE] en €/MWh', min_value = 30, max_value = 150, step = 1, key = 'omip_slider')
     reset_omip = st.sidebar.button('Resetear OMIE', on_click = reset_slider)
