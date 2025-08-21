@@ -79,5 +79,10 @@ def carga_total_sheets(): #sheet_name=None
     data = worksheet.get_all_records()
     df = pd.DataFrame(data)
     df['fecha'] = pd.to_datetime(df['fecha']).dt.date
+
+    # 🔹 Leer solo la columna de fechas (columna A)
+    fechas_col = worksheet.col_values(1)
+    ultima_fecha_str = fechas_col[-1]
+    st.session_state.ultima_fecha_sheets = pd.to_datetime(ultima_fecha_str, errors='coerce').date()
     
     return df

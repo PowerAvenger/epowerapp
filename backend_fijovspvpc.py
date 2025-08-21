@@ -169,7 +169,7 @@ def obtener_tabla_filtrada(df_datos_horarios_combo, fecha_ini, fecha_fin, consum
     return df_datos_horarios_combo_filtrado_consumo, pt_horario_filtrado, media_precio_perfilado,coste_pvpc_perfilado
 
 
-
+# 
 def optimizar_consumo_media_horaria(df: pd.DataFrame):
     """
     Optimiza el perfil medio horario (24h) redistribuyendo el consumo hacia las horas con menor precio medio.
@@ -333,12 +333,23 @@ def optimizar_consumo_suavizado(df: pd.DataFrame, consumo_total_anual: float, la
     return df, df_perfiles, resumen
 
 def grafico_comparativo_perfiles(df_perfiles):
+    color_streamlit = st.get_option("theme.primaryColor")
     fig = px.line(df_perfiles.reset_index(),
-                  x='hora', 
-                  y=['original', 'optimizado'],
-                  title='Comparativa de perfiles horarios (kWh)',
-                  labels={'value': 'kWh', 'hora': 'Hora del día', 'variable': 'Perfil'},
-                  height=400)
+        x='hora', 
+        y=['original', 'optimizado'],
+        title='Comparativa de perfiles horarios (kWh)',
+        labels={'value': 'kWh', 'hora': 'Hora del día', 'variable': 'Perfil'},
+        height=400,
+        color_discrete_map={
+                'original': color_streamlit,
+                'optimizado': 'lime'
+            }
+    )
+
+    fig.update_traces(
+        line=dict(width=3),
+        selector=dict(name='optimizado')
+    )
     
     fig.update_layout(
         xaxis=dict(tickmode='linear'),
