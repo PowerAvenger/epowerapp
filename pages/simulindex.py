@@ -89,9 +89,9 @@ with st.sidebar.container(border=True):
 zona_mensajes = st.sidebar.empty()
 
 
-simul20_margen = simul20 + st.session_state.margen / 10
-simul30_margen = simul30 + st.session_state.margen / 10
-simul61_margen = simul61 + st.session_state.margen / 10
+simul20_margen = simul20 + st.session_state.margen_simulindex / 10
+simul30_margen = simul30 + st.session_state.margen_simulindex / 10
+simul61_margen = simul61 + st.session_state.margen_simulindex / 10
 
 ##LAYOUT DE LA PÁGINA PRINCIPAL-----------------------------------------------------------------------------------------------------------------------------
 #st.title("Simulindex :orange[e]PowerAPP©")
