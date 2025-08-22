@@ -62,7 +62,7 @@ df_FTB_mensual, fig = obtener_meff_mensual(df_historicos_FTB, df_mes)
 
 
 # Inicializamos margen a cero
-if 'margen' not in st.session_state:
+if 'margen_simulindex' not in st.session_state:
     st.session_state.margen = 0
 
 
@@ -84,7 +84,7 @@ with st.sidebar.container(border=True):
     st.sidebar.info('¿Quieres afinar un poco más. Añade :violet[margen] al gusto y obtén un precio medio de indexado más ajustado con tus necesidades.', icon="ℹ️")
     añadir_margen = st.sidebar.toggle('Quieres añadir :violet[margen]?')
     if añadir_margen:
-        st.sidebar.slider('Añade margen al precio base de indexado en €/MWh', min_value = 1, max_value = 50, step = 1, key = 'margen')
+        st.sidebar.slider('Añade margen al precio base de indexado en €/MWh', min_value = 1, max_value = 50, step = 1, key = 'margen_simulindex')
 
 zona_mensajes = st.sidebar.empty()
 
