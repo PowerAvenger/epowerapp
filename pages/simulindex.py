@@ -63,7 +63,7 @@ df_FTB_mensual, fig = obtener_meff_mensual(df_historicos_FTB, df_mes)
 
 # Inicializamos margen a cero
 if 'margen_simulindex' not in st.session_state:
-    st.session_state.margen = 0
+    st.session_state.margen_simulindex = 0
 
 
 #BARRA LATERAL+++++++++++++++++++++++++++++++++++++++++++++++++++++++
