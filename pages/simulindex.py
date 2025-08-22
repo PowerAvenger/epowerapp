@@ -117,7 +117,7 @@ with col1:
         with col11:
             st.metric(':green[OMIE] (€/MWh)', value = st.session_state.omip_slider, help = 'Este es el valor OMIE de referencia que has utilizado como entrada')
         with col12:
-            st.metric(':violet[Margen] (€/MWh)', value = st.session_state.margen, help = 'Margen que añades para obtener un precio medio final más ajustado a tus necesidades')
+            st.metric(':violet[Margen] (€/MWh)', value = st.session_state.margen_simulindex, help = 'Margen que añades para obtener un precio medio final más ajustado a tus necesidades')
     with st.container(border = True):
         st.subheader(':green-background[Datos de salida]', divider = 'rainbow')
         col13, col14 = st.columns(2)
