@@ -399,7 +399,7 @@ def diarios(datos, fecha_ini, fecha_fin):
             )
         )
 
-        # añadimos gráfico de línea para la media
+        # añadimos gráfico de línea para la media movil
         graf_ecv_diario.add_trace(
             go.Scatter(
                 x = datos_dia['fecha'],
