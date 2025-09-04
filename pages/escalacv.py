@@ -3,7 +3,7 @@ from utilidades import generar_menu, init_app
 
 
 
-from backend_escalacv import leer_json, diarios_totales, diarios, mensuales, horarios
+from backend_escalacv import leer_json, diarios_totales, diarios, mensuales, horarios, medias_horarias
 import datetime
 from datetime import datetime
 import pandas as pd
@@ -125,6 +125,8 @@ valor_maximo_horario = round(datos_horarios['value'].max(),2)
 fecha_min_horario = datos_horarios.loc[datos_horarios['value'].idxmin(), 'fecha']
 fecha_max_horario = datos_horarios.loc[datos_horarios['value'].idxmax(), 'fecha']
 
+medias_horarias_filtrado, graf_medias_horarias = medias_horarias(datos_año_filtrado)
+
 #st.write(ultimo_registro) 
 #   fecha_descarga=pasar_fecha()
     #st.write(ultima_descarga)
@@ -132,7 +134,8 @@ fecha_max_horario = datos_horarios.loc[datos_horarios['value'].idxmax(), 'fecha'
 años_lista = list(range(2018, 2026))
 
 
-
+# ELEMENTOS DE LA BARRA LATERAL DE OPCIONES-----------------------------------------------------------------------------------------------
+st.sidebar.header('', divider='rainbow')
 st.sidebar.selectbox('Selecciona el año', options = años_lista, key = 'año_seleccionado_esc')
 st.sidebar.slider('Selecciona el día', min_value= fecha_min_select_dia, max_value=fecha_max_select_dia, key = 'dia_seleccionado_esc')
 st.sidebar.radio('Selecciona el componente de mercado', options=['SPOT', 'SSAA', 'SPOT+SSAA'], key = 'componente')
@@ -148,7 +151,8 @@ if 'dos_colores' in st.session_state and st.session_state.dos_colores:
 
 
     
-
+# VISUALIZACIÓN ÁREA PRINCIPAL---------------------------------------------------------------------------------------------------------
+# Gráfijo fijo de medias diarias y anuales
 with st.container():
     col1,col2=st.columns([0.8,0.2])
     with col1:
@@ -160,6 +164,7 @@ with st.container():
         st.metric(f'Precio mínimo diario ( {fecha_min_diario_total})', value=valor_minimo_diario_total)
         st.metric(f'Precio máximo diario ({fecha_max_diario_total})', value=valor_maximo_diario_total)
 
+# Gráfico interactivo de medias diarias según el año seleccionado
 with st.container():
     col1,col2=st.columns([0.8,0.2])
     with col1:
@@ -171,33 +176,40 @@ with st.container():
         st.metric(f'Precio mínimo diario ( {fecha_min_diario})', value=valor_minimo_diario)
         st.metric(f'Precio máximo diario ({fecha_max_diario})', value=valor_maximo_diario)
 
-col5,col6,col7=st.columns([.4,.4,.2])
+with st.container():
+    col5,col6,col7=st.columns([.4,.4,.2])
+    with col5:
+        st.plotly_chart(graf_ecv_mensual)
+    with col6:
+        st.plotly_chart(graf_medias_horarias)
+    with col7:
+        st.subheader('Datos en €/MWh',divider='rainbow')
+        sub1, sub2 = st.columns([.7,.3])
+        with sub1:
+            st.metric(f'Precio mínimo horario ({fecha_min_horario})', value=valor_minimo_horario)
+            st.metric(f'Precio máximo horario ({fecha_max_horario})', value=valor_maximo_horario)
+        with sub2:
+            def mod_min():
+                st.session_state.dia_seleccionado_esc = fecha_min_horario
+            def mod_max():
+                st.session_state.dia_seleccionado_esc = fecha_max_horario
 
-with col5:
-    st.plotly_chart(graf_ecv_mensual)
-with col6:
-    st.write(graf_horario_dia)
-with col7:
+            st.button('Seleccionar día', on_click=mod_min, key='mod_min')
+            st.button('Seleccionar día', on_click=mod_max)
 
-    st.subheader('Datos en €/MWh',divider='rainbow')
-    st.metric(f'Precio medio diario', value=valor_medio_diario_select)
-    st.metric(f'Precio mínimo horario (hora: {hora_min_select})', value=valor_minimo_horario_select)
-    st.metric(f'Precio máximo horario (hora: {hora_max_select})', value=valor_maximo_horario_select)
+with st.container():
+    col5,col6,col7=st.columns([.4,.4,.2])
+    with col6:
+        st.write(graf_horario_dia)
+    with col7:
+        st.subheader('Datos en €/MWh',divider='rainbow')
+        st.metric(f'Precio medio diario', value=valor_medio_diario_select)
+        st.metric(f'Precio mínimo horario (hora: {hora_min_select})', value=valor_minimo_horario_select)
+        st.metric(f'Precio máximo horario (hora: {hora_max_select})', value=valor_maximo_horario_select)
 
-    #st.metric(f'Precio medio diario ( {fecha_min_horario})', value=valor_minimo_horario)
-    sub1, sub2 = st.columns([.7,.3])
-    with sub1:
-        st.metric(f'Precio mínimo horario ({fecha_min_horario})', value=valor_minimo_horario)
-        st.metric(f'Precio máximo horario ({fecha_max_horario})', value=valor_maximo_horario)
-    with sub2:
-        def mod_min():
-            st.session_state.dia_seleccionado_esc = fecha_min_horario
-        def mod_max():
-            st.session_state.dia_seleccionado_esc = fecha_max_horario
-
-        st.button('Seleccionar día', on_click=mod_min, key='mod_min')
-        st.button('Seleccionar día', on_click=mod_max)
-            
+        #st.metric(f'Precio medio diario ( {fecha_min_horario})', value=valor_minimo_horario)
+        
+                
         
     
 

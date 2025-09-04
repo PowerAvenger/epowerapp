@@ -793,7 +793,163 @@ def horarios(datos):
     return datos_horarios, graf_horaria_dia, datos_horarios_filtrado
     
     
+# DATOS HORARIOS PARA UN DÍA SELECCIONADO+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+def medias_horarias(datos):
+    #datos_horarios = datos[datos['año'] == st.session_state.get('año_seleccionado_esc', 2025)] #.copy()
+    datos_horarios=datos.copy()
+
+    print('datos recibidos por medias horarias')
+    print(datos_horarios)
+    # --- 4. Calcular medias horarias ---
+
+    componente = st.session_state.get('componente', 'SPOT')
+    dos_colores = st.session_state.get('dos_colores', False)
+
+    if componente in ['SPOT+SSAA'] and dos_colores:
+        datos_horarios = (
+            datos_horarios
+            .groupby('hora', as_index=False)[['value','value_spot','value_ssaa']]
+            #.groupby('hora', as_index=False)['value']
+            .mean()
+        )
+    else:
+        datos_horarios = (
+            datos_horarios
+            #.groupby('hora', as_index=False)[['value','value_spot','value_ssaa']]
+            .groupby('hora', as_index=False)['value']
+            .mean()
+        )
+        
     
+    #datos_horarios['fecha'] = pd.to_datetime(datos_horarios['fecha'], format='%d/%m/%Y')
+
+    df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes()
+    datos_horarios['escala']=pd.cut(datos_horarios['value'],bins=df_limites['rango'],labels=etiquetas,right=True)
+    lista_escala=datos_horarios['escala'].unique()
+    datos_horarios['color']=datos_horarios['escala'].map(colores)
+    
+
+    
+    escala_horaria=['muy bajo', 'bajo', 'medio', 'alto', 'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2']
+    escala_ordenada_hora = sorted(escala_horaria, key=lambda x: valor_asignado_a_rango[x], reverse=True)
+    datos_horarios['escala']=pd.Categorical(datos_horarios['escala'],categories=escala_ordenada_hora, ordered=True)
+
+    #print(datos_horarios.dtypes)
+
+    #fecha_max = datos_horarios['fecha'].max()
+    #if st.session_state.dia_seleccionado_esc > fecha_max:
+    #    datos_horarios_filtrado = datos_horarios[datos_horarios['fecha'] == fecha_max]
+    #else:
+    #    datos_horarios_filtrado = datos_horarios[datos_horarios['fecha'] == st.session_state.dia_seleccionado_esc]
+    
+    datos_horarios_filtrado = datos_horarios.copy()
+    print('datos horarios filtrado')
+    print(datos_horarios_filtrado)
+
+
+    """
+    Esto es para la curva de precios medios horarios del año seleccionado
+    """
+    
+    if componente in ['SPOT+SSAA'] and dos_colores:
+        datos_horarios_filtrado = datos_horarios_filtrado.melt(id_vars='hora', value_vars=['value_spot', 'value_ssaa'], var_name='componente', value_name='value_bis')
+        datos_horarios_filtrado = datos_horarios_filtrado.rename(columns={'value_bis': 'value'})
+
+    #    pt_curva_horaria = datos.pivot_table(
+    #        values = ['value_spot','value_ssaa'],
+    #        index = 'hora'
+    #    )
+    #    pt_curva_horaria = pt_curva_horaria.melt(id_vars='hora', var_name='componente', value_name='value')
+    #    pt_curva_horaria = pt_curva_horaria.reset_index()
+        
+    #else:    
+    #    pt_curva_horaria = datos.pivot_table(
+    #        values = 'value',
+    #        index = 'hora'
+    #    ).reset_index()
+
+
+    #pt_curva_horaria = pt_curva_horaria['value'].round(2)
+    print('datos horarios filtrado')
+    print(datos_horarios_filtrado)
+
+    print('curva horaria')
+    #print(pt_curva_horaria)
+
+    # GRAFICO DE VALORES HORARIOS POR DIA FILTRADO----------------------------------------------
+    componente = st.session_state.get('componente', 'SPOT')
+    if componente in ['SPOT']:
+        title = f'Perfil horario medio del SPOT. Año {st.session_state.año_seleccionado_esc}'
+        tick_y = 20
+    elif componente in ['SPOT+SSAA']:
+        title = f'Perfil horario medio del SPOT+SSAA. Año {st.session_state.año_seleccionado_esc}'
+        tick_y = 20
+    else:
+        title = f'Perfil horario medio de los SSAA. Día Año {st.session_state.año_seleccionado_esc}'
+        tick_y = 4
+
+    if componente == 'SPOT+SSAA' and dos_colores:
+        graf_horaria_dia = px.bar(
+            datos_horarios_filtrado,
+            x = 'hora',
+            y = 'value',
+            title = title,
+            labels = {'value': '€/MWh', 'escala':'escala_cv'},
+            color='componente',
+            color_discrete_map={'value_spot': 'green', 'value_ssaa': 'lightgreen'}
+            #category_orders = {'escala':escala_ordenada_hora},
+        )
+    else:
+
+        graf_horaria_dia = px.bar(
+            datos_horarios_filtrado,
+            x='hora',
+            y='value',
+            title=title,
+            labels={'value': '€/MWh', 'escala':'escala_cv'},
+            color='escala',
+            color_discrete_map=colores,
+            category_orders = {'escala':escala_ordenada_hora},
+        )
+
+    #graf_horaria_linea = go.Scatter(
+    #    x=pt_curva_horaria['hora'],
+    #    y=pt_curva_horaria['value'],
+    #    name='Media Anual',
+    #    mode='lines',
+    #    line=dict(color='yellow', width=3),  # opcional: dar estilo a la línea
+    #)
+
+    #graf_horaria_dia.add_trace(graf_horaria_linea)
+
+    min_horarios = datos_horarios['value'].min()
+    max_horarios = datos_horarios['value'].max()
+    #min_media = pt_curva_horaria['value'].min()
+    #max_media = pt_curva_horaria['value'].max()
+    #min_y = min(min_horarios,min_media)
+    #max_y = max(max_horarios, max_media)
+    
+    graf_horaria_dia.update_layout(
+        yaxis=dict(
+            #range=[min_y,max_y],
+            autorange = True,
+            tickmode="linear",            # Escala lineal
+            #tick0=0,                      # Comenzar en 0
+            dtick=tick_y                     # Incrementos de 20
+       
+        ),
+        title={'x': 0.5, 'xanchor': 'center'},
+        #legend=dict(
+        #    orientation="v",  # Leyenda horizontal
+        #    x=0.5,
+        #    xanchor="center",
+        #    y=1,
+        #    yanchor="top",
+        #),
+        bargap = .5
+    )        
+
+    return datos_horarios_filtrado, graf_horaria_dia
     
     
 #print(datos_mes)
