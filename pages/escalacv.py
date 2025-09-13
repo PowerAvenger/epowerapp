@@ -1,9 +1,7 @@
 import streamlit as st
 from utilidades import generar_menu, init_app
 
-
-
-from backend_escalacv import leer_json, diarios_totales, diarios, mensuales, horarios, medias_horarias
+from backend_escalacv import leer_json, diarios_totales, diarios, mensuales, horarios, medias_horarias, evolucion_mensual, meses_español
 import datetime
 from datetime import datetime
 import pandas as pd
@@ -20,10 +18,16 @@ if 'inicio' not in st.session_state:
     st.session_state.inicio = True
 
 fecha_hoy=datetime.today().date()
+num_mes_actual = fecha_hoy.month
+mes_actual = meses_español[num_mes_actual]
 
 if 'año_seleccionado_esc' not in st.session_state:
     st.session_state.año_seleccionado_esc = 2025
     st.session_state.año_anterior_esc = 2025
+
+if 'mes_seleccionado_esc' not in st.session_state:
+    st.session_state.mes_seleccionado_esc = mes_actual
+    #st.session_state.año_anterior_esc = 2025    
 
 CREDENTIALS = st.secrets['GOOGLE_SHEETS_CREDENTIALS']
 
@@ -92,6 +96,7 @@ print (f'fecha max dia select: {fecha_max_select_dia}')
 
 
 graf_ecv_mensual = mensuales(datos_dia)
+graf_ecv_evol_mes_años = evolucion_mensual(datos_totales)
 #graf_ecv_mensual = mensuales(datos_año_filtrado)
 
 
@@ -132,11 +137,13 @@ medias_horarias_filtrado, graf_medias_horarias = medias_horarias(datos_año_filt
     #st.write(ultima_descarga)
 
 años_lista = list(range(2018, 2026))
+meses_lista = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']
 
 
 # ELEMENTOS DE LA BARRA LATERAL DE OPCIONES-----------------------------------------------------------------------------------------------
 st.sidebar.header('', divider='rainbow')
 st.sidebar.selectbox('Selecciona el año', options = años_lista, key = 'año_seleccionado_esc')
+st.sidebar.selectbox('Selecciona el mes', options = meses_lista, key = 'mes_seleccionado_esc')
 st.sidebar.slider('Selecciona el día', min_value= fecha_min_select_dia, max_value=fecha_max_select_dia, key = 'dia_seleccionado_esc')
 st.sidebar.radio('Selecciona el componente de mercado', options=['SPOT', 'SSAA', 'SPOT+SSAA'], key = 'componente')
 
@@ -199,6 +206,8 @@ with st.container():
 
 with st.container():
     col5,col6,col7=st.columns([.4,.4,.2])
+    with col5:
+        st.write(graf_ecv_evol_mes_años)
     with col6:
         st.write(graf_horario_dia)
     with col7:
