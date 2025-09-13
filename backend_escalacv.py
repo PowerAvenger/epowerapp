@@ -692,6 +692,10 @@ def evolucion_mensual(df):
         df_mensual['media'] = df_mensual.groupby('componente')['value'].expanding().mean().reset_index(level=0, drop=True)
         #media_spot = df[df['componente'] == 'value_spot'].sort_values('fecha')['media'].iloc[-1]
         #media_ssaa = df[df['componente'] == 'value_ssaa'].sort_values('fecha')['media'].iloc[-1]
+
+        totales_mes = df_mensual.dropna(subset=['componente', 'value']) \
+            .groupby(['año', 'mes'])['value'].transform('sum')
+        df_mensual['peso_%'] = (df_mensual['value'] / totales_mes * 100).round(2) 
     else:
         df_mensual = df.groupby(['año','mes']).agg({
             'value':'mean',
@@ -709,6 +713,8 @@ def evolucion_mensual(df):
     print(df_mensual)
     # Filtrar solo el mes elegido
     datos_mes = df_mensual[df_mensual['mes_nombre'] == st.session_state.mes_seleccionado_esc]
+
+       
 
     print('medias mensuales del mes seleccionado')
     print(datos_mes)
@@ -741,7 +747,7 @@ def evolucion_mensual(df):
             #category_orders = {'mes_nombre': orden_meses},
             
             labels = {'value':'€/MWh', 'escala':'escala_cv','mes_nombre':'mes'},
-            title = f'Peso en % del SPOT y de los SSAA. Año {st.session_state.año_seleccionado_esc}',
+            title = f'Peso en % del SPOT y de los SSAA.Mes {st.session_state.mes_seleccionado_esc}',
             #title=title,
             text = 'peso_%',
             #text_auto=True
