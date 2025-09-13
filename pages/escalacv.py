@@ -137,7 +137,7 @@ medias_horarias_filtrado, graf_medias_horarias = medias_horarias(datos_año_filt
     #st.write(ultima_descarga)
 
 años_lista = list(range(2018, 2026))
-meses_lista = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']
+meses_lista = ['todos', 'ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']
 
 
 # ELEMENTOS DE LA BARRA LATERAL DE OPCIONES-----------------------------------------------------------------------------------------------

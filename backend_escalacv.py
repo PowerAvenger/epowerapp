@@ -679,40 +679,53 @@ def evolucion_mensual(df):
     dos_colores = st.session_state.get('dos_colores', False)
     peso_comp = st.session_state.get('peso_comp', False)
     # Agrupar por año y mes
+    
     if componente in ['SPOT+SSAA'] and dos_colores:
-        df_mensual = df.groupby(['año','mes','componente']).agg({
-            'value':'mean',
-            
-            'mes_nombre':'first'
-        }).reset_index()
-
-        #print('datos mes antes de media')
-        #print(datos_mes)
-        #datos_dia = datos_dia.melt(id_vars=['año', 'mes_nombre'], var_name='componente', value_name='value')
+        if st.session_state.mes_seleccionado_esc != 'todos':
+            df_mensual = df.groupby(['año','mes','componente']).agg({
+                'value':'mean',
+                'mes_nombre':'first'
+            }).reset_index()
+            totales_mes = df_mensual.dropna(subset=['componente', 'value']) \
+            .groupby(['año', 'mes'])['value'].transform('sum')
+        else:
+            df_mensual = df.groupby(['año','componente']).agg({
+                'value':'mean',
+                'mes_nombre':'first'
+            }).reset_index()
+            totales_mes = df_mensual.dropna(subset=['componente', 'value']) \
+            .groupby('año')['value'].transform('sum')
+       
         df_mensual['media'] = df_mensual.groupby('componente')['value'].expanding().mean().reset_index(level=0, drop=True)
         #media_spot = df[df['componente'] == 'value_spot'].sort_values('fecha')['media'].iloc[-1]
         #media_ssaa = df[df['componente'] == 'value_ssaa'].sort_values('fecha')['media'].iloc[-1]
 
-        totales_mes = df_mensual.dropna(subset=['componente', 'value']) \
-            .groupby(['año', 'mes'])['value'].transform('sum')
+        #totales_mes = df_mensual.dropna(subset=['componente', 'value']) \
+        #    .groupby(['año', 'mes'])['value'].transform('sum')
         df_mensual['peso_%'] = (df_mensual['value'] / totales_mes * 100).round(2) 
     else:
-        df_mensual = df.groupby(['año','mes']).agg({
-            'value':'mean',
-            'mes_nombre':'first'
-        }).reset_index() 
+        if st.session_state.mes_seleccionado_esc != 'todos':
+            df_mensual = df.groupby(['año','mes']).agg({
+                'value':'mean',
+                'mes_nombre':'first'
+            }).reset_index() 
+        else:
+            df_mensual = df.groupby(['año']).agg({
+                'value':'mean',
+                'mes_nombre':'first'
+            }).reset_index() 
 
-    #df_mensual = df.groupby(['año','mes']).agg({
-    #        'value':'mean',
-    #        'mes_nombre':'first'
-    #    }).reset_index()
-      
+          
     df_mensual['value']=round(df_mensual['value'],2)
 
     print('medias mensuales de todos los meses')
     print(df_mensual)
+
     # Filtrar solo el mes elegido
-    datos_mes = df_mensual[df_mensual['mes_nombre'] == st.session_state.mes_seleccionado_esc]
+    if st.session_state.mes_seleccionado_esc != 'todos':
+        datos_mes = df_mensual[df_mensual['mes_nombre'] == st.session_state.mes_seleccionado_esc]
+    else:
+        datos_mes = df_mensual
 
        
 
