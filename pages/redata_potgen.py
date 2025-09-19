@@ -56,20 +56,21 @@ if 'tec_seleccionadas' not in st.session_state:
 #if 'opcion_evol' not in st.session_state:
 #    st.session_state.opcion_evol = 'FC'
 
-# descargamos datos históricos y montamos una tabla con datos diarios tratados (%mix, FC, heq, FU, heqmax)
+# descargamos datos históricos y montamos una tabla con TODOS los datos diarios tratados (%mix, FC, heq, FU, heqmax)
 with st.spinner('Cargando datos de generación...'):
     df_in_gen = leer_json(file_id_gen, widget_gen)
 with st.spinner('Cargando datos de potencia instalada...'):
     df_in_pot = leer_json(file_id_pot, widget_pot)
 with st.spinner('Tratando los datos...'):
-    df_out = tablas_diario(df_in_gen, df_in_pot, horas_eq_max)
+    #df con TODOS los datos diarios
+    df_diario_all = tablas_diario(df_in_gen, df_in_pot, horas_eq_max)
 
 
 
 fecha_hoy = datetime.now().date()
 año_hoy = fecha_hoy.year
 dia_hoy = fecha_hoy.day
-ultima_fecha_registro = df_out['fecha'].iloc[-1].date()
+ultima_fecha_registro = df_diario_all['fecha'].iloc[-1].date()
 def es_bisiesto(año):
     return (año % 4 == 0 and año % 100 != 0) or (año % 400 == 0)
 año_bisiesto = es_bisiesto(año_hoy)
@@ -85,7 +86,7 @@ print(f'coef horas =  {coef_horas}')
 
 
 
-df_out_filtrado = df_out[df_out['año'] == st.session_state.año_seleccionado]
+df_año_filtrado = df_diario_all[df_diario_all['año'] == st.session_state.año_seleccionado]
 
 #'''CODIGO AÑADIDO PARA INTENTAR FILTRAR LOS AÑOS HASTA FECHA SIMILAR A LA DEL ÚLTIMO REGISTRO DEL AÑO EN CURSO'''
 # Obtener día y mes del último registro
@@ -96,16 +97,16 @@ mes_ult = ultima_fecha_registro.month
 año_actual = ultima_fecha_registro.year
 
 # Filtro adicional si el toggle está activado y el año seleccionado es anterior al actual
-if st.session_state.get('dias_filtrados',False) and st.session_state.año_seleccionado < año_actual:
-    df_out_filtrado = df_out_filtrado[
-        (df_out_filtrado['mes_num'] < mes_ult) |
-        ((df_out_filtrado['mes_num'] == mes_ult) & (df_out_filtrado['fecha'].dt.day <= dia_ult))
+if st.session_state.get('dias_equiparados', True) and st.session_state.año_seleccionado < año_actual:
+    df_año_filtrado = df_año_filtrado[
+        (df_año_filtrado['mes_num'] < mes_ult) |
+        ((df_año_filtrado['mes_num'] == mes_ult) & (df_año_filtrado['fecha'].dt.day <= dia_ult))
     ]
 
-# usado para los gráficos 5 y 6, 
-df_out_equiparado = df_out.copy()
+# usado para los gráficos 5 y 6, donde comparamos todos los años
+df_out_equiparado = df_diario_all.copy()
 
-if st.session_state.get('dias_filtrados', False):
+if st.session_state.get('dias_equiparados', True):
     df_out_equiparado = df_out_equiparado[
         (df_out_equiparado['mes_num'] < mes_ult) |
         ((df_out_equiparado['mes_num'] == mes_ult) & (df_out_equiparado['fecha'].dt.day <= dia_ult))
@@ -117,18 +118,18 @@ nombres_meses = {
     5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
     9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
 }
-meses_disponibles = sorted(df_out_filtrado['mes_num'].unique())
+meses_disponibles = sorted(df_año_filtrado['mes_num'].unique())
 meses_nombres = ["TODOS"] + [nombres_meses[m] for m in meses_disponibles]
 
 # Aplicar filtro solo si no es 'TODOS'
 if st.session_state.get('mes_seleccionado_redata', 'TODOS') != "TODOS":
     num_mes_seleccionado = {v: k for k, v in nombres_meses.items()}[st.session_state.mes_seleccionado_redata]
-    df_out_filtrado = df_out_filtrado[df_out_filtrado['mes_num'] == num_mes_seleccionado]
+    df_año_filtrado = df_año_filtrado[df_año_filtrado['mes_num'] == num_mes_seleccionado]
     df_out_equiparado = df_out_equiparado[df_out_equiparado['mes_num'] == num_mes_seleccionado]
 
 
-
-df_out_bolas, df_out_fc, df_out_fu, df_out_mix  = tablas_salida(df_out_filtrado, tec_filtro) 
+#dfs con el año seleccionado
+df_out_bolas, df_out_fc, df_out_fu, df_out_mix  = tablas_salida(df_año_filtrado, tec_filtro) 
 
 graf_bolas = graficar_bolas(df_out_bolas, colores_tec)
 graf_fc = graficar_new_fc(df_out_fc, colores_tec)
@@ -156,9 +157,10 @@ with st.sidebar:
     #st.info('Todos los datos son elaborados a partir de REData / Generación / Estructura generación y Potencia instalada (sistema eléctrico nacional todas las tecnologías).',icon="ℹ️")
     
     st.write(f'Datos disponibles hasta el {ultima_fecha_registro.strftime("%d.%m.%Y")}')
-    st.selectbox('Selecciona un año', options = lista_años, key = 'año_seleccionado')
-    st.toggle('Equiparar años anteriores al actual', key = 'dias_filtrados')
-    st.selectbox('Selecciona un mes', options = meses_nombres, key = 'mes_seleccionado_redata')
+    st.toggle('Equiparar años anteriores al actual', key = 'dias_equiparados', value = True)
+    st.selectbox('Selecciona un año (gráficos 1 a 4)', options = lista_años, key = 'año_seleccionado')
+    
+    st.selectbox('Selecciona un mes (todos los gráficos)', options = meses_nombres, key = 'mes_seleccionado_redata')
         
     st.text ('Datos para el Gráfico 3 - Factor de Uso')
     st.code(code_heqmax, language='python')
@@ -202,27 +204,63 @@ help_graf7 = (
     "Representa la relación entre la GENERACION y la POTENCIA INSTALADA. Es como un FC, pero de todo el sistema eléctrico nacional.\n\n"
     "A mayor relación, mayor eficiencia. El año 2025 es una proyección en base a la generación total a fecha de hoy.\n\n"
 )
-            
+
+#definir texto secundario de los gráficos
+#Si el toogle 'dias_equiparados' es True y mes = TODOS, indicar 'Hasta el día {ultimo_dia_registro} con formato dd.mm
+#Si el toogle 'dias_equiparados' es True y mes = cualquiera menos el mes actual (mes_ult), indicar 'Mes de {mes_nombre}
+#Si el toogle 'dias_equiparados' es True y mes =  mes actual (mes_ult), indicar 'Mes de {mes_nombre} hasta el {ultimo_dia_registro} con formato dd.mm'
+#Si el toogle 'dias_equiparados' es False y mes = TODOS, indicar 'Hasta el día 31.12'
+#Si el toogle 'dias_equiparados' es False y mes = cualquiera menos el mes actual (mes_ult), indicar 'Mes de {mes_nombre}  
+#Si el toogle 'dias_equiparados' es False y mes =  mes actual (mes_ult), indicar 'Mes de {mes_nombre} hasta el {ultimo_dia_registro} con formato dd.mm'
+#if st.session_state.get('dias_equiparados', True):
+if st.session_state.año_seleccionado == año_actual:
+    if st.session_state.mes_seleccionado_redata == 'TODOS':
+        subtexto = f'Hasta el día {ultima_fecha_registro.strftime("%d")} de {nombres_meses[mes_ult]}'
+    elif st.session_state.mes_seleccionado_redata == nombres_meses[mes_ult]:
+        subtexto = f'Mes de {st.session_state.mes_seleccionado_redata} hasta el día {ultima_fecha_registro.strftime("%d")}'
+    else:
+        subtexto = f'Mes de {st.session_state.mes_seleccionado_redata}'
+else:
+    if st.session_state.dias_equiparados == True:
+        if st.session_state.mes_seleccionado_redata == 'TODOS':
+            subtexto = f'Hasta el día {ultima_fecha_registro.strftime("%d")} de {nombres_meses[mes_ult]}'
+        elif st.session_state.mes_seleccionado_redata == nombres_meses[mes_ult]:
+            subtexto = f'Mes de {st.session_state.mes_seleccionado_redata} hasta el día {ultima_fecha_registro.strftime("%d")}'
+        else:
+            subtexto = f'Mes de {st.session_state.mes_seleccionado_redata}'
+    else:
+        if st.session_state.mes_seleccionado_redata == 'TODOS':
+            subtexto = f'Hasta el día 31 de diciembre'
+        else:
+            subtexto = f'Mes de {st.session_state.mes_seleccionado_redata}'
+
+
 
 with c1:
     #GRAFICO 1
     st.subheader(f'Gráfico 1: Factor de Capacidad medio en **:orange[{st.session_state.año_seleccionado}]**', divider = 'rainbow', help=help_graf1)
+    st.write(subtexto)
     st.write(graf_bolas)
 
     #GRAFICO 2
     st.subheader(f'Gráfico 2: Factores de Capacidad diarios en **:orange[{st.session_state.año_seleccionado}]**', divider = 'rainbow', help=help_graf2)
+    st.write(subtexto)
     st.write(graf_fc)
 
+    #GRAFICO 7
     st.subheader('Gráfico 7: Eficiencia del sistema', divider = 'rainbow', help=help_graf7)
+    st.write(subtexto)
     st.write(graf_efi)
 
 with c2:
     #GRAFICO 3
     st.subheader(f'Gráfico 3: Factor de Uso en **:orange[{st.session_state.año_seleccionado}]**', divider = 'rainbow', help=help_graf3)
+    st.write(subtexto)
     st.write(graf_fu)
 
     #GRAFICO 4
     st.subheader(f'Gráfico 4: Mix de generación en **:orange[{st.session_state.año_seleccionado}]**', divider = 'rainbow', help=help_graf4)
+    st.write(subtexto)
     tipo_mix = st.toggle('Cambiar de tipo de gráfico')
     espacio_mix = st.empty()
     if tipo_mix:
@@ -232,12 +270,14 @@ with c2:
 
 with c3:
     st.subheader('Gráfico 5: Evolución del FC Factor de Capacidad', divider = 'rainbow', help=help_graf5)
+    st.write(subtexto)
     if not df_fc_mix_evol.empty:
         st.write(graf_fc_evol)
     else:
         st.warning('Selecciona al menos una tecnología', icon = '⚠️') 
 
     st.subheader('Gráfico 6: Evolución del MIX de Generación', divider = 'rainbow', help=help_graf6)
+    st.write(subtexto)
     if not df_fc_mix_evol.empty:
         st.write(graf_mix_evol)
     else:

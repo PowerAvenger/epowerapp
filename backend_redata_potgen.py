@@ -63,14 +63,14 @@ def tablas_diario(df_in_gen, df_in_pot, horas_eqmax):
     df_out['FU'] = round(df_out['horas_eq']/df_out['horas_eqmax'], 1)
     df_out.sort_values(by='fecha', inplace=True)
     df_out.rename(columns={'porc_gen':'%_mix_gen', 'porc_pot':'%_mix_pot'}, inplace=True)
-    print('df_out')
+    print('DF DIARIO TODOS LOS DIAS DESDE 2018')
     print (df_out)
     
     return df_out
 
 # TABLAS RESUMEN DE TECNOLOGIAS PARA UN AÑO DETERMINADO+++++++++++++++++++++++++++++++++++++++++++++++++++++  
 def tablas_salida(df, tec_filtro):
-    #df es df_out_filtro
+    #df es un df con los datos diarios del año seleccionado
     #tec_filtro son las tecnologías que se muestran
     
     #DATAFRAME PARA GRÁFICO FC DE DISPERSIÓN
@@ -95,7 +95,7 @@ def tablas_salida(df, tec_filtro):
     gen_total = round(df_anual['generacion_GWh'].sum(), 1)
     pot_total = round(df_anual['pot_GW'].sum(), 1)
     
-    print ('df_anual')
+    #print ('df_anual')
     #print(df_anual)
     #print(df_anual['tecnologia'].unique())
 
@@ -366,8 +366,9 @@ def graficar_mix_queso(df, colores_tecnologia):
 
 
 # NUEVO GRÁFICO DE EVOLUCION DE LOS FC Y % MIX GEN +++++++++++++++++++++++++++++++++++++++
-def gen_evol(df_out):
-    df_in = df_out.copy()
+def gen_evol(df_out_equiparado):
+    #recibimos un df con valores diarios de todos los años. Depende del toogle, 
+    df_in = df_out_equiparado.copy()
     #df_out_evol = df_out_evol[(df_out_evol['tecnologia'] == st.session_state.tec_select_1) | (df_out_evol['tecnologia'] == st.session_state.tec_select_2)]
     if not st.session_state.tec_seleccionadas:
         return pd.DataFrame(columns=['año', 'tecnologia', 'FC', '%_mix_gen'])
@@ -389,6 +390,7 @@ def gen_evol(df_out):
     df_mix = df_out2['%_mix_gen'].transpose().reset_index().rename(columns = {'index':'año'})
     df_mix = df_mix.melt(id_vars = 'año', var_name = 'tecnologia', value_name = '%_mix_gen')
     df_out_evol = pd.merge(df_fc, df_mix, on = ['año', 'tecnologia'])
+    df_out_evol['%_mix_gen'] = df_out_evol['%_mix_gen']*100
     
     print ('df_out_evol')
     print (df_out_evol)
@@ -436,7 +438,7 @@ def calc_efi(df, coef):
 
     df_out = pd.merge(df_pot, df_gen, on='año')
     
-    if not st.session_state.get('dias_filtrados', False):
+    if not st.session_state.get('dias_equiparados', True):
         df_out.loc[df_out['año'] == 2025, 'gen_GWh'] *= coef
 
         horas_anuales = {
