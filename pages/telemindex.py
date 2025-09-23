@@ -13,6 +13,7 @@ if not st.session_state.get('usuario_autenticado', False):
 
 
 #inicializamos variables de sesión
+generar_menu()
 init_app()
 
 zona_mensajes = st.sidebar.empty() 
@@ -21,8 +22,8 @@ df_filtrado, lista_meses = filtrar_datos()
 try:
     fecha_ultima_filtrado = df_filtrado['fecha'].iloc[-1]
 except:
-    st.session_state.dia_seleccionado = '2025-01-01'
-    #st.session_state.dia_seleccionado = datetime.date(2025,1,1)
+    #st.session_state.dia_seleccionado = '2025-01-01'
+    st.session_state.dia_seleccionado = datetime.date(2025,1,1)
     df_filtrado, lista_meses = filtrar_datos()
 
 #ejecutamos la función para obtener la tabla resumen y precios medios
@@ -41,12 +42,13 @@ tabla_costes = costes_indexado(df_filtrado)
 
 df_precios_mensuales, graf_mensual = evol_mensual(st.session_state.df_sheets, colores_precios)
 
-generar_menu()
+#generar_menu()
 
 #ELEMENTOS DE LA BARRA LATERAL ---------------------------------------------------------------------------------------
 
 st.sidebar.header('', divider='rainbow')
 st.sidebar.header('Histórico de indexados')
+st.sidebar.write(f'Última fecha disponible: {st.session_state.ultima_fecha_sheets}')
 
 st.sidebar.subheader('Opciones')
 with st.sidebar.container(border=True):
@@ -63,17 +65,19 @@ with st.sidebar.container(border=True):
             st.sidebar.selectbox('Seleccionar mes', lista_meses, key = 'mes_seleccionado')
             st.session_state.texto_precios = f'Seleccionado: {st.session_state.mes_seleccionado} de {st.session_state.año_seleccionado}'
     else:
-        st.sidebar.date_input('Selecciona un día', min_value = datetime.date(2023, 1, 1), max_value = st.session_state.ultima_fecha_sheets, key = 'dia_seleccionado')  
+        #st.sidebar.date_input('Selecciona un día', min_value = datetime.date(2023, 1, 1), max_value = st.session_state.ultima_fecha_sheets, key = 'dia_seleccionado')
+        st.sidebar.date_input('Selecciona un día', min_value = datetime.date(2023, 1, 1), max_value = datetime.date(2025, 12, 31), key = 'dia_seleccionado')    
         st.session_state.texto_precios = f'Día seleccionado {st.session_state.dia_seleccionado}'
 with st.sidebar.container():
 #if st.sidebar.toggle('Marca si quieres añadir margen'):
-    st.sidebar.slider("Añadir margen al gusto (en €/MWh)", min_value = 0, max_value = 50, value = 0, key = 'margen', on_change = aplicar_margen, args=(df_filtrado,))
+    #st.sidebar.slider("Añadir margen al gusto (en €/MWh)", min_value = 0, max_value = 50, value = 0, key = 'margen', on_change = aplicar_margen, args=(df_filtrado,))
+    st.sidebar.slider("Añadir margen al gusto (en €/MWh)", min_value = 0, max_value = 50, key = 'margen', on_change = aplicar_margen, args=(df_filtrado,))
     st.sidebar.caption(f'Se ha añadido {st.session_state.margen} €/MWh')
 #else:
 #    st.session_state.margen = 0
 #zona_mensajes = st.sidebar.empty()        
 
-st.sidebar.write(f'Última fecha disponible: {st.session_state.ultima_fecha_sheets}')
+#st.sidebar.write(f'Última fecha disponible: {st.session_state.ultima_fecha_sheets}')
 
 
 zona_grafica = st.empty()

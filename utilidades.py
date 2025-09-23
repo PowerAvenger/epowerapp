@@ -1,4 +1,5 @@
 import streamlit as st
+import datetime, pandas as pd
 from backend_comun import autenticar_google_sheets, carga_rapida_sheets, carga_total_sheets, colores_precios
 
 def generar_menu():
@@ -21,6 +22,7 @@ def generar_menu():
         st.page_link('pages/marginales.py', label = 'Marginales', icon = "🔀")
         st.page_link('pages/redata_potgen.py', label = 'Tecnologías de generación', icon = "⚡️")
 
+
 def init_app():
     '''INICIALIZAMOS VARIABLES DE SESIÓN'''
     # General
@@ -38,12 +40,18 @@ def init_app():
         carga_rapida_sheets()
     if 'dia_seleccionado' not in st.session_state:
         st.session_state.dia_seleccionado = st.session_state.ultima_fecha_sheets
+    else:
+        if not isinstance(st.session_state.dia_seleccionado, (datetime.date, datetime.datetime)):
+            try:
+                st.session_state.dia_seleccionado = pd.to_datetime(st.session_state.dia_seleccionado).date()
+            except Exception:
+                st.session_state.dia_seleccionado = st.session_state.ultima_fecha_sheets
     if 'margen' not in st.session_state: 
         st.session_state.margen = 0
     if 'texto_precios' not in st.session_state:
         st.session_state.texto_precios = f'Día seleccionado: {st.session_state.ultima_fecha_sheets}'
 
-    # Para ESCALA CV
+    
     
     
 

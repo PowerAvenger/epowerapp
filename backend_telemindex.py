@@ -19,12 +19,15 @@ def filtrar_datos():
         lista_meses = df_filtrado_año['mes_nombre'].unique().tolist()
         print('Filtrado por mes')
     else:
+        #forzamos de nuevo la columna fecha a date para evitar error en el filtrado, ya que dia seleccionado debe ser un date
+        st.session_state.df_sheets['fecha'] = pd.to_datetime(st.session_state.df_sheets['fecha']).dt.date
         df_filtrado = st.session_state.df_sheets[(st.session_state.df_sheets['fecha'] == st.session_state.dia_seleccionado)]
         lista_meses = None
         print('Filtrado por dia')
 
     print('dia seleccionado')
     print(st.session_state.dia_seleccionado)
+    print("DEBUG tipo dia_seleccionado:", type(st.session_state.get("dia_seleccionado")))
     print('st session df sheets')
     print(st.session_state.df_sheets)
 
