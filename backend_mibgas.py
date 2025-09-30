@@ -58,10 +58,19 @@ def graficar_qs(df_mg_q):
     fig.update_layout(hovermode="x unified")
 
     # 2) Formato de la fecha en el encabezado del tooltip
-    fig.update_xaxes(hoverformat="%Y-%m-%d")
+    fig.update_xaxes(
+        hoverformat="%Y-%m-%d",
+        dtick="M1",   # intervalo de 1 mes
+        tickformat="%b\n%Y",  # etiquetas: abreviatura del mes y año
+        showgrid=True,
+        gridcolor="lightgrey",
+        gridwidth=1
+    )
 
     # 3) Contenido de cada fila del tooltip (nombre del Q y su valor)
     fig.update_traces(hovertemplate="%{fullData.name}: %{y:.2f} €/MWh<extra></extra>")
+
+  
     
     return fig
 
