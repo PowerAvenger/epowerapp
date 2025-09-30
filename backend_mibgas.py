@@ -60,7 +60,7 @@ def graficar_qs(df_mg_q):
     # 2) Formato de la fecha en el encabezado del tooltip
     fig.update_xaxes(
         hoverformat="%Y-%m-%d",
-        dtick="M1",   # intervalo de 1 mes
+        #dtick="M1",   # intervalo de 1 mes
         tickformat="%b\n%Y",  # etiquetas: abreviatura del mes y año
         showgrid=True,
         gridcolor="lightgrey",
