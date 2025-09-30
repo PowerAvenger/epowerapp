@@ -64,7 +64,7 @@ def graficar_qs(df_mg_q):
         tickformat="%b\n%Y",  # etiquetas: abreviatura del mes y año
         showgrid=True,
         gridcolor="lightgrey",
-        gridwidth=.5
+        gridwidth=.1
     )
 
     # 3) Contenido de cada fila del tooltip (nombre del Q y su valor)
