@@ -86,3 +86,16 @@ def carga_total_sheets(): #sheet_name=None
     st.session_state.ultima_fecha_sheets = pd.to_datetime(ultima_fecha_str, errors='coerce').date()
     
     return df
+
+#CARGAMOS MIBGAS DESDE SHEET DE DRIVE
+@st.cache_data
+def carga_mibgas(): #sheet_name=None
+    SPREADSHEET_ID = st.secrets['SHEET_MIBGAS_ID']
+    sheet = st.session_state.client.open_by_key(SPREADSHEET_ID)
+    # Primera hoja por defecto  
+    worksheet = sheet.sheet1  
+    # Obtener los datos como DataFrame
+    data = worksheet.get_all_records()
+    df = pd.DataFrame(data)
+    
+    return df

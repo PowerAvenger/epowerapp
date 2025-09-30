@@ -5,7 +5,7 @@ from backend_comun import autenticar_google_sheets, carga_rapida_sheets, carga_t
 import pandas as pd
 import datetime
 
-from utilidades import generar_menu, init_app
+from utilidades import generar_menu, init_app, init_app_index
 
 
 if not st.session_state.get('usuario_autenticado', False):
@@ -15,6 +15,7 @@ if not st.session_state.get('usuario_autenticado', False):
 #inicializamos variables de sesión
 generar_menu()
 init_app()
+init_app_index()
 
 zona_mensajes = st.sidebar.empty() 
 
@@ -156,6 +157,7 @@ with zona_grafica.container():
 
 if 'df_sheets_full' not in st.session_state:
     zona_mensajes.warning('Cargados datos iniciales. Espera a que estén disponibles todos los datos', icon = '⚠️')
+    #SPREADSHEET_ID = st.secrets['SHEET_INDEX_ID']
     st.session_state.df_sheets_full = carga_total_sheets()
     st.session_state.df_sheets = st.session_state.df_sheets_full
     zona_mensajes.success('Cargados todos los datos. Ya puedes consultar los históricos', icon = '👍')

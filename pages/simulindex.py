@@ -3,7 +3,7 @@ from backend_comun import autenticar_google_sheets
 from backend_simulindex import obtener_historicos_meff, obtener_meff_trimestral, obtener_grafico_meff_simulindex, obtener_grafico_cober, obtener_meff_mensual, hist_mensual, graf_hist
 from backend_comun import carga_rapida_sheets, carga_total_sheets, colores_precios
 
-from utilidades import generar_menu, init_app
+from utilidades import generar_menu, init_app, init_app_index
 
 if not st.session_state.get('usuario_autenticado', False):
     st.switch_page('epowerapp.py')
@@ -11,10 +11,12 @@ if not st.session_state.get('usuario_autenticado', False):
 
 generar_menu()
 init_app()
+init_app_index()
 zona_mensajes = st.sidebar.empty() 
 
 if 'df_sheets_full' not in st.session_state:
     zona_mensajes.warning('Cargados datos iniciales. Espera a que estén disponibles todos los datos', icon = '⚠️')
+    #SPREADSHEET_ID = st.secrets['SHEET_INDEX_ID']
     st.session_state.df_sheets_full = carga_total_sheets()
     st.session_state.df_sheets = st.session_state.df_sheets_full
     zona_mensajes.success('Cargados todos los datos. Ya puedes consultar los históricos', icon = '👍')

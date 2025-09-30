@@ -19,17 +19,18 @@ def generar_menu():
         st.page_link('pages/escalacv.py', label = 'Escala CV', icon = "📊")
         st.page_link('pages/excedentes.py', label = 'Excedentes', icon = "💰")
         st.page_link('pages/demanda.py', label = 'Demanda', icon = "🏭")
-        st.page_link('pages/marginales.py', label = 'Marginales', icon = "🔀")
+        st.page_link('pages/mibgas.py', label = 'Gas & Furious', icon = "🔥")
         st.page_link('pages/redata_potgen.py', label = 'Tecnologías de generación', icon = "⚡️")
+        st.page_link('pages/marginales.py', label = 'Marginales', icon = "🔀")
 
 
 def init_app():
-    '''INICIALIZAMOS VARIABLES DE SESIÓN'''
     # General
     if 'client' not in st.session_state:
         st.session_state.client = autenticar_google_sheets()
-    
-    # Para TELEMINDEX
+
+def init_app_index():
+    # Para TELEMINDEX Y SIMULINDEX
     if 'rango_temporal' not in st.session_state:
         st.session_state.rango_temporal = 'Selecciona un día'
     if 'año_seleccionado' not in st.session_state:
@@ -37,6 +38,7 @@ def init_app():
     if 'mes_seleccionado' not in st.session_state: 
         st.session_state.mes_seleccionado = 'enero'
     if 'ultima_fecha_sheets' not in st.session_state or 'df_sheets' not in st.session_state:
+        #sheet_id = st.secrets['SHEET_INDEX_ID']
         carga_rapida_sheets()
     if 'dia_seleccionado' not in st.session_state:
         st.session_state.dia_seleccionado = st.session_state.ultima_fecha_sheets
