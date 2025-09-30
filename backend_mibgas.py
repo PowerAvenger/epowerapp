@@ -62,8 +62,8 @@ def graficar_qs(df_mg_q):
         hoverformat="%Y-%m-%d",
         #dtick="M1",   # intervalo de 1 mes
         #tickformat="%b\n%Y",  # etiquetas: abreviatura del mes y año
-        showgrid=True,
-        gridcolor="lightgrey",
+        #showgrid=True,
+        #gridcolor="lightgrey",
         #gridwidth=.1
     )
 
