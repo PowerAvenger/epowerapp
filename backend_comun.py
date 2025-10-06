@@ -97,5 +97,8 @@ def carga_mibgas(): #sheet_name=None
     # Obtener los datos como DataFrame
     data = worksheet.get_all_records()
     df = pd.DataFrame(data)
+
+    print('mibgas base')
+    print(df)
     
     return df
