@@ -3,7 +3,7 @@ from datetime import datetime, date
 from backend_redata_potgen import (
     leer_json, tablas_diario, tablas_salida, 
     graficar_bolas,  graficar_new_fc, graficar_FU, graficar_mix, graficar_mix_queso,
-    gen_evol, graficar_evol, calc_efi, graficar_efi_evol
+    gen_evol, graficar_evol, calc_efi, graficar_efi_evol, graficar_gen_diaria
 )
 
 from utilidades import generar_menu
@@ -103,7 +103,7 @@ if st.session_state.get('dias_equiparados', True) and st.session_state.año_sele
         ((df_año_filtrado['mes_num'] == mes_ult) & (df_año_filtrado['fecha'].dt.day <= dia_ult))
     ]
 
-# usado para los gráficos 5 y 6, donde comparamos todos los años
+# usado para los gráficos 5,6,9, donde comparamos todos los años
 df_out_equiparado = df_diario_all.copy()
 
 if st.session_state.get('dias_equiparados', True):
@@ -111,6 +111,7 @@ if st.session_state.get('dias_equiparados', True):
         (df_out_equiparado['mes_num'] < mes_ult) |
         ((df_out_equiparado['mes_num'] == mes_ult) & (df_out_equiparado['fecha'].dt.day <= dia_ult))
     ]
+
 
 # CÓDIGO AÑADIDO PARA PODER FILTRAR POR MES
 nombres_meses = {
@@ -127,6 +128,8 @@ if st.session_state.get('mes_seleccionado_redata', 'TODOS') != "TODOS":
     df_año_filtrado = df_año_filtrado[df_año_filtrado['mes_num'] == num_mes_seleccionado]
     df_out_equiparado = df_out_equiparado[df_out_equiparado['mes_num'] == num_mes_seleccionado]
 
+print('df out equiparado')
+print(df_out_equiparado)
 
 #dfs con el año seleccionado
 df_out_bolas, df_out_fc, df_out_fu, df_out_mix  = tablas_salida(df_año_filtrado, tec_filtro) 
@@ -142,10 +145,13 @@ df_fc_mix_evol = gen_evol(df_out_equiparado)
 #if not df_fc_evol.empty:
 graf_fc_evol = graficar_evol(df_fc_mix_evol, colores_tec, 'FC')
 graf_mix_evol = graficar_evol(df_fc_mix_evol, colores_tec, '%_mix_gen')
+graf_gen_evol = graficar_evol(df_fc_mix_evol, colores_tec, 'gen_GWh')
 
 #df_efi_evol = calc_efi(df_out, coef_horas)
 df_efi_evol = calc_efi(df_out_equiparado, coef_horas)
 graf_efi = graficar_efi_evol(df_efi_evol)
+
+graf_gen_diaria = graficar_gen_diaria(df_año_filtrado, colores_tec)
 
 
 
@@ -167,6 +173,7 @@ with st.sidebar:
 
     #st.radio('Selecciona el párametro a visualizar en el Gráfico 5:', ['FC', '%_mix'], key = 'opcion_evol')
     st.multiselect('Selecciona y compara tecnologías', options = tec_filtro, key = 'tec_seleccionadas')
+    tipo_mix = st.toggle('Cambiar de tipo de gráfico 4')
 
 # VISUALIZACION EN EL TABLERO++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 c1, c2, c3 = st.columns(3)
@@ -261,12 +268,17 @@ with c2:
     #GRAFICO 4
     st.subheader(f'Gráfico 4: Mix de generación en **:orange[{st.session_state.año_seleccionado}]**', divider = 'rainbow', help=help_graf4)
     st.write(subtexto)
-    tipo_mix = st.toggle('Cambiar de tipo de gráfico')
+    #tipo_mix = st.toggle('Cambiar de tipo de gráfico')
     espacio_mix = st.empty()
     if tipo_mix:
         espacio_mix.write(graf_mix)
     else:
         espacio_mix.write(graf_mix_queso)
+    
+    #GRAFICO 8
+    st.subheader(f'Gráfico 8: Generación diaria **:orange[{st.session_state.año_seleccionado}]**', divider = 'rainbow', help=help_graf3)
+    st.write(subtexto)
+    st.write(graf_gen_diaria)
 
 with c3:
     st.subheader('Gráfico 5: Evolución del FC Factor de Capacidad', divider = 'rainbow', help=help_graf5)
@@ -280,6 +292,13 @@ with c3:
     st.write(subtexto)
     if not df_fc_mix_evol.empty:
         st.write(graf_mix_evol)
+    else:
+        st.warning('Selecciona al menos una tecnología', icon = '⚠️') 
+    
+    st.subheader('Gráfico 9: Evolución de la Generación', divider = 'rainbow', help=help_graf6)
+    st.write(subtexto)
+    if not df_fc_mix_evol.empty:
+        st.write(graf_gen_evol)
     else:
         st.warning('Selecciona al menos una tecnología', icon = '⚠️') 
     

@@ -371,25 +371,43 @@ def gen_evol(df_out_equiparado):
     df_in = df_out_equiparado.copy()
     #df_out_evol = df_out_evol[(df_out_evol['tecnologia'] == st.session_state.tec_select_1) | (df_out_evol['tecnologia'] == st.session_state.tec_select_2)]
     if not st.session_state.tec_seleccionadas:
-        return pd.DataFrame(columns=['año', 'tecnologia', 'FC', '%_mix_gen'])
+        return pd.DataFrame(columns=['año', 'tecnologia', 'FC', '%_mix_gen', 'gen_GWh_dia'])
     
     df_out = df_in[df_in['tecnologia'].isin(st.session_state.tec_seleccionadas)]
     #df_out.rename(columns = {'porc_gen':'%_mix'}, inplace = True)
     
     print('df_out')
-    #print(df_out)
+    print(df_out)
     
+    #df_out2 = df_out.pivot_table(
+    #    index = 'tecnologia',
+    #    columns = 'año',
+    #    values = ['FC', '%_mix_gen'],
+    #    aggfunc = 'mean'
+    #)
     df_out2 = df_out.pivot_table(
-        index = 'tecnologia',
-        columns = 'año',
-        values = ['FC', '%_mix_gen'],
-        aggfunc = 'mean'
+        index='tecnologia',
+        columns='año',
+        values=['FC', '%_mix_gen', 'gen_GWh_dia'],
+        aggfunc={'FC': 'mean', '%_mix_gen': 'mean', 'gen_GWh_dia': 'sum'}
     )
+
     df_fc = df_out2['FC'].transpose().reset_index().rename(columns = {'index':'año'})
     df_fc = df_fc.melt(id_vars = 'año', var_name = 'tecnologia', value_name = 'FC')
     df_mix = df_out2['%_mix_gen'].transpose().reset_index().rename(columns = {'index':'año'})
     df_mix = df_mix.melt(id_vars = 'año', var_name = 'tecnologia', value_name = '%_mix_gen')
-    df_out_evol = pd.merge(df_fc, df_mix, on = ['año', 'tecnologia'])
+    df_gen = df_out2['gen_GWh_dia'].transpose().reset_index().rename(columns = {'index':'año'})
+    df_gen = df_gen.melt(id_vars = 'año', var_name = 'tecnologia', value_name = 'gen_GWh')
+
+    #df_out_evol = pd.merge(df_fc, df_mix, df_gen, on = ['año', 'tecnologia'])
+    df_out_evol = (
+        pd.merge(df_fc, df_mix, on=['año', 'tecnologia'])
+        .merge(df_gen, on=['año', 'tecnologia'])
+    )
+
+    print ('df_out_evol')
+    print (df_out_evol)
+
     df_out_evol['%_mix_gen'] = df_out_evol['%_mix_gen']*100
     
     print ('df_out_evol')
@@ -497,6 +515,31 @@ def graficar_efi_evol(df):
     return graf
 
 
+
+#grafico de barras verticales para ver la evolución de la generación diaria
+def graficar_gen_diaria(df, colores_tecnologia):
+
+    df_out = df[df['tecnologia'].isin(st.session_state.tec_seleccionadas)]
+    #recibimos df_año_filtrado
+    graf = px.bar(df_out, x='fecha', y='gen_GWh_dia',
+        color = 'tecnologia',
+        color_discrete_map = colores_tecnologia
+    )
+    graf.update_layout(
+        legend=dict(
+            title='',
+            orientation='h',
+            yanchor='top',
+            y=1.1,
+            xanchor='center',
+            x=.5
+        ),
+        showlegend=True,
+        xaxis = dict(tickmode = 'array'),
+        #bargroupgap = 0.1
+    )
+
+    return graf
 
 
 
