@@ -39,11 +39,11 @@ def filtrar_datos():
 
 
 def aplicar_margen(df_filtrado):
+    df_mod = df_filtrado.copy()
     for col in ['precio_2.0','precio_3.0', 'precio_6.1']:
-        df_filtrado[col] += st.session_state.margen
+        df_mod[col] += st.session_state.margen
     
-
-    return df_filtrado
+    return df_mod
 
 
 def pt1(df_filtrado):

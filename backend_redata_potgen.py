@@ -498,6 +498,9 @@ def graficar_efi_evol(df):
 
 
 
+
+
+
 #NO USADO+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 def graficar_FC(df_out_ratio_select_fc, colores_tecnologia):
     graf_FC = px.bar(df_out_ratio_select_fc, x = 'FC', y = 'tecnologia',
