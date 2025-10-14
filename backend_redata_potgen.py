@@ -518,12 +518,18 @@ def graficar_efi_evol(df):
 
 #grafico de barras verticales para ver la evolución de la generación diaria
 def graficar_gen_diaria(df, colores_tecnologia):
-
+    #recibimos df_año_filtrado y escogemos sólo las tecnologías seleccionadas
     df_out = df[df['tecnologia'].isin(st.session_state.tec_seleccionadas)]
-    #recibimos df_año_filtrado
+
+    # 👇 Ordenar según el orden del multiselect
+    orden_tecnologias = st.session_state.tec_seleccionadas
+    df_out['tecnologia'] = pd.Categorical(df_out['tecnologia'], categories=orden_tecnologias, ordered=True)
+
+    
     graf = px.bar(df_out, x='fecha', y='gen_GWh_dia',
         color = 'tecnologia',
-        color_discrete_map = colores_tecnologia
+        color_discrete_map = colores_tecnologia,
+        category_orders={'tecnologia': orden_tecnologias}
     )
     graf.update_layout(
         legend=dict(

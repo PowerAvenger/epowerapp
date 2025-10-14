@@ -49,7 +49,6 @@ if 'año_seleccionado' not in st.session_state:
     st.session_state.año_seleccionado = 2025
 # usado en el multiselect FC y %mix EVOL    
 if 'tec_seleccionadas' not in st.session_state:
-    #st.session_state.tec_seleccionadas = ['Solar fotovoltaica', 'Eólica', 'Hidráulica']
     st.session_state.tec_seleccionadas = ['Solar fotovoltaica', 'Eólica']
 
 # usado para opciones de visualizacion en gráfico 5 
