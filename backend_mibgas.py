@@ -1,5 +1,13 @@
 import pandas as pd
 import plotly.express as px
+from datetime import datetime,date
+
+# Definimos los colores manualmente
+colores = {
+    2024: "lightblue",
+    2025: "#1E90FF"
+    #2025: "darkblue"
+}
 
 
 
@@ -8,17 +16,17 @@ import plotly.express as px
 def filtrar_por_producto(df, producto):
     df_f = df[df['producto'] == producto].copy()
     #df_f['fecha'] = pd.to_datetime(df_f['fecha'], dayfirst=True, errors='coerce')
-    df_f['fecha'] = pd.to_datetime(df_f['fecha'], dayfirst=False, errors='coerce').dt.date
-    #df_f = df_f.drop(columns=['producto']).dropna().reset_index(drop=True)
+    #df_f['fecha_entrega'] = pd.to_datetime(df_f['fecha_entrega'], dayfirst=False, errors='coerce').dt.date
+    #df_f['año_entrega'] = df_f['fecha_entrega'].dt.year
     return df_f
 
 
 def graficar_qs(df_mg_q):
-    df_mg_q['Trading day'] = pd.to_datetime(df_mg_q['Trading day'])
-    df_mg_q['fecha'] = pd.to_datetime(df_mg_q['fecha'])
+    #df_mg_q['Trading day'] = pd.to_datetime(df_mg_q['Trading day'])
+    #df_mg_q['fecha_entrega'] = pd.to_datetime(df_mg_q['fecha_entrega'])
 
     # Crear columna 'trimestre'
-    df_mg_q["trimestre"] = ("Q" + df_mg_q["fecha"].dt.quarter.astype(str) + "-" + df_mg_q["fecha"].dt.year.astype(str))
+    df_mg_q["trimestre"] = ("Q" + df_mg_q["fecha_entrega"].dt.quarter.astype(str) + "-" + df_mg_q["fecha_entrega"].dt.year.astype(str))
 
     def _key(lbl):
         q, y = lbl.split("-")
@@ -50,12 +58,15 @@ def graficar_qs(df_mg_q):
         labels={'value':'€/MWh', 'variable':'Trimestre'},
         color_discrete_map=color_map, # todas las columnas de trimestres
         title='Evolución de MIBGAS para los próximos trimestres',
-        height=800
+        #height=800
     )
 
     # Ajustar el tooltip para que muestre todas las series
     # 1) Un solo tooltip por x (Trading day)
-    fig.update_layout(hovermode="x unified")
+    fig.update_layout(
+        hovermode="x unified",
+        title={'x':0.5, 'xanchor':'center'},
+        )
 
     # 2) Formato de la fecha en el encabezado del tooltip
     fig.update_xaxes(
@@ -74,3 +85,77 @@ def graficar_qs(df_mg_q):
     
     return fig
 
+
+def graficar_da_corrido(df):
+    
+
+    fig = px.line(
+        df,
+        x="fecha_entrega",
+        y="precio_gas",
+        color="año_entrega",
+        color_discrete_map=colores,
+        title="Evolución del precio del gas por año",
+        #height=600
+    )
+
+    fig.update_layout(
+        title={'x':0.5, 'xanchor':'center'},
+        xaxis_title="Fecha",
+        yaxis_title="Precio gas (€/MWh)"
+    )
+
+    return fig
+
+def graficar_da_comparado(df):
+
+    df = df.copy()
+
+      # Claves para orden y etiqueta
+    df["mmdd"] = df["fecha_entrega"].dt.strftime("%m-%d")  # '02-29', '10-21', ...
+    # Linux/Mac: %-d ; Windows: %#d  (elige el que corresponda)
+    
+
+    # Orden cronológico sin datetime: (MM, DD)
+    orden_mmdd = sorted(
+        df["mmdd"].unique(),
+        key=lambda s: (int(s[:2]), int(s[3:]))
+    )
+
+    print('df da comparado')
+    print(df)
+    
+    fig = px.line(
+        df,
+        x="mmdd",
+        y="precio_gas",
+        color="año_entrega",
+        color_discrete_map=colores,
+        category_orders={"mmdd": orden_mmdd},
+        title="Comparación anual del precio del gas (2024 vs 2025)",
+        #height=600
+    )
+
+     # Forzar eje categórico y aplicar etiquetas legibles
+    # Reducimos el número de etiquetas visibles en el eje X
+    tickvals = orden_mmdd[::15]  # uno cada 15 días
+    ticktext = [df.loc[df["mmdd"] == v, "fecha_corta"].iloc[0] for v in tickvals]
+    
+    fig.update_xaxes(
+        tickmode="array",
+        #tickvals=orden_mmdd,
+        #ticktext=df.drop_duplicates("mmdd").sort_values("mmdd")["fecha_corta"].tolist(),
+        tickvals=tickvals,
+        ticktext=ticktext,
+        tickangle=0,  # puedes probar 45 si quieres inclinar
+        type="category"
+    )
+
+
+    fig.update_layout(
+        title={'x':0.5, 'xanchor':'center'},
+        xaxis_title="Día del año",
+        yaxis_title="Precio gas (€/MWh)"
+    )
+
+    return fig

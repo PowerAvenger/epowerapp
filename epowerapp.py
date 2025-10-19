@@ -23,7 +23,7 @@ with c2:
     
     with zona_objetos.container():
         st.title(':orange[e]PowerAPP© ⚡️:rainbow[TOTALPOWER]⚡️')
-        st.header('Todo lo que necesitas para energizarte.')
+        st.subheader('Todo lo que necesitas para energizarte.')
         st.caption("Copyright by Jose Vidal 2024-2025 :ok_hand:")
         
 
@@ -47,12 +47,13 @@ with c2:
 
         st.text('')
         st.text('')
-        st.info('¡¡Bienvenido a mi :orange[e]PowerAPP!! \n\n'
+        st.info('¡¡Bienvenido a mi :orange[e]PowerAPP **:rainbow[TOTALPOWER]**!! \n\n'
                 'En ningún sitio vas a encontrar herramientas personalizables para obtener información de los mercados mayoristas y minoristas de electricidad y gas.\n'
                 'No dudes en contactar para comentar errores detectados o proponer mejoras en la :orange[e]PowerAPP'
                 , icon="ℹ️")
         
-        url_linkedin = "https://www.linkedin.com/posts/josefvidalsierra_epowerapps-spo2425-telemindex-activity-7281942697399967744-IpFK?utm_source=share&utm_medium=member_deskto"
+        #url_linkedin = "https://www.linkedin.com/posts/josefvidalsierra_epowerapps-spo2425-telemindex-activity-7281942697399967744-IpFK?utm_source=share&utm_medium=member_deskto"
+        url_linkedin = 'https://www.linkedin.com/in/jfvidalsierra/'
         #url_bluesky = "https://bsky.app/profile/poweravenger.bsky.social"
         st.markdown(f"Contacta por privado en mi perfil de [Linkedin]({url_linkedin}) para obtener un código de pago")
         st.text_input('Introduce el código de acceso', type='password', key='acceso')

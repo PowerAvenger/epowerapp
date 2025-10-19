@@ -3,6 +3,10 @@ import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
 import streamlit as st
+from datetime import datetime,date
+import locale
+
+
 
 
 
@@ -97,6 +101,19 @@ def carga_mibgas(): #sheet_name=None
     # Obtener los datos como DataFrame
     data = worksheet.get_all_records()
     df = pd.DataFrame(data)
+    df=df.rename(columns={'Product':'producto','First Day Delivery':'fecha_entrega','Last Price\n[EUR/MWh]':'precio_gas'})
+    df["precio_gas"] = pd.to_numeric(df["precio_gas"], errors="coerce")
+    df['fecha_entrega'] = pd.to_datetime(df['fecha_entrega'], dayfirst=False, errors='coerce')
+    df['año_entrega'] = df['fecha_entrega'].dt.year
+    df['Trading day'] = pd.to_datetime(df['Trading day'])
+
+    # Crear nueva columna con formato "6-ene"
+    #df['fecha_corta'] = df['fecha_entrega'].dt.strftime('%-d-%b')  # en Linux/Mac
+    # Si estás en Windows y da error con %-d, usa:
+    df['fecha_corta'] = df['fecha_entrega'].dt.strftime('%#d-%b')
+    # Convertir abreviaturas de mes a minúsculas y eliminar puntos
+    df['fecha_corta'] = df['fecha_corta'].str.lower().str.replace('.', '', regex=False)
+    df = df.sort_values('fecha_entrega', ascending=True).reset_index(drop=True)
 
     print('mibgas base')
     print(df)
