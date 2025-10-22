@@ -47,7 +47,7 @@ df_precios_mensuales, graf_mensual = evol_mensual(st.session_state.df_sheets, co
 
 #ELEMENTOS DE LA BARRA LATERAL ---------------------------------------------------------------------------------------
 
-st.sidebar.header('', divider='rainbow')
+#st.sidebar.header('', divider='rainbow')
 st.sidebar.header('Histórico de indexados')
 st.sidebar.write(f'Última fecha disponible: {st.session_state.ultima_fecha_sheets}')
 

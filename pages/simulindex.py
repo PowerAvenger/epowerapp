@@ -69,7 +69,7 @@ if 'margen_simulindex' not in st.session_state:
 
 
 #BARRA LATERAL+++++++++++++++++++++++++++++++++++++++++++++++++++++++
-st.sidebar.header('', divider='rainbow')
+#st.sidebar.header('', divider='rainbow')
 st.sidebar.header('Simulación de indexados')
 #st.sidebar.subheader('¡Personaliza la simulación!')
 with st.sidebar.expander('¡Personaliza la simulación!', icon = "ℹ️"):

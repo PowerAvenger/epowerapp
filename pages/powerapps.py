@@ -29,6 +29,11 @@ with col14:
     st.page_link("pages/excedentes.py", label="Compara tus excedentes en fijo con el mercado regulado", icon="💰", use_container_width=True)
     st.image('images/excedentes.jpg')
 
+with col15:
+    st.subheader('Gas & Furious',divider='rainbow')
+    st.page_link("pages/mibgas.py", label="Pasado, presente y futuro del gas", icon="🔥", use_container_width=True)
+    st.image('images/gas.jpg')
+
 
 col21,col22,col23,col24,col25=st.columns(5)
 
