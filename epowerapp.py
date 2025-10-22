@@ -52,11 +52,13 @@ with c2:
                 'No dudes en contactar para comentar errores detectados o proponer mejoras en la :orange[e]PowerAPP'
                 , icon="ℹ️")
         
-        url_linkedin = "https://www.linkedin.com/posts/josefvidalsierra_epowerapps-spo2425-telemindex-activity-7281942697399967744-IpFK?utm_source=share&utm_medium=member_deskto"
-        url_linkedin = 'https://www.linkedin.com/posts/josefvidalsierra_epowerapp-totalpower-activity-7382675731379830784-ObeG/?utm_source=share&utm_medium=member_desktop&rcm=ACoAAFYBwa4BRZN7ghU77azb6YGy123gZvYnqoE'
-        #url_linkedin = 'https://www.linkedin.com/in/jfvidalsierra/'
         #url_bluesky = "https://bsky.app/profile/poweravenger.bsky.social"
+        #url_linkedin = "https://www.linkedin.com/posts/josefvidalsierra_epowerapps-spo2425-telemindex-activity-7281942697399967744-IpFK?utm_source=share&utm_medium=member_deskto"
+        url_linkedin = 'https://www.linkedin.com/posts/josefvidalsierra_epowerapp-totalpower-activity-7382675731379830784-ObeG/?utm_source=share&utm_medium=member_desktop&rcm=ACoAAFYBwa4BRZN7ghU77azb6YGy123gZvYnqoE'
         st.markdown(f"Contacta por privado en mi perfil de [Linkedin]({url_linkedin}) para obtener un código de pago")
+
+        
+
         st.text_input('Introduce el código de acceso', type='password', key='acceso')
         if st.session_state.acceso == st.secrets['KEY_ACCESS']:
 

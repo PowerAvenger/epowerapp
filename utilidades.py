@@ -10,10 +10,13 @@ def generar_menu():
         #url_apps = "https://powerappspy-josevidal.streamlit.app/"
         #st.write("Visita mi página de [ePowerAPPs](%s) con un montón de utilidades." % url_apps)
         #url_linkedin = "https://www.linkedin.com/posts/josefvidalsierra_epowerapps-spo2425-telemindex-activity-7281942697399967744-IpFK?utm_source=share&utm_medium=member_deskto"
-        url_linkedin = 'https://www.linkedin.com/in/jfvidalsierra/'
+        #url_linkedin = 'https://www.linkedin.com/in/jfvidalsierra/'
         url_bluesky = "https://bsky.app/profile/poweravenger.bsky.social"
         #st.markdown(f"Deja tus comentarios y propuestas en mi perfil de [Linkedin]({url_linkedin}) - ¡Sígueme en [Bluesky]({url_bluesky})!")
-        st.markdown(f"Deja tus comentarios y propuestas en mi perfil de [Linkedin]({url_linkedin})!")
+        #st.markdown(f"Deja tus comentarios y propuestas en mi perfil de [Linkedin]({url_linkedin})!")
+        url_linkedin = 'https://www.linkedin.com/posts/josefvidalsierra_epowerapp-totalpower-activity-7382675731379830784-ObeG/?utm_source=share&utm_medium=member_desktop&rcm=ACoAAFYBwa4BRZN7ghU77azb6YGy123gZvYnqoE'
+        st.markdown(f"Deja tus impresiones y valoraciones en [Linkedin]({url_linkedin}).")
+
         st.page_link('epowerapp.py', label = 'Bienvenida', icon = "🙌")
         st.page_link('pages/telemindex.py', label = 'Telemindex', icon = "📈")
         st.page_link('pages/simulindex.py', label = 'Simulindex', icon = "🔮")
