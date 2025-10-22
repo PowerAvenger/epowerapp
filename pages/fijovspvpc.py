@@ -319,8 +319,8 @@ with col3:
     #st.subheader('Gráfico del PVPC medio horario perfilado', divider = 'gray')
     st.write(grafico_precio)
 
-    st.header('Optimización burda del consumo', divider = 'gray')
-    st.plotly_chart(grafico_comparativo_perfiles(df_perfiles))
+    #st.header('Optimización burda del consumo', divider = 'gray')
+    #st.plotly_chart(grafico_comparativo_perfiles(df_perfiles))
 
     col31, col32, col33, col34 = st.columns(4)
     with col31:
