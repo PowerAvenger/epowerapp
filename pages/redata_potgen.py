@@ -6,10 +6,14 @@ from backend_redata_potgen import (
     gen_evol, graficar_evol, calc_efi, graficar_efi_evol, graficar_gen_diaria
 )
 
-from utilidades import generar_menu
+from utilidades import generar_menu, init_app_json_escalacv
+
+from backend_escalacv import diarios_totales
 
 if not st.session_state.get('usuario_autenticado', False):
     st.switch_page('epowerapp.py')
+
+
 
 generar_menu()
 
@@ -65,6 +69,16 @@ with st.spinner('Tratando los datos...'):
     df_diario_all = tablas_diario(df_in_gen, df_in_pot, horas_eq_max)
 
 
+# 📆 Datos diarios de OMIE (desde 2018) y gráfico
+st.session_state.componente = 'SPOT+SSAA'
+init_app_json_escalacv()
+datos_totales_escalacv = st.session_state.datos_total_escalacv
+fecha_ini = st.session_state.fecha_ini_escalacv
+fecha_fin = st.session_state.fecha_fin_escalacv
+datos_diarios_escalacv, graf_ecv_total = diarios_totales(datos_totales_escalacv, fecha_ini, fecha_fin)
+
+
+
 
 fecha_hoy = datetime.now().date()
 año_hoy = fecha_hoy.year
@@ -102,6 +116,16 @@ if st.session_state.get('dias_equiparados', True) and st.session_state.año_sele
         ((df_año_filtrado['mes_num'] == mes_ult) & (df_año_filtrado['fecha'].dt.day <= dia_ult))
     ]
 
+# 2️⃣ Filtrar el DataFrame de OMIE con el mismo rango
+df_omie_filtrado = datos_diarios_escalacv[datos_diarios_escalacv['año'] == st.session_state.año_seleccionado]
+# Filtro adicional si el toggle está activado y el año seleccionado es anterior al actual
+if st.session_state.get('dias_equiparados', True) and st.session_state.año_seleccionado < año_actual:
+    df_omie_filtrado = df_omie_filtrado[
+        (df_omie_filtrado['mes'] < mes_ult) |
+        ((df_omie_filtrado['mes'] == mes_ult) & (df_omie_filtrado['fecha'].dt.day <= dia_ult))
+    ]
+
+
 # usado para los gráficos 5,6,9, donde comparamos todos los años
 df_out_equiparado = df_diario_all.copy()
 
@@ -126,9 +150,13 @@ if st.session_state.get('mes_seleccionado_redata', 'TODOS') != "TODOS":
     num_mes_seleccionado = {v: k for k, v in nombres_meses.items()}[st.session_state.mes_seleccionado_redata]
     df_año_filtrado = df_año_filtrado[df_año_filtrado['mes_num'] == num_mes_seleccionado]
     df_out_equiparado = df_out_equiparado[df_out_equiparado['mes_num'] == num_mes_seleccionado]
+    df_omie_filtrado = df_omie_filtrado[df_omie_filtrado['mes'] == num_mes_seleccionado]
 
 print('df out equiparado')
 print(df_out_equiparado)
+
+print('df out filtrado')
+print(df_año_filtrado)
 
 #dfs con el año seleccionado
 df_out_bolas, df_out_fc, df_out_fu, df_out_mix  = tablas_salida(df_año_filtrado, tec_filtro) 
@@ -150,7 +178,13 @@ graf_gen_evol = graficar_evol(df_fc_mix_evol, colores_tec, 'gen_GWh')
 df_efi_evol = calc_efi(df_out_equiparado, coef_horas)
 graf_efi = graficar_efi_evol(df_efi_evol)
 
-graf_gen_diaria = graficar_gen_diaria(df_año_filtrado, colores_tec)
+graf_gen_diaria = graficar_gen_diaria(df_año_filtrado, df_omie_filtrado, colores_tec)
+
+
+
+
+print('datos totales escalacv')
+print(datos_totales_escalacv)
 
 
 
@@ -209,6 +243,14 @@ help_graf6 = (
 help_graf7 = (
     "Representa la relación entre la GENERACION y la POTENCIA INSTALADA. Es como un FC, pero de todo el sistema eléctrico nacional.\n\n"
     "A mayor relación, mayor eficiencia. El año 2025 es una proyección en base a la generación total a fecha de hoy.\n\n"
+)
+help_graf8 = (
+    "Representa la generación diaria de las tecnologías seleccionadas.\n\n"
+    "Se superpone el precio medio diario del mercado mayorista.\n\n"
+)
+help_graf9 = (
+    "Este gráfico representa la evolución de la generación para cada tecnología seleccionada.\n\n"
+    "Este valor variará según si el año seleccionado es completo o hasta el último día con registros del año en curso.\n\n"
 )
 
 #definir texto secundario de los gráficos
@@ -275,7 +317,7 @@ with c2:
         espacio_mix.write(graf_mix_queso)
     
     #GRAFICO 8
-    st.subheader(f'Gráfico 8: Generación diaria **:orange[{st.session_state.año_seleccionado}]**', divider = 'rainbow', help=help_graf3)
+    st.subheader(f'Gráfico 8: Generación diaria **:orange[{st.session_state.año_seleccionado}]**', divider = 'rainbow', help=help_graf8)
     st.write(subtexto)
     st.write(graf_gen_diaria)
 
@@ -294,10 +336,12 @@ with c3:
     else:
         st.warning('Selecciona al menos una tecnología', icon = '⚠️') 
     
-    st.subheader('Gráfico 9: Evolución de la Generación', divider = 'rainbow', help=help_graf6)
+    st.subheader('Gráfico 9: Evolución de la Generación', divider = 'rainbow', help=help_graf9)
     st.write(subtexto)
     if not df_fc_mix_evol.empty:
         st.write(graf_gen_evol)
     else:
         st.warning('Selecciona al menos una tecnología', icon = '⚠️') 
+    
+    st.write("🔹 Componente actual:", st.session_state.get('componente'))
     

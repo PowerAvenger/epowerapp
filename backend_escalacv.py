@@ -11,8 +11,8 @@ import json
 import numpy as np
 
 
-if 'componente' not in st.session_state:
-        st.session_state.componente = 'SPOT'
+#if 'componente' not in st.session_state:
+#        st.session_state.componente = 'SPOT'
 
 meses_español = {1: "ene", 2: "feb", 3: "mar", 4: "abr", 5: "may", 6: "jun",
     7: "jul", 8: "ago", 9: "sep", 10: "oct", 11: "nov", 12: "dic"
@@ -155,7 +155,7 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
     print(datos_dia)
 
     #GRÁFICO PRINCIPAL CON LOS PRECIOS MEDIOS DIARIOS DE TODOS LOS AÑOS. ecv es escala cavero vidal-----------------------------------------------------------
-    componente = st.session_state.get('componente', 'SPOT')
+    #componente = st.session_state.get('componente', 'SPOT')
     
     if componente in ['SPOT']:
         title = f'Precios medios diarios del SPOT. 2018-2025'

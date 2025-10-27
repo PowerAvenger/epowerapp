@@ -517,7 +517,7 @@ def graficar_efi_evol(df):
 
 
 #grafico de barras verticales para ver la evolución de la generación diaria
-def graficar_gen_diaria(df, colores_tecnologia):
+def graficar_gen_diaria(df, df_omie, colores_tecnologia):
     #recibimos df_año_filtrado y escogemos sólo las tecnologías seleccionadas
     df_out = df[df['tecnologia'].isin(st.session_state.tec_seleccionadas)]
 
@@ -526,11 +526,29 @@ def graficar_gen_diaria(df, colores_tecnologia):
     df_out['tecnologia'] = pd.Categorical(df_out['tecnologia'], categories=orden_tecnologias, ordered=True)
 
     
-    graf = px.bar(df_out, x='fecha', y='gen_GWh_dia',
+    graf = px.bar(
+        df_out,
+        x='fecha',
+        y='gen_GWh_dia',
         color = 'tecnologia',
         color_discrete_map = colores_tecnologia,
         category_orders={'tecnologia': orden_tecnologias}
     )
+
+
+    # Añadir línea del precio OMIE al eje secundario
+    graf.add_trace(
+        go.Scatter(
+            x=df_omie['fecha'],
+            y=df_omie['value'],
+            mode='lines',
+            name='Precio SPOT+SSAA (€/MWh)',
+            line=dict(color='cyan', width=2.5),
+            yaxis='y2'
+        )
+    )
+
+
     graf.update_layout(
         legend=dict(
             title='',
@@ -542,6 +560,16 @@ def graficar_gen_diaria(df, colores_tecnologia):
         ),
         showlegend=True,
         xaxis = dict(tickmode = 'array'),
+        yaxis2=dict(
+            title=dict(
+                text='Precio SPOT+SSAA (€/MWh)',
+                font=dict(color='cyan')
+            ),
+            overlaying='y',
+            side='right',
+            showgrid=False,
+            tickfont=dict(color='cyan')
+        ),
         #bargroupgap = 0.1
     )
 

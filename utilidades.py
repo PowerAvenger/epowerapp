@@ -1,6 +1,7 @@
 import streamlit as st
 import datetime, pandas as pd
 from backend_comun import autenticar_google_sheets, carga_rapida_sheets, carga_total_sheets, colores_precios
+from backend_escalacv import leer_json
 
 def generar_menu():
     with st.sidebar:
@@ -58,6 +59,65 @@ def init_app_index():
         st.session_state.margen = 0
     if 'texto_precios' not in st.session_state:
         st.session_state.texto_precios = f'Día seleccionado: {st.session_state.ultima_fecha_sheets}'
+
+
+def init_app_json_escalacv():
+    """
+    Inicializa los datos OMIE (SPOT, SSAA o ambos combinados)
+    y los guarda en st.session_state para uso compartido entre páginas.
+    """
+    # Evita recargar si ya está en sesión
+    #if 'datos_total_escalacv' in st.session_state and 'fecha_ini_escalacv' in st.session_state and 'fecha_fin_escalacv' in st.session_state:
+    #    return
+
+    #CODIGO ORIGINAL DE escalacv.py-----------------------------------------------------------------------------
+    CREDENTIALS = st.secrets['GOOGLE_SHEETS_CREDENTIALS']
+    #componente = st.session_state.get('componente', 'SPOT')
+
+    if st.session_state.get('componente', 'SPOT') == 'SPOT':
+        FILE_ID = st.secrets['FILE_ID_SPOT']
+        datos_total, fecha_ini, fecha_fin = leer_json(FILE_ID, CREDENTIALS)
+
+    elif st.session_state.get('componente', 'SPOT') == 'SSAA':
+        FILE_ID = st.secrets['FILE_ID_SSAA']
+        datos_total, fecha_ini, fecha_fin = leer_json(FILE_ID, CREDENTIALS)
+
+    else:
+        # 🔹 Caso combinado (SPOT + SSAA)
+        FILE_ID_SPOT = st.secrets['FILE_ID_SPOT']
+        FILE_ID_SSAA = st.secrets['FILE_ID_SSAA']
+        datos_spot, fecha_ini_spot, fecha_fin_spot = leer_json(FILE_ID_SPOT, CREDENTIALS)
+        datos_ssaa, fecha_ini_ssaa, fecha_fin_ssaa = leer_json(FILE_ID_SSAA, CREDENTIALS)
+
+        datos_spot = datos_spot.reset_index()
+        datos_ssaa = datos_ssaa.reset_index()
+
+        datos_total = (
+            datos_spot[['datetime', 'value']].rename(columns={'value': 'value_spot'})
+            .merge(
+                datos_ssaa[['datetime', 'value']].rename(columns={'value': 'value_ssaa'}),
+                on='datetime',
+                how='inner'
+            )
+        )
+        datos_total['value'] = datos_total['value_spot'] + datos_total['value_ssaa']
+        datos_total['fecha'] = datos_total['datetime'].dt.date
+        datos_total['hora'] = datos_total['datetime'].dt.hour
+        datos_total['dia'] = datos_total['datetime'].dt.day
+        datos_total['mes'] = datos_total['datetime'].dt.month
+        datos_total['año'] = datos_total['datetime'].dt.year
+        datos_total.set_index('datetime', inplace=True)
+
+        fecha_ini = datos_total['fecha'].min()
+        fecha_fin = datos_total['fecha'].max()
+    #CODIGO ORIGINAL DE escalacv.py-----------------------------------------------------------------------------
+
+
+
+    # 💾 Guardar todo en sesión para reuso
+    st.session_state.datos_total_escalacv = datos_total
+    st.session_state.fecha_ini_escalacv = fecha_ini
+    st.session_state.fecha_fin_escalacv = fecha_fin
 
     
     

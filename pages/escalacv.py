@@ -1,5 +1,5 @@
 import streamlit as st
-from utilidades import generar_menu, init_app
+from utilidades import generar_menu, init_app_json_escalacv
 
 from backend_escalacv import leer_json, diarios_totales, diarios, mensuales, horarios, medias_horarias, evolucion_mensual, meses_español
 import datetime
@@ -13,9 +13,10 @@ generar_menu()
 
 
 
-if 'inicio' not in st.session_state:
-    st.cache_data.clear()
-    st.session_state.inicio = True
+
+#if 'inicio' not in st.session_state:
+#    st.cache_data.clear()
+#    st.session_state.inicio = True
 
 fecha_hoy=datetime.today().date()
 num_mes_actual = fecha_hoy.month
@@ -29,38 +30,55 @@ if 'mes_seleccionado_esc' not in st.session_state:
     st.session_state.mes_seleccionado_esc = mes_actual
     #st.session_state.año_anterior_esc = 2025    
 
-CREDENTIALS = st.secrets['GOOGLE_SHEETS_CREDENTIALS']
 
-if st.session_state.get('componente', 'SPOT') == 'SPOT':
-    FILE_ID = st.secrets['FILE_ID_SPOT']
-    datos_total, fecha_ini, fecha_fin = leer_json(FILE_ID, CREDENTIALS)
-elif st.session_state.get('componente', 'SPOT') == 'SSAA':
-    FILE_ID = st.secrets['FILE_ID_SSAA']
-    datos_total, fecha_ini, fecha_fin = leer_json(FILE_ID, CREDENTIALS)
-else:
-    FILE_ID_SPOT = st.secrets['FILE_ID_SPOT']
-    FILE_ID_SSAA = st.secrets['FILE_ID_SSAA']
-    datos_spot, fecha_ini_spot, fecha_fin_spot = leer_json(FILE_ID_SPOT, CREDENTIALS)
-    datos_ssaa, fecha_ini_ssaa, fecha_fin_ssaa = leer_json(FILE_ID_SSAA, CREDENTIALS)
 
-    datos_spot = datos_spot.reset_index()
-    datos_ssaa = datos_ssaa.reset_index()
-    datos_total = pd.merge(
-        datos_spot[['datetime', 'value']].rename(columns={'value': 'value_spot'}),
-        datos_ssaa[['datetime', 'value']].rename(columns={'value': 'value_ssaa'}),
-        on='datetime',
-        how='inner'
-    )
-    datos_total['value'] = datos_total['value_spot'] + datos_total['value_ssaa']
+#esto
+init_app_json_escalacv()
+datos_total = st.session_state.datos_total_escalacv
+fecha_ini = st.session_state.fecha_ini_escalacv
+fecha_fin = st.session_state.fecha_fin_escalacv
 
-    datos_total['fecha'] = datos_total['datetime'].dt.date
-    datos_total['hora'] = datos_total['datetime'].dt.hour
-    datos_total['dia'] = datos_total['datetime'].dt.day
-    datos_total['mes'] = datos_total['datetime'].dt.month
-    datos_total['año'] = datos_total['datetime'].dt.year
-    datos_total.set_index('datetime', inplace=True)
-    fecha_ini = datos_total['fecha'].min()
-    fecha_fin = datos_total['fecha'].max()
+
+
+#sustituye a todo lo que está entre
+#CODIGO ORIGINAL DE escalacv.py-----------------------------------------------------------------------------
+
+
+#CODIGO ORIGINAL DE escalacv.py-----------------------------------------------------------------------------
+#dentro de la funcion anterior
+
+#CREDENTIALS = st.secrets['GOOGLE_SHEETS_CREDENTIALS']
+
+#if st.session_state.get('componente', 'SPOT') == 'SPOT':
+#    FILE_ID = st.secrets['FILE_ID_SPOT']
+#    datos_total, fecha_ini, fecha_fin = leer_json(FILE_ID, CREDENTIALS)
+#elif st.session_state.get('componente', 'SPOT') == 'SSAA':
+#    FILE_ID = st.secrets['FILE_ID_SSAA']
+#    datos_total, fecha_ini, fecha_fin = leer_json(FILE_ID, CREDENTIALS)
+#else:
+#    FILE_ID_SPOT = st.secrets['FILE_ID_SPOT']
+#    FILE_ID_SSAA = st.secrets['FILE_ID_SSAA']
+#    datos_spot, fecha_ini_spot, fecha_fin_spot = leer_json(FILE_ID_SPOT, CREDENTIALS)
+#    datos_ssaa, fecha_ini_ssaa, fecha_fin_ssaa = leer_json(FILE_ID_SSAA, CREDENTIALS)
+
+#    datos_spot = datos_spot.reset_index()
+#    datos_ssaa = datos_ssaa.reset_index()
+#    datos_total = pd.merge(
+#        datos_spot[['datetime', 'value']].rename(columns={'value': 'value_spot'}),
+#        datos_ssaa[['datetime', 'value']].rename(columns={'value': 'value_ssaa'}),
+#        on='datetime',
+#        how='inner'
+#    )
+#    datos_total['value'] = datos_total['value_spot'] + datos_total['value_ssaa']
+
+#    datos_total['fecha'] = datos_total['datetime'].dt.date
+#    datos_total['hora'] = datos_total['datetime'].dt.hour
+#    datos_total['dia'] = datos_total['datetime'].dt.day
+#    datos_total['mes'] = datos_total['datetime'].dt.month
+#    datos_total['año'] = datos_total['datetime'].dt.year
+#    datos_total.set_index('datetime', inplace=True)
+#    fecha_ini = datos_total['fecha'].min()
+#    fecha_fin = datos_total['fecha'].max()
 
 
 ultimo_registro = datos_total['fecha'].max()
