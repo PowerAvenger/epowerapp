@@ -329,15 +329,15 @@ with col3:
     #st.header('Optimización burda del consumo', divider = 'gray')
     #st.plotly_chart(grafico_comparativo_perfiles(df_perfiles))
 
-    col31, col32, col33, col34 = st.columns(4)
-    with col31:
-        st.metric("Coste original", f"{resumen['coste_original']:.2f} €")
-    with col32:
-        st.metric("Coste optimizado", f"{resumen['coste_optimizado']:.2f} €")
-    with col33:
-        st.metric("Ahorro absoluto", f"{resumen['ahorro_abs']:.2f} €")
-    with col34:
-        st.metric("Ahorro relativo", f"{resumen['ahorro_pct']:.2f} %")
+    #col31, col32, col33, col34 = st.columns(4)
+    #with col31:
+    #    st.metric("Coste original", f"{resumen['coste_original']:.2f} €")
+    #with col32:
+    #    st.metric("Coste optimizado", f"{resumen['coste_optimizado']:.2f} €")
+    #with col33:
+    #    st.metric("Ahorro absoluto", f"{resumen['ahorro_abs']:.2f} €")
+    #with col34:
+    #    st.metric("Ahorro relativo", f"{resumen['ahorro_pct']:.2f} %")
 
     
     st.header('Optimización del consumo (en pruebas)', divider = 'gray')
