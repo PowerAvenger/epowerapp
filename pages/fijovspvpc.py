@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from backend_fijovspvpc import (obtener_datos_horarios, obtener_tabla_filtrada, grafico_horario_consumo, grafico_horario_coste, grafico_horario_precio, 
                                 obtener_datos_por_periodo,graf_consumos_queso,graf_costes_queso,
-                                optimizar_consumo_media_horaria, grafico_comparativo_perfiles, optimizar_consumo_suavizado)
+                                optimizar_consumo_media_horaria, grafico_comparativo_perfiles, optimizar_consumo_suavizado, mapa_diferencias)
 import datetime
 import numpy as np
 from dateutil.relativedelta import relativedelta
@@ -88,6 +88,7 @@ print('dias_2025')
 print(dias_2025)
 
 ## CÁLCULOS
+
 # Cálculo del coste del término de potencia PVPC
 
 tp_pvpc_2024 = tp_boe_2024 + tp_margen_pvpc #€/kW año
@@ -168,6 +169,9 @@ if 'precios_3p' not in st.session_state:
 
 df_opt, df_perfiles, resumen = optimizar_consumo_media_horaria(df_datos_horarios_combo_filtrado_consumo)
 df_opt_2, df_perfiles_2, resumen_2 = optimizar_consumo_suavizado(df_datos_horarios_combo_filtrado_consumo, st.session_state.consumo_anual)
+
+
+graf_mapa = mapa_diferencias(te_pvpc, tp_pvpc)
 
 # BARRA LATERAL-----------------------------------------------------------------------------
 st.sidebar.header('Herramientas adicionales')
@@ -274,7 +278,7 @@ with col2:
         with st.container(border = True):
             st.metric('Sobrecoste FIJO (€)', dif_pvpc_fijo, f'{dif_pvpc_fijo_porc} %', 'inverse')
 
-  
+    
 
 
     st.subheader('Datos adicionales oferta FIJO') #, divider ='gray')
@@ -306,6 +310,9 @@ with col2:
             #    st.write(totales_periodo)
     else:
         st.error('No se disponen de datos de periodos dh para el mes en curso.')   
+
+    st.header('Mapa comparativo FIJO vs PVPC', divider = 'gray')
+    st.write(graf_mapa)
 
         
 with col3:

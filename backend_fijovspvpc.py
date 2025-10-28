@@ -7,6 +7,8 @@ from datetime import datetime
 import numpy as np
 import cvxpy as cp
 
+import plotly.graph_objects as go
+
 
 
 def download_esios_id(id, fecha_ini, fecha_fin, agrupacion):
@@ -496,5 +498,142 @@ def graf_costes_queso(pt_periodos_filtrado_porc):
     )
 
     return graf_costes_queso
+
+
+def mapa_diferencias(te_pvpc, tp_pvpc):
+
+    # --- Parámetros fijos ---
+
+    potencia_contratada = st.session_state.pot_con      # kW
+    consumo = st.session_state.consumo_anual               # kWh/año
+    precios_potencia = np.arange(27, 71, 1)     # €/kW·año
+    precios_energia = np.arange(8, 20.5, 0.5)   # c€/kWh
+
+    # --- Malla de precios ---
+    X, Y = np.meshgrid(precios_energia, precios_potencia)
+    precio_energia_eur = X / 100
+
+    # --- Coste medio total en c€/kWh ---
+    coste_total = ((Y * potencia_contratada) + (precio_energia_eur * consumo)) / consumo * 100
+
+    # --- PVPC ---
+    tp_pvpc = tp_pvpc    # €/kW·año
+    te_pvpc = te_pvpc * 100   # c€/kWh
+    coste_pvpc = ((tp_pvpc * potencia_contratada) + (te_pvpc / 100) * consumo) / consumo  # €/kWh
+    coste_pvpc_cents = coste_pvpc * 100  # c€/kWh
+    coste_pvpc_euros = (tp_pvpc * potencia_contratada) + (te_pvpc / 100) * consumo  # € anuales
+
+    # --- Diferencia respecto al PVPC (c€/kWh y €) ---
+    coste_norm = coste_total - coste_pvpc_cents
+    coste_anual = (Y * potencia_contratada) + (precio_energia_eur * consumo)
+    diferencia_euros = coste_anual - coste_pvpc_euros  # € de sobrecoste o ahorro
+
+    # --- Escala de colores ---
+    colorscale_bicolor = [
+        [0.0, 'rgb(0,150,0)'],     # verde (más barato)
+        [0.5, 'rgb(240,240,240)'], # neutro
+        [1.0, 'rgb(180,0,0)']      # rojo (más caro)
+    ]
+
+    fig = go.Figure()
+
+    # --- Mapa principal (color = diferencia en c€/kWh) ---
+    fig.add_trace(go.Contour(
+        #z=coste_norm,
+        z=diferencia_euros,
+        x=precios_energia,
+        y=precios_potencia,
+        colorscale=colorscale_bicolor,
+        zmid=0,
+        #contours=dict(
+        #    start=np.floor(coste_norm.min()),
+        #    end=np.ceil(coste_norm.max()),
+        #    size=1
+        #),
+        contours=dict(
+            start=np.floor(diferencia_euros.min() / 50) * 50,
+            end=np.ceil(diferencia_euros.max() / 50) * 50,
+            size=50
+        ),
+        colorbar=dict(title='Diferencia<br> FIJO vs PVPC (€)')
+    ))
+
+    # --- Capa transparente para mostrar etiquetas (en €) ---
+    fig.add_trace(go.Contour(
+        z=diferencia_euros,
+        x=precios_energia,
+        y=precios_potencia,
+        contours=dict(
+            start=np.floor(diferencia_euros.min()/50)*50,   # múltiplos de 50 €
+            end=np.ceil(diferencia_euros.max()/50)*50,
+            size=50,
+            showlabels=True,
+            labelfont=dict(size=11, color='black')
+        ),
+        showscale=False,
+        line=dict(width=0),
+        colorscale=[[0, 'rgba(0,0,0,0)'], [1, 'rgba(0,0,0,0)']],  # transparente
+        hoverinfo='skip'
+    ))
+
+    # --- Línea de equilibrio (Δ=0) ---
+    Y_linea = (coste_pvpc * consumo - (precios_energia / 100) * consumo) / potencia_contratada
+    mask = (Y_linea >= precios_potencia.min()) & (Y_linea <= precios_potencia.max())
+
+    fig.add_trace(go.Scatter(
+        x=precios_energia[mask],
+        y=Y_linea[mask],
+        mode='lines',
+        line=dict(color='black', dash='dash', width=2),
+        name='Equilibrio (Δ=0)',
+        hoverinfo='none',
+        showlegend=False
+    ))
+
+    # --- Capa invisible para hover detallado ---
+    fig.add_trace(go.Scatter(
+        x=X.flatten(),
+        y=Y.flatten(),
+        mode='markers',
+        marker=dict(size=5, color='rgba(0,0,0,0)'),
+        hoverinfo='text',
+        text=[
+            f"Te={x:.1f} c€/kWh<br>Tp={y:.0f} €/kW·año"
+            f"<br>Precio medio={z:.2f} c€/kWh"
+            f"<br>Δ coste anual={d:.0f} €"
+            for x, y, z, d in zip(X.flatten(), Y.flatten(), coste_total.flatten(), diferencia_euros.flatten())
+        ],
+        showlegend=False
+    ))
+
+    # --- Punto PVPC ---
+    fig.add_trace(go.Scatter(
+        x=[te_pvpc],
+        y=[tp_pvpc],
+        mode='markers+text',
+        text=[f"PVPC<br>{te_pvpc:.1f} c€/kWh · {tp_pvpc:.2f} €/kW·año"
+            f"<br><b>{coste_pvpc_cents:.2f} c€/kWh</b><br>{coste_pvpc_euros:.0f} €"],
+        textposition='top right',
+        textfont=dict(size=13, color='black'),
+        marker=dict(color='white', size=12, line=dict(width=2, color='black')),
+        name='PVPC',
+        showlegend=False
+    ))
+
+    # --- Layout ---
+    fig.update_layout(
+        title=f"Mapa comparativo FIJO vs PVPC — Potencia {potencia_contratada} kW | Consumo {consumo} kWh",
+        xaxis_title='Precio FIJO energía (c€/kWh)',
+        yaxis_title='Precio FIJO potencia (€/kW·año)',
+        template='simple_white',
+        #margin=dict(l=50, r=50, t=80, b=50)
+        #width=950,
+        #height=700
+    )
+    
+    fig.update_xaxes(range=[precios_energia.min(), precios_energia.max()], constrain='domain')
+    fig.update_yaxes(range=[precios_potencia.min(), precios_potencia.max()], constrain='domain')
+
+    return fig
 
 
