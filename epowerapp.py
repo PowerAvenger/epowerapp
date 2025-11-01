@@ -3,7 +3,7 @@ import base64
 import time
 
 st.set_page_config(
-    page_title="ePowerAPP",
+    page_title="TotalPower",
     page_icon="⚡",
     layout='wide',
     #layout='centered',
