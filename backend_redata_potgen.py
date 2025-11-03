@@ -405,8 +405,8 @@ def gen_evol(df_out_equiparado):
         .merge(df_gen, on=['año', 'tecnologia'])
     )
 
-    print ('df_out_evol')
-    print (df_out_evol)
+    #print ('df_out_evol')
+    #print (df_out_evol)
 
     df_out_evol['%_mix_gen'] = df_out_evol['%_mix_gen']*100
     
@@ -537,18 +537,20 @@ def graficar_gen_diaria(df, df_omie, colores_tecnologia):
 
 
     # Añadir línea del precio OMIE al eje secundario
-    graf.add_trace(
-        go.Scatter(
-            x=df_omie['fecha'],
-            y=df_omie['value'],
-            mode='lines',
-            name='Precio SPOT+SSAA (€/MWh)',
-            line=dict(color='cyan', width=2.5),
-            yaxis='y2'
+    if df_omie is not None and not df_omie.empty:
+        graf.add_trace(
+            go.Scatter(
+                x=df_omie['fecha'],
+                y=df_omie['value'],
+                mode='lines',
+                name='Precio SPOT+SSAA (€/MWh)',
+                line=dict(color='yellow', width=2),
+                yaxis='y2'
+            )
         )
-    )
 
 
+    
     graf.update_layout(
         legend=dict(
             title='',
@@ -560,18 +562,36 @@ def graficar_gen_diaria(df, df_omie, colores_tecnologia):
         ),
         showlegend=True,
         xaxis = dict(tickmode = 'array'),
-        yaxis2=dict(
-            title=dict(
-                text='Precio SPOT+SSAA (€/MWh)',
-                font=dict(color='cyan')
-            ),
-            overlaying='y',
-            side='right',
-            showgrid=False,
-            tickfont=dict(color='cyan')
-        ),
+        
+        #yaxis2=dict(
+        #    title=dict(
+        #        text='Precio SPOT+SSAA (€/MWh)',
+        #        font=dict(color='cyan')
+        #    ),
+        #    overlaying='y',
+        #    side='right',
+        #    showgrid=False,
+        #    tickfont=dict(color='cyan')
+        #),
         #bargroupgap = 0.1
     )
+
+    # Verificar si hay una traza asociada a yaxis='y2'
+    tiene_precio = any(t.yaxis == 'y2' for t in graf.data)
+    # Si hay línea de precio, añadir eje secundario
+    if tiene_precio:
+        graf.update_layout(
+            yaxis2=dict(
+                title=dict(
+                    text='Precio SPOT+SSAA (€/MWh)',
+                    font=dict(color='cyan')
+                ),
+                overlaying='y',
+                side='right',
+                showgrid=False,
+                tickfont=dict(color='cyan')
+            )
+        )
 
     return graf
 

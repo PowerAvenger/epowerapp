@@ -7,7 +7,7 @@ from backend_redata_potgen import (
 )
 
 from utilidades import generar_menu, init_app_json_escalacv
-
+import pandas as pd
 from backend_escalacv import diarios_totales
 
 if not st.session_state.get('usuario_autenticado', False):
@@ -70,12 +70,12 @@ with st.spinner('Tratando los datos...'):
 
 
 # 📆 Datos diarios de OMIE (desde 2018) y gráfico
-st.session_state.componente = 'SPOT+SSAA'
-init_app_json_escalacv()
-datos_totales_escalacv = st.session_state.datos_total_escalacv
-fecha_ini = st.session_state.fecha_ini_escalacv
-fecha_fin = st.session_state.fecha_fin_escalacv
-datos_diarios_escalacv, graf_ecv_total = diarios_totales(datos_totales_escalacv, fecha_ini, fecha_fin)
+#st.session_state.componente = 'SPOT+SSAA'
+#init_app_json_escalacv()
+#datos_totales_escalacv = st.session_state.datos_total_escalacv
+#fecha_ini = st.session_state.fecha_ini_escalacv
+#fecha_fin = st.session_state.fecha_fin_escalacv
+#datos_diarios_escalacv, graf_ecv_total = diarios_totales(datos_totales_escalacv, fecha_ini, fecha_fin)
 
 
 
@@ -117,14 +117,24 @@ if st.session_state.get('dias_equiparados', True) and st.session_state.año_sele
     ]
 
 # 2️⃣ Filtrar el DataFrame de OMIE con el mismo rango
-df_omie_filtrado = datos_diarios_escalacv[datos_diarios_escalacv['año'] == st.session_state.año_seleccionado]
-# Filtro adicional si el toggle está activado y el año seleccionado es anterior al actual
-if st.session_state.get('dias_equiparados', True) and st.session_state.año_seleccionado < año_actual:
-    df_omie_filtrado = df_omie_filtrado[
-        (df_omie_filtrado['mes'] < mes_ult) |
-        ((df_omie_filtrado['mes'] == mes_ult) & (df_omie_filtrado['fecha'].dt.day <= dia_ult))
-    ]
+# 📆 Datos diarios de OMIE (desde 2018) y gráfico
+if st.session_state.get('spot_ssaa', False):
+    st.session_state.componente = 'SPOT+SSAA'
+    init_app_json_escalacv()
+    datos_totales_escalacv = st.session_state.datos_total_escalacv
+    fecha_ini = st.session_state.fecha_ini_escalacv
+    fecha_fin = st.session_state.fecha_fin_escalacv
+    datos_diarios_escalacv, graf_ecv_total = diarios_totales(datos_totales_escalacv, fecha_ini, fecha_fin)
 
+    df_omie_filtrado = datos_diarios_escalacv[datos_diarios_escalacv['año'] == st.session_state.año_seleccionado]
+    # Filtro adicional si el toggle está activado y el año seleccionado es anterior al actual
+    if st.session_state.get('dias_equiparados', True) and st.session_state.año_seleccionado < año_actual:
+        df_omie_filtrado = df_omie_filtrado[
+            (df_omie_filtrado['mes'] < mes_ult) |
+            ((df_omie_filtrado['mes'] == mes_ult) & (df_omie_filtrado['fecha'].dt.day <= dia_ult))
+        ]
+else:
+    df_omie_filtrado = pd.DataFrame()
 
 # usado para los gráficos 5,6,9, donde comparamos todos los años
 df_out_equiparado = df_diario_all.copy()
@@ -150,7 +160,10 @@ if st.session_state.get('mes_seleccionado_redata', 'TODOS') != "TODOS":
     num_mes_seleccionado = {v: k for k, v in nombres_meses.items()}[st.session_state.mes_seleccionado_redata]
     df_año_filtrado = df_año_filtrado[df_año_filtrado['mes_num'] == num_mes_seleccionado]
     df_out_equiparado = df_out_equiparado[df_out_equiparado['mes_num'] == num_mes_seleccionado]
-    df_omie_filtrado = df_omie_filtrado[df_omie_filtrado['mes'] == num_mes_seleccionado]
+    if st.session_state.get('spot_ssaa', False):
+        df_omie_filtrado = df_omie_filtrado[df_omie_filtrado['mes'] == num_mes_seleccionado]
+    else: 
+        df_omie_filtrado = pd.DataFrame()
 
 print('df out equiparado')
 print(df_out_equiparado)
@@ -178,13 +191,14 @@ graf_gen_evol = graficar_evol(df_fc_mix_evol, colores_tec, 'gen_GWh')
 df_efi_evol = calc_efi(df_out_equiparado, coef_horas)
 graf_efi = graficar_efi_evol(df_efi_evol)
 
+#if st.session_state.get('spot_ssaa', False):
 graf_gen_diaria = graficar_gen_diaria(df_año_filtrado, df_omie_filtrado, colores_tec)
 
 
 
 
-print('datos totales escalacv')
-print(datos_totales_escalacv)
+#print('datos totales escalacv')
+#print(datos_totales_escalacv)
 
 
 
@@ -207,6 +221,7 @@ with st.sidebar:
     #st.radio('Selecciona el párametro a visualizar en el Gráfico 5:', ['FC', '%_mix'], key = 'opcion_evol')
     st.multiselect('Selecciona y compara tecnologías', options = tec_filtro, key = 'tec_seleccionadas')
     tipo_mix = st.toggle('Cambiar de tipo de gráfico 4')
+    st.toggle('Cargar SPOT+SSAA', key = 'spot_ssaa', value = False)
 
 # VISUALIZACION EN EL TABLERO++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 c1, c2, c3 = st.columns(3)
