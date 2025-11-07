@@ -584,7 +584,7 @@ def mapa_diferencias(te_pvpc, tp_pvpc):
         x=precios_energia[mask],
         y=Y_linea[mask],
         mode='lines',
-        line=dict(color='black', dash='dash', width=2),
+        line=dict(color='black', dash='dash', width=4),
         name='Equilibrio (Δ=0)',
         hoverinfo='none',
         showlegend=False
