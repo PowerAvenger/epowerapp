@@ -615,7 +615,7 @@ def mapa_diferencias(te_pvpc, tp_pvpc):
             f"<br><b>{coste_pvpc_cents:.2f} c€/kWh</b><br>{coste_pvpc_euros:.0f} €"],
         textposition='top right',
         textfont=dict(size=13, color='black'),
-        marker=dict(color='white', size=12, line=dict(width=2, color='black')),
+        marker=dict(color='white', size=12, line=dict(width=4, color='black')),
         name='PVPC',
         showlegend=False
     ))
