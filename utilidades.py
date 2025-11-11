@@ -27,6 +27,7 @@ def generar_menu():
         st.page_link('pages/demanda.py', label = 'Demanda', icon = "🏭")
         st.page_link('pages/mibgas.py', label = 'Gas & Furious', icon = "🔥")
         st.page_link('pages/redata_potgen.py', label = 'Tecnologías de generación', icon = "⚡️")
+        st.page_link('pages/curvadecarga.py', label = 'Curvas de carga', icon = "🕒")
         st.page_link('pages/marginales.py', label = 'Marginales', icon = "🔀")
         st.sidebar.header('', divider='rainbow')
 
