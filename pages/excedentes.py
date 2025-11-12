@@ -1,7 +1,7 @@
 import streamlit as st
 import time
 from io import StringIO
-from backend_excedentes import obtener_file, graf_no_neteo_total, graf_neteo_total, graf_no_neteo, graf_coste_exc, graf_coste_pvpc, graf_demver
+from backend_excedentes import obtener_file, graf_no_neteo_total, graf_neteo_total, graf_no_neteo, graf_coste_exc, graf_coste_pvpc, graf_demver, obtener_dfs
 
 from utilidades import generar_menu
 
@@ -13,15 +13,19 @@ generar_menu()
 
 
 #usamos ejemplo de curva por defecto
-file = st.file_uploader('Curva de carga a analizar')
-
+#file = st.file_uploader('Curva de carga a analizar')
+if 'df_norm' in st.session_state:
+    file = st.session_state.df_norm
+else:
+    file = None
 zona_mensajes = st.empty()
 
 
 if file is not None:
     try:
-        stringio = StringIO(file.getvalue().decode("utf-8"))
-        df_origen, df_coste_24h, df_demver_24h, demanda, demanda_neteo,vertido,vertido_neteo, fecha_ini_curva, fecha_fin_curva, precio_medio_exc, coste_exc,precio_medio_pvpc, coste_pvpc=obtener_file(stringio)
+        #stringio = StringIO(file.getvalue().decode("utf-8"))
+        #df_origen, df_coste_24h, df_demver_24h, demanda, demanda_neteo,vertido,vertido_neteo, fecha_ini_curva, fecha_fin_curva, precio_medio_exc, coste_exc,precio_medio_pvpc, coste_pvpc=obtener_file(stringio)
+        df_origen, df_coste_24h, df_demver_24h, demanda, demanda_neteo,vertido,vertido_neteo, fecha_ini_curva, fecha_fin_curva, precio_medio_exc, coste_exc,precio_medio_pvpc, coste_pvpc=obtener_dfs(file)
         zona_mensajes.success('Archivo cargado correctamente!')
     except Exception as e:
         zona_mensajes.error(f'Error al cargar el archivo. Asegúrate de que el archivo tenga el formato correcto')
@@ -38,10 +42,13 @@ else:
     
 #df_origen, df_coste_24h, df_demver_24h, demanda, demanda_neteo,vertido,vertido_neteo, fecha_ini_curva, fecha_fin_curva, precio_medio_exc, coste_exc,precio_medio_pvpc, coste_pvpc=obtener_file(f'curvas/2024 07.csv')
 
+if 'df_norm' in st.session_state:
+    st.sidebar.toggle('Usar curva cargada', key='toggle_curva', value=True)
+neteo = st.sidebar.toggle('Cambia a NETEO (saldos horarios facturables). Recuerda que en la parte superior derecha del gráfico tienes herramientas de zoom.')
 
 col1, col2 = st.columns([.8,.2])
 with col1:
-    neteo = st.toggle('Cambia a NETEO (saldos horarios facturables). Recuerda que en la parte superior derecha del gráfico tienes herramientas de zoom.')
+    
 
     if neteo:
         graf2=graf_neteo_total(df_origen)

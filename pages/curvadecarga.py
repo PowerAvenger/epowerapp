@@ -43,13 +43,22 @@ with st.sidebar:
             key='opcion_tipodia'
         )
 
-        
+# Inicializa el estado si no existe
+if "df_norm" not in st.session_state:
+    st.session_state.df_norm = None 
+if "df_in" not in st.session_state:
+    st.session_state.df_in = None      
+if 'modo_agrupacion' not in st.session_state:
+    st.session_state.modo_agrupacion = "Horario" 
+if 'opcion_tipodia' not in st.session_state:
+    st.session_state.opcion_tipodia = "L-V"
 
         
 
 if uploaded:
     try:
         df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos = normalize_curve_simple(uploaded, origin=uploaded.name)
+        #st.session_state.df_norm = df_norm
 
         #print('mensaje periodos')
         #print(msg_periodos)
@@ -99,52 +108,68 @@ if uploaded:
         else:
             msg_periodos = 'Cargados periodos desde fichero origen'
             zona_mensajes3.info(msg_periodos, icon="ℹ️")
+        
+        st.session_state.df_norm = df_norm
+        st.session_state.df_in = df_in
+        st.session_state.consumo_total=consumo_total
+        st.session_state.vertido_total=vertido_total
+        st.session_state.consumo_neto=consumo_neto
+        st.session_state.vertido_neto=vertido_neto
 
     except Exception as e:
         zona_mensajes.error(f"❌ Error al normalizar: {e}")
         st.stop()
 
    
+    
+    
+
+
+else:
+    zona_mensajes.info("⬆️ Sube un archivo CSV o Excel para comenzar.")
+
+
+if st.session_state.get('df_norm') is not None:
     altura_df = 300
     c1,c2,c3,c4,c5=st.columns([.35,.35,.1,.1,.1])
     with c1:
         # Visor del df in
         st.subheader("📄 Vista previa del archivo original (df_in)")
-        st.dataframe(df_in, height=altura_df)
+        st.dataframe(st.session_state.df_in, height=altura_df)
     with c2:
         # Visor del df out
         st.subheader("📊 DataFrame normalizado (df_norm)")
-        st.dataframe(df_norm, height=altura_df)
+        st.dataframe(st.session_state.df_norm, height=altura_df)
     with c3:
         # --- Resumen registros---
         st.subheader("Resumen registros")
-        st.metric("Número de registros", f"{len(df_norm):,.0f}".replace(",", "."))
-        st.metric("Fecha inicio", df_norm["fecha_hora"].min().strftime("%d.%m.%Y"))
-        st.metric("Fecha final", df_norm["fecha_hora"].max().strftime("%d.%m.%Y"))
+        st.metric("Número de registros", f"{len(st.session_state.df_norm):,.0f}".replace(",", "."))
+        st.metric("Fecha inicio", st.session_state.df_norm["fecha_hora"].min().strftime("%d.%m.%Y"))
+        st.metric("Fecha final", st.session_state.df_norm["fecha_hora"].max().strftime("%d.%m.%Y"))
     with c4:
         st.subheader("Resumen datos")
-        st.metric("Consumo total KWh", f"{consumo_total:,.0f}".replace(",", "."))
-        st.metric("Vertido total KWh", f"{vertido_total:,.0f}".replace(",", "."))
+        st.metric("Consumo total KWh", f"{st.session_state.consumo_total:,.0f}".replace(",", "."))
+        st.metric("Vertido total KWh", f"{st.session_state.vertido_total:,.0f}".replace(",", "."))
     with c5:
         st.subheader("Resumen datos")
-        st.metric("Consumo neteo KWh", f"{consumo_neto:,.0f}".replace(",", "."))
-        st.metric("Vertido neteo KWh", f"{vertido_neto:,.0f}".replace(",", "."))
+        st.metric("Consumo neteo KWh", f"{st.session_state.consumo_neto:,.0f}".replace(",", "."))
+        st.metric("Vertido neteo KWh", f"{st.session_state.vertido_neto:,.0f}".replace(",", "."))
     # --- Gráfico ---
 
     c1,c2=st.columns([.7,.3])
     with c1:
         st.subheader("Gráfico de consumo")
         # Mostrar gráfico
-        graf_dfnorm = graficar_curva(df_norm)
+        graf_dfnorm = graficar_curva(st.session_state.df_norm)
         st.plotly_chart(graf_dfnorm, use_container_width=True)
-        graf_dfneteo = graficar_curva_neteo(df_norm)
+        graf_dfneteo = graficar_curva_neteo(st.session_state.df_norm)
         st.plotly_chart(graf_dfneteo, use_container_width=True)
     with c2:
         st.subheader("Consumo por periodos")
-        graf_periodos=graficar_queso_periodos(df_norm)
+        graf_periodos=graficar_queso_periodos(st.session_state.df_norm)
         st.plotly_chart(graf_periodos, use_container_width=True)
         st.subheader("Medias horarias")
-        graf_medias_horarias=graficar_media_horaria(df_norm)
+        graf_medias_horarias=graficar_media_horaria(st.session_state.df_norm)
         st.plotly_chart(graf_medias_horarias, use_container_width=True)
         
         
@@ -152,11 +177,6 @@ if uploaded:
     
 
     # --- Descarga ---
-    csv_bytes = df_norm.reset_index().to_csv(index=False, sep=";").encode("utf-8")
+    csv_bytes = st.session_state.df_norm.reset_index().to_csv(index=False, sep=";").encode("utf-8")
     st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes,
                        "curva_normalizada.csv", "text/csv")
-    
-
-
-else:
-    zona_mensajes.info("⬆️ Sube un archivo CSV o Excel para comenzar.")

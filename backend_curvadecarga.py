@@ -85,6 +85,8 @@ def _read_any(uploaded_or_path):
         df.columns = df.iloc[0]
         df = df.iloc[1:].reset_index(drop=True)
     
+    df = df.dropna(axis=1, how="all")
+
     print('df original')
     print (df)
 
@@ -178,7 +180,7 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
 
     # --- Consumo ---
     kwh_consumo = pd.to_numeric(df[c_kwh].str.replace(",", ".", regex=False), errors="coerce")
-    kwh_vertido = pd.to_numeric(df[c_ver].str.replace(",", ".", regex=False), errors="coerce") if c_ind else np.nan
+    kwh_vertido = pd.to_numeric(df[c_ver].str.replace(",", ".", regex=False), errors="coerce") if c_ver else np.nan
 
     msg_unidades = ""
 

@@ -107,6 +107,92 @@ def obtener_file(file):
     return df_origen, df_coste_24h, df_demver_24h, demanda, demanda_neteo,vertido,vertido_neteo, fecha_ini_curva, fecha_fin_curva, precio_medio_exc, coste_exc, precio_medio_pvpc, coste_pvpc
 
 
+def obtener_dfs(df_norm):
+    print(df_norm)
+    #df_file=pd.read_csv(file, sep=';')
+    df_origen=df_norm.copy()
+    #df_origen=df_origen.iloc[:,[1,3,4,5]]
+
+    #renombramos columnas
+    #df_origen=df_origen.rename(columns={'FECHA-HORA':'fecha_hora','PERIODO TARIFARIO':'dh','CONSUMO Wh':'demanda','GENERACION Wh':'vertido'})
+    #pasamos a kWh
+    #df_origen[['demanda','vertido']] /= 1000
+    #convertimos a fecha_hora a datetime y restamos una hora (para luego agrupar correctamente por dias)
+    df_origen['fecha_hora']=pd.to_datetime(df_origen['fecha_hora'])
+    #df_origen['fecha_hora']=df_origen['fecha_hora']-pd.Timedelta(hours=1)
+    #creamos columnas de fecha y hora
+    df_origen['fecha']=df_origen['fecha_hora'].dt.date
+    #df_origen['fecha']=pd.to_datetime(df_origen['fecha_hora'].dt.date)
+    #df_origen['hora']=df_origen['fecha_hora'].dt.hour
+    #df_origen['hora']+=1
+
+    #movemos las columnas de fecha y hora
+    cols=df_origen.columns.tolist()
+    cols.remove('fecha')
+    cols.remove('hora')
+    pos_fecha_hora=cols.index('fecha_hora')
+    print(pos_fecha_hora)
+    cols.insert(pos_fecha_hora +1,'fecha')
+    cols.insert(pos_fecha_hora +2,'hora')
+    df_origen=df_origen[cols]
+
+    #aqui vamos a renombrar las columnas de df_norm para asegurar compatibilidad con el código anterior
+    #consumo_neto_kWh por demanda_neteo
+    #vertido_neto_kWh por vertido_neteo
+    #consumo_kWh por demanda
+    #excedentes_kWh por vertido
+
+
+    #df_origen['demanda_neteo']=df_origen['demanda']-df_origen['vertido']
+    #df_origen.loc[df_origen['demanda_neteo']<0 , 'demanda_neteo']=0
+    #df_origen['vertido_neteo']=df_origen['vertido']-df_origen['demanda']
+    #df_origen.loc[df_origen['vertido_neteo']<0 , 'vertido_neteo']=0
+
+    # 🔄 Renombramos columnas para compatibilidad con el código anterior
+    rename_map = {
+        'consumo_neto_kWh': 'demanda_neteo',
+        'vertido_neto_kWh': 'vertido_neteo',
+        'consumo_kWh': 'demanda',
+        'excedentes_kWh': 'vertido'
+    }
+    df_origen.rename(columns=rename_map, inplace=True)
+
+    id_exc=1739
+    id_pvpc=10391
+    fecha_ini_curva=df_origen['fecha'].min().strftime('%Y-%m-%d')
+    fecha_fin_curva=df_origen['fecha'].max().strftime('%Y-%m-%d')
+    agrupacion='hour'
+    df_excedentes=download_esios_id(id_exc,fecha_ini_curva,fecha_fin_curva,agrupacion,None)
+    df_excedentes=df_excedentes.rename(columns={'datetime':'fecha_hora','value':'precio_exc'})
+    df_pvpc=download_esios_id(id_pvpc,fecha_ini_curva,fecha_fin_curva,agrupacion,8741)
+    df_pvpc=df_pvpc.rename(columns={'datetime':'fecha_hora','value':'precio_pvpc'})
+
+    df_origen=pd.merge(df_origen,df_pvpc,on='fecha_hora')
+    df_origen=pd.merge(df_origen,df_excedentes,on='fecha_hora')
+
+    df_origen['coste_pvpc']=df_origen['demanda_neteo']*df_origen['precio_pvpc']/1000
+    df_origen['coste_exc']=df_origen['vertido_neteo']*df_origen['precio_exc']/1000
+
+    demanda=round(df_origen['demanda'].sum(),2)
+    vertido=round(df_origen['vertido'].sum(),2)
+    demanda_neteo=round(df_origen['demanda_neteo'].sum(),2)
+    vertido_neteo=round(df_origen['vertido_neteo'].sum(),2)
+
+    coste_exc=round(df_origen['coste_exc'].sum(),2)
+    coste_pvpc=round(df_origen['coste_pvpc'].sum(),2)
+
+    precio_medio_exc=round(coste_exc/vertido_neteo,3)
+    precio_medio_pvpc=round(coste_pvpc/demanda_neteo,3)
+
+    df_coste_24h=df_origen.groupby('hora')[['vertido_neteo', 'coste_exc','demanda_neteo','coste_pvpc']].sum()
+    df_coste_24h.reset_index(inplace=True)
+
+    df_demver_24h=df_origen.groupby('hora')[['demanda_neteo','vertido_neteo']].mean()
+    df_demver_24h.reset_index(inplace=True)  
+
+    return df_origen, df_coste_24h, df_demver_24h, demanda, demanda_neteo,vertido,vertido_neteo, fecha_ini_curva, fecha_fin_curva, precio_medio_exc, coste_exc, precio_medio_pvpc, coste_pvpc
+
+
 def graf_no_neteo_total(df_origen):
     graf_no_neteo_total=px.bar(df_origen,x='fecha_hora',y=['demanda','vertido'],
                             color_discrete_map={'demanda':'red','vertido':'green'},
