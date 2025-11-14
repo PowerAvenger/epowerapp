@@ -28,20 +28,8 @@ with st.sidebar:
     zona_mensajes3 = st.sidebar.empty()
 
     # Selector de modo
-    if uploaded:
-        st.radio(
-            "Selecciona el tipo de gráfico",
-            ["Horario", "Diario", "Mensual"],
-            horizontal=True,
-            key='modo_agrupacion'
-        )
-
-        st.radio(
-            "Selecciona el tipo de día:",
-            ["Todos", "L-V", "FS"],
-            horizontal=True,
-            key='opcion_tipodia'
-        )
+    #if uploaded:
+    
 
 # Inicializa el estado si no existe
 if "df_norm" not in st.session_state:
@@ -51,7 +39,7 @@ if "df_in" not in st.session_state:
 if 'modo_agrupacion' not in st.session_state:
     st.session_state.modo_agrupacion = "Horario" 
 if 'opcion_tipodia' not in st.session_state:
-    st.session_state.opcion_tipodia = "L-V"
+    st.session_state.opcion_tipodia = "TOTAL"
 
         
 
@@ -130,6 +118,21 @@ else:
 
 
 if st.session_state.get('df_norm') is not None:
+
+    st.sidebar.radio(
+        "Selecciona el tipo de gráfico",
+        ["Horario", "Diario", "Mensual"],
+        horizontal=True,
+        key='modo_agrupacion'
+    )
+
+    st.sidebar.radio(
+        "Selecciona el tipo de día:",
+        ["Todos", "L-V", "FS"],
+        horizontal=True,
+        key='opcion_tipodia'
+    )
+
     altura_df = 300
     c1,c2,c3,c4,c5=st.columns([.35,.35,.1,.1,.1])
     with c1:
