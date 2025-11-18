@@ -623,7 +623,7 @@ def mapa_diferencias(te_pvpc, tp_pvpc):
         # --- Punto PVPC ---
     fig.add_trace(go.Scatter(
         x=[st.session_state.precio_ene],
-        y=[st.sesson_state.tp_fijo],
+        y=[st.session_state.tp_fijo],
         mode='markers+text',
         text=[f"PVPC<br>{st.session_state.precio_ene:.1f} c€/kWh · {st.sesson_state.tp_fijo:.2f} €/kW·año"
             f"<br><b>{coste_pvpc_cents:.2f} c€/kWh</b><br>{coste_pvpc_euros:.0f} €"],
