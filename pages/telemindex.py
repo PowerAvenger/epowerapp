@@ -68,7 +68,12 @@ with st.sidebar.container(border=True):
     else:
         #st.sidebar.date_input('Selecciona un día', min_value = datetime.date(2023, 1, 1), max_value = st.session_state.ultima_fecha_sheets, key = 'dia_seleccionado')
         with st.sidebar.form(key='form_fechas_telemindex'):
-            st.date_input('Selecciona un rango de días', min_value = datetime.date(2023, 1, 1), max_value = datetime.date(2025, 12, 31), key = 'dias_seleccionados')    
+            # Asegurar que ultima_fecha_sheets es un objeto datetime.date
+            ultima_fecha_sheets = st.session_state.ultima_fecha_sheets
+            if isinstance(ultima_fecha_sheets, (pd.Timestamp, datetime.datetime)):
+                ultima_fecha_sheets = ultima_fecha_sheets.date()
+            #st.date_input('Selecciona un rango de días', min_value = datetime.date(2023, 1, 1), max_value = datetime.date(2025, 12, 31), key = 'dias_seleccionados')  
+            st.date_input('Selecciona un rango de días', min_value = datetime.date(2023, 1, 1), max_value = ultima_fecha_sheets, key = 'dias_seleccionados')   
             #st.session_state.texto_precios = f'Día seleccionado {st.session_state.dia_seleccionado}'
             inicio, fin = st.session_state.dias_seleccionados
             st.session_state.texto_precios = (f"Rango seleccionado: {inicio.strftime('%d/%m/%Y')} → {fin.strftime('%d/%m/%Y')}")

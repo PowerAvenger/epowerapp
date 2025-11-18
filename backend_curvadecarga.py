@@ -108,7 +108,7 @@ def _guess_cols(df: pd.DataFrame):
     c_time = find([r"hora", r"hr", r"time", r"^h$"])
     c_kwh = find([r"consumo", r"energia", r"kwh", r"ae", r"active.?energy", r"importada", r"activa"])
     c_per = find([r"periodo", r"^p$", r"^p[1-6]$"])
-    c_ind = find(["reactiva", "kvarh"])
+    c_ind = find(["reactiva", "kvarh", "inductiva"])
     c_cap = find(["capac"])
     c_ver = find([r"gener", r"vertid", r"exportad", r"as", r"prod"])
 

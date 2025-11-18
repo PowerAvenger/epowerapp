@@ -2,7 +2,8 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 from backend_curvadecarga import (normalize_curve_simple,graficar_curva,graficar_curva_neteo,graficar_media_horaria,graficar_queso_periodos)
-from utilidades import generar_menu
+from backend_comun import carga_total_sheets
+from utilidades import generar_menu, init_app, init_app_index
 
 if not st.session_state.get('usuario_autenticado', False):
     st.switch_page('epowerapp.py')
@@ -33,7 +34,9 @@ with st.sidebar:
 
 # Inicializa el estado si no existe
 if "df_norm" not in st.session_state:
-    st.session_state.df_norm = None 
+    st.session_state.df_norm = None
+if "df_norm_h" not in st.session_state:
+    st.session_state.df_norm = None  
 if "df_in" not in st.session_state:
     st.session_state.df_in = None
 if 'frec' not in st.session_state:
@@ -147,13 +150,14 @@ if uploaded:
 
         if frec =='15T':
             # Agregar cada 4 muestras por hora
+            # Agrupar a nivel horario (suma de los 4 cuartos horarios)
             df_norm_h = (
-                df_norm.resample("H", on="fecha_hora", label="right", closed="right")
+                df_norm.groupby(["fecha", "hora"], as_index=False)
                 .agg({
-                    "consumo_neto_kWh": "sum",   # suma de los 4 cuartos horarios
-                    "periodo": "first"           # toma el primer periodo de la hora
+                    "consumo_neto_kWh": "sum",
+                    "vertido_neto_kWh": "sum",
+                    "periodo": "first"
                 })
-                .reset_index()
             )
         else:
             # Ya está en frecuencia horaria → copiar
@@ -169,6 +173,20 @@ if uploaded:
         st.session_state.vertido_total=vertido_total
         st.session_state.consumo_neto=consumo_neto
         st.session_state.vertido_neto=vertido_neto
+        # Obtener fechas mínima y máxima del df_norm_h y guardar para telemindex
+        fecha_ini = df_norm_h["fecha"].min()
+        fecha_fin = df_norm_h["fecha"].max()
+        if 'df_sheets_full' not in st.session_state:
+            init_app()
+            init_app_index()
+            zona_mensajes.warning('Cargados datos iniciales. Espera a que estén disponibles todos los datos', icon = '⚠️')
+            #SPREADSHEET_ID = st.secrets['SHEET_INDEX_ID']
+            st.session_state.df_sheets_full = carga_total_sheets()
+            st.session_state.df_sheets = st.session_state.df_sheets_full
+            zona_mensajes.success('Cargados todos los datos. Ya puedes consultar los históricos', icon = '👍')
+        st.session_state.dias_seleccionados = (fecha_ini, fecha_fin)
+
+        
 
 
 
@@ -240,7 +258,7 @@ if st.session_state.get('df_norm') is not None:
         st.plotly_chart(graf_medias_horarias, use_container_width=True)
         
         
-
+    st.write(st.session_state.df_norm_h)
     
 
     # --- Descarga ---
