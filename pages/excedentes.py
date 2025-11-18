@@ -14,7 +14,7 @@ generar_menu()
 
 #usamos ejemplo de curva por defecto
 #file = st.file_uploader('Curva de carga a analizar')
-if 'df_norm' in st.session_state:
+if 'df_norm' in st.session_state and "atr_dfnorm" in st.session_state and st.session_state.atr_dfnorm == "2.0":
     file = st.session_state.df_norm
 else:
     file = None
@@ -32,11 +32,11 @@ if file is not None:
         time.sleep(3)
         zona_mensajes.warning('Se cargará el archivo de ejemplo')
         time.sleep(3)
-        zona_mensajes.warning('Por favor, sube una curva de carga de i-DE para autoconsumidores. Lo que estás viendo es un archivo de ejemplo')
+        zona_mensajes.warning('Por favor, sube una curva de carga 2.0. Lo que estás viendo es un archivo de ejemplo')
         file='curvas/2024 07.csv'
         df_origen, df_coste_24h, df_demver_24h, demanda, demanda_neteo,vertido,vertido_neteo, fecha_ini_curva, fecha_fin_curva, precio_medio_exc, coste_exc,precio_medio_pvpc, coste_pvpc=obtener_file(f'curvas/2024 07.csv')
 else:
-    zona_mensajes.warning('Por favor, sube una curva de carga. Lo que estás viendo es un archivo de ejemplo')
+    zona_mensajes.warning('Por favor, sube una curva de carga 2.0. Lo que estás viendo es un archivo de ejemplo')
     #file='curvas/2024 07.csv'
     df_origen, df_coste_24h, df_demver_24h, demanda, demanda_neteo,vertido,vertido_neteo, fecha_ini_curva, fecha_fin_curva, precio_medio_exc, coste_exc,precio_medio_pvpc, coste_pvpc=obtener_file(f'curvas/2024 07.csv')
     

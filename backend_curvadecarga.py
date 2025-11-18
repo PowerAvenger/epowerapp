@@ -395,6 +395,21 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
         except Exception as e:
             st.warning(f"No se pudieron cargar los periodos: {e}")
             periodo = np.nan
+    
+    # --- NUEVO BLOQUE: Determinación del ATR según periodos detectados ---
+    try:
+        if isinstance(periodo, pd.Series):
+            # Extraemos el número del periodo (P1→1, etc.)
+            numeros = periodo.dropna().str.extract(r"P(\d+)")[0].astype(float)
+            if not numeros.empty and numeros.max() == 3:
+                atr_dfnorm = "2.0"
+            else:
+                atr_dfnorm = None
+        else:
+            atr_dfnorm = None
+    except Exception as e:
+        atr_dfnorm = None
+        print(f"Error determinando ATR: {e}")
 
     ind = pd.to_numeric(df[c_ind], errors="coerce") if c_ind else np.nan
     cap = pd.to_numeric(df[c_cap], errors="coerce") if c_cap else np.nan
@@ -426,7 +441,7 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
     df_norm["vertido_neto_kWh"] = np.where(saldo_horario < 0, -saldo_horario, 0)
 
 
-    return df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos
+    return df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, atr_dfnorm, freq
 
 
 
@@ -435,7 +450,7 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
 #=================================================================================
 
 
-def graficar_curva(df_norm):
+def graficar_curva(df_norm, frec):
     # Asegurar índice temporal
     df_norm = df_norm.set_index("fecha_hora")
 
@@ -446,7 +461,10 @@ def graficar_curva(df_norm):
         orden_periodos = list(colores_periodo.keys())
         df_plot['periodo'] = pd.Categorical(df_plot['periodo'], categories=orden_periodos, ordered=True)
 
-
+        if frec=='15T':
+            titulo = 'Curva cuarto horaria de consumo (kWh)'
+        else:
+            titulo = 'Curva horaria de consumo (kWh)'
         
         fig = px.bar(
             df_plot,
@@ -456,7 +474,8 @@ def graficar_curva(df_norm):
             color='periodo',
             color_discrete_map=colores_periodo,
             category_orders={'periodo': orden_periodos},  # 👈 fuerza el orden
-            title="Curva horaria de consumo (kWh)"
+            #title="Curva horaria de consumo (kWh)"
+            title=titulo
         )
         fig.update_layout(
             xaxis_title="Fecha",
@@ -641,9 +660,12 @@ def graficar_media_horaria(df_norm):
         add_title='TOTAL'
 
     # Calcular media por hora
-    df_sel["hora"] = df_sel["fecha_hora"].dt.hour
+    df_horas = (df_sel.resample("H", on="fecha_hora")["consumo_kWh"].sum().reset_index())
+    #df_sel["hora"] = df_sel["fecha_hora"].dt.hour
+    df_horas["hora"] = df_horas["fecha_hora"].dt.hour
     df_horas = (
-        df_sel.groupby("hora", as_index=False)["consumo_kWh"]
+        df_horas.groupby("hora", as_index=False)["consumo_kWh"]
+        #df_sel.groupby("hora", as_index=False)["consumo_kWh"]
         .mean()
         .rename(columns={"consumo_kWh": "media_kWh"})
     )

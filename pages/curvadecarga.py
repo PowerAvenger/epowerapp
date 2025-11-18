@@ -19,7 +19,7 @@ generar_menu()
 #st.set_page_config(page_title="Curvas de carga — Normalizador simple", layout="wide")
 
 with st.sidebar:
-    st.title("⚡ :orange[e]Powerapp :rainbow[PowerLoader] ⚡")
+    st.title("⚡:rainbow[PowerLoader]⚡")
     st.caption("Lee CSV/Excel, detecta columnas y normaliza horas al rango 0–23 del mismo día. Añade columnas adicionales.")
 
     uploaded = st.file_uploader("📂 Sube un archivo CSV o Excel", type=["csv", "xlsx"])
@@ -45,7 +45,7 @@ if 'opcion_tipodia' not in st.session_state:
 
 if uploaded:
     try:
-        df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos = normalize_curve_simple(uploaded, origin=uploaded.name)
+        df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, atr_dfnorm, frec = normalize_curve_simple(uploaded, origin=uploaded.name)
         #st.session_state.df_norm = df_norm
 
         #print('mensaje periodos')
@@ -61,43 +61,89 @@ if uploaded:
         if msg_unidades != "":
             zona_mensajes2.info(msg_unidades, icon="ℹ️")
 
+        # --- Obtención de periodos ------------------------------------------------
         if not flag_periodos_en_origen:
-            msg_periodos = 'Cargados periodos desde fichero auxiliar. Seleccione modo 3P/6P'
+            msg_periodos = 'Cargados periodos desde fichero auxiliar. Seleccione ATR (3.0 / 6.1 si aplica)'
             zona_mensajes3.warning(msg_periodos, icon="⚠️")
-            tipo_periodo = st.sidebar.radio(
-                    "Selecciona calendario tarifario:",
-                    ("6P", "3P"),
-                    index=0,
-                    horizontal=True
+
+            # --- Determinar ATR y tipo de calendario ---
+            if atr_dfnorm == "2.0":
+                st.sidebar.success("✅ ATR detectado automáticamente: 2.0TD (3 periodos)")
+                tipo_periodo = "dh_3p"
+            else:
+                st.sidebar.warning("⚙️ No se ha detectado ATR 2.0TD. Selección manual requerida:")
+                atr_dfnorm = st.sidebar.selectbox(
+                    "Selecciona tipo de ATR:",
+                    ("3.0", "6.1"),
+                    index=0
                 )
-            col_periodo = "dh_6p" if "6" in tipo_periodo else "dh_3p"
-            #si la columna periodo viene sin periodos (nan)
+                tipo_periodo = "dh_6p"   # ambos ATR 3.0 y 6.1 usan 6 periodos
+
+            # --- Si la columna 'periodo' no existe o está vacía ---
             if "periodo" not in df_norm.columns or df_norm["periodo"].isna().all():
-                df_norm = df_norm.drop(columns=["periodo"])
+                if "periodo" in df_norm.columns:
+                    df_norm = df_norm.drop(columns=["periodo"])
+
                 df_norm = pd.merge(
                     df_norm,
-                    df_periodos[["fecha_hora", col_periodo]].rename(columns={col_periodo: "periodo"}),
+                    df_periodos[["fecha_hora", tipo_periodo]].rename(columns={tipo_periodo: "periodo"}),
                     on="fecha_hora",
                     how='left'
                 )
-            print('df_norm')
-            print (df_norm)
-            # Normalizar la columna 'periodo' a tipo texto limpio
+
+            # --- Normalizar la columna 'periodo' ---
             df_norm["periodo"] = df_norm["periodo"].astype(str).str.strip()
 
-            # --- Rellenar periodos faltantes hacia abajo (para curvas QH) ---
+            # --- Rellenar periodos faltantes (curvas QH) ---
             if df_norm["periodo"].isna().any() or (df_norm["periodo"] == "nan").any():
                 df_norm["periodo"] = (
                     df_norm["periodo"]
                     .replace("nan", np.nan)
-                    .ffill()        # rellena hacia abajo
+                    .ffill()
                 )
 
         else:
             msg_periodos = 'Cargados periodos desde fichero origen'
             zona_mensajes3.info(msg_periodos, icon="ℹ️")
+
+            # --- Detectar ATR según los periodos en el origen ---
+            if "periodo" in df_norm.columns:
+                numeros = (
+                    df_norm["periodo"]
+                    .astype(str)
+                    .str.extract(r"P?(\d+)", expand=False)
+                    .dropna()
+                    .astype(int)
+                )
+
+                if not numeros.empty and numeros.max() == 3:
+                    atr_dfnorm = "2.0"
+                    st.sidebar.success("✅ ATR detectado automáticamente: 2.0TD (3 periodos)")
+                elif not numeros.empty and numeros.max() == 6:
+                    st.sidebar.warning("⚙️ ATR con 6 periodos detectado. Selección manual requerida:")
+                    atr_dfnorm = st.sidebar.selectbox(
+                        "Selecciona tipo de ATR:",
+                        ("3.0", "6.1"),
+                        index=0
+                    )
+                else:
+                    st.sidebar.warning("⚙️ No se ha podido determinar el ATR. Selección manual:")
+                    atr_dfnorm = st.sidebar.selectbox(
+                        "Selecciona tipo de ATR:",
+                        ("2.0", "3.0", "6.1"),
+                        index=0
+                    )
+
+            else:
+                st.sidebar.warning("⚙️ No se ha podido determinar el ATR. Selección manual:")
+                atr_dfnorm = st.sidebar.selectbox(
+                    "Selecciona tipo de ATR:",
+                    ("2.0", "3.0", "6.1"),
+                    index=0
+                )
         
         st.session_state.df_norm = df_norm
+        st.session_state.atr_dfnorm = atr_dfnorm
         st.session_state.df_in = df_in
         st.session_state.consumo_total=consumo_total
         st.session_state.vertido_total=vertido_total
@@ -108,17 +154,13 @@ if uploaded:
         zona_mensajes.error(f"❌ Error al normalizar: {e}")
         st.stop()
 
-   
-    
-    
-
-
 else:
     zona_mensajes.info("⬆️ Sube un archivo CSV o Excel para comenzar.")
 
 
 if st.session_state.get('df_norm') is not None:
 
+    st.sidebar.write(f'ATR de la curva actual: **:orange[{st.session_state.atr_dfnorm}]**')
     st.sidebar.radio(
         "Selecciona el tipo de gráfico",
         ["Horario", "Diario", "Mensual"],
@@ -163,7 +205,7 @@ if st.session_state.get('df_norm') is not None:
     with c1:
         st.subheader("Gráfico de consumo")
         # Mostrar gráfico
-        graf_dfnorm = graficar_curva(st.session_state.df_norm)
+        graf_dfnorm = graficar_curva(st.session_state.df_norm, frec)
         st.plotly_chart(graf_dfnorm, use_container_width=True)
         graf_dfneteo = graficar_curva_neteo(st.session_state.df_norm)
         st.plotly_chart(graf_dfneteo, use_container_width=True)
