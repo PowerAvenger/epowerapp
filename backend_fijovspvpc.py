@@ -523,10 +523,17 @@ def mapa_diferencias(te_pvpc, tp_pvpc):
     coste_pvpc_cents = coste_pvpc * 100  # c€/kWh
     coste_pvpc_euros = (tp_pvpc * potencia_contratada) + (te_pvpc / 100) * consumo  # € anuales
 
+
+
     # --- Diferencia respecto al PVPC (c€/kWh y €) ---
     coste_norm = coste_total - coste_pvpc_cents
     coste_anual = (Y * potencia_contratada) + (precio_energia_eur * consumo)
     diferencia_euros = coste_anual - coste_pvpc_euros  # € de sobrecoste o ahorro
+
+    coste_fijo = ((st.session_state.tp_fijo * potencia_contratada) + (st.session_state.precio_ene / 100) * consumo) / consumo  # €/kWh
+    coste_fijo_cents = coste_fijo * 100  # c€/kWh
+    coste_fijo_euros = (st.session_state.tp_fijo * potencia_contratada) + (st.session_state.precio_ene / 100) * consumo  # € anuales
+
 
     # --- Escala de colores ---
     colorscale_bicolor = [
@@ -620,13 +627,13 @@ def mapa_diferencias(te_pvpc, tp_pvpc):
         showlegend=False
     ))
 
-        # --- Punto PVPC ---
+    # --- Punto FIJO ---
     fig.add_trace(go.Scatter(
         x=[st.session_state.precio_ene],
         y=[st.session_state.tp_fijo],
         mode='markers+text',
-        text=[f"PVPC<br>{st.session_state.precio_ene:.1f} c€/kWh · {st.sesson_state.tp_fijo:.2f} €/kW·año"
-            f"<br><b>{coste_pvpc_cents:.2f} c€/kWh</b><br>{coste_pvpc_euros:.0f} €"],
+        text=[f"FIJO<br>{st.session_state.precio_ene:.1f} c€/kWh · {st.session_state.tp_fijo:.2f} €/kW·año"
+            f"<br><b>{coste_fijo_cents:.2f} c€/kWh</b><br>{coste_fijo_euros:.0f} €"],
         textposition='top right',
         textfont=dict(size=13, color='black'),
         marker=dict(color='white', size=12, line=dict(width=4, color='black')),
