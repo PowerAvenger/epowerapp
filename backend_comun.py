@@ -21,7 +21,7 @@ def rango_componentes():
         }
     else:
         return {
-                'rango': [-50, 4.01, 8.01, 16.01, 20.01, 24.01, 28.01, 32.01, 10000], #9 elementos
+                'rango': [-50, 4.01, 8.01, 12.01, 16.01, 20.01, 24.01, 28.01, 10000], #9 elementos
                 'valor_asignado': ['muy bajo', 'bajo', 'medio', 'alto', 'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2'],
         }
     

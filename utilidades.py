@@ -40,7 +40,7 @@ def init_app():
 def init_app_index():
     # Para TELEMINDEX Y SIMULINDEX
     if 'rango_temporal' not in st.session_state:
-        st.session_state.rango_temporal = 'Selecciona un día'
+        st.session_state.rango_temporal = 'Selecciona un rango de fechas'
     if 'año_seleccionado' not in st.session_state:
         st.session_state.año_seleccionado = 2025
     if 'mes_seleccionado' not in st.session_state: 
@@ -48,14 +48,29 @@ def init_app_index():
     if 'ultima_fecha_sheets' not in st.session_state or 'df_sheets' not in st.session_state:
         #sheet_id = st.secrets['SHEET_INDEX_ID']
         carga_rapida_sheets()
-    if 'dia_seleccionado' not in st.session_state:
-        st.session_state.dia_seleccionado = st.session_state.ultima_fecha_sheets
+
+    if 'dias_seleccionados' not in st.session_state:
+        #st.session_state.dia_seleccionado = st.session_state.ultima_fecha_sheets
+        ultima_fecha = st.session_state.ultima_fecha_sheets
+        if isinstance(ultima_fecha, datetime.datetime):
+            ultima_fecha = ultima_fecha.date()
+
+        #inicio_rango = ultima_fecha - datetime.timedelta(days=7)
+        inicio_rango = ultima_fecha
+        st.session_state.dias_seleccionados = (inicio_rango, ultima_fecha)
+
     else:
-        if not isinstance(st.session_state.dia_seleccionado, (datetime.date, datetime.datetime)):
-            try:
-                st.session_state.dia_seleccionado = pd.to_datetime(st.session_state.dia_seleccionado).date()
-            except Exception:
-                st.session_state.dia_seleccionado = st.session_state.ultima_fecha_sheets
+        #if not isinstance(st.session_state.dia_seleccionado, (datetime.date, datetime.datetime)):
+        #    try:
+        #        st.session_state.dia_seleccionado = pd.to_datetime(st.session_state.dia_seleccionado).date()
+        #    except Exception:
+        #        st.session_state.dia_seleccionado = st.session_state.ultima_fecha_sheets
+            # Verificar formato correcto
+        if not isinstance(st.session_state.dias_seleccionados, tuple) or len(st.session_state.dias_seleccionados) != 2:
+            ultima_fecha = st.session_state.ultima_fecha_sheets
+            inicio_rango = ultima_fecha - datetime.timedelta(days=5)
+            st.session_state.dias_seleccionados = (inicio_rango, ultima_fecha)
+
     if 'margen' not in st.session_state: 
         st.session_state.margen = 0
     if 'texto_precios' not in st.session_state:

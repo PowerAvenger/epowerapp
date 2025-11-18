@@ -53,7 +53,7 @@ st.sidebar.write(f'Última fecha disponible: {st.session_state.ultima_fecha_shee
 
 st.sidebar.subheader('Opciones')
 with st.sidebar.container(border=True):
-    st.sidebar.radio("Seleccionar rango temporal", ['Por años', 'Por meses', 'Selecciona un día'], key = "rango_temporal")
+    st.sidebar.radio("Seleccionar rango temporal", ['Por años', 'Por meses', 'Selecciona un rango de fechas'], key = "rango_temporal")
 
     if st.session_state.rango_temporal == 'Por años':
         st.sidebar.selectbox('Seleccione el año', options = [2025, 2024, 2023], key = 'año_seleccionado') 
@@ -67,8 +67,12 @@ with st.sidebar.container(border=True):
             st.session_state.texto_precios = f'Seleccionado: {st.session_state.mes_seleccionado} de {st.session_state.año_seleccionado}'
     else:
         #st.sidebar.date_input('Selecciona un día', min_value = datetime.date(2023, 1, 1), max_value = st.session_state.ultima_fecha_sheets, key = 'dia_seleccionado')
-        st.sidebar.date_input('Selecciona un día', min_value = datetime.date(2023, 1, 1), max_value = datetime.date(2025, 12, 31), key = 'dia_seleccionado')    
-        st.session_state.texto_precios = f'Día seleccionado {st.session_state.dia_seleccionado}'
+        with st.sidebar.form(key='form_fechas_telemindex'):
+            st.date_input('Selecciona un rango de días', min_value = datetime.date(2023, 1, 1), max_value = datetime.date(2025, 12, 31), key = 'dias_seleccionados')    
+            #st.session_state.texto_precios = f'Día seleccionado {st.session_state.dia_seleccionado}'
+            inicio, fin = st.session_state.dias_seleccionados
+            st.session_state.texto_precios = (f"Rango seleccionado: {inicio.strftime('%d/%m/%Y')} → {fin.strftime('%d/%m/%Y')}")
+            st.form_submit_button('Actualizar cálculos')
 with st.sidebar.container():
 #if st.sidebar.toggle('Marca si quieres añadir margen'):
     #st.sidebar.slider("Añadir margen al gusto (en €/MWh)", min_value = 0, max_value = 50, value = 0, key = 'margen', on_change = aplicar_margen, args=(df_filtrado,))

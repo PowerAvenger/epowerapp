@@ -35,7 +35,9 @@ with st.sidebar:
 if "df_norm" not in st.session_state:
     st.session_state.df_norm = None 
 if "df_in" not in st.session_state:
-    st.session_state.df_in = None      
+    st.session_state.df_in = None
+if 'frec' not in st.session_state:
+    st.session_state.frec = '15T'      
 if 'modo_agrupacion' not in st.session_state:
     st.session_state.modo_agrupacion = "Horario" 
 if 'opcion_tipodia' not in st.session_state:
@@ -142,13 +144,33 @@ if uploaded:
                     index=0
                 )
         
+
+        if frec =='15T':
+            # Agregar cada 4 muestras por hora
+            df_norm_h = (
+                df_norm.resample("H", on="fecha_hora", label="right", closed="right")
+                .agg({
+                    "consumo_neto_kWh": "sum",   # suma de los 4 cuartos horarios
+                    "periodo": "first"           # toma el primer periodo de la hora
+                })
+                .reset_index()
+            )
+        else:
+            # Ya está en frecuencia horaria → copiar
+            df_norm_h = df_norm[["fecha_hora", "consumo_neto_kWh", "periodo"]].copy()
+
+
         st.session_state.df_norm = df_norm
         st.session_state.atr_dfnorm = atr_dfnorm
+        st.session_state.df_norm_h = df_norm_h
+        st.session_state.freq = frec
         st.session_state.df_in = df_in
         st.session_state.consumo_total=consumo_total
         st.session_state.vertido_total=vertido_total
         st.session_state.consumo_neto=consumo_neto
         st.session_state.vertido_neto=vertido_neto
+
+
 
     except Exception as e:
         zona_mensajes.error(f"❌ Error al normalizar: {e}")
@@ -205,7 +227,7 @@ if st.session_state.get('df_norm') is not None:
     with c1:
         st.subheader("Gráfico de consumo")
         # Mostrar gráfico
-        graf_dfnorm = graficar_curva(st.session_state.df_norm, frec)
+        graf_dfnorm = graficar_curva(st.session_state.df_norm, st.session_state.freq)
         st.plotly_chart(graf_dfnorm, use_container_width=True)
         graf_dfneteo = graficar_curva_neteo(st.session_state.df_norm)
         st.plotly_chart(graf_dfneteo, use_container_width=True)

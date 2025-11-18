@@ -21,13 +21,18 @@ def filtrar_datos():
     else:
         #forzamos de nuevo la columna fecha a date para evitar error en el filtrado, ya que dia seleccionado debe ser un date
         st.session_state.df_sheets['fecha'] = pd.to_datetime(st.session_state.df_sheets['fecha']).dt.date
-        df_filtrado = st.session_state.df_sheets[(st.session_state.df_sheets['fecha'] == st.session_state.dia_seleccionado)]
+        #df_filtrado = st.session_state.df_sheets[(st.session_state.df_sheets['fecha'] == st.session_state.dia_seleccionado)]
+        inicio, fin = st.session_state.dias_seleccionados
+        df_filtrado = st.session_state.df_sheets[
+            (st.session_state.df_sheets['fecha'] >= inicio) &
+            (st.session_state.df_sheets['fecha'] <= fin)
+        ]
         lista_meses = None
         print('Filtrado por dia')
 
-    print('dia seleccionado')
-    print(st.session_state.dia_seleccionado)
-    print("DEBUG tipo dia_seleccionado:", type(st.session_state.get("dia_seleccionado")))
+    print('dias seleccionados')
+    print(st.session_state.dias_seleccionados)
+    print("DEBUG tipo dia_seleccionado:", type(st.session_state.get("dias_seleccionados")))
     print('st session df sheets')
     print(st.session_state.df_sheets)
 

@@ -62,7 +62,7 @@ def _read_any(uploaded_or_path):
     if isinstance(uploaded_or_path, str):
         path = uploaded_or_path.lower()
         if path.endswith(".csv"):
-            df = pd.read_csv(uploaded_or_path, dtype=str, header=None)
+            df = pd.read_csv(uploaded_or_path, dtype=str, header=None, skip_blank_lines=True)
         else:
             df = pd.read_excel(uploaded_or_path, dtype=str, header=None)
     else:
@@ -103,7 +103,7 @@ def _guess_cols(df: pd.DataFrame):
                     return c
         return None
 
-    c_dt = find([r"^fecha.?y.?hora$", r"fecha.?hora", r"datetime", r"timestamp", r"instante"])
+    c_dt = find([r"^fecha.?y.?hora$", r"fecha.?hora", r"^dia.?y.?hora$", r"datetime", r"timestamp", r"instante"])
     c_date = find([r"fecha", r"^fecha$", r"dia", r"date", r"data"])
     c_time = find([r"hora", r"hr", r"time", r"^h$"])
     c_kwh = find([r"consumo", r"energia", r"kwh", r"ae", r"active.?energy", r"importada", r"activa"])
@@ -426,6 +426,9 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
 
     # Extraer la hora (0–23)
     df_norm["hora"] = df_norm["fecha_hora"].dt.hour
+    # Extraer la fecha
+    df_norm["fecha"] = df_norm["fecha_hora"].dt.date
+
     # --- Clasificación de tipo de día (laboral o fin de semana)
     df_norm["tipo_dia"] = np.where(
         df_norm["fecha_hora"].dt.dayofweek < 5, "L-V", "FS"  # 0=lunes, 6=domingo
