@@ -68,7 +68,7 @@ if uploaded:
 
         # --- Obtención de periodos ------------------------------------------------
         if not flag_periodos_en_origen:
-            msg_periodos = 'Cargados periodos desde fichero auxiliar. Seleccione ATR (3.0 / 6.1 si aplica)'
+            msg_periodos = 'Cargados periodos desde fichero auxiliar. Seleccione ATR (2.0/ 3.0 / 6.1)'
             zona_mensajes3.warning(msg_periodos, icon="⚠️")
 
             # --- Determinar ATR y tipo de calendario ---
@@ -79,10 +79,13 @@ if uploaded:
                 st.sidebar.warning("⚙️ No se ha detectado ATR 2.0TD. Selección manual requerida:")
                 atr_dfnorm = st.sidebar.selectbox(
                     "Selecciona tipo de ATR:",
-                    ("3.0", "6.1"),
+                    ("2.0", "3.0", "6.1"),
                     index=0
                 )
-                tipo_periodo = "dh_6p"   # ambos ATR 3.0 y 6.1 usan 6 periodos
+                if atr_dfnorm == "2.0":
+                    tipo_periodo = "dh_3p"
+                else:
+                    tipo_periodo = "dh_6p"   # ambos ATR 3.0 y 6.1 usan 6 periodos
 
             # --- Si la columna 'periodo' no existe o está vacía ---
             if "periodo" not in df_norm.columns or df_norm["periodo"].isna().all():
@@ -161,7 +164,7 @@ if uploaded:
             )
         else:
             # Ya está en frecuencia horaria → copiar
-            df_norm_h = df_norm[["fecha_hora", "consumo_neto_kWh", "periodo"]].copy()
+            df_norm_h = df_norm[["fecha_hora", "fecha", "hora","consumo_neto_kWh", "vertido_neto_kWh", "periodo"]].copy()
 
 
         st.session_state.df_norm = df_norm
@@ -184,9 +187,11 @@ if uploaded:
             st.session_state.df_sheets_full = carga_total_sheets()
             st.session_state.df_sheets = st.session_state.df_sheets_full
             zona_mensajes.success('Cargados todos los datos. Ya puedes consultar los históricos', icon = '👍')
-        st.session_state.dias_seleccionados = (fecha_ini, fecha_fin)
+        #st.session_state.dias_seleccionados = (fecha_ini, fecha_fin)
+        st.session_state.rango_curvadecarga = (fecha_ini, fecha_fin)
 
-        
+        print('df norm horaria')
+        print(df_norm_h)
 
 
 

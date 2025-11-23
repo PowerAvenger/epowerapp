@@ -143,10 +143,9 @@ def graf_principal(df_filtrado, colores_precios):
     pt2 = pt1(df_filtrado)[0]
     #print('pt2')
     #print(pt2)
-    #colores_precios = {'precio_2.0': 'goldenrod', 'precio_3.0': 'darkred', 'precio_6.1': '#1C83E1'}
+    
     graf_pt1=px.line(pt2,x='hora',y=['precio_2.0','precio_3.0','precio_6.1'],
         height=600,
-        #title=f'Telemindex {st.session_state.año_seleccionado}: Precios medios horarios de indexado según tarifas de acceso',
         labels={'value':'€/MWh','variable':'Precios según ATR'},
         color_discrete_map=colores_precios,
     )
@@ -165,6 +164,37 @@ def graf_principal(df_filtrado, colores_precios):
     )
     graf_pt1 = graf_pt1.add_bar(y = pt2['spot'], name = 'spot', marker_color = 'green', width = 0.5)
     graf_pt1 = graf_pt1.add_bar(y = pt2['ssaa'], name = 'ssaa', marker_color = 'lightgreen', width = 0.5)
+
+        # ---- LÍNEA CURVA PERSONALIZADA ----
+    if ("df_curva_sheets" in st.session_state and st.session_state.df_curva_sheets is not None and "coste_total" in st.session_state.df_curva_sheets.columns):
+        dfc = st.session_state.df_curva_sheets.copy()
+
+        # consumo en MWh
+        dfc["consumo_MWh"] = dfc["consumo_neto_kWh"] / 1000
+
+        # precio medio ponderado horario real en €/MWh
+        curva_sin_margen = (
+            dfc.groupby("hora")
+            .apply(lambda g: g["coste_total"].sum() / g["consumo_MWh"].sum())
+            .reset_index(name="precio_medio_horario")
+        )
+
+        curva = curva_sin_margen.copy()
+        curva['precio_medio_horario']+=st.session_state.margen
+
+        # ---- Color dinámico según ATR seleccionado ----
+        atr = st.session_state.atr_dfnorm           # "2.0", "3.0" o "6.1"
+        clave_color = f"precio_{atr}"               # "precio_2.0", ...
+        color_curva = colores_precios[clave_color]  # color correcto    
+
+        graf_pt1.add_scatter(
+            x=curva["hora"],
+            y=curva["precio_medio_horario"],
+            mode="lines",
+            name=f'precio_{atr}_curva',
+            line=dict(color=color_curva, width=6, dash="dot")
+        )
+
     return graf_pt1
 
 
@@ -190,14 +220,64 @@ def pt5_trans(df_filtrado_final):
         media_spot=dffm['spot'].mean()
         media_ssaa = dffm['ssaa'].mean()
         precios_medios = [media_20, media_30, media_61]
+
+        # ---- MEDIA DE LA CURVA PERSONALIZADA ----
+        media_atr_curva = None
+        fila_curva_periodos = None
+
+        if ("df_curva_sheets" in st.session_state and st.session_state.df_curva_sheets is not None):
+            dfc = st.session_state.df_curva_sheets.copy()
+            #dfc["consumo_MWh"] = dfc["consumo_neto_kWh"] / 1000
+
+            # precio ponderado total €/MWh
+            media_atr_curva = ((dfc["coste_total"].sum() / dfc["consumo_neto_kWh"].sum()) * 1000) + st.session_state.margen
+            print(f'Media precio curva en €/MWh: {media_atr_curva}')
+
+            atr = st.session_state.atr_dfnorm  # "2.0", "3.0", "6.1"
+
+            # ---- 3A. ATR = 2.0 → USAR PERIODOS 3P ----
+            if atr == "2.0":
+
+                fila_curva_periodos = (
+                    dfc.groupby("dh_3p")
+                    .apply(lambda g: (g["coste_total"].sum() / g["consumo_neto_kWh"].sum())*1000)
+                )
+
+            # ---- 3B. ATR = 3.0 o 6.1 → USAR PERIODOS 6P ----
+            else:
+
+                fila_curva_periodos = (
+                    dfc.groupby("dh_6p")
+                    .apply(lambda g: (g["coste_total"].sum() / g["consumo_neto_kWh"].sum())*1000)
+                )
+
+            fila_curva_periodos_con_margen = fila_curva_periodos + st.session_state.margen
+
+
         pt5_trans = pt5.transpose()
         pt5_trans['Media'] = precios_medios
+
+        # añadir la media de la curva personalizada, total y por periodos
+        if media_atr_curva is not None:
+            # columnas de periodos (P1,P2,P3... según ATR de los pivots)
+            periodos = pt5_trans.columns[:-1]
+
+            # aseguramos orden correcto
+            fila_curva = fila_curva_periodos_con_margen.reindex(periodos)
+
+            pt5_trans.loc[f"precio_{st.session_state.atr_dfnorm}_curva", periodos] = fila_curva.values
+            pt5_trans.loc[f"precio_{st.session_state.atr_dfnorm}_curva", "Media"] = media_atr_curva
+
+
+
         pt5_trans = pt5_trans.div(10)
         pt5_trans = pt5_trans.round(1)
         pt5_trans = pt5_trans.apply(pd.to_numeric, errors = 'coerce')
         
 
-        return pt5_trans, media_20, media_30, media_61, media_spot, media_ssaa
+        return pt5_trans, media_20, media_30, media_61, media_spot, media_ssaa, media_atr_curva
+
+
 
 def costes_indexado(df_filtrado_final):
         dffm = aplicar_margen(df_filtrado_final)
@@ -219,8 +299,52 @@ def costes_indexado(df_filtrado_final):
         media_61=dffm['coste_6.1'].mean()
         #media_spot=dffm['spot'].mean()
         precios_medios = [media_20, media_30, media_61]
+
+        # ---- MEDIA DE LA CURVA PERSONALIZADA ----
+        media_atr_curva = None
+        fila_curva_periodos = None
+
+        if ("df_curva_sheets" in st.session_state and st.session_state.df_curva_sheets is not None):
+            dfc = st.session_state.df_curva_sheets.copy()
+            #dfc["consumo_MWh"] = dfc["consumo_neto_kWh"] / 1000
+
+            # precio ponderado total €/MWh
+            media_atr_curva = ((dfc["coste_base"].sum() / dfc["consumo_neto_kWh"].sum()) * 1000)
+            print(f'Media precio curva base en €/MWh: {media_atr_curva}')
+
+            atr = st.session_state.atr_dfnorm  # "2.0", "3.0", "6.1"
+
+            # ---- 3A. ATR = 2.0 → USAR PERIODOS 3P ----
+            if atr == "2.0":
+
+                fila_curva_periodos = (
+                    dfc.groupby("dh_3p")
+                    .apply(lambda g: (g["coste_base"].sum() / g["consumo_neto_kWh"].sum())*1000)
+                )
+
+            # ---- 3B. ATR = 3.0 o 6.1 → USAR PERIODOS 6P ----
+            else:
+
+                fila_curva_periodos = (
+                    dfc.groupby("dh_6p")
+                    .apply(lambda g: (g["coste_base"].sum() / g["consumo_neto_kWh"].sum())*1000)
+                )
+            
+
         pt5_trans = pt5.transpose()
         pt5_trans['Media'] = precios_medios
+
+        # añadir la media de la curva personalizada, total y por periodos
+        if media_atr_curva is not None:
+            # columnas de periodos (P1,P2,P3... según ATR de los pivots)
+            periodos = pt5_trans.columns[:-1]
+
+            # aseguramos orden correcto
+            fila_curva = fila_curva_periodos.reindex(periodos)
+
+            pt5_trans.loc[f"coste_{st.session_state.atr_dfnorm}_curva", periodos] = fila_curva.values
+            pt5_trans.loc[f"coste_{st.session_state.atr_dfnorm}_curva", "Media"] = media_atr_curva
+
         pt5_trans=pt5_trans.div(10)
         pt5_trans=pt5_trans.round(1)
         
@@ -250,8 +374,51 @@ def pt7_trans(df_filtrado_final):
         media_61 = dffm['pyc_6.1'].mean()
         #media_spot=dffm['spot'].mean()
         precios_medios = [media_20, media_30, media_61]
+
+        # ---- MEDIA DE LA CURVA PERSONALIZADA ----
+        media_atr_curva = None
+        fila_curva_periodos = None
+
+        if ("df_curva_sheets" in st.session_state and st.session_state.df_curva_sheets is not None):
+            dfc = st.session_state.df_curva_sheets.copy()
+            #dfc["consumo_MWh"] = dfc["consumo_neto_kWh"] / 1000
+
+            # precio ponderado total €/MWh
+            media_atr_curva = ((dfc["coste_pyc"].sum() / dfc["consumo_neto_kWh"].sum()) * 1000)
+            print(f'Media precio curva base en €/MWh: {media_atr_curva}')
+
+            atr = st.session_state.atr_dfnorm  # "2.0", "3.0", "6.1"
+
+            # ---- 3A. ATR = 2.0 → USAR PERIODOS 3P ----
+            if atr == "2.0":
+
+                fila_curva_periodos = (
+                    dfc.groupby("dh_3p")
+                    .apply(lambda g: (g["coste_pyc"].sum() / g["consumo_neto_kWh"].sum())*1000)
+                )
+
+            # ---- 3B. ATR = 3.0 o 6.1 → USAR PERIODOS 6P ----
+            else:
+
+                fila_curva_periodos = (
+                    dfc.groupby("dh_6p")
+                    .apply(lambda g: (g["coste_pyc"].sum() / g["consumo_neto_kWh"].sum())*1000)
+                )
+
         pt5_trans = pt5.transpose()
         pt5_trans['Media']=precios_medios
+
+        # añadir la media de la curva personalizada, total y por periodos
+        if media_atr_curva is not None:
+            # columnas de periodos (P1,P2,P3... según ATR de los pivots)
+            periodos = pt5_trans.columns[:-1]
+
+            # aseguramos orden correcto
+            fila_curva = fila_curva_periodos.reindex(periodos)
+
+            pt5_trans.loc[f"pyc_{st.session_state.atr_dfnorm}_curva", periodos] = fila_curva.values
+            pt5_trans.loc[f"pyc_{st.session_state.atr_dfnorm}_curva", "Media"] = media_atr_curva
+
         pt5_trans = pt5_trans.div(10)
         pt5_trans = pt5_trans.round(1)
         pt5_trans = pt5_trans.apply(pd.to_numeric, errors='coerce')
@@ -345,3 +512,71 @@ def evol_mensual (df, colores_precios):
     
 
     return df_precios_mensuales, graf_mensual
+
+
+def construir_df_curva_sheets(df_filtrado):
+    """
+    Construye un nuevo df combinando la curva normalizada (df_norm_h)
+    con los datos filtrados del Sheets.
+    """
+
+    df_norm = st.session_state.df_norm_h.copy()
+
+    # Asegurar que 'fecha' es date en ambos DF
+    df_norm["fecha"] = pd.to_datetime(df_norm["fecha"]).dt.date
+    df_filtrado["fecha"] = pd.to_datetime(df_filtrado["fecha"]).dt.date
+
+    # Unión por fecha + hora
+    df = df_norm.merge(
+        df_filtrado,
+        on=["fecha", "hora"],
+        how="left"
+    )
+
+    print('df curva sheets')
+    print(df)
+
+    return df
+
+def añadir_costes_curva(df):
+    df = df.copy()
+
+    # 1. consumo en MWh
+    cons = df["consumo_neto_kWh"] / 1000
+
+    # --- 2. COSTE componentes base en € (curva normalizada) ---
+    df["coste_spot"]  = df["spot"]  * cons
+    df["coste_ssaa"]  = df["ssaa"]  * cons
+    df["coste_osom"]  = df["osom"]  * cons
+    df["coste_otros"] = df["otros"] * cons
+
+    # --- 3. Seleccionar ATR asignado para esta curva ---
+    atr = st.session_state.atr_dfnorm      # "2.0", "3.0" o "6.1"
+
+    # columnas base dinámicas
+    col_ppcc = f"ppcc_{atr}"
+    col_perd = f"perd_{atr}"
+    col_pyc  = f"pyc_{atr}"
+
+    # --- 4. COSTE Componentes regulados según ATR en €---
+    df["coste_ppcc"] = df[col_ppcc] * cons
+    df["perdidas"] = df[col_perd]
+    df["coste_pyc"] = df[col_pyc] * cons
+
+    # --- 3. COSTE BASE (con pérdidas y 1.015, pero SIN PYC) ---
+    df["coste_base"] = (
+        (
+            df["coste_spot"]
+            + df["coste_ssaa"]
+            + df["coste_osom"]
+            + df["coste_otros"]
+            + df["coste_ppcc"]
+        )
+        * (1 + df["perdidas"])
+        * 1.015
+    )
+
+    # --- 4. COSTE TOTAL (coste_base + coste_pyc) ---
+    df["coste_total"] = df["coste_base"] + df["coste_pyc"]
+
+    return df

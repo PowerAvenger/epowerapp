@@ -391,7 +391,7 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
                         
             #periodo = df_merge["periodo"].astype(str).str.upper().str.strip()
 
-            msg_periodos = 'Cargados periodos desde fichero auxiliar. Seleccione modo 3P/6P'
+            #msg_periodos = 'Cargados periodos desde fichero auxiliar. Seleccione modo 3P/6P'
         except Exception as e:
             st.warning(f"No se pudieron cargar los periodos: {e}")
             periodo = np.nan
@@ -433,8 +433,7 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
     df_norm["tipo_dia"] = np.where(
         df_norm["fecha_hora"].dt.dayofweek < 5, "L-V", "FS"  # 0=lunes, 6=domingo
     )
-    print('df norm dentro de la funcion')
-    print(df_norm)
+    
     
     # --- Cálculo del saldo horario (consumo - vertido) ---
     saldo_horario = df_norm["consumo_kWh"].fillna(0) - df_norm["excedentes_kWh"].fillna(0)
@@ -442,6 +441,9 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
     # --- Columnas “shadow” ---
     df_norm["consumo_neto_kWh"] = np.where(saldo_horario > 0, saldo_horario, 0)
     df_norm["vertido_neto_kWh"] = np.where(saldo_horario < 0, -saldo_horario, 0)
+
+    print('df norm dentro de la funcion')
+    print(df_norm)
 
 
     return df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, atr_dfnorm, freq

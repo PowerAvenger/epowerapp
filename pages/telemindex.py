@@ -1,5 +1,5 @@
 import streamlit as st
-from backend_telemindex import filtrar_datos, aplicar_margen, graf_principal, pt5_trans, pt1, pt7_trans, costes_indexado, evol_mensual 
+from backend_telemindex import filtrar_datos, aplicar_margen, graf_principal, pt5_trans, pt1, pt7_trans, costes_indexado, evol_mensual, construir_df_curva_sheets, añadir_costes_curva 
 from backend_comun import autenticar_google_sheets, carga_rapida_sheets, carga_total_sheets, colores_precios
 
 import pandas as pd
@@ -17,18 +17,38 @@ generar_menu()
 init_app()
 init_app_index()
 
+if "rango_curvadecarga" in st.session_state:
+    if st.session_state.rango_temporal == "Selecciona un rango de fechas":
+        st.session_state.dias_seleccionados = st.session_state.rango_curvadecarga
+
 zona_mensajes = st.sidebar.empty() 
 
 df_filtrado, lista_meses = filtrar_datos()
 try:
     fecha_ultima_filtrado = df_filtrado['fecha'].iloc[-1]
 except:
-    #st.session_state.dia_seleccionado = '2025-01-01'
     st.session_state.dia_seleccionado = datetime.date(2025,1,1)
     df_filtrado, lista_meses = filtrar_datos()
 
+if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
+    df_curva_sheets = construir_df_curva_sheets(df_filtrado)
+    df_curva_sheets = añadir_costes_curva(df_curva_sheets)
+    st.session_state.df_curva_sheets = df_curva_sheets
+    print("df_curva_sheets generado correctamente")
+    df_uso = df_curva_sheets.copy()
+    print(df_uso)
+else:
+    st.session_state.df_curva_sheets = None
+    print("df_norm_h no está disponible → no se genera df_curva_sheets")
+    df_uso = df_filtrado.copy()
+
+
 #ejecutamos la función para obtener la tabla resumen y precios medios
-tabla_precios, media_20, media_30, media_61, media_spot, media_ssaa = pt5_trans(df_filtrado)
+tabla_precios, media_20, media_30, media_61, media_spot, media_ssaa, media_atr_curva = pt5_trans(df_uso)
+
+print(f'Media precio curva en €/MWh: {media_atr_curva}')
+print(f'Media precio 3.0 en €/MWh: {media_30}')
+
 media_20 = round(media_20 / 10, 1)
 media_30 = round(media_30 / 10, 1)
 media_61 = round(media_61 / 10, 1)
@@ -37,13 +57,16 @@ media_ssaa = round(media_ssaa, 2)
 media_combo = media_spot + media_ssaa
 sobrecoste_ssaa = ((media_combo / media_spot) - 1) * 100
 
+if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
+    media_atr_curva = round(media_atr_curva / 10, 1)
+
 #tabla resumen de costes ATR
-tabla_atr = pt7_trans(df_filtrado)
-tabla_costes = costes_indexado(df_filtrado)
+tabla_atr = pt7_trans(df_uso)
+tabla_costes = costes_indexado(df_uso)
 
 df_precios_mensuales, graf_mensual = evol_mensual(st.session_state.df_sheets, colores_precios)
 
-#generar_menu()
+
 
 #ELEMENTOS DE LA BARRA LATERAL ---------------------------------------------------------------------------------------
 
@@ -66,28 +89,20 @@ with st.sidebar.container(border=True):
             st.sidebar.selectbox('Seleccionar mes', lista_meses, key = 'mes_seleccionado')
             st.session_state.texto_precios = f'Seleccionado: {st.session_state.mes_seleccionado} de {st.session_state.año_seleccionado}'
     else:
-        #st.sidebar.date_input('Selecciona un día', min_value = datetime.date(2023, 1, 1), max_value = st.session_state.ultima_fecha_sheets, key = 'dia_seleccionado')
         with st.sidebar.form(key='form_fechas_telemindex'):
             # Asegurar que ultima_fecha_sheets es un objeto datetime.date
             ultima_fecha_sheets = st.session_state.ultima_fecha_sheets
             if isinstance(ultima_fecha_sheets, (pd.Timestamp, datetime.datetime)):
                 ultima_fecha_sheets = ultima_fecha_sheets.date()
-            #st.date_input('Selecciona un rango de días', min_value = datetime.date(2023, 1, 1), max_value = datetime.date(2025, 12, 31), key = 'dias_seleccionados')  
             st.date_input('Selecciona un rango de días', min_value = datetime.date(2023, 1, 1), max_value = ultima_fecha_sheets, key = 'dias_seleccionados')   
-            #st.session_state.texto_precios = f'Día seleccionado {st.session_state.dia_seleccionado}'
             inicio, fin = st.session_state.dias_seleccionados
             st.session_state.texto_precios = (f"Rango seleccionado: {inicio.strftime('%d/%m/%Y')} → {fin.strftime('%d/%m/%Y')}")
             st.form_submit_button('Actualizar cálculos')
-with st.sidebar.container():
-#if st.sidebar.toggle('Marca si quieres añadir margen'):
-    #st.sidebar.slider("Añadir margen al gusto (en €/MWh)", min_value = 0, max_value = 50, value = 0, key = 'margen', on_change = aplicar_margen, args=(df_filtrado,))
-    st.sidebar.slider("Añadir margen al gusto (en €/MWh)", min_value = 0, max_value = 50, key = 'margen', on_change = aplicar_margen, args=(df_filtrado,))
-    st.sidebar.caption(f'Se ha añadido {st.session_state.margen} €/MWh')
-#else:
-#    st.session_state.margen = 0
-#zona_mensajes = st.sidebar.empty()        
 
-#st.sidebar.write(f'Última fecha disponible: {st.session_state.ultima_fecha_sheets}')
+with st.sidebar.container():
+    st.sidebar.slider("Añadir margen al gusto (en €/MWh)", min_value = 0, max_value = 50, key = 'margen', on_change = aplicar_margen, args=(df_uso,))
+    st.caption(f'Se ha añadido {st.session_state.margen} €/MWh')
+
 
 
 zona_grafica = st.empty()
@@ -105,6 +120,8 @@ with zona_grafica.container():
             col5, col6, col7, col8, col9 = st.columns(5)
             with col5:
                 st.metric(':orange[Precio medio 2.0 c€/kWh]',value = media_20)
+                if media_atr_curva is not None:
+                    st.metric(f'Precio medio curva {st.session_state.atr_dfnorm} c€/kWh',value = media_atr_curva)
             with col6:
                 st.metric(':red[Precio medio 3.0 c€/kWh]',value = media_30)
             with col7:
@@ -115,7 +132,8 @@ with zona_grafica.container():
                 st.metric('Precio medio SSAA €/MWh', value = media_ssaa, delta = f'{sobrecoste_ssaa:,.1f}%', delta_color = 'inverse', help= 'Se indica su valor medio y en qué % aumenta el precio medio Spot')
         st.empty()
         # gráfico principal de barras y lineas precios medios y omie+ssaa
-        st.plotly_chart(graf_principal(df_filtrado, colores_precios))
+        #st.plotly_chart(graf_principal(df_filtrado, colores_precios))
+        st.plotly_chart(graf_principal(df_uso, colores_precios))
         st.empty()
         st.subheader("Peso de los componentes por peaje de acceso", divider='rainbow')
         _, graf20, graf30, graf61 = pt1(df_filtrado)
@@ -134,7 +152,7 @@ with zona_grafica.container():
     with col2:
         st.subheader("Tabla resumen de precios por peaje de acceso", divider='rainbow')
         with st.expander("Nota sobre los precios de indexado:"):
-            st.caption("Basados en las fórmulas tipo con todos los componentes de mercado y costes regulados. Se incluye FNEE, SRAD y 2€ en desvíos. Por supuesto peajes y cargos según tarifa de acceso. Añadir margen al gusto en 'Opciones' de la barra lateral")
+            st.caption("Basados en las fórmulas tipo con todos los componentes de mercado y costes regulados. Se incluye FNEE, SRAD y 1€/MWh por diferencias con los SSAA C2. Por supuesto peajes y cargos según tarifa de acceso. Añadir margen al gusto en 'Opciones' de la barra lateral")
             
         with st.container():
 
@@ -145,6 +163,7 @@ with zona_grafica.container():
             st.caption(st.session_state.texto_precios)
 
             st.text ('Precios medios de indexado', help='PRECIO MEDIO (FINAL) DE LA ENERGÍA.Suma de costes (energía y ATR)')
+            #st.dataframe(tabla_precios, use_container_width=True)
             st.dataframe(tabla_precios, use_container_width=True)
             
             st.text ('Costes medios de indexado', help = 'COSTE MEDIO DE LA ENERGÍA, sin incluir ATR.')
