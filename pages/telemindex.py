@@ -1,6 +1,7 @@
 import streamlit as st
 from backend_telemindex import filtrar_datos, aplicar_margen, graf_principal, pt5_trans, pt1, pt7_trans, costes_indexado, evol_mensual, construir_df_curva_sheets, añadir_costes_curva 
 from backend_comun import autenticar_google_sheets, carga_rapida_sheets, carga_total_sheets, colores_precios
+from backend_curvadecarga import graficar_media_horaria
 
 import pandas as pd
 import datetime
@@ -37,6 +38,13 @@ if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None an
     print("df_curva_sheets generado correctamente")
     df_uso = df_curva_sheets.copy()
     print(df_uso)
+
+    #consumo total curva
+    consumo_total_curva = df_uso['consumo_neto_kWh'].sum()
+    #calculamos el coste spot ponderado en €/MWh
+    media_spot_curva = round(df_uso['coste_spot'].sum()/(consumo_total_curva/1000),2)
+    coste_total_curva = round(df_uso['coste_total'].sum()+consumo_total_curva*st.session_state.margen/1000,2)
+    
 else:
     st.session_state.df_curva_sheets = None
     print("df_norm_h no está disponible → no se genera df_curva_sheets")
@@ -49,16 +57,36 @@ tabla_precios, media_20, media_30, media_61, media_spot, media_ssaa, media_atr_c
 print(f'Media precio curva en €/MWh: {media_atr_curva}')
 print(f'Media precio 3.0 en €/MWh: {media_30}')
 
-media_20 = round(media_20 / 10, 1)
-media_30 = round(media_30 / 10, 1)
-media_61 = round(media_61 / 10, 1)
+#media_20 = round(media_20 / 10, 1)
+media_20 = media_20 / 10
+#media_30 = round(media_30 / 10, 1)
+media_30 = media_30 / 10
+#media_61 = round(media_61 / 10, 1)
+media_61 = media_61 / 10
 media_spot = round(media_spot, 2)
 media_ssaa = round(media_ssaa, 2)
 media_combo = media_spot + media_ssaa
 sobrecoste_ssaa = ((media_combo / media_spot) - 1) * 100
 
+
+
+
 if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
-    media_atr_curva = round(media_atr_curva / 10, 1)
+    media_atr_curva = media_atr_curva / 10
+    apuntamiento_spot = round(media_spot_curva/media_spot,3)
+
+    atr_map = {
+        "2.0": media_20,
+        "3.0": media_30,
+        "6.1": media_61
+    }
+    media_atr = atr_map.get(st.session_state.atr_dfnorm)
+    coste_sin_ponderar = round(consumo_total_curva * media_atr / 100,2)
+    desvio_coste_total = coste_total_curva-coste_sin_ponderar
+    desvio_coste_total_porc = (desvio_coste_total / coste_sin_ponderar) * 100
+
+    print(f'Coste sin ponderar: {coste_sin_ponderar}€')
+    print(f'Coste ponderado: {coste_total_curva}€')
 
 #tabla resumen de costes ATR
 tabla_atr = pt7_trans(df_uso)
@@ -119,17 +147,24 @@ with zona_grafica.container():
         with st.container():
             col5, col6, col7, col8, col9 = st.columns(5)
             with col5:
-                st.metric(':orange[Precio medio 2.0 c€/kWh]',value = media_20)
+                #st.metric(':orange[Precio medio 2.0 c€/kWh]',value = media_20)
+                st.metric(':orange[Precio medio 2.0 c€/kWh]',value = f"{media_20:.2f}".replace('.', ','))
                 if media_atr_curva is not None:
-                    st.metric(f'Precio medio curva {st.session_state.atr_dfnorm} c€/kWh',value = media_atr_curva)
+                    st.metric(f'Precio medio curva {st.session_state.atr_dfnorm} c€/kWh',value = f"{media_atr_curva:.2f}".replace('.', ','))
             with col6:
-                st.metric(':red[Precio medio 3.0 c€/kWh]',value = media_30)
+                st.metric(':red[Precio medio 3.0 c€/kWh]',value = f"{media_30:.2f}".replace('.', ','))
+                if media_atr_curva is not None:
+                    st.metric(f'Consumo curva kWh',value = f"{consumo_total_curva:,.0f}".replace(',', '.'))
             with col7:
-                st.metric(':blue[Precio medio 6.1 c€/kWh]',value = media_61)
+                st.metric(':blue[Precio medio 6.1 c€/kWh]',value = f"{media_61:.2f}".replace('.', ','))
+                if media_atr_curva is not None:
+                    st.metric('Coste total curva €',value = f"{coste_total_curva:,.0f}".replace(',', '.'), delta=f"{desvio_coste_total_porc:,.2f}%".replace('.',','), delta_color='inverse', help = 'El % indica el desvío con respecto al coste medio aritmético')
             with col8:
-                st.metric(':green[Precio medio Spot €/MWh]',value = media_spot)
+                st.metric(':green[Precio medio Spot €/MWh]',value = f"{media_spot:.2f}".replace('.', ','))
+                if media_atr_curva is not None:
+                    st.metric('Precio medio Spot curva €/MWh',value = f"{media_spot_curva:.2f}".replace('.', ','), delta=f"{apuntamiento_spot:,.3f}".replace('.', ','), delta_color='inverse', help = 'Se indica apuntamiento.')
             with col9:
-                st.metric('Precio medio SSAA €/MWh', value = media_ssaa, delta = f'{sobrecoste_ssaa:,.1f}%', delta_color = 'inverse', help= 'Se indica su valor medio y en qué % aumenta el precio medio Spot')
+                st.metric(':violet[Precio medio SSAA €/MWh]', value = f"{media_ssaa:.2f}".replace('.', ','), delta = f'{sobrecoste_ssaa:,.1f}%', delta_color = 'inverse', help= 'Se indica su valor medio y en qué % aumenta el precio medio Spot')
         st.empty()
         # gráfico principal de barras y lineas precios medios y omie+ssaa
         #st.plotly_chart(graf_principal(df_filtrado, colores_precios))
@@ -180,7 +215,10 @@ with zona_grafica.container():
             #print(tabla_precios)
             #print(tabla_costes)
             #print(tabla_atr)
-        
+        if media_atr_curva is not None:
+            st.subheader("Medias horarias", divider='rainbow')
+            graf_medias_horarias=graficar_media_horaria(st.session_state.df_norm)
+            st.plotly_chart(graf_medias_horarias, use_container_width=True)
 
 
 if 'df_sheets_full' not in st.session_state:

@@ -163,7 +163,8 @@ def graf_principal(df_filtrado, colores_precios):
         barmode = 'relative'
     )
     graf_pt1 = graf_pt1.add_bar(y = pt2['spot'], name = 'spot', marker_color = 'green', width = 0.5)
-    graf_pt1 = graf_pt1.add_bar(y = pt2['ssaa'], name = 'ssaa', marker_color = 'lightgreen', width = 0.5)
+    #graf_pt1 = graf_pt1.add_bar(y = pt2['ssaa'], name = 'ssaa', marker_color = 'lightgreen', width = 0.5)
+    graf_pt1 = graf_pt1.add_bar(y = pt2['ssaa'], name = 'ssaa', marker_color = '#5f259f', width = 0.5)
 
         # ---- LÍNEA CURVA PERSONALIZADA ----
     if ("df_curva_sheets" in st.session_state and st.session_state.df_curva_sheets is not None and "coste_total" in st.session_state.df_curva_sheets.columns):
@@ -227,8 +228,9 @@ def pt5_trans(df_filtrado_final):
 
         if ("df_curva_sheets" in st.session_state and st.session_state.df_curva_sheets is not None):
             dfc = st.session_state.df_curva_sheets.copy()
-            #dfc["consumo_MWh"] = dfc["consumo_neto_kWh"] / 1000
 
+
+            
             # precio ponderado total €/MWh
             media_atr_curva = ((dfc["coste_total"].sum() / dfc["consumo_neto_kWh"].sum()) * 1000) + st.session_state.margen
             print(f'Media precio curva en €/MWh: {media_atr_curva}')

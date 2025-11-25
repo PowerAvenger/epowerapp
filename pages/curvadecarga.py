@@ -263,7 +263,7 @@ if st.session_state.get('df_norm') is not None:
         st.plotly_chart(graf_medias_horarias, use_container_width=True)
         
         
-    st.write(st.session_state.df_norm_h)
+    #st.write(st.session_state.df_norm_h)
     
 
     # --- Descarga ---
