@@ -1,7 +1,7 @@
 import streamlit as st
 from backend_telemindex import filtrar_datos, aplicar_margen, graf_principal, pt5_trans, pt1, pt7_trans, costes_indexado, evol_mensual, construir_df_curva_sheets, añadir_costes_curva 
 from backend_comun import autenticar_google_sheets, carga_rapida_sheets, carga_total_sheets, colores_precios
-from backend_curvadecarga import graficar_media_horaria
+from backend_curvadecarga import graficar_media_horaria, graficar_queso_periodos
 
 import pandas as pd
 import datetime
@@ -37,6 +37,7 @@ if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None an
     st.session_state.df_curva_sheets = df_curva_sheets
     print("df_curva_sheets generado correctamente")
     df_uso = df_curva_sheets.copy()
+    df_uso = df_uso.drop_duplicates(subset=["fecha", "hora", "spot"])
     print(df_uso)
 
     #consumo total curva
@@ -185,6 +186,14 @@ with zona_grafica.container():
         st.plotly_chart(graf_mensual)
 
     with col2:
+        if media_atr_curva is not None:
+            st.subheader("Perfil de consumo", divider='rainbow')
+            graf_medias_horarias=graficar_media_horaria(st.session_state.df_norm)
+            st.plotly_chart(graf_medias_horarias, use_container_width=True)
+
+            st.subheader("Consumo por periodos")
+            graf_periodos=graficar_queso_periodos(st.session_state.df_norm)
+            st.plotly_chart(graf_periodos, use_container_width=True)
         st.subheader("Tabla resumen de precios por peaje de acceso", divider='rainbow')
         with st.expander("Nota sobre los precios de indexado:"):
             st.caption("Basados en las fórmulas tipo con todos los componentes de mercado y costes regulados. Se incluye FNEE, SRAD y 1€/MWh por diferencias con los SSAA C2. Por supuesto peajes y cargos según tarifa de acceso. Añadir margen al gusto en 'Opciones' de la barra lateral")
@@ -216,7 +225,7 @@ with zona_grafica.container():
             #print(tabla_costes)
             #print(tabla_atr)
         if media_atr_curva is not None:
-            st.subheader("Medias horarias", divider='rainbow')
+            st.subheader("Perfil de consumo", divider='rainbow')
             graf_medias_horarias=graficar_media_horaria(st.session_state.df_norm)
             st.plotly_chart(graf_medias_horarias, use_container_width=True)
 

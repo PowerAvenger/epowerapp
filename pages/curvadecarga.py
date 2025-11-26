@@ -166,7 +166,9 @@ if uploaded:
             # Ya está en frecuencia horaria → copiar
             df_norm_h = df_norm[["fecha_hora", "fecha", "hora","consumo_neto_kWh", "vertido_neto_kWh", "periodo"]].copy()
 
-
+        consumototalhorario= df_norm_h['consumo_neto_kWh'].sum()
+        print(f'consumo total df_norm_h: {consumototalhorario}')
+        
         st.session_state.df_norm = df_norm
         st.session_state.atr_dfnorm = atr_dfnorm
         st.session_state.df_norm_h = df_norm_h
