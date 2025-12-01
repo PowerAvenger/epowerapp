@@ -106,6 +106,9 @@ tp_coste_pvpc = tp_coste_pvpc_kW * st.session_state.pot_con  #€
 
 df_datos_horarios_combo_filtrado_consumo, pt_horario_filtrado, media_precio_perfilado, coste_pvpc_perfilado = obtener_tabla_filtrada(df_datos_horarios_combo, fecha_inicio, fecha_fin, consumo_periodo)
 
+#media pvpc sin perfilar
+pvpc_medio=df_datos_horarios_combo_filtrado_consumo['pvpc'].mean()
+
 te_pvpc = media_precio_perfilado
 te_coste_pvpc = round(te_pvpc * consumo_periodo, 2)
 coste_pvpc = round((tp_coste_pvpc + te_coste_pvpc) * (1 + iee) * (1 + iva), 2)
@@ -257,9 +260,10 @@ with col2:
         else:
             consumo_periodo_formateado = f'{consumo_periodo/1000:0,.3f}'.replace(',', '.')
         st.metric('Consumo periodo (kWh)', consumo_periodo_formateado)
+        st.metric('Precio medio del PVPC (c€/kWh)', f"{pvpc_medio / 10:,.2f}".replace('.', ','), help = 'Precio medio del PVPC sin perfilar (c€/kWh)')
          
     with col102:
-        st.metric('Precio medio del PVPC (c€/kWh)', f"{te_pvpc * 100:,.2f}".replace('.', ','), help = 'Precio medio del PVPC perfilado en el periodo seleccionado (c€/kWh)')
+        st.metric('Media ponderada del PVPC (c€/kWh)', f"{te_pvpc * 100:,.2f}".replace('.', ','), help = 'Precio medio del PVPC perfilado en el periodo seleccionado (c€/kWh)')
         st.metric('Coste del Te PVPC(€)', f'{te_coste_pvpc:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.'))
 
     with col103:
