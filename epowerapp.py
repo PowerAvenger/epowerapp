@@ -60,7 +60,7 @@ with c2:
         
 
         st.text_input('Introduce el código de acceso', type='password', key='acceso')
-        if st.session_state.acceso == st.secrets['KEY_ACCESS']:
+        if st.session_state.acceso == st.secrets['KEY_ACCESS'] or st.session_state.acceso == st.secrets['KEY_FREE']:
 
             acceso = st.button('🚀 Acceder a la aplicación', type='primary', use_container_width=True, disabled=False)
             st.session_state.usuario_autenticado = True
