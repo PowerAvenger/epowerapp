@@ -44,6 +44,10 @@ else:
 
 grafico, simul20, simul30, simul61, simulcurva = graf_hist(df_hist, st.session_state.omip_slider, colores_precios)
 
+# Inicializamos margen a cero
+if 'margen_simulindex' not in st.session_state:
+    st.session_state.margen_simulindex = 0
+    
 if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None:
     df_int, df_resumen_simul = resumen_periodos_simulado(df_curva = st.session_state.df_curva_sheets, simul_curva = simulcurva)  
 
@@ -59,9 +63,7 @@ graf_omip_cober = obtener_grafico_cober(df_FTB_trimestral_cobertura, df_mes, st.
 
 df_FTB_mensual, fig = obtener_meff_mensual(df_historicos_FTB, df_mes)
 
-# Inicializamos margen a cero
-if 'margen_simulindex' not in st.session_state:
-    st.session_state.margen_simulindex = 0
+
 
 
 #BARRA LATERAL+++++++++++++++++++++++++++++++++++++++++++++++++++++++
