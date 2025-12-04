@@ -34,16 +34,20 @@ except:
 if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
     df_curva_sheets = construir_df_curva_sheets(df_filtrado)
     df_curva_sheets = añadir_costes_curva(df_curva_sheets)
-    st.session_state.df_curva_sheets = df_curva_sheets
+    #st.session_state.df_curva_sheets = df_curva_sheets
     print("df_curva_sheets generado correctamente")
     df_uso = df_curva_sheets.copy()
     df_uso = df_uso.drop_duplicates(subset=["fecha", "hora", "spot"])
+    st.session_state.df_curva_sheets = df_uso
     print(df_uso)
 
     #consumo total curva
     consumo_total_curva = df_uso['consumo_neto_kWh'].sum()
+    
     #calculamos el coste spot ponderado en €/MWh
     media_spot_curva = round(df_uso['coste_spot'].sum()/(consumo_total_curva/1000),2)
+    coste_curva_sin_margen = round(df_uso['coste_total'].sum(),2)
+
     coste_total_curva = round(df_uso['coste_total'].sum()+consumo_total_curva*st.session_state.margen/1000,2)
     
 else:
@@ -224,10 +228,7 @@ with zona_grafica.container():
             #print(tabla_precios)
             #print(tabla_costes)
             #print(tabla_atr)
-        if media_atr_curva is not None:
-            st.subheader("Perfil de consumo", divider='rainbow')
-            graf_medias_horarias=graficar_media_horaria(st.session_state.df_norm)
-            st.plotly_chart(graf_medias_horarias, use_container_width=True)
+        
 
 
 if 'df_sheets_full' not in st.session_state:

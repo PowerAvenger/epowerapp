@@ -1,6 +1,6 @@
 import streamlit as st
 from backend_comun import autenticar_google_sheets
-from backend_simulindex import obtener_historicos_meff, obtener_meff_trimestral, obtener_grafico_meff_simulindex, obtener_grafico_cober, obtener_meff_mensual, hist_mensual, graf_hist
+from backend_simulindex import obtener_historicos_meff, obtener_meff_trimestral, obtener_grafico_meff_simulindex, obtener_grafico_cober, obtener_meff_mensual, hist_mensual, graf_hist, resumen_periodos_simulado, estilo_excel
 from backend_comun import carga_rapida_sheets, carga_total_sheets, colores_precios
 
 from utilidades import generar_menu, init_app, init_app_index
@@ -37,31 +37,27 @@ if 'trimestre_cobertura' not in st.session_state:
     st.session_state.trimestre_cobertura = trimestre_actual
 
 # obtenemos históricos de medias mensuales de omie df_mes y un filtrado hist de los últimos 12 meses 
-df_hist, df_mes = hist_mensual()
-grafico, simul20, simul30, simul61 = graf_hist(df_hist, st.session_state.omip_slider, colores_precios)
+if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None:
+    df_hist, df_mes = hist_mensual(st.session_state.df_curva_sheets)
+else:
+    df_hist, df_mes = hist_mensual(st.session_state.df_sheets)
+
+grafico, simul20, simul30, simul61, simulcurva = graf_hist(df_hist, st.session_state.omip_slider, colores_precios)
+
+if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None:
+    df_int, df_resumen_simul = resumen_periodos_simulado(df_curva = st.session_state.df_curva_sheets, simul_curva = simulcurva)  
+
 # a los precios simulados resultantes le incrementamos el coste medio de los pyc 2025
-simul20 = round(simul20 + 0.38, 2)
-simul30 = round(simul30 + 0.18, 2)
-simul61 = round(simul61 + 0.1, 2)
+#simul20 = round(simul20 + 0.38, 2)
+#simul30 = round(simul30 + 0.18, 2)
+#simul61 = round(simul61 + 0.1, 2)
 
 graf_omip_trim = obtener_grafico_meff_simulindex(df_FTB_trimestral_simulindex)
 
 df_FTB_trimestral_cobertura = df_FTB_trimestral[df_FTB_trimestral['Entrega'] == st.session_state.trimestre_cobertura]
 graf_omip_cober = obtener_grafico_cober(df_FTB_trimestral_cobertura, df_mes, st.session_state.trimestre_cobertura)
 
-
-
-
-
-
-
 df_FTB_mensual, fig = obtener_meff_mensual(df_historicos_FTB, df_mes)
-
-
-
-#df_hist = leer_excel()
-
-
 
 # Inicializamos margen a cero
 if 'margen_simulindex' not in st.session_state:
@@ -75,18 +71,14 @@ st.sidebar.header('Simulación de indexados')
 with st.sidebar.expander('¡Personaliza la simulación!', icon = "ℹ️"):
     #st.sidebar.info('Usa el deslizador para modificar el valor de :green[OMIE] estimado. No te preocupes, siempre puedes resetear al valor por defecto.', icon = "ℹ️")
     st.write('Usa el deslizador para modificar el valor de :green[OMIE] estimado. No te preocupes, siempre puedes resetear al valor por defecto.')
-with st.sidebar.container(border = True):
-    st.slider(':green[OMIE] en €/MWh', min_value = 30, max_value = 150, step = 1, key = 'omip_slider')
-    reset_omip = st.sidebar.button('Resetear OMIE', on_click = reset_slider)
-  
-
-
-with st.sidebar.container(border=True):
-    st.sidebar.subheader('¡Más interacción!')
-    st.sidebar.info('¿Quieres afinar un poco más. Añade :violet[margen] al gusto y obtén un precio medio de indexado más ajustado con tus necesidades.', icon="ℹ️")
-    añadir_margen = st.sidebar.toggle('Quieres añadir :violet[margen]?')
-    if añadir_margen:
-        st.sidebar.slider('Añade margen al precio base de indexado en €/MWh', min_value = 1, max_value = 50, step = 1, key = 'margen_simulindex')
+st.sidebar.slider(':green[OMIE] en €/MWh', min_value = 30, max_value = 150, step = 1, key = 'omip_slider')
+reset_omip = st.sidebar.button('Resetear OMIE', on_click = reset_slider)
+ 
+with st.sidebar.expander('¿Quieres añadir margen?', icon = "ℹ️"):
+    st.write('Añade :violet[margen] al gusto y obtén un precio medio de indexado más ajustado con tus necesidades.')
+    #añadir_margen = st.sidebar.toggle('Quieres añadir :violet[margen]?')
+    #if añadir_margen:
+st.sidebar.slider('Añade margen al precio base de indexado en €/MWh', min_value = 0, max_value = 50, step = 1, key = 'margen_simulindex')
 
 zona_mensajes = st.sidebar.empty()
 
@@ -94,6 +86,7 @@ zona_mensajes = st.sidebar.empty()
 simul20_margen = simul20 + st.session_state.margen_simulindex / 10
 simul30_margen = simul30 + st.session_state.margen_simulindex / 10
 simul61_margen = simul61 + st.session_state.margen_simulindex / 10
+simulcurva_margen = simulcurva + st.session_state.margen_simulindex / 10
 
 ##LAYOUT DE LA PÁGINA PRINCIPAL-----------------------------------------------------------------------------------------------------------------------------
 #st.title("Simulindex :orange[e]PowerAPP©")
@@ -128,15 +121,23 @@ with col1:
             st.metric(':orange[Precio 2.0] c€/kWh', value = simul20, help = 'Este el precio 2.0 medio simulado a un año vista')
             st.metric(':red[Precio 3.0] c€/kWh', value = simul30, help = 'Este el precio 3.0 medio simulado a un año vista')
             st.metric(':blue[Precio 6.1] c€/kWh', value = simul61, help='Este el precio 6.1 medio simulado a un año vista')
+            if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None:
+                st.metric(f':green[Precio CURVA {st.session_state.atr_dfnorm}]  c€/kWh', value = simulcurva, help='Este el precio medio ponderado simulado a un año vista')
         with col14:
             st.text('Precios con margen')
             st.metric(':orange[Precio 2.0] c€/kWh', value = round(simul20_margen, 2), help = 'Este el precio 2.0 con el margen añadido')
             st.metric(':red[Precio 3.0] c€/kWh', value = round(simul30_margen, 2), help = 'Este el precio 3.0 con el margen añadido')
             st.metric(':blue[Precio 6.1] c€/kWh', value = round(simul61_margen, 2), help = 'Este el precio 6.1 con el margen añadido')
-    
+            if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None:
+                st.metric(f':green[Precio CURVA {st.session_state.atr_dfnorm}]  c€/kWh', value = simulcurva_margen, help='Este el precio medio ponderado con el margen añadido')
 with col2:
     st.info('**¿Cómo funciona?** Los :orange[puntos] son valores de indexado de los 12 últimos meses. Las :orange[líneas] reflejan una tendencia. Los :orange[círculos] simulan los precios medios de indexado a un año vista en base al valor de OMIE estimado.',icon="ℹ️")
-    st.plotly_chart(grafico)            
+    st.plotly_chart(grafico)
+    if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None:
+        st.write(f'Tabla resumen de datos para el suministro :green[{st.session_state.atr_dfnorm}] con OMIE a :green[{st.session_state.omip_slider}]€/MWh')
+        st.dataframe(estilo_excel(df_resumen_simul))
+    #st.write("df_curva_sheets shape", st.session_state.df_curva_sheets.shape)
+    #st.write(st.session_state.df_curva_sheets.head())           
 
 #SEGUNDA TANDA DE GRÁFICOS. OMIP TRIMESTRAL------------------------------------------------------------------------------------------------------------------
 col3, col4 = st.columns([0.2, 0.8])
