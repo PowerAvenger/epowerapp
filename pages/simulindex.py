@@ -86,7 +86,8 @@ zona_mensajes = st.sidebar.empty()
 simul20_margen = simul20 + st.session_state.margen_simulindex / 10
 simul30_margen = simul30 + st.session_state.margen_simulindex / 10
 simul61_margen = simul61 + st.session_state.margen_simulindex / 10
-simulcurva_margen = simulcurva + st.session_state.margen_simulindex / 10
+if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None:
+    simulcurva_margen = simulcurva + st.session_state.margen_simulindex / 10
 
 ##LAYOUT DE LA PÁGINA PRINCIPAL-----------------------------------------------------------------------------------------------------------------------------
 #st.title("Simulindex :orange[e]PowerAPP©")
