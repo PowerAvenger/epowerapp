@@ -161,6 +161,7 @@ meses_lista = ['todos', 'ene','feb','mar','abr','may','jun','jul','ago','sep','o
 # ELEMENTOS DE LA BARRA LATERAL DE OPCIONES-----------------------------------------------------------------------------------------------
 #st.sidebar.header('', divider='rainbow')
 st.sidebar.subheader('Escala Cavero-Vidal')
+st.markdown(f':blue-background[Sección dedicada a **Roberto Cavero García**]')
 st.sidebar.selectbox('Selecciona el año', options = años_lista, key = 'año_seleccionado_esc')
 st.sidebar.selectbox('Selecciona el mes', options = meses_lista, key = 'mes_seleccionado_esc')
 st.sidebar.slider('Selecciona el día', min_value= fecha_min_select_dia, max_value=fecha_max_select_dia, key = 'dia_seleccionado_esc')
