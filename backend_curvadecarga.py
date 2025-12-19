@@ -60,20 +60,35 @@ def _read_any(uploaded_or_path):
 
     # --- Leer según tipo ---
     if isinstance(uploaded_or_path, str):
+        print('Fichero seleccionado con ruta manual') #NO SE VA A USAR NUNCA PERO POR SI ACASO
         path = uploaded_or_path.lower()
+        print(path)
         if path.endswith(".csv"):
             df = pd.read_csv(uploaded_or_path, dtype=str, header=None, skip_blank_lines=True)
         else:
             df = pd.read_excel(uploaded_or_path, dtype=str, header=None)
     else:
+        print('Fichero seleccionado por upload files')
         name = uploaded_or_path.name.lower()
+        print(name)
         if name.endswith(".csv"):
             content = uploaded_or_path.read()
             sample = content[:4096].decode("utf-8", errors="ignore")
             sep = ";" if sample.count(";") > sample.count(",") else ","
             df = pd.read_csv(io.BytesIO(content), sep=sep, dtype=str, header=None)
         else:
-            df = pd.read_excel(uploaded_or_path, dtype=str, header=None)
+            #uploaded_or_path.seek(0)
+            xls = pd.ExcelFile(uploaded_or_path)
+            for sheet in xls.sheet_names:
+                #df = pd.read_excel(uploaded_or_path, dtype=str, header=None)
+                df = pd.read_excel(uploaded_or_path, sheet_name=sheet, dtype=str, header=None)
+                if not df.empty:
+                    print(f"Usando hoja: {sheet}")
+                    break
+            #if df.empty:
+                #uploaded_or_path.seek(0)
+            #    df = pd.read_excel(uploaded_or_path)
+            print(df)
 
     # --- Detección automática de cabecera ---
     header_row = detect_header_row(df)
@@ -91,6 +106,85 @@ def _read_any(uploaded_or_path):
     print (df)
 
     return df, (header_row or 0)
+
+def _read_any_nofunciona(uploaded_or_path):
+    """
+    Lee CSV o Excel forzando texto (sin autoconversión de fechas) y
+    detecta automáticamente la fila de cabecera real si NO existe ya.
+    """
+
+    def detect_header_row(df):
+        for i in range(min(10, len(df))):
+            row = df.iloc[i].astype(str).tolist()
+            row_values = " ".join(row).lower()
+
+            if not any(k in row_values for k in ["fecha", "hora", "consumo", "energ", "cups"]):
+                continue
+
+            non_empty = [x for x in row if x.strip() not in ["", "nan", "none"]]
+            text_like = sum(1 for x in non_empty if not any(ch.isdigit() for ch in x))
+            ratio_text = text_like / max(len(non_empty), 1)
+
+            if ratio_text > 0.7 and len(non_empty) >= 2:
+                return i
+
+        return None
+
+    def looks_like_header(cols):
+        cols = [_clean(c) for c in cols]
+        joined = " ".join(cols)
+        return any(k in joined for k in ["fecha", "hora", "consumo", "energ", "periodo"])
+
+    # --- Leer según tipo (PRIMERA LECTURA NORMAL) ---
+    if isinstance(uploaded_or_path, str):
+        if uploaded_or_path.lower().endswith(".csv"):
+            df = pd.read_csv(uploaded_or_path, dtype=str)
+        else:
+            df = pd.read_excel(uploaded_or_path, dtype=str)
+    else:
+        uploaded_or_path.seek(0)  # ✅ AQUÍ FALTABA
+        if uploaded_or_path.name.lower().endswith(".csv"):
+            df = pd.read_csv(uploaded_or_path, dtype=str)
+        else:
+            df = pd.read_excel(uploaded_or_path, dtype=str)
+
+    # --- SI YA ES TABULAR, SALIR ---
+    if not df.empty and looks_like_header(df.columns):
+        df = df.dropna(axis=1, how="all")
+        return df.reset_index(drop=True), 0
+
+    # --- SI NO, RELEER SIN CABECERA Y DETECTAR ---
+    if isinstance(uploaded_or_path, str):
+        if uploaded_or_path.lower().endswith(".csv"):
+            df = pd.read_csv(uploaded_or_path, dtype=str, header=None, skip_blank_lines=True)
+        else:
+            df = pd.read_excel(uploaded_or_path, dtype=str, header=None)
+    else:
+        uploaded_or_path.seek(0)  # ✅ AQUÍ TAMBIÉN
+        if uploaded_or_path.name.lower().endswith(".csv"):
+            content = uploaded_or_path.read()
+            sample = content[:4096].decode("utf-8", errors="ignore")
+            sep = ";" if sample.count(";") > sample.count(",") else ","
+            df = pd.read_csv(io.BytesIO(content), sep=sep, dtype=str, header=None)
+        else:
+            df = pd.read_excel(uploaded_or_path, dtype=str, header=None)
+
+    df = df.dropna(how="all").reset_index(drop=True)
+
+    if df.empty:
+        raise ValueError("Archivo sin datos legibles")
+
+    header_row = detect_header_row(df)
+
+    if header_row is None:
+        header_row = 0  # fallback seguro
+
+    df.columns = df.iloc[header_row]
+    df = df.iloc[header_row + 1:].reset_index(drop=True)
+    df = df.dropna(axis=1, how="all")
+
+    return df, header_row
+
 
 def _guess_cols(df: pd.DataFrame):
     cols = list(df.columns)

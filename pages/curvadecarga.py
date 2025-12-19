@@ -16,9 +16,6 @@ generar_menu()
 #  Interfaz Streamlit
 # ===============================
 
-
-#st.set_page_config(page_title="Curvas de carga — Normalizador simple", layout="wide")
-
 with st.sidebar:
     st.title("⚡:rainbow[PowerLoader]⚡")
     st.caption("Lee CSV/Excel, detecta columnas y normaliza horas al rango 0–23 del mismo día. Añade columnas adicionales.")
@@ -28,8 +25,6 @@ with st.sidebar:
     zona_mensajes2 = st.sidebar.empty()
     zona_mensajes3 = st.sidebar.empty()
 
-    # Selector de modo
-    #if uploaded:
     
 
 # Inicializa el estado si no existe

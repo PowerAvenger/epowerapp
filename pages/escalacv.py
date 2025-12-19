@@ -164,7 +164,7 @@ st.sidebar.subheader('Escala Cavero-Vidal')
 st.sidebar.markdown(f':blue-background[Sección dedicada a **Roberto Cavero García**]')
 st.sidebar.selectbox('Selecciona el año', options = años_lista, key = 'año_seleccionado_esc')
 st.sidebar.selectbox('Selecciona el mes', options = meses_lista, key = 'mes_seleccionado_esc')
-st.sidebar.slider('Selecciona el día', min_value= fecha_min_select_dia, max_value=fecha_max_select_dia, key = 'dia_seleccionado_esc')
+st.sidebar.date_input('Selecciona el día', min_value= fecha_min_select_dia, max_value=fecha_max_select_dia, key = 'dia_seleccionado_esc')
 st.sidebar.radio('Selecciona el componente de mercado', options=['SPOT', 'SSAA', 'SPOT+SSAA'], key = 'componente')
 
 if st.session_state.componente == 'SPOT+SSAA':

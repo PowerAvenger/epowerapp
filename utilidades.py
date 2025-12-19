@@ -19,15 +19,16 @@ def generar_menu():
         st.markdown(f"Deja tus impresiones y valoraciones en [Linkedin]({url_linkedin}).")
 
         st.page_link('epowerapp.py', label = 'Bienvenida', icon = "🙌")
+        st.page_link('pages/curvadecarga.py', label = 'Curvas de carga', icon = "🕒")
+        st.page_link('pages/opt2.py', label = 'Optimización curvas Qh', icon = "🎯")
         st.page_link('pages/telemindex.py', label = 'Telemindex', icon = "📈")
         st.page_link('pages/simulindex.py', label = 'Simulindex', icon = "🔮")
         st.page_link('pages/fijovspvpc.py', label = 'FijovsPVPC', icon = "⚖️")
         st.page_link('pages/escalacv.py', label = 'Escala CV', icon = "📊")
         st.page_link('pages/excedentes.py', label = 'Excedentes', icon = "💰")
         st.page_link('pages/demanda.py', label = 'Demanda', icon = "🏭")
-        st.page_link('pages/mibgas.py', label = 'Gas & Furious', icon = "🔥")
         st.page_link('pages/redata_potgen.py', label = 'Tecnologías de generación', icon = "⚡️")
-        st.page_link('pages/curvadecarga.py', label = 'Curvas de carga', icon = "🕒")
+        st.page_link('pages/mibgas.py', label = 'Gas & Furious', icon = "🔥")
         st.page_link('pages/marginales.py', label = 'Marginales', icon = "🔀")
         st.sidebar.header('', divider='rainbow')
 
