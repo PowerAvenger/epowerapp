@@ -55,7 +55,7 @@ with c2:
         #url_bluesky = "https://bsky.app/profile/poweravenger.bsky.social"
         #url_linkedin = "https://www.linkedin.com/posts/josefvidalsierra_epowerapps-spo2425-telemindex-activity-7281942697399967744-IpFK?utm_source=share&utm_medium=member_deskto"
         url_linkedin = 'https://www.linkedin.com/posts/josefvidalsierra_epowerapp-totalpower-activity-7382675731379830784-ObeG/?utm_source=share&utm_medium=member_desktop&rcm=ACoAAFYBwa4BRZN7ghU77azb6YGy123gZvYnqoE'
-        st.markdown(f"Contacta por privado en mi perfil de [Linkedin]({url_linkedin}) para obtener un código de pago")
+        st.markdown(f"Contacta por privado en mi perfil de [Linkedin]({url_linkedin}) para obtener un código gratuito o de pago")
 
         
 

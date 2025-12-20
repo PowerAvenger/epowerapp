@@ -7,7 +7,13 @@ import plotly.express as px
 from utilidades import generar_menu, init_app, init_app_index
 from backend_opt2 import leer_curva_normalizada, calcular_costes, funcion_objetivo, ajustar_potencias, grafico_costes_con, graficar_costes_opt, pyc_tp, kp, tep, meses
 
+if not st.session_state.get('usuario_autenticado', False):
+    st.switch_page('epowerapp.py')
+
 generar_menu()
+
+if 'mantener_potencia' not in st.session_state:
+    st.session_state.mantener_potencia = "Mantener" 
 
 pot_con_ini = {
     'P1' : 50,
@@ -17,29 +23,38 @@ pot_con_ini = {
     'P5' : 50,
     'P6' : 110
 }
-df_pot = pd.DataFrame.from_dict(
-    pot_con_ini,
-    orient="index",
-    columns=["Potencia (kW)"]
-)
-df_pot.index.name = "Periodo"
-st.sidebar.markdown("### Potencias contratadas")
-
-df_pot_edit = st.sidebar.data_editor(
-    df_pot,
-    use_container_width=True,
-    num_rows="fixed"
-)
-pot_con = df_pot_edit["Potencia (kW)"].to_dict()
+if "df_pot" not in st.session_state:
+    st.session_state.df_pot = pd.DataFrame.from_dict(
+        pot_con_ini,
+        orient="index",
+        columns=["Potencia (kW)"]
+    )
+    st.session_state.df_pot.index.name = "Periodo"
+    #st.session_state.df_pot = df_pot
 
 
-if not st.session_state.get('usuario_autenticado', False):
-    st.switch_page('epowerapp.py')
+with st.sidebar.form("form_optimizacion"):
+    st.sidebar.markdown("### Potencias contratadas")
+
+    df_pot_edit = st.sidebar.data_editor(
+        st.session_state.df_pot,
+        use_container_width=True,
+        num_rows="fixed"
+    )
+    st.session_state.df_pot = df_pot_edit
+
+    st.sidebar.radio(
+        "Selecciona potencia P6",
+        ["Mantener", "No mantener"],
+        horizontal=True,
+        key='mantener_potencia'
+    )
+    submit = st.form_submit_button("🔄 Calcular optimización")
+    
+    #st.form_submit_button("🔄 Calcular optimización")
 
 
 
-if 'mantener_potencia' not in st.session_state:
-    st.session_state.mantener_potencia = "Mantener" 
 
 if 'df_norm' not in st.session_state:
     st.session_state.df_norm = None
@@ -47,14 +62,14 @@ if 'df_norm' not in st.session_state:
 else:
     tarifa = st.session_state.atr_dfnorm
     st.sidebar.write(f'El peaje del suministro es {st.session_state.atr_dfnorm}')
-    st.sidebar.radio(
-        "Selecciona potencia P6",
-        ["Mantener", "No mantener"],
-        horizontal=True,
-        key='mantener_potencia'
-    )
     
+if submit and st.session_state.df_norm is not None:
+
+    #pot_con = df_pot_edit["Potencia (kW)"].to_dict()
+    pot_con = st.session_state.df_pot["Potencia (kW)"].to_dict()
     fijar_P6 = st.session_state["mantener_potencia"] == "Mantener"
+    #fijar_P6 = st.session_state["mantener_potencia"]
+    print(f'fijar_P6 = {fijar_P6}')
 
 
     df_in = leer_curva_normalizada(pot_con)
@@ -106,7 +121,7 @@ else:
     print("¿Optimización exitosa?", resultado.success)
     print("Mensaje de optimización:", resultado.message)
 
-    pot_opt = ajustar_potencias(pot_opt_ini, fijar_P6=True, pot_con=pot_con)
+    pot_opt = ajustar_potencias(pot_opt_ini, fijar_P6=fijar_P6, pot_con=pot_con)
 
     coste_potfra_potopt, coste_excesos_potopt, coste_tp_potopt, df_coste_potfra_potopt, df_coste_excesos_potopt = calcular_costes(list(pot_opt.values()), df_in, tarifa, pyc_tp, kp, tep, meses, pot_con)
 
