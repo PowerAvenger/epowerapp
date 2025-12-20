@@ -10,4 +10,5 @@ google-api-python-client
 google-auth-httplib2
 cvxpy
 unidecode
+pvlib
 
