@@ -1,17 +1,17 @@
 import pandas as pd
-import plotly.express as px
+#import plotly.express as px
 import plotly.graph_objects as go
-from dateutil.relativedelta import relativedelta
-import pvlib
+#from dateutil.relativedelta import relativedelta
+#import pvlib
 import numpy as np
 import cvxpy as cp
 from scipy.optimize import minimize
 import plotly.graph_objects as go
 import math
 
-import plotly.io as pio
-import dataframe_image as dfi
-import nest_asyncio
+#import plotly.io as pio
+#import dataframe_image as dfi
+#import nest_asyncio
 import streamlit as st
 
 # PEAJES Y CARGOS TP 2025
