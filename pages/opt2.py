@@ -423,7 +423,7 @@ if submit and st.session_state.df_norm is not None:
         #st.plotly_chart(fig)
         st.metric('Coste ACTUAL (€)', f'{coste_tp_potcon:,.0f}'.replace(',','.'))
         st.metric('Coste OPTIMIZADO (€)', f'{coste_tp_potopt:,.0f}'.replace(',','.'))
-        st.metric('AHORRO (€)', f'{ahorro_opt:,.0f}'.replace(',','.'), delta=f'{ahorro_opt_porc:,.1f}')
+        st.metric('AHORRO (€)', f'{ahorro_opt:,.0f}'.replace(',','.'), delta=f'{ahorro_opt_porc:,.1f}%')
     with c4:
         st.plotly_chart(fig)
     

@@ -255,7 +255,7 @@ def _localize_madrid(dt: pd.Series) -> pd.Series:
 # FUNCIÓN PARA NORMALIZAR CURVA
 # ------------------------------------
 
-
+#@st.cache_data()
 def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd.DataFrame, str]:
 
     import traceback
@@ -286,9 +286,10 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
         kwh_vertido = kwh_vertido / 1000
         msg_unidades = "Detectado consumo en Wh → Convertido automáticamente a kWh"
 
-
+    # Flag usado sólo en formatos hora y cuarto que creo solo son de endesa cuarto horarios, donde la energía viene como potencia cuartohoria (consumox4)
+    endesa_qh = False
     try:
-        # --- Datetime base (naïve) ---
+        # Determinamos el formato de fecha hora
         if c_dt:
             # Disponemos de fecha y hora en la misma columna
             sample = str(df[c_dt].dropna().iloc[0]).strip()
@@ -352,6 +353,8 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
 
                 print("DEBUG --- dt0 cuartohorario:")
                 print(dt0.head(12))
+                
+                endesa_qh = True
 
             else:
                 # 🔽 aquí sigue EXACTAMENTE tu código actual
@@ -579,6 +582,9 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
         df_norm["fecha_hora"].dt.dayofweek < 5, "L-V", "FS"  # 0=lunes, 6=domingo
     )
     
+    # usado cuando la energía viene como potencia cuarto horaria
+    if endesa_qh:
+        df_norm["consumo_kWh"] /= 4
     
     # --- Cálculo del saldo horario (consumo - vertido) ---
     saldo_horario = df_norm["consumo_kWh"].fillna(0) - df_norm["excedentes_kWh"].fillna(0)
@@ -586,6 +592,9 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
     # --- Columnas “shadow” ---
     df_norm["consumo_neto_kWh"] = np.where(saldo_horario > 0, saldo_horario, 0)
     df_norm["vertido_neto_kWh"] = np.where(saldo_horario < 0, -saldo_horario, 0)
+
+    
+        
 
     print('df norm dentro de la funcion')
     print(df_norm)
