@@ -382,23 +382,22 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
 
                     if minutos.max() == 0:
                         # Horario tipo “01:00”
-                        dt0 = d + pd.to_timedelta(hora_raw + ":00")
+                        print("horarios")
+                        #dt0 = d + pd.to_timedelta(hora_raw + ":00")
+                        dt0 = d + pd.to_timedelta(hora_raw, errors="coerce")
 
                         # Ajuste por casos 01:00→00:00 del día siguiente
                         if dt0.dt.hour.min() == 1 and dt0.dt.hour.max() == 0:
                             dt0 = dt0 - pd.Timedelta(hours=1)
 
-                        print("horarios")
+                        
                         print(dt0.head(24))
 
                     else:
                         # Cuartohoraria (00:15, 00:30…)
                         print("cuarto horarios")
-                        h = pd.to_timedelta(
-                            hora_raw.where(hora_raw.str.count(":") == 2,
-                                        hora_raw + ":00"),
-                            errors="coerce"
-                        )
+                        #h = pd.to_timedelta(hora_raw.where(hora_raw.str.count(":") == 2, hora_raw + ":00"), errors="coerce")
+                        h = pd.to_timedelta(hora_raw, errors="coerce")
                         dt0 = d + h
 
                 else:
