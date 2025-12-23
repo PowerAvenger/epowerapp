@@ -296,6 +296,9 @@ def diarios(datos, fecha_ini, fecha_fin):
     datos_dia = datos_dia.drop(columns=['hora'])
     datos_dia['mes_nombre']=datos_dia['mes'].map(meses_español)
 
+    print('datos_dia')
+    print(datos_dia)
+
     
     componente = st.session_state.get('componente', 'SPOT')
     dos_colores = st.session_state.get('dos_colores', False)
