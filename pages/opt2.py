@@ -43,6 +43,8 @@ with st.sidebar.form("form_optimizacion"):
     )
     st.session_state.df_pot = df_pot_edit
 
+    p6 = float(st.session_state.df_pot.loc["P6", "Potencia (kW)"])
+
     st.sidebar.radio(
         "Selecciona potencia P6",
         ["Mantener", "No mantener"],
@@ -64,6 +66,10 @@ else:
     st.sidebar.write(f'El peaje del suministro es {st.session_state.atr_dfnorm}')
     
 if submit and st.session_state.df_norm is not None:
+
+    if p6 < 50 or st.session_state.atr_dfnorm == '2.0':
+        st.warning('Suministro no válido para optimización por excesos', icon='⚠️')
+        st.stop()
 
     #pot_con = df_pot_edit["Potencia (kW)"].to_dict()
     pot_con = st.session_state.df_pot["Potencia (kW)"].to_dict()
