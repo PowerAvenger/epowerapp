@@ -23,37 +23,45 @@ pot_con_ini = {
     'P5' : 50,
     'P6' : 110
 }
+df_pot_ini = pd.DataFrame(
+    {
+        "Periodo": pot_con_ini.keys(),
+        "Potencia (kW)": pot_con_ini.values()
+    }
+).set_index("Periodo")
+
 if "df_pot" not in st.session_state:
-    st.session_state.df_pot = pd.DataFrame.from_dict(
-        pot_con_ini,
-        orient="index",
-        columns=["Potencia (kW)"]
-    )
-    st.session_state.df_pot.index.name = "Periodo"
-    #st.session_state.df_pot = df_pot
+    st.session_state.df_pot = df_pot_ini
+else:
+    df_pot_ini = st.session_state.df_pot
+
+st.sidebar.markdown("### Potencias contratadas")
+
+df_pot_edit = st.sidebar.data_editor(
+    df_pot_ini,
+    use_container_width=True,
+    num_rows="fixed",
+)
+
+st.session_state.df_pot = df_pot_edit
 
 
-with st.sidebar.form("form_optimizacion"):
-    st.sidebar.markdown("### Potencias contratadas")
+print('df_pot')
+print(st.session_state.df_pot)
 
-    df_pot_edit = st.sidebar.data_editor(
-        st.session_state.df_pot,
-        use_container_width=True,
-        num_rows="fixed"
-    )
-    st.session_state.df_pot = df_pot_edit
+p6 = float(st.session_state.df_pot.loc["P6", "Potencia (kW)"])
 
-    p6 = float(st.session_state.df_pot.loc["P6", "Potencia (kW)"])
 
-    st.sidebar.radio(
-        "Selecciona potencia P6",
-        ["Mantener", "No mantener"],
-        horizontal=True,
-        key='mantener_potencia'
-    )
-    submit = st.form_submit_button("🔄 Calcular optimización")
+st.sidebar.radio(
+    "Selecciona potencia P6",
+    ["Mantener", "No mantener"],
+    horizontal=True,
+    key='mantener_potencia'
+)
+submit = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True)
     
-    #st.form_submit_button("🔄 Calcular optimización")
+if 'atr_dfnorm' not in st.session_state:
+    st.session_state.atr_dfnorm = 'Ninguno'
 
 
 
