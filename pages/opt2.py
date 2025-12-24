@@ -58,7 +58,7 @@ st.sidebar.radio(
     horizontal=True,
     key='mantener_potencia'
 )
-submit = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True)
+
     
 if 'atr_dfnorm' not in st.session_state:
     st.session_state.atr_dfnorm = 'Ninguno'
@@ -69,9 +69,11 @@ if 'atr_dfnorm' not in st.session_state:
 if 'df_norm' not in st.session_state:
     st.session_state.df_norm = None
     st.sidebar.warning('Por favor introduce una curva de carga')
+    submit = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=True)
 else:
     tarifa = st.session_state.atr_dfnorm
     st.sidebar.write(f'El peaje del suministro es {st.session_state.atr_dfnorm}')
+    submit = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=False)
     
 if submit and st.session_state.df_norm is not None:
 
