@@ -49,7 +49,7 @@ with st.container():
     with col1:
         st.write(graf_da_corrido)
     with col2:
-        st.metric("Precio medio gas 2024 (€)", df_medias.loc[df_medias["año_entrega"] == 2024, "precio_str"].values[0])
-        st.metric("Precio medio gas 2025 (€)", df_medias.loc[df_medias["año_entrega"] == 2025, "precio_str"].values[0])
+        st.metric("Precio medio gas 2024 (€/MWh)", df_medias.loc[df_medias["año_entrega"] == 2024, "precio_str"].values[0])
+        st.metric("Precio medio gas 2025 (€/MWh)", df_medias.loc[df_medias["año_entrega"] == 2025, "precio_str"].values[0])
 
 st.write(graf_da_comparado)
