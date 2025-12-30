@@ -49,6 +49,8 @@ if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None an
     coste_curva_sin_margen = round(df_uso['coste_total'].sum(),2)
 
     coste_total_curva = round(df_uso['coste_total'].sum()+consumo_total_curva*st.session_state.margen/1000,2)
+
+    df_uso.to_excel("df_uso.xlsx", index=False)
     
 else:
     st.session_state.df_curva_sheets = None

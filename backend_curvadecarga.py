@@ -281,7 +281,7 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
 
     msg_unidades = ""
 
-    if (header_row > 0) or ("wh" in str(c_kwh).lower() and "kwh" not in str(c_kwh).lower()):
+    if (header_row > 1) or ("wh" in str(c_kwh).lower() and "kwh" not in str(c_kwh).lower()):
         kwh_consumo = kwh_consumo / 1000
         kwh_vertido = kwh_vertido / 1000
         msg_unidades = "Detectado consumo en Wh → Convertido automáticamente a kWh"

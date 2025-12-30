@@ -201,7 +201,8 @@ def leer_curva_normalizada(pot_con):
 
 
 # Función para calcular los costes a partir de las potencias
-def calcular_costes(potencias, df_in, tarifa, pyc_tp, kp, tep, meses, pot_con):
+#def calcular_costes(potencias, df_in, tarifa, pyc_tp, kp, tep, meses, pot_con):
+def calcular_costes(df_in, tarifa, pyc_tp, kp, tep, meses, potencias):
     # Obtenemos los valores pyc_tp, kp y tep según la tarifa del suministro
     pyc_tp_tarifa = pyc_tp.get(tarifa, {})
     kp_tarifa = kp.get(tarifa, {})
@@ -210,15 +211,17 @@ def calcular_costes(potencias, df_in, tarifa, pyc_tp, kp, tep, meses, pot_con):
     df_temp = df_in.copy()
     
     # Actualizamos las potencias optimizadas en la columna 'pot_opt'
-    df_temp['pot_opt'] = df_temp['periodo'].map(dict(zip(pot_con.keys(), potencias)))
+    #df_temp['pot_opt'] = df_temp['periodo'].map(dict(zip(pot_con.keys(), potencias)))
+    df_temp['pot_opt'] = df_temp['periodo'].map(potencias)
     
     # Calculamos los excesos y excesos_cuadrado
     df_temp['excesos_opt'] = np.maximum(df_temp['potencia'] - df_temp['pot_opt'], 0)
     df_temp['excesos_cuad_opt'] = df_temp['excesos_opt'] ** 2
     
     # Calculamos el coste de potencia
-    df_coste_potfra_temp = pd.DataFrame(index=meses, columns=pot_con.keys())
-    for periodo, pot_opt_value in zip(pot_con.keys(), potencias):
+    df_coste_potfra_temp = pd.DataFrame(index=meses, columns=potencias.keys())
+    for periodo, pot_opt_value in potencias.items():
+    #for periodo, pot_opt_value in zip(pot_con.keys(), potencias):
         #df_coste_potfra_temp[periodo] = round(pot_opt_value * pyc_tp_tarifa[periodo] / 12, 2)
         df_coste_potfra_temp[periodo] = pot_opt_value * pyc_tp_tarifa[periodo] / 12
     coste_potfra_temp = df_coste_potfra_temp.sum().sum()
@@ -228,14 +231,15 @@ def calcular_costes(potencias, df_in, tarifa, pyc_tp, kp, tep, meses, pot_con):
     df_excesos_temp = np.sqrt(df_excesos_temp)
     for periodo, k in kp_tarifa.items():
         #df_excesos_temp[periodo] = round(df_excesos_temp[periodo] * k * tep_tarifa, 2)
-        df_excesos_temp[periodo] = df_excesos_temp[periodo] * k * tep_tarifa
+        if periodo in df_excesos_temp.columns:
+            df_excesos_temp[periodo] = df_excesos_temp[periodo] * k * tep_tarifa
     df_excesos_temp.index = pd.Categorical(df_excesos_temp.index, categories=meses, ordered=True)
     #ordenamos
     df_excesos_temp = df_excesos_temp.sort_index()
     coste_excesos_temp = df_excesos_temp.sum().sum()
-    
     # Coste total
     coste_tp_temp = coste_potfra_temp + coste_excesos_temp
+
     return coste_potfra_temp, coste_excesos_temp, coste_tp_temp, df_coste_potfra_temp, df_excesos_temp
 
 
@@ -279,7 +283,10 @@ def grafico_costes_con(df_coste_tp_mes):
 
 
 def funcion_objetivo(pot_opt, df_in, tarifa, pyc_tp, kp, tep, meses, pot_con):
-    coste_potfra_potopt, coste_excesos_potopt, coste_tp_potopt, df_coste_potfra_potopt, df_coste_excesos_potopt = calcular_costes(pot_opt, df_in, tarifa, pyc_tp, kp, tep, meses, pot_con)
+    #pot_opt son las potencias a optimizar en base a la suma de costes (return)
+    #coste_potfra_potopt, coste_excesos_potopt, coste_tp_potopt, df_coste_potfra_potopt, df_coste_excesos_potopt = calcular_costes(pot_opt, df_in, tarifa, pyc_tp, kp, tep, meses, pot_con)
+    potencias = dict(zip(pot_con.keys(), pot_opt))
+    coste_potfra_potopt, coste_excesos_potopt, coste_tp_potopt, df_coste_potfra_potopt, df_coste_excesos_potopt = calcular_costes(df_in, tarifa, pyc_tp, kp, tep, meses, potencias)
     return coste_potfra_potopt + coste_excesos_potopt
 
 
@@ -351,17 +358,18 @@ def graficar_costes_opt(graf_costes_potcon, df_coste_tp_mes):
 
     return graf_costes_potcon
 
-#FUNCIÓN GLOBAL PARA OPTIMIZAR
-def calcular_optimizacion(p6):
-    pot_con = st.session_state.df_pot["Potencia (kW)"].to_dict()
-    fijar_P6 = st.session_state["mantener_potencia"] == "Mantener"
-    tarifa = st.session_state.atr_dfnorm
+#FUNCIÓN GLOBAL PARA OPTIMIZAR++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con):
+    #pot_con = st.session_state.df_pot["Potencia (kW)"].to_dict()
+    #fijar_P6 = st.session_state["mantener_potencia"] == "Mantener"
+    #tarifa = st.session_state.atr_dfnorm
     print(f'fijar_P6 = {fijar_P6}')
 
-    df_in = leer_curva_normalizada(pot_con)
+    #df_in = leer_curva_normalizada(pot_con)
 
-    potencias_contratadas = list(pot_con.values())
-    coste_potfra_potcon, coste_excesos_potcon, coste_tp_potcon, df_coste_potfra_potcon, df_coste_excesos_potcon = calcular_costes(potencias_contratadas, df_in, tarifa, pyc_tp, kp, tep, meses, pot_con)
+    #potencias_contratadas = list(pot_con.values())
+    #coste_potfra_potcon, coste_excesos_potcon, coste_tp_potcon, df_coste_potfra_potcon, df_coste_excesos_potcon = calcular_costes(potencias_contratadas, df_in, tarifa, pyc_tp, kp, tep, meses, pot_con)
+    coste_potfra_potcon, coste_excesos_potcon, coste_tp_potcon, df_coste_potfra_potcon, df_coste_excesos_potcon = calcular_costes(df_in, tarifa, pyc_tp, kp, tep, meses, pot_con)
     df_coste_potfra_potcon['coste_pot_mes'] = df_coste_potfra_potcon.sum(axis=1)
     totales_potfra_potcon = df_coste_potfra_potcon.sum()
     totales_potfra_potcon.name = 'total año'
@@ -409,7 +417,8 @@ def calcular_optimizacion(p6):
 
     pot_opt = ajustar_potencias(pot_opt_ini, fijar_P6=fijar_P6, pot_con=pot_con)
 
-    coste_potfra_potopt, coste_excesos_potopt, coste_tp_potopt, df_coste_potfra_potopt, df_coste_excesos_potopt = calcular_costes(list(pot_opt.values()), df_in, tarifa, pyc_tp, kp, tep, meses, pot_con)
+    coste_potfra_potopt, coste_excesos_potopt, coste_tp_potopt, df_coste_potfra_potopt, df_coste_excesos_potopt = calcular_costes(df_in, tarifa, pyc_tp, kp, tep, meses, pot_opt)
+    #coste_potfra_potopt, coste_excesos_potopt, coste_tp_potopt, df_coste_potfra_potopt, df_coste_excesos_potopt = calcular_costes(list(pot_opt.values()), df_in, tarifa, pyc_tp, kp, tep, meses, pot_con)
 
     
     df_coste_potfra_potopt['coste_pot_mes_opt'] = df_coste_potfra_potopt.sum(axis=1)
@@ -476,21 +485,21 @@ def calcular_optimizacion(p6):
             potencias_actuales[periodo] = potencia  # Cambiamos solo la potencia de este periodo
             
             # Calculamos costes por mes, referenciados al periodo
-            _, _, _, df_coste_pot_temp, df_aei_temp = calcular_costes(
-                list(potencias_actuales.values()), df_in, tarifa, pyc_tp, kp, tep, meses, pot_con
-            )
+            #_, _, _, df_coste_pot_temp, df_aei_temp = calcular_costes(list(potencias_actuales.values()), df_in, tarifa, pyc_tp, kp, tep, meses, pot_con)
+            _, _, _, df_coste_pot_temp, df_aei_temp = calcular_costes(df_in, tarifa, pyc_tp, kp, tep, meses, potencias_actuales)
             
             # Sumamos los costes de todos los meses para este periodo específico
             coste_potencia_periodo = df_coste_pot_temp[periodo].sum()
-            coste_excesos_periodo = df_aei_temp[periodo].sum()
+            if periodo in df_aei_temp.columns:
+                coste_excesos_periodo = df_aei_temp[periodo].sum()
             
-            # Añadimos los datos al DataFrame para graficar
-            data.append({
-                "Periodo": periodo,
-                "Potencia": potencia,
-                "Coste Potencia": coste_potencia_periodo,
-                "Coste Excesos": coste_excesos_periodo,
-            })
+                # Añadimos los datos al DataFrame para graficar
+                data.append({
+                    "Periodo": periodo,
+                    "Potencia": potencia,
+                    "Coste Potencia": coste_potencia_periodo,
+                    "Coste Excesos": coste_excesos_periodo,
+                })
     
     # Creamos un DataFrame con los datos referenciados al periodo
     df_plot = pd.DataFrame(data)
