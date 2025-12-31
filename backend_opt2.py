@@ -14,8 +14,8 @@ import math
 #import nest_asyncio
 import streamlit as st
 
-# PEAJES Y CARGOS TP 2025
-pyc_tp = {
+# PEAJES Y CARGOS TP 2025. NO USADOS DE MOMENTO
+pyc_tp_2025 = {
     '2.0': {
         'P1': 26.93055,
         'P2': 0.697588,
@@ -66,68 +66,110 @@ pyc_tp = {
     }
 }
 
-# VALORES DE KP PARA 2025 TIPOS 1, 2 Y 3
-kp = {
+# VALORES PyC TP PARA 2026 (€/kW·año) USADOS PARA OPTIMIZACIÓN (DE MOMENTO)
+pyc_tp = {
     '2.0': {
-        'P1': 1.000000,
-        'P2': 0.019259,
+        'P1': 27.704413,
+        'P2': 0.725423,
         'P3': None,
         'P4': None,
         'P5': None,
         'P6': None
     },
     '3.0': {
-        'P1': 1.000000,
-        'P2': 0.528543,
-        'P3': 0.167641,
-        'P4': 0.128181,
-        'P5': 0.036261,
-        'P6': 0.036261
+        'P1': 20.376927,
+        'P2': 10.617621,
+        'P3': 4.481534,
+        'P4': 3.886333,
+        'P5': 2.513851,
+        'P6': 1.442287
     },
     '6.1': {
-        'P1': 1.000000,
-        'P2': 0.528704,
-        'P3': 0.198416,
-        'P4': 0.139813,
-        'P5': 0.002956,
-        'P6': 0.002632
+        'P1': 29.595368,
+        'P2': 15.514709,
+        'P3': 6.801881,
+        'P4': 5.393829,
+        'P5': 2.125113,
+        'P6': 1.004181
     },
     '6.2': {
-        'P1': 1.000000,
-        'P2': 0.567139,
-        'P3': 0.149306,
-        'P4': 0.090974,
-        'P5': 0.003567,
-        'P6': 0.003168
+        'P1': 20.103588,
+        'P2': 11.115668,
+        'P3': 3.709113,
+        'P4': 2.728152,
+        'P5': 1.265617,
+        'P6': 0.605381
     },
     '6.3': {
-        'P1': 1.000000,
-        'P2': 0.602540,
-        'P3': 0.196297,
-        'P4': 0.127930,
-        'P5': 0.004201,
-        'P6': 0.003698
+        'P1': 13.053392,
+        'P2': 5.878863,
+        'P3': 3.062065,
+        'P4': 2.332116,
+        'P5': 1.010041,
+        'P6': 0.481394
     },
     '6.4': {
-        'P1': 1.000000,
-        'P2': 0.597853,
-        'P3': 0.145188,
-        'P4': 0.100919,
-        'P5': 0.003001,
-        'P6': 0.002000
+        'P1': 7.905445,
+        'P2': 4.585787,
+        'P3': 1.460005,
+        'P4': 1.158560,
+        'P5': 0.492827,
+        'P6': 0.230511
     }
 }
 
-# VALORES TEP MODO 2 (EXCESOS) PARA 2025
-tep = {
-    '2.0': 2.953979,
-    '3.0': 3.361213,
-    '6.1': 3.332942,
-    '6.2': 3.292963,
-    '6.3': 3.099043,
-    '6.4': 2.732620
-}
 
+# VALORES TEPp PARA 2026 (€/kW)
+tepp = {
+    '2.0': {
+        'P1': 2.968850,
+        'P2': 0.056473,
+        'P3': None,
+        'P4': None,
+        'P5': None,
+        'P6': None
+    },
+    '3.0': {
+        'P1': 3.325715,
+        'P2': 1.757877,
+        'P3': 0.557353,
+        'P4': 0.427494,
+        'P5': 0.119179,
+        'P6': 0.119179
+    },
+    '6.1': {
+        'P1': 3.431797,
+        'P2': 1.818277,
+        'P3': 0.680379,
+        'P4': 0.478581,
+        'P5': 0.010172,
+        'P6': 0.008984
+    },
+    '6.2': {
+        'P1': 3.243495,
+        'P2': 1.826897,
+        'P3': 0.483612,
+        'P4': 0.294055,
+        'P5': 0.011467,
+        'P6': 0.010143
+    },
+    '6.3': {
+        'P1': 3.063808,
+        'P2': 1.844204,
+        'P3': 0.617738,
+        'P4': 0.402624,
+        'P5': 0.013069,
+        'P6': 0.011406
+    },
+    '6.4': {
+        'P1': 2.736629,
+        'P2': 1.630338,
+        'P3': 0.409096,
+        'P4': 0.284221,
+        'P5': 0.008441,
+        'P6': 0.005787
+    }
+}
 
 meses = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
 
@@ -202,11 +244,12 @@ def leer_curva_normalizada(pot_con):
 
 # Función para calcular los costes a partir de las potencias
 #def calcular_costes(potencias, df_in, tarifa, pyc_tp, kp, tep, meses, pot_con):
-def calcular_costes(df_in, tarifa, pyc_tp, kp, tep, meses, potencias):
+def calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, potencias):
     # Obtenemos los valores pyc_tp, kp y tep según la tarifa del suministro
     pyc_tp_tarifa = pyc_tp.get(tarifa, {})
-    kp_tarifa = kp.get(tarifa, {})
-    tep_tarifa = tep.get(tarifa, {})
+    #kp_tarifa = kp.get(tarifa, {})
+    #tep_tarifa = tep.get(tarifa, {})
+    tepp_tarifa = tepp.get(tarifa, {})
     # Copia de df_in para no modificar los datos originales
     df_temp = df_in.copy()
     
@@ -229,10 +272,10 @@ def calcular_costes(df_in, tarifa, pyc_tp, kp, tep, meses, potencias):
     # Calculamos el coste de excesos
     df_excesos_temp = pd.pivot_table(df_temp, values='excesos_cuad_opt', index='mes_nom', columns='periodo', aggfunc='sum')
     df_excesos_temp = np.sqrt(df_excesos_temp)
-    for periodo, k in kp_tarifa.items():
+    for periodo, x in tepp_tarifa.items():
         #df_excesos_temp[periodo] = round(df_excesos_temp[periodo] * k * tep_tarifa, 2)
         if periodo in df_excesos_temp.columns:
-            df_excesos_temp[periodo] = df_excesos_temp[periodo] * k * tep_tarifa
+            df_excesos_temp[periodo] = df_excesos_temp[periodo] * x 
     df_excesos_temp.index = pd.Categorical(df_excesos_temp.index, categories=meses, ordered=True)
     #ordenamos
     df_excesos_temp = df_excesos_temp.sort_index()
@@ -282,11 +325,11 @@ def grafico_costes_con(df_coste_tp_mes):
     return graf_costes_potcon
 
 
-def funcion_objetivo(pot_opt, df_in, tarifa, pyc_tp, kp, tep, meses, pot_con):
+def funcion_objetivo(pot_opt, df_in, tarifa, pyc_tp, tepp, meses, pot_con):
     #pot_opt son las potencias a optimizar en base a la suma de costes (return)
     #coste_potfra_potopt, coste_excesos_potopt, coste_tp_potopt, df_coste_potfra_potopt, df_coste_excesos_potopt = calcular_costes(pot_opt, df_in, tarifa, pyc_tp, kp, tep, meses, pot_con)
     potencias = dict(zip(pot_con.keys(), pot_opt))
-    coste_potfra_potopt, coste_excesos_potopt, coste_tp_potopt, df_coste_potfra_potopt, df_coste_excesos_potopt = calcular_costes(df_in, tarifa, pyc_tp, kp, tep, meses, potencias)
+    coste_potfra_potopt, coste_excesos_potopt, coste_tp_potopt, df_coste_potfra_potopt, df_coste_excesos_potopt = calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, potencias)
     return coste_potfra_potopt + coste_excesos_potopt
 
 
@@ -369,7 +412,7 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con):
 
     #potencias_contratadas = list(pot_con.values())
     #coste_potfra_potcon, coste_excesos_potcon, coste_tp_potcon, df_coste_potfra_potcon, df_coste_excesos_potcon = calcular_costes(potencias_contratadas, df_in, tarifa, pyc_tp, kp, tep, meses, pot_con)
-    coste_potfra_potcon, coste_excesos_potcon, coste_tp_potcon, df_coste_potfra_potcon, df_coste_excesos_potcon = calcular_costes(df_in, tarifa, pyc_tp, kp, tep, meses, pot_con)
+    coste_potfra_potcon, coste_excesos_potcon, coste_tp_potcon, df_coste_potfra_potcon, df_coste_excesos_potcon = calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, pot_con)
     df_coste_potfra_potcon['coste_pot_mes'] = df_coste_potfra_potcon.sum(axis=1)
     totales_potfra_potcon = df_coste_potfra_potcon.sum()
     totales_potfra_potcon.name = 'total año'
@@ -401,7 +444,7 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con):
     resultado = minimize(
         funcion_objetivo,
         pot_inicial,  # Valores iniciales
-        args=(df_in, tarifa, pyc_tp, kp, tep, meses, pot_con),  # Argumentos adicionales
+        args=(df_in, tarifa, pyc_tp, tepp, meses, pot_con),  # Argumentos adicionales
         method='SLSQP',
         constraints=constraints,
         bounds=[(0, None)] * len(pot_inicial)  # Las potencias deben ser >= 0
@@ -417,7 +460,7 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con):
 
     pot_opt = ajustar_potencias(pot_opt_ini, fijar_P6=fijar_P6, pot_con=pot_con)
 
-    coste_potfra_potopt, coste_excesos_potopt, coste_tp_potopt, df_coste_potfra_potopt, df_coste_excesos_potopt = calcular_costes(df_in, tarifa, pyc_tp, kp, tep, meses, pot_opt)
+    coste_potfra_potopt, coste_excesos_potopt, coste_tp_potopt, df_coste_potfra_potopt, df_coste_excesos_potopt = calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, pot_opt)
     #coste_potfra_potopt, coste_excesos_potopt, coste_tp_potopt, df_coste_potfra_potopt, df_coste_excesos_potopt = calcular_costes(list(pot_opt.values()), df_in, tarifa, pyc_tp, kp, tep, meses, pot_con)
 
     
@@ -486,7 +529,7 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con):
             
             # Calculamos costes por mes, referenciados al periodo
             #_, _, _, df_coste_pot_temp, df_aei_temp = calcular_costes(list(potencias_actuales.values()), df_in, tarifa, pyc_tp, kp, tep, meses, pot_con)
-            _, _, _, df_coste_pot_temp, df_aei_temp = calcular_costes(df_in, tarifa, pyc_tp, kp, tep, meses, potencias_actuales)
+            _, _, _, df_coste_pot_temp, df_aei_temp = calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, potencias_actuales)
             
             # Sumamos los costes de todos los meses para este periodo específico
             coste_potencia_periodo = df_coste_pot_temp[periodo].sum()

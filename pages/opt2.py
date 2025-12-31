@@ -5,7 +5,7 @@ from scipy.optimize import minimize
 import numpy as np
 import plotly.express as px
 from utilidades import generar_menu, init_app, init_app_index
-from backend_opt2 import leer_curva_normalizada, calcular_costes, funcion_objetivo, ajustar_potencias, grafico_costes_con, graficar_costes_opt, calcular_optimizacion, pyc_tp, kp, tep, meses
+from backend_opt2 import leer_curva_normalizada, calcular_costes, funcion_objetivo, ajustar_potencias, grafico_costes_con, graficar_costes_opt, calcular_optimizacion, pyc_tp, tepp, meses
 from backend_curvadecarga import colores_periodo
 
 if not st.session_state.get('usuario_autenticado', False):
@@ -67,7 +67,7 @@ if 'atr_dfnorm' not in st.session_state:
 pot_con = st.session_state.df_pot["Potencia (kW)"].to_dict()
 fijar_P6 = st.session_state["mantener_potencia"] == "Mantener"
 tarifa = st.session_state.atr_dfnorm
-df_in = leer_curva_normalizada(pot_con)
+#df_in = leer_curva_normalizada(pot_con)
 
 
 #tab1, tab2 =st.tabs(['Optimizar', 'Verificar'])
@@ -80,11 +80,12 @@ if 'df_norm' not in st.session_state:
 #    with tab2:
     submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=True)
 else:
+    df_in = leer_curva_normalizada(pot_con)
     st.sidebar.write(f'El peaje del suministro es {st.session_state.atr_dfnorm}')
 #    with tab1:
     submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=False)
 #    with tab2:
-    submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=False)
+    submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=True)
 
 
 #with tab1:    
@@ -127,7 +128,7 @@ if submit_opt and st.session_state.df_norm is not None:
 
 #with tab2:
 if submit_ver and st.session_state.df_norm is not None:
-        coste_potfra_potcon, coste_excesos_potcon, coste_tp_potcon, df_coste_potfra_potcon, df_coste_excesos_potcon = calcular_costes(df_in, tarifa, pyc_tp, kp, tep, meses, pot_con)
+        coste_potfra_potcon, coste_excesos_potcon, coste_tp_potcon, df_coste_potfra_potcon, df_coste_excesos_potcon = calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, pot_con)
 
         mes_verificado = df_in['mes_nom'].iloc[0]
         df_pot_mes = df_coste_potfra_potcon.loc[[mes_verificado]].copy()
