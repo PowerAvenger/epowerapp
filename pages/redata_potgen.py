@@ -38,7 +38,7 @@ horas_eq_max = {
 code_heqmax = f'''Horas equivalentes máximas: {horas_eq_max}'''
 
 # Usado para el select box de años
-lista_años = [2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018]
+lista_años = [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018]
 
 
 
@@ -50,7 +50,7 @@ colores_tec['Resto'] = '#FFFFE0'
 
 # usado para seleccionar el año en df_out (se obtiene df_out_filtrado)
 if 'año_seleccionado' not in st.session_state:
-    st.session_state.año_seleccionado = 2025
+    st.session_state.año_seleccionado = 2026
 # usado en el multiselect FC y %mix EVOL    
 if 'tec_seleccionadas' not in st.session_state:
     st.session_state.tec_seleccionadas = ['Solar fotovoltaica', 'Eólica']

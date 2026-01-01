@@ -82,8 +82,8 @@ if datos is not None and not datos.empty:
 #2024 9400 fue una media estimativa a partir de la encuesta realizada en el último trimestre del año. Actualizado el 12/02/2025 s/informe APPA
 #2025 a ojo buen cubero.
 df_gen_autoconsumo_anual = pd.DataFrame({
-    'año': [2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025],
-    'autogen': [446, 925, 1656, 3007, 4564, 7262, 9243, 11000]  
+    'año': [2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026],
+    'autogen': [446, 925, 1656, 3007, 4564, 7262, 9243, 11000, 12000]  
 })
 #coeficientes aplicados al autoconsumo anual (obtenidos del pvgis un poco a pelo)
 coeficientes_mensuales = {'Enero': 0.065, 'Febrero': 0.070, 'Marzo': 0.086, 'Abril': 0.090, 

@@ -86,6 +86,7 @@ def graficar_qs(df_mg_q):
     return fig
 
 
+
 def graficar_da_corrido(df):
     
 
@@ -96,13 +97,21 @@ def graficar_da_corrido(df):
         color="año_entrega",
         color_discrete_map=colores,
         title="Evolución del precio del gas por año",
-        #height=600
+        
     )
 
     fig.update_layout(
         title={'x':0.5, 'xanchor':'center'},
         xaxis_title="Fecha",
-        yaxis_title="Precio gas (€/MWh)"
+        yaxis_title="Precio gas (€/MWh)",
+    
+        
+        xaxis=dict(
+            showgrid=True,  # Mostrar la cuadrícula horizontal
+            gridwidth=1,     # Ancho de las líneas de cuadrícula
+            tickmode='linear',
+            dtick="M1",  
+        ),
     )
 
     return fig
@@ -155,7 +164,23 @@ def graficar_da_comparado(df):
     fig.update_layout(
         title={'x':0.5, 'xanchor':'center'},
         xaxis_title="Día del año",
-        yaxis_title="Precio gas (€/MWh)"
+        yaxis_title="Precio gas (€/MWh)",
+        
+
     )
+    cortes_mes = (
+        df
+        .drop_duplicates("mmdd")
+        .loc[df["mmdd"].str.endswith("-01"), "mmdd"]
+        .tolist()
+    )
+    for mmdd in cortes_mes:
+        fig.add_vline(
+            x=mmdd,
+            line_width=1,
+            line_dash="dot",
+            #line_color="lightgrey",
+            line_color="rgba(200,200,200,0.2)"
+        )
 
     return fig
