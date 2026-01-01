@@ -179,25 +179,45 @@ df_opt_2, df_perfiles_2, resumen_2 = optimizar_consumo_suavizado(df_datos_horari
 graf_mapa = mapa_diferencias(te_pvpc, tp_pvpc)
 
 # PESO DE LOS COMPONENTES DE LA FACTURA REGULADA
-base_iee = round(tp_coste_pvpc + te_coste_pvpc,2)
-iee_coste = round(iee * base_iee,2)
-base_iva = round(base_iee + iee_coste,2)
-iva_coste = round(iva * base_iva,2)
-df_pie = pd.DataFrame({
+base_iee_pvpc = round(tp_coste_pvpc + te_coste_pvpc,2)
+iee_coste_pvpc = round(iee * base_iee_pvpc,2)
+base_iva_pvpc = round(base_iee_pvpc + iee_coste_pvpc,2)
+iva_coste_pvpc = round(iva * base_iva_pvpc,2)
+df_pie_pvpc = pd.DataFrame({
     "Concepto": ["Potencia", "Energía", "IEE", "IVA"],
-    "Importe (€)": [tp_coste_pvpc, te_coste_pvpc, iee_coste, iva_coste]
+    "Importe (€)": [tp_coste_pvpc, te_coste_pvpc, iee_coste_pvpc, iva_coste_pvpc]
 })
-fig = px.pie(
-    df_pie,
-    values="Importe (€)",
-    names="Concepto",
-    title="Peso de los componentes de la factura regulada (PVPC)",
-    hole=0.4,
-    category_orders={"Concepto": ["Potencia", "Energía", "IEE", "IVA"]}
-    
-)
+title_pvpc = 'Peso de los componentes de la factura regulada (PVPC)'
 
-fig.update_traces(textinfo="percent+label")
+# PESO DE LOS COMPONENTES DE LA FACTURA FIJA
+base_iee_fijo = round(tp_coste_fijo + te_coste_fijo, 2)
+iee_coste_fijo = round(iee * base_iee_fijo, 2)
+
+base_iva_fijo = round(base_iee_fijo + iee_coste_fijo, 2)
+iva_coste_fijo = round(iva * base_iva_fijo, 2)
+
+df_pie_fijo = pd.DataFrame({
+    "Concepto": ["Potencia", "Energía", "IEE", "IVA"],
+    "Importe (€)": [tp_coste_fijo, te_coste_fijo, iee_coste_fijo, iva_coste_fijo]
+})
+title_fijo = 'Peso de los componentes de la factura libre (FIJO)'
+
+def dibujar_queso_peso(df, titulo):
+    fig = px.pie(
+        df,
+        values="Importe (€)",
+        names="Concepto",
+        title=titulo,
+        hole=0.4,
+        category_orders={"Concepto": ["Potencia", "Energía", "IEE", "IVA"]}
+        
+    )
+    fig.update_traces(textinfo="percent+label")
+
+    return fig
+
+graf_queso_comp_pvpc = dibujar_queso_peso(df_pie_pvpc,title_pvpc )
+graf_queso_comp_fijo = dibujar_queso_peso(df_pie_fijo, title_fijo)
 
 
 # BARRA LATERAL-----------------------------------------------------------------------------
@@ -269,7 +289,9 @@ with col1:
             )
         st.form_submit_button('Actualizar cálculos')
     
-    st.plotly_chart(fig, use_container_width=True)
+    st.header('Peso de los componentes de la factura', divider = 'gray')
+    st.plotly_chart(graf_queso_comp_pvpc, use_container_width=True)
+    st.plotly_chart(graf_queso_comp_fijo, use_container_width=True)
 
 
     
