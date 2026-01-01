@@ -23,8 +23,8 @@ num_mes_actual = fecha_hoy.month
 mes_actual = meses_español[num_mes_actual]
 
 if 'año_seleccionado_esc' not in st.session_state:
-    st.session_state.año_seleccionado_esc = 2025
-    st.session_state.año_anterior_esc = 2025
+    st.session_state.año_seleccionado_esc = 2026
+    st.session_state.año_anterior_esc = 2026
 
 if 'mes_seleccionado_esc' not in st.session_state:
     st.session_state.mes_seleccionado_esc = mes_actual
@@ -117,7 +117,7 @@ medias_horarias_filtrado, graf_medias_horarias = medias_horarias(datos_año_filt
 #   fecha_descarga=pasar_fecha()
     #st.write(ultima_descarga)
 
-años_lista = list(range(2018, 2026))
+años_lista = list(range(2018, 2027)) #se pone un año más del actual
 meses_lista = ['todos', 'ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']
 
 

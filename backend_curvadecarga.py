@@ -504,7 +504,7 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
         flag_periodos_en_origen = False
         try:
             # Puedes definir esta ruta al inicio del script
-            periodos_path = "local_bbdd/periodos_horarios.xlsx"
+            periodos_path = "utils/periodos_horarios.xlsx"
             df_periodos = pd.read_excel(periodos_path, dtype={"año": int, "mes": int, "dia": int, "hora": int, "dh_3p": str, "dh_6p": str})
 
             
