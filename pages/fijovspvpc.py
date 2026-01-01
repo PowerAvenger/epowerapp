@@ -7,36 +7,39 @@ import datetime
 import numpy as np
 from dateutil.relativedelta import relativedelta
 from datetime import timedelta
+import plotly.express as px
 from utilidades import generar_menu
 
 generar_menu()
 
-#st.title('Fijo vs PVPC :orange[e]PowerAPP©')
-#st.caption(f'Dedicado a **Fernando Sánchez Rey-Maeso** y a **Alfonso Zárate Conde** por sus contribuciones a la causa. Copyright by **Jose Vidal** :ok_hand:')
+
 url_apps = 'https://powerappspy-josevidal.streamlit.app/'
 url_linkedin = "https://www.linkedin.com/posts/josefvidalsierra_epowerapps-spo2425-telemindex-activity-7281942697399967744-IpFK?utm_source=share&utm_medium=member_deskto"
 url_bluesky = "https://bsky.app/profile/poweravenger.bsky.social"
-
-#st.write('Visita mi mini-web de [PowerAPPs](%s) con un montón de utilidades.' % url_apps)
-
-#st.markdown(f"Deja tus comentarios y propuestas en mi perfil de [Linkedin]({url_linkedin}) - ¡Sígueme en [Bluesky]({url_bluesky})!")
-#st.markdown(f'Visita mi mini-web de [PowerAPPs]({url_apps}) con un montón de utilidades. Deja tus comentarios y propuestas en mi perfil de [LinkedIn]({url_linkedin}) - ¡Sígueme en [Bluesky]({url_bluesky})! Copyright by **Jose Vidal** :ok_hand:')
 
 
 if not st.session_state.get('usuario_autenticado', False):
     st.switch_page('epowerapp.py')
 
 
-#DEFINIMOS CONSTANTES
+#DEFINIMOS CONSTANTES---------------------
 #impuestos
 iee = 0.051127
 iva = 0.21
 #costes regulados
-tp_boe_2024 = 26.36
-tp_boe_2025 = 27.63
+#tp_boe_2024 = 26.36
+#tp_boe_2025 = 27.63
+#tp_boe_2026 = 28.43
+
+#costes regulados €/kW año
+tp_boe = {
+    2024: 26.36,
+    2025: 27.63,
+    2026: 28.43,
+}
 tp_margen_pvpc = 3.12
 
-#Inicializamos variables
+#Inicializamos variables-------------------
 
 # valor de la potencia contratada en kW
 if 'pot_con' not in st.session_state:
@@ -76,32 +79,28 @@ print(dias_periodo)
 consumo_periodo = round(st.session_state.consumo_anual * dias_periodo / 365) #consumo del periodo seleccionado
 print('consumo_periodo')
 print(consumo_periodo)
-# Calcular los días dentro de cada año
-inicio_2024 = max(fecha_inicio, pd.Timestamp("2024-01-01"))
-fin_2024 = min(fecha_fin, pd.Timestamp("2024-12-31"))
-dias_2024 = (fin_2024 - inicio_2024).days + 1 if inicio_2024 <= fin_2024 else 0
 
-inicio_2025 = max(fecha_inicio, pd.Timestamp("2025-01-01"))
-fin_2025 = min(fecha_fin, pd.Timestamp("2025-12-31"))
-dias_2025 = (fin_2025 - inicio_2025).days + 1 if inicio_2025 <= fin_2025 else 0
-print('dias_2025')
-print(dias_2025)
 
-## CÁLCULOS
+def dias_en_año(año):
+    return 366 if pd.Timestamp(f"{año}-12-31").is_leap_year else 365
 
-# Cálculo del coste del término de potencia PVPC
+tp_coste_pvpc_kW = 0
 
-tp_pvpc_2024 = tp_boe_2024 + tp_margen_pvpc #€/kW año
-tp_coste_pvpc_2024_kW = tp_pvpc_2024 * dias_2024 / 366 #€/kW
+for año, tp_boe_año in tp_boe.items():
 
-tp_pvpc_2025 = tp_boe_2025 + tp_margen_pvpc
-tp_coste_pvpc_2025_kW = tp_pvpc_2025 * dias_2025 / 365 #€/kW
+    inicio_año = max(fecha_inicio, pd.Timestamp(f"{año}-01-01"))
+    fin_año = min(fecha_fin, pd.Timestamp(f"{año}-12-31"))
 
-tp_coste_pvpc_kW = tp_coste_pvpc_2024_kW + tp_coste_pvpc_2025_kW #€/kW
+    if inicio_año <= fin_año:
+        dias_año_periodo = (fin_año - inicio_año).days + 1
+        dias_totales_año = dias_en_año(año)
+
+        tp_pvpc_año = tp_boe_año + tp_margen_pvpc  # €/kW·año
+        tp_coste_pvpc_kW += tp_pvpc_año * dias_año_periodo / dias_totales_año
+
+
 tp_pvpc = tp_coste_pvpc_kW * 365 / dias_periodo
-print('tp_pvpc')
-print(tp_pvpc)
-tp_coste_pvpc = tp_coste_pvpc_kW * st.session_state.pot_con  #€
+tp_coste_pvpc = round(tp_coste_pvpc_kW * st.session_state.pot_con,2)  #€
 
 
 df_datos_horarios_combo_filtrado_consumo, pt_horario_filtrado, media_precio_perfilado, coste_pvpc_perfilado = obtener_tabla_filtrada(df_datos_horarios_combo, fecha_inicio, fecha_fin, consumo_periodo)
@@ -120,6 +119,9 @@ te_fijo = st.session_state.precio_ene / 100
 te_coste_fijo = round(te_fijo * consumo_periodo, 2)
 coste_fijo = float(f"{round((tp_coste_fijo + te_coste_fijo) * (1 + iee) * (1 + iva), 2):.2f}")
 
+#precios medios del kWh del total de la factura en c€/kWh
+media_pvpc_fra = coste_pvpc*100/consumo_periodo
+media_fijo_fra = coste_fijo*100/consumo_periodo
 
 print(f'precio energía fijo €/kWh: {te_fijo}')
 print(f'coste energía fijo €: {te_coste_fijo}')
@@ -176,15 +178,39 @@ df_opt_2, df_perfiles_2, resumen_2 = optimizar_consumo_suavizado(df_datos_horari
 
 graf_mapa = mapa_diferencias(te_pvpc, tp_pvpc)
 
+# PESO DE LOS COMPONENTES DE LA FACTURA REGULADA
+base_iee = round(tp_coste_pvpc + te_coste_pvpc,2)
+iee_coste = round(iee * base_iee,2)
+base_iva = round(base_iee + iee_coste,2)
+iva_coste = round(iva * base_iva,2)
+df_pie = pd.DataFrame({
+    "Concepto": ["Potencia", "Energía", "IEE", "IVA"],
+    "Importe (€)": [tp_coste_pvpc, te_coste_pvpc, iee_coste, iva_coste]
+})
+fig = px.pie(
+    df_pie,
+    values="Importe (€)",
+    names="Concepto",
+    title="Peso de los componentes de la factura regulada (PVPC)",
+    hole=0.4,
+    category_orders={"Concepto": ["Potencia", "Energía", "IEE", "IVA"]}
+    
+)
+
+fig.update_traces(textinfo="percent+label")
+
+
 # BARRA LATERAL-----------------------------------------------------------------------------
 st.sidebar.header('Herramientas adicionales')
 with st.sidebar.form('form2'):
         st.subheader('Calcular Tp BOE anual')
-        precio_tp_dia_P1 = st.number_input('potencia €/kW dia P1', min_value = 0.074, max_value = 0.164, step = .001, format  ="%f")
-        precio_tp_dia_P3 = st.number_input('potencia €/kW dia P3',min_value=0.002, max_value = 0.164, step = .001, format  ="%f")
+        precio_tp_dia_P1 = st.number_input('potencia €/kW dia P1', min_value = 0.076, max_value = 0.192, step = .001, format  ="%f")
+        precio_tp_dia_P3 = st.number_input('potencia €/kW dia P3',min_value=0.002, max_value = 0.192, step = .001, format  ="%f")
         precio_tp_año = round((precio_tp_dia_P1 + precio_tp_dia_P3) * 365, 2)
-        if precio_tp_año < tp_boe_2025:
-            precio_tp_año = tp_boe_2025
+        año_boe = max(tp_boe.keys())
+        tp_boe_ref = tp_boe[año_boe]
+        if precio_tp_año < tp_boe_ref:
+            precio_tp_año = tp_boe_ref
 
         st.form_submit_button('Calcular')
         st.write(f'Precio Tp anual en €/kW año = {precio_tp_año}')
@@ -201,7 +227,7 @@ with col1:
         st.slider('Consumo :blue[ANUAL] estimado (kWh)',min_value = 500, max_value = 7000, step = 100, key = 'consumo_anual')
     with st.container(border=True):
         st.subheader('2.Introduce datos del contrato a precio fijo')
-        st.slider('Precio ofertado: término de potencia (€/kW año)', min_value = tp_boe_2025, max_value = 70.0, step =.1, key = 'tp_fijo')
+        st.slider('Precio ofertado: término de potencia (€/kW año)', min_value = tp_boe_ref, max_value = 70.0, step =.1, key = 'tp_fijo')
 
 
         st.toggle('Usar tres precios de energía (c€/kWh)', key = 'precios_3p')
@@ -242,6 +268,8 @@ with col1:
             key = 'fechas_periodo',
             )
         st.form_submit_button('Actualizar cálculos')
+    
+    st.plotly_chart(fig, use_container_width=True)
 
 
     
@@ -276,8 +304,10 @@ with col2:
     col4, col5, col6 = st.columns(3)
     with col4:
         st.metric('Coste factura PVPC (€)', f'{coste_pvpc:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.'))
+        st.metric('Precio factura PVPC (c€/kWh)', f'{media_pvpc_fra:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.'), help='Precio medio en c€/kWh teniendo en cuenta todos los componentes de la factura PVPC')
     with col5: 
         st.metric('Coste factura FIJO (€)', f'{coste_fijo:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.'))
+        st.metric('Precio factura FIJO (c€/kWh)', f'{media_fijo_fra:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.'), help='Precio medio en c€/kWh teniendo en cuenta todos los componentes de la factura FIJO')
     with col6:
         with st.container(border = True):
             st.metric('Sobrecoste FIJO (€)', dif_pvpc_fijo, f'{dif_pvpc_fijo_porc} %', 'inverse')
