@@ -44,7 +44,8 @@ df_pot_edit = st.sidebar.data_editor(
     num_rows="fixed",
 )
 
-st.session_state.df_pot = df_pot_edit
+if st.sidebar.button('Cargar potencias contratadas', use_container_width=True, type='primary'):
+    st.session_state.df_pot = df_pot_edit
 
 
 print('df_pot')
@@ -67,7 +68,9 @@ if 'atr_dfnorm' not in st.session_state:
 pot_con = st.session_state.df_pot["Potencia (kW)"].to_dict()
 fijar_P6 = st.session_state["mantener_potencia"] == "Mantener"
 tarifa = st.session_state.atr_dfnorm
-#df_in = leer_curva_normalizada(pot_con)
+año_opt = 2026
+pyc_tp_opt = pyc_tp[año_opt][tarifa]
+tepp_opt = tepp[año_opt][tarifa]
 
 
 #tab1, tab2 =st.tabs(['Optimizar', 'Verificar'])
@@ -97,13 +100,13 @@ if submit_opt and st.session_state.df_norm is not None:
             st.warning('Suministro no válido para optimización por excesos', icon='⚠️')
             st.stop()
 
-        graf_costes_potcon, fig2, coste_tp_potcon, coste_tp_potopt, ahorro_opt, ahorro_opt_porc, df_potencias, fig_ahorro, fig1, fig = calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con)
+        graf_costes_potcon, fig2, coste_tp_potcon, coste_tp_potopt, ahorro_opt, ahorro_opt_porc, df_potencias, fig_ahorro, fig1, fig = calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp_opt, tepp_opt)
 
         
 
         
         # INTERFAZ STREAMLIT++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-        st.header('Resultados de la optimización', divider = 'rainbow')
+        st.header('Resultados de la optimización del Término de Potencia para tipos 1, 2 y 3 (>50kW)', divider = 'rainbow')
         c1, c2, c3, c4 = st.columns([.5, .2, .1, .2])
         with c1:
             st.write(graf_costes_potcon)
@@ -112,9 +115,9 @@ if submit_opt and st.session_state.df_norm is not None:
             st.write(fig2)
         with c3:
             #st.plotly_chart(fig)
-            st.metric('Coste ACTUAL (€)', f'{coste_tp_potcon:,.0f}'.replace(',','.'))
-            st.metric('Coste OPTIMIZADO (€)', f'{coste_tp_potopt:,.0f}'.replace(',','.'))
-            st.metric('AHORRO (€)', f'{ahorro_opt:,.0f}'.replace(',','.'), delta=f'{ahorro_opt_porc:,.1f}%')
+            st.metric('Coste ACTUAL (€)', f'{coste_tp_potcon:,.2f}'.replace(',','X').replace('.',',').replace('X','.'))
+            st.metric('Coste OPTIMIZADO (€)', f'{coste_tp_potopt:,.2f}'.replace(',','X').replace('.',',').replace('X','.'))
+            st.metric('AHORRO (€)', f'{ahorro_opt:,.2f}'.replace(',','X').replace('.',',').replace('X','.'), delta=f'{ahorro_opt_porc:,.1f}%')
         with c4:
             st.plotly_chart(fig)
         

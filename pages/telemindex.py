@@ -13,16 +13,37 @@ if not st.session_state.get('usuario_autenticado', False):
     st.switch_page('epowerapp.py')
 
 
+
+
 #inicializamos variables de sesión
 generar_menu()
 init_app()
+
+st.sidebar.header('⚡ Histórico de indexados ⚡')
+zona_mensajes = st.sidebar.empty()
+if 'df_sheets' not in st.session_state:
+    zona_mensajes.warning('Cargando históricos de indexado. Espera a que estén disponibles...', icon = '⚠️')
+#else:
+#    zona_mensajes.success('Cargados todos los históricos de indexado. Ya puedes consultar los datos.', icon = '👍')
+
+
 init_app_index()
+
+
+
+
+#if 'df_sheets_full' not in st.session_state:
+#    zona_mensajes.warning('Cargados datos iniciales. Espera a que estén disponibles todos los datos', icon = '⚠️')
+#    #SPREADSHEET_ID = st.secrets['SHEET_INDEX_ID']
+#    st.session_state.df_sheets_full = carga_total_sheets()
+#    st.session_state.df_sheets = st.session_state.df_sheets_full
+#    zona_mensajes.success('Cargados todos los datos. Ya puedes consultar los históricos', icon = '👍')
 
 if "rango_curvadecarga" in st.session_state:
     if st.session_state.rango_temporal == "Selecciona un rango de fechas":
         st.session_state.dias_seleccionados = st.session_state.rango_curvadecarga
 
-zona_mensajes = st.sidebar.empty() 
+#zona_mensajes = st.sidebar.empty() 
 
 df_filtrado, lista_meses = filtrar_datos()
 try:
@@ -106,20 +127,23 @@ df_precios_mensuales, graf_mensual = evol_mensual(st.session_state.df_sheets, co
 #ELEMENTOS DE LA BARRA LATERAL ---------------------------------------------------------------------------------------
 
 #st.sidebar.header('', divider='rainbow')
-st.sidebar.header('Histórico de indexados')
-st.sidebar.write(f'Última fecha disponible: {st.session_state.ultima_fecha_sheets}')
+
+#zona_mensajes.info(f'Última fecha disponible: {st.session_state.ultima_fecha_sheets}')
+zona_mensajes.info(
+    f"Última fecha disponible: {st.session_state.ultima_fecha_sheets.strftime('%d.%m.%Y')}"
+)
 
 st.sidebar.subheader('Opciones')
 with st.sidebar.container(border=True):
     st.sidebar.radio("Seleccionar rango temporal", ['Por años', 'Por meses', 'Selecciona un rango de fechas'], key = "rango_temporal")
 
     if st.session_state.rango_temporal == 'Por años':
-        st.sidebar.selectbox('Seleccione el año', options = [2025, 2024, 2023], key = 'año_seleccionado') 
+        st.sidebar.selectbox('Seleccione el año', options = [2026, 2025, 2024, 2023], key = 'año_seleccionado') 
         st.session_state.texto_precios = f'Año {st.session_state.año_seleccionado}, hasta el día {fecha_ultima_filtrado}'
     elif st.session_state.rango_temporal =='Por meses' : 
         col_sb1, col_sb2 = st.sidebar.container().columns(2)      
         with col_sb1:
-            st.sidebar.selectbox('Seleccione el año', options = [2025, 2024, 2023], key = 'año_seleccionado') 
+            st.sidebar.selectbox('Seleccione el año', options = [2026, 2025, 2024, 2023], key = 'año_seleccionado') 
         with col_sb2:
             st.sidebar.selectbox('Seleccionar mes', lista_meses, key = 'mes_seleccionado')
             st.session_state.texto_precios = f'Seleccionado: {st.session_state.mes_seleccionado} de {st.session_state.año_seleccionado}'
@@ -233,9 +257,9 @@ with zona_grafica.container():
         
 
 
-if 'df_sheets_full' not in st.session_state:
-    zona_mensajes.warning('Cargados datos iniciales. Espera a que estén disponibles todos los datos', icon = '⚠️')
-    #SPREADSHEET_ID = st.secrets['SHEET_INDEX_ID']
-    st.session_state.df_sheets_full = carga_total_sheets()
-    st.session_state.df_sheets = st.session_state.df_sheets_full
-    zona_mensajes.success('Cargados todos los datos. Ya puedes consultar los históricos', icon = '👍')
+#if 'df_sheets_full' not in st.session_state:
+#    zona_mensajes.warning('Cargados datos iniciales. Espera a que estén disponibles todos los datos', icon = '⚠️')
+#    #SPREADSHEET_ID = st.secrets['SHEET_INDEX_ID']
+#    st.session_state.df_sheets_full = carga_total_sheets()
+#    st.session_state.df_sheets = st.session_state.df_sheets_full
+#    zona_mensajes.success('Cargados todos los datos. Ya puedes consultar los históricos', icon = '👍')

@@ -14,7 +14,7 @@ import math
 #import nest_asyncio
 import streamlit as st
 
-# PEAJES Y CARGOS TP 2025. NO USADOS DE MOMENTO
+# PEAJES Y CARGOS TP 2025
 pyc_tp_2025 = {
     '2.0': {
         'P1': 26.93055,
@@ -66,8 +66,8 @@ pyc_tp_2025 = {
     }
 }
 
-# VALORES PyC TP PARA 2026 (€/kW·año) USADOS PARA OPTIMIZACIÓN (DE MOMENTO)
-pyc_tp = {
+# PEAJES Y CARGOS TP 2026
+pyc_tp_2026 = {
     '2.0': {
         'P1': 27.704413,
         'P2': 0.725423,
@@ -115,6 +115,109 @@ pyc_tp = {
         'P4': 1.158560,
         'P5': 0.492827,
         'P6': 0.230511
+    }
+}
+
+pyc_tp = {
+    2025: {
+        '2.0': {
+            'P1': 26.93055,
+            'P2': 0.697588,
+            'P3': None,
+            'P4': None,
+            'P5': None,
+            'P6': None
+        },
+        '3.0': {
+            'P1': 19.658495,
+            'P2': 10.251651,
+            'P3': 4.262536,
+            'P4': 3.681551,
+            'P5': 2.328167,
+            'P6': 1.356394
+        },
+        '6.1': {
+            'P1': 28.791866,
+            'P2': 15.077643,
+            'P3': 6.55917,
+            'P4': 5.172085,
+            'P5': 1.932805,
+            'P6': 0.916088
+        },
+        '6.2': {
+            'P1': 19.628657,
+            'P2': 10.931799,
+            'P3': 3.575439,
+            'P4': 2.605951,
+            'P5': 1.153201,
+            'P6': 0.554036
+        },
+        '6.3': {
+            'P1': 13.200058,
+            'P2': 7.707603,
+            'P3': 2.994066,
+            'P4': 2.256289,
+            'P5': 0.921080,
+            'P6': 0.441352
+        },
+        '6.4': {
+            'P1': 7.768462,
+            'P2': 4.529595,
+            'P3': 1.385270,
+            'P4': 1.093534,
+            'P5': 0.448232,
+            'P6': 0.209555
+        }
+    },
+    2026: {
+        '2.0': {
+            'P1': 27.704413,
+            'P2': 0.725423,
+            'P3': None,
+            'P4': None,
+            'P5': None,
+            'P6': None
+        },
+        '3.0': {
+            'P1': 20.376927,
+            'P2': 10.617621,
+            'P3': 4.481534,
+            'P4': 3.886333,
+            'P5': 2.513851,
+            'P6': 1.442287
+        },
+        '6.1': {
+            'P1': 29.595368,
+            'P2': 15.514709,
+            'P3': 6.801881,
+            'P4': 5.393829,
+            'P5': 2.125113,
+            'P6': 1.004181
+        },
+        '6.2': {
+            'P1': 20.103588,
+            'P2': 11.115668,
+            'P3': 3.709113,
+            'P4': 2.728152,
+            'P5': 1.265617,
+            'P6': 0.605381
+        },
+        '6.3': {
+            'P1': 13.053392,
+            'P2': 5.878863,
+            'P3': 3.062065,
+            'P4': 2.332116,
+            'P5': 1.010041,
+            'P6': 0.481394
+        },
+        '6.4': {
+            'P1': 7.905445,
+            'P2': 4.585787,
+            'P3': 1.460005,
+            'P4': 1.158560,
+            'P5': 0.492827,
+            'P6': 0.230511
+        }
     }
 }
 
@@ -170,6 +273,111 @@ tepp = {
         'P6': 0.005787
     }
 }
+
+tepp = {
+    2025: {
+        '2.0': {
+            'P1': 2.953979,
+            'P2': 0.056891,
+            'P3': None,
+            'P4': None,
+            'P5': None,
+            'P6': None
+        },
+        '3.0': {
+            'P1': 3.361213,
+            'P2': 1.776546,
+            'P3': 0.563477,
+            'P4': 0.430844,
+            'P5': 0.121880,
+            'P6': 0.121880
+        },
+        '6.1': {
+            'P1': 3.332942,
+            'P2': 1.762138,
+            'P3': 0.661311,
+            'P4': 0.465989,
+            'P5': 0.011745,
+            'P6': 0.010432
+        },
+        '6.2': {
+            'P1': 3.292963,
+            'P2': 1.867567,
+            'P3': 0.491658,
+            'P4': 0.299575,
+            'P5': 0.011745,
+            'P6': 0.010432
+        },
+        '6.3': {
+            'P1': 3.099043,
+            'P2': 1.867297,
+            'P3': 0.608334,
+            'P4': 0.396461,
+            'P5': 0.013018,
+            'P6': 0.011460
+        },
+        '6.4': {
+            'P1': 2.732620,
+            'P2': 1.633705,
+            'P3': 0.396742,
+            'P4': 0.275775,
+            'P5': 0.008201,
+            'P6': 0.005465
+        }
+    },
+
+    2026: {
+        '2.0': {
+            'P1': 2.968850,
+            'P2': 0.056473,
+            'P3': None,
+            'P4': None,
+            'P5': None,
+            'P6': None
+        },
+        '3.0': {
+            'P1': 3.325715,
+            'P2': 1.757877,
+            'P3': 0.557353,
+            'P4': 0.427494,
+            'P5': 0.119179,
+            'P6': 0.119179
+        },
+        '6.1': {
+            'P1': 3.431797,
+            'P2': 1.818277,
+            'P3': 0.680379,
+            'P4': 0.478581,
+            'P5': 0.010172,
+            'P6': 0.008984
+        },
+        '6.2': {
+            'P1': 3.243495,
+            'P2': 1.826897,
+            'P3': 0.483612,
+            'P4': 0.294055,
+            'P5': 0.011467,
+            'P6': 0.010143
+        },
+        '6.3': {
+            'P1': 3.063808,
+            'P2': 1.844204,
+            'P3': 0.617738,
+            'P4': 0.402624,
+            'P5': 0.013069,
+            'P6': 0.011406
+        },
+        '6.4': {
+            'P1': 2.736629,
+            'P2': 1.630338,
+            'P3': 0.409096,
+            'P4': 0.284221,
+            'P5': 0.008441,
+            'P6': 0.005787
+        }
+    }
+}
+
 
 meses = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
 
@@ -246,10 +454,10 @@ def leer_curva_normalizada(pot_con):
 #def calcular_costes(potencias, df_in, tarifa, pyc_tp, kp, tep, meses, pot_con):
 def calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, potencias):
     # Obtenemos los valores pyc_tp, kp y tep según la tarifa del suministro
-    pyc_tp_tarifa = pyc_tp.get(tarifa, {})
+    #pyc_tp_tarifa = pyc_tp.get(tarifa, {})
     #kp_tarifa = kp.get(tarifa, {})
     #tep_tarifa = tep.get(tarifa, {})
-    tepp_tarifa = tepp.get(tarifa, {})
+    #tepp_tarifa = tepp.get(tarifa, {})
     # Copia de df_in para no modificar los datos originales
     df_temp = df_in.copy()
     
@@ -264,24 +472,27 @@ def calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, potencias):
     # Calculamos el coste de potencia
     df_coste_potfra_temp = pd.DataFrame(index=meses, columns=potencias.keys())
     for periodo, pot_opt_value in potencias.items():
-    #for periodo, pot_opt_value in zip(pot_con.keys(), potencias):
         #df_coste_potfra_temp[periodo] = round(pot_opt_value * pyc_tp_tarifa[periodo] / 12, 2)
-        df_coste_potfra_temp[periodo] = pot_opt_value * pyc_tp_tarifa[periodo] / 12
+        #df_coste_potfra_temp[periodo] = pot_opt_value * pyc_tp_tarifa[periodo] / 12
+        df_coste_potfra_temp[periodo] = pot_opt_value * pyc_tp[periodo] / 12
+
     coste_potfra_temp = df_coste_potfra_temp.sum().sum()
     
     # Calculamos el coste de excesos
     df_excesos_temp = pd.pivot_table(df_temp, values='excesos_cuad_opt', index='mes_nom', columns='periodo', aggfunc='sum')
     df_excesos_temp = np.sqrt(df_excesos_temp)
-    for periodo, x in tepp_tarifa.items():
+    #for periodo, x in tepp_tarifa.items():
+    for periodo, x in tepp.items():
         #df_excesos_temp[periodo] = round(df_excesos_temp[periodo] * k * tep_tarifa, 2)
         if periodo in df_excesos_temp.columns:
             df_excesos_temp[periodo] = df_excesos_temp[periodo] * x 
+            
     df_excesos_temp.index = pd.Categorical(df_excesos_temp.index, categories=meses, ordered=True)
     #ordenamos
     df_excesos_temp = df_excesos_temp.sort_index()
     coste_excesos_temp = df_excesos_temp.sum().sum()
     # Coste total
-    coste_tp_temp = coste_potfra_temp + coste_excesos_temp
+    coste_tp_temp = round(coste_potfra_temp + coste_excesos_temp, 2)
 
     return coste_potfra_temp, coste_excesos_temp, coste_tp_temp, df_coste_potfra_temp, df_excesos_temp
 
@@ -401,8 +612,9 @@ def graficar_costes_opt(graf_costes_potcon, df_coste_tp_mes):
 
     return graf_costes_potcon
 
-#FUNCIÓN GLOBAL PARA OPTIMIZAR++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con):
+
+#FUNCIÓN GLOBAL PARA OPTIMIZAR++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
     #pot_con = st.session_state.df_pot["Potencia (kW)"].to_dict()
     #fijar_P6 = st.session_state["mantener_potencia"] == "Mantener"
     #tarifa = st.session_state.atr_dfnorm
@@ -483,7 +695,7 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con):
     df_coste_tp_mes = pd.concat([df_coste_tp_mes, df_coste_tp_mes_opt,], axis=1)
     
 
-    ahorro_opt = int(coste_tp_potcon - coste_tp_potopt)
+    ahorro_opt = round(coste_tp_potcon - coste_tp_potopt, 2)
     ahorro_opt_porc = ahorro_opt * 100 / coste_tp_potcon
 
     graf_costes_potcon = graficar_costes_opt(graf_costes_potcon, df_coste_tp_mes)
@@ -498,8 +710,15 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con):
         'P4': [pot_con['P4'], pot_opt['P4']],
         'P5': [pot_con['P5'], pot_opt['P5']],
         'P6': [pot_con['P6'], pot_opt['P6']],
-        'Coste Total (€)': [int(coste_tp_potcon), int(coste_tp_potopt)]
+        'Coste Total (€)': [coste_tp_potcon, coste_tp_potopt]
     })
+
+    df_potencias["Coste Total (€)"] = (
+        df_potencias["Coste Total (€)"]
+        .astype(float)
+        .round(2)
+        .apply(lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+    )
 
     pot_rangos = {}
     for periodo in pot_con.keys():

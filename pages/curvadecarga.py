@@ -176,14 +176,15 @@ if uploaded:
         # Obtener fechas mínima y máxima del df_norm_h y guardar para telemindex
         fecha_ini = df_norm_h["fecha"].min()
         fecha_fin = df_norm_h["fecha"].max()
-        if 'df_sheets_full' not in st.session_state:
-            init_app()
-            init_app_index()
-            zona_mensajes.warning('Cargados datos iniciales. Espera a que estén disponibles todos los datos', icon = '⚠️')
+
+        #if 'df_sheets_full' not in st.session_state:
+        #    init_app()
+        #    init_app_index()
+        #    zona_mensajes.warning('Cargados datos iniciales. Espera a que estén disponibles todos los datos', icon = '⚠️')
             #SPREADSHEET_ID = st.secrets['SHEET_INDEX_ID']
-            st.session_state.df_sheets_full = carga_total_sheets()
-            st.session_state.df_sheets = st.session_state.df_sheets_full
-            zona_mensajes.success('Cargados todos los datos. Ya puedes consultar los históricos', icon = '👍')
+        #    st.session_state.df_sheets_full = carga_total_sheets()
+        #    st.session_state.df_sheets = st.session_state.df_sheets_full
+        #    zona_mensajes.success('Cargados todos los datos. Ya puedes consultar los históricos', icon = '👍')
         #st.session_state.dias_seleccionados = (fecha_ini, fecha_fin)
         st.session_state.rango_curvadecarga = (fecha_ini, fecha_fin)
 

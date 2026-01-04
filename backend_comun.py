@@ -82,6 +82,7 @@ def carga_total_sheets(): #sheet_name=None
     # Obtener los datos como DataFrame
     data = worksheet.get_all_records()
     df = pd.DataFrame(data)
+    
     df['fecha'] = pd.to_datetime(df['fecha']).dt.date
 
     # 🔹 Leer solo la columna de fechas (columna A)
@@ -89,7 +90,12 @@ def carga_total_sheets(): #sheet_name=None
     ultima_fecha_str = fechas_col[-1]
     st.session_state.ultima_fecha_sheets = pd.to_datetime(ultima_fecha_str, errors='coerce').date()
     
-    return df
+    st.session_state.df_sheets = df
+    columnas_numericas = st.session_state.df_sheets.columns.difference(['fecha', 'mes_nombre', 'dh_3p', 'dh_6p'])  # Excluir columnas de texto si las hay
+    # 🔹 Convertir todas las columnas a numérico (int o float según corresponda)
+    st.session_state.df_sheets[columnas_numericas] = st.session_state.df_sheets[columnas_numericas].apply(pd.to_numeric, errors='coerce')
+    
+    return st.session_state.df_sheets
 
 #CARGAMOS MIBGAS DESDE SHEET DE DRIVE
 @st.cache_data

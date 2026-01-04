@@ -9,17 +9,26 @@ if not st.session_state.get('usuario_autenticado', False):
     st.switch_page('epowerapp.py')
 
 
+
+
 generar_menu()
 init_app()
-init_app_index()
-zona_mensajes = st.sidebar.empty() 
 
-if 'df_sheets_full' not in st.session_state:
-    zona_mensajes.warning('Cargados datos iniciales. Espera a que estén disponibles todos los datos', icon = '⚠️')
-    #SPREADSHEET_ID = st.secrets['SHEET_INDEX_ID']
-    st.session_state.df_sheets_full = carga_total_sheets()
-    st.session_state.df_sheets = st.session_state.df_sheets_full
-    zona_mensajes.success('Cargados todos los datos. Ya puedes consultar los históricos', icon = '👍')
+st.sidebar.header('⚡ Simulación de indexados ⚡')
+zona_mensajes = st.sidebar.empty()
+if 'df_sheets' not in st.session_state:
+    zona_mensajes.warning('Cargando históricos de indexado. Espera a que estén disponibles...', icon = '⚠️')
+#else:
+#    zona_mensajes.success('Cargados todos los históricos de indexado. Ya puedes consultar los datos.', icon = '👍')
+init_app_index()
+
+
+#if 'df_sheets_full' not in st.session_state:
+#    zona_mensajes.warning('Cargados datos iniciales. Espera a que estén disponibles todos los datos', icon = '⚠️')
+#    #SPREADSHEET_ID = st.secrets['SHEET_INDEX_ID']
+#    st.session_state.df_sheets_full = carga_total_sheets()
+#    st.session_state.df_sheets = st.session_state.df_sheets_full
+#    zona_mensajes.success('Cargados todos los datos. Ya puedes consultar los históricos', icon = '👍')
 #if 'client' not in st.session_state:
 #    st.session_state.client = autenticar_google_sheets()
 #if 'ultima_fecha_sheets' not in st.session_state:
@@ -68,7 +77,7 @@ df_FTB_mensual, fig = obtener_meff_mensual(df_historicos_FTB, df_mes)
 
 #BARRA LATERAL+++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #st.sidebar.header('', divider='rainbow')
-st.sidebar.header('Simulación de indexados')
+zona_mensajes.success('Cargados todos los históricos de indexado. Ya puedes consultar los datos.', icon = '👍')
 #st.sidebar.subheader('¡Personaliza la simulación!')
 with st.sidebar.expander('¡Personaliza la simulación!', icon = "ℹ️"):
     #st.sidebar.info('Usa el deslizador para modificar el valor de :green[OMIE] estimado. No te preocupes, siempre puedes resetear al valor por defecto.', icon = "ℹ️")

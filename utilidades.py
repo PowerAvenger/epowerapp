@@ -43,12 +43,13 @@ def init_app_index():
     if 'rango_temporal' not in st.session_state:
         st.session_state.rango_temporal = 'Selecciona un rango de fechas'   
     if 'año_seleccionado' not in st.session_state:
-        st.session_state.año_seleccionado = 2025
+        st.session_state.año_seleccionado = 2026
     if 'mes_seleccionado' not in st.session_state: 
         st.session_state.mes_seleccionado = 'enero'
     if 'ultima_fecha_sheets' not in st.session_state or 'df_sheets' not in st.session_state:
         #sheet_id = st.secrets['SHEET_INDEX_ID']
-        carga_rapida_sheets()
+        #carga_rapida_sheets()
+        carga_total_sheets()
 
     if 'dias_seleccionados' not in st.session_state:
         #st.session_state.dia_seleccionado = st.session_state.ultima_fecha_sheets
