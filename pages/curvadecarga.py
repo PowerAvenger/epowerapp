@@ -24,6 +24,7 @@ with st.sidebar:
     zona_mensajes = st.sidebar.empty()
     zona_mensajes2 = st.sidebar.empty()
     zona_mensajes3 = st.sidebar.empty()
+    
 
     
 
@@ -204,6 +205,7 @@ else:
 if st.session_state.get('df_norm') is not None:
 
     st.sidebar.write(f'ATR de la curva actual: **:orange[{st.session_state.atr_dfnorm}]**')
+    st.sidebar.write(f'Registros de la curva actual: **:orange[{st.session_state.freq}]**')
     st.sidebar.radio(
         "Selecciona el tipo de gráfico",
         ["Horario", "Diario", "Mensual"],

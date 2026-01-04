@@ -67,10 +67,8 @@ if 'atr_dfnorm' not in st.session_state:
 
 pot_con = st.session_state.df_pot["Potencia (kW)"].to_dict()
 fijar_P6 = st.session_state["mantener_potencia"] == "Mantener"
-tarifa = st.session_state.atr_dfnorm
-año_opt = 2026
-pyc_tp_opt = pyc_tp[año_opt][tarifa]
-tepp_opt = tepp[año_opt][tarifa]
+
+
 
 
 #tab1, tab2 =st.tabs(['Optimizar', 'Verificar'])
@@ -83,13 +81,34 @@ if 'df_norm' not in st.session_state:
 #    with tab2:
     submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=True)
 else:
-    df_in = leer_curva_normalizada(pot_con)
-    st.sidebar.write(f'El peaje del suministro es {st.session_state.atr_dfnorm}')
-#    with tab1:
-    submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=False)
-#    with tab2:
-    submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=True)
+    if st.session_state.freq =='15T':
+        df_in = leer_curva_normalizada(pot_con)
+        st.sidebar.write(f'El peaje del suministro es {st.session_state.atr_dfnorm}')
+        st.sidebar.info('Pincha en la opción activada')
+        fecha_ini, fecha_fin = st.session_state.rango_curvadecarga
+        dias_rango = (fecha_fin - fecha_ini).days + 1
+        año_ver = fecha_ini.year
 
+        if dias_rango <= 31:
+            st.sidebar.info('Es posible verificar.')
+            submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=True)
+            submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=False)
+        if dias_rango in (365,366):
+            st.sidebar.info('Es posible optimizar.')
+            submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=False)
+            submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=True)
+
+    else:
+        st.sidebar.warning('Curva de carga horaria. No es posible ejecutar ninguna acción')
+        submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=True)
+        submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=True)
+
+    tarifa = st.session_state.atr_dfnorm
+    año_opt = 2026
+    pyc_tp_opt = pyc_tp[año_opt][tarifa]
+    tepp_opt = tepp[año_opt][tarifa]
+    pyc_tp_ver = pyc_tp[año_ver][tarifa]
+    tepp_ver = tepp[año_ver][tarifa]
 
 #with tab1:    
 if submit_opt and st.session_state.df_norm is not None:
@@ -131,7 +150,7 @@ if submit_opt and st.session_state.df_norm is not None:
 
 #with tab2:
 if submit_ver and st.session_state.df_norm is not None:
-        coste_potfra_potcon, coste_excesos_potcon, coste_tp_potcon, df_coste_potfra_potcon, df_coste_excesos_potcon = calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, pot_con)
+        coste_potfra_potcon, coste_excesos_potcon, coste_tp_potcon, df_coste_potfra_potcon, df_coste_excesos_potcon = calcular_costes(df_in, tarifa, pyc_tp_ver, tepp_ver, meses, pot_con)
 
         mes_verificado = df_in['mes_nom'].iloc[0]
         df_pot_mes = df_coste_potfra_potcon.loc[[mes_verificado]].copy()

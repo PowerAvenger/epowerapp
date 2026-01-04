@@ -294,7 +294,7 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
             # Disponemos de fecha y hora en la misma columna
             sample = str(df[c_dt].dropna().iloc[0]).strip()
             print('Intentamos entrar por datetime')
-            print(sample)
+            #print(sample)
 
             # Detectar si TIENE hora → patrón HH:MM
             tiene_hora = re.search(r"\d{1,2}:\d{2}", sample) is not None
@@ -416,9 +416,9 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
         traceback.print_exc()
         raise
 
-    print(df[c_date].head())
+    #print(df[c_date].head())
     
-    print(_parse_date_ddmmyyyy(df[c_date]).head())
+    #print(_parse_date_ddmmyyyy(df[c_date]).head())
     #print (dt0)
 
     # --- df_in solo para vista previa ---
@@ -441,7 +441,7 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
         ajuste_tiempo = pd.Timedelta(0)
         st.warning("Frecuencia no reconocida. No se aplica ajuste temporal.")
 
-
+    print(f'Frecuencia detectada: {freq}')
 
     if dt0.dt.hour.min() == 1:
         # Formato 1–24 → ajustar 24:00
