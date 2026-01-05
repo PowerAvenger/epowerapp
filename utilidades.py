@@ -20,7 +20,7 @@ def generar_menu():
 
         st.page_link('epowerapp.py', label = 'Bienvenida', icon = "🙌")
         st.page_link('pages/curvadecarga.py', label = 'Curvas de carga', icon = "🕒")
-        st.page_link('pages/opt2.py', label = 'Optimización curvas Qh', icon = "🎯")
+        st.page_link('pages/opt2.py', label = 'Término de Potencia', icon = "🎯")
         st.page_link('pages/telemindex.py', label = 'Telemindex', icon = "📈")
         st.page_link('pages/simulindex.py', label = 'Simulindex', icon = "🔮")
         st.page_link('pages/fijovspvpc.py', label = 'FijovsPVPC', icon = "⚖️")
