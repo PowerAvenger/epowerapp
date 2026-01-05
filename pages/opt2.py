@@ -81,6 +81,7 @@ if 'df_norm' not in st.session_state:
 #    with tab2:
     submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=True)
 else:
+    tarifa = st.session_state.atr_dfnorm
     if st.session_state.freq =='15T':
         df_in = leer_curva_normalizada(pot_con)
         st.sidebar.write(f'El peaje del suministro es {st.session_state.atr_dfnorm}')
@@ -93,6 +94,9 @@ else:
             st.sidebar.info('Es posible verificar.')
             submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=True)
             submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=False)
+            pyc_tp_ver = pyc_tp[año_ver][tarifa]
+            tepp_ver = tepp[año_ver][tarifa]
+
         if dias_rango in (365,366):
             st.sidebar.info('Es posible optimizar.')
             submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=False)
@@ -103,12 +107,11 @@ else:
         submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=True)
         submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=True)
 
-    tarifa = st.session_state.atr_dfnorm
+    
     año_opt = 2026
     pyc_tp_opt = pyc_tp[año_opt][tarifa]
     tepp_opt = tepp[año_opt][tarifa]
-    pyc_tp_ver = pyc_tp[año_ver][tarifa]
-    tepp_ver = tepp[año_ver][tarifa]
+    
 
 #with tab1:    
 if submit_opt and st.session_state.df_norm is not None:
