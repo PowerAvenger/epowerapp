@@ -5,7 +5,7 @@ from backend_mibgas import filtrar_por_producto, graficar_qs, graficar_da_corrid
 import pandas as pd
 
 
-if not st.session_state.get('usuario_autenticado', False):
+if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
 
 #inicializamos variables de sesión

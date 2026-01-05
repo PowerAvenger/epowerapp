@@ -10,7 +10,7 @@ from utilidades import generar_menu, init_app_json_escalacv
 import pandas as pd
 from backend_escalacv import diarios_totales
 
-if not st.session_state.get('usuario_autenticado', False):
+if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
 
 
@@ -67,17 +67,6 @@ with st.spinner('Cargando datos de potencia instalada...'):
 with st.spinner('Tratando los datos...'):
     #df con TODOS los datos diarios
     df_diario_all = tablas_diario(df_in_gen, df_in_pot, horas_eq_max)
-
-
-# 📆 Datos diarios de OMIE (desde 2018) y gráfico
-#st.session_state.componente = 'SPOT+SSAA'
-#init_app_json_escalacv()
-#datos_totales_escalacv = st.session_state.datos_total_escalacv
-#fecha_ini = st.session_state.fecha_ini_escalacv
-#fecha_fin = st.session_state.fecha_fin_escalacv
-#datos_diarios_escalacv, graf_ecv_total = diarios_totales(datos_totales_escalacv, fecha_ini, fecha_fin)
-
-
 
 
 fecha_hoy = datetime.now().date()
@@ -143,6 +132,11 @@ if st.session_state.get('dias_equiparados', True):
     df_out_equiparado = df_out_equiparado[
         (df_out_equiparado['mes_num'] < mes_ult) |
         ((df_out_equiparado['mes_num'] == mes_ult) & (df_out_equiparado['fecha'].dt.day <= dia_ult))
+    ]
+else:
+    # 🔹 SOLO años completos (excluye el año en curso)
+    df_out_equiparado = df_out_equiparado[
+        df_out_equiparado['año'] < año_actual
     ]
 
 

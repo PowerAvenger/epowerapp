@@ -4,7 +4,7 @@ from utilidades import generar_menu
 
 generar_menu()
 
-if not st.session_state.get('usuario_autenticado', False):
+if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
 
 

@@ -60,10 +60,14 @@ with c2:
         
 
         st.text_input('Introduce el código de acceso', type='password', key='acceso')
-        if st.session_state.acceso == st.secrets['KEY_ACCESS'] or st.session_state.acceso == st.secrets['KEY_FREE'] or st.session_state.acceso == st.secrets['KEY_ACCESS2']:
-
+        #if st.session_state.acceso == st.secrets['KEY_ACCESS'] or st.session_state.acceso == st.secrets['KEY_FREE'] or st.session_state.acceso == st.secrets['KEY_ACCESS2']:
+        if st.session_state.acceso == st.secrets['KEY_ACCESS'] or st.session_state.acceso == st.secrets['KEY_ACCESS2']:    
+            #acceso completo a la app
             acceso = st.button('🚀 Acceder a la aplicación', type='primary', use_container_width=True, disabled=False)
             st.session_state.usuario_autenticado = True
+        elif st.session_state.acceso == st.secrets['KEY_FREE']:
+            acceso = st.button('🚀 Acceder a la aplicación', type='primary', use_container_width=True, disabled=False)
+            st.session_state.usuario_free = True            
         else:
             acceso = st.button('🚀 Acceder a la aplicación', type='primary', use_container_width=True, disabled=True)
 

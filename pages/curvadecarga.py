@@ -5,8 +5,9 @@ from backend_curvadecarga import (normalize_curve_simple,graficar_curva,graficar
 from backend_comun import carga_total_sheets
 from utilidades import generar_menu, init_app, init_app_index
 
-if not st.session_state.get('usuario_autenticado', False):
+if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
+
 
 generar_menu()
 
@@ -25,7 +26,10 @@ with st.sidebar:
     zona_mensajes2 = st.sidebar.empty()
     zona_mensajes3 = st.sidebar.empty()
     
-
+if st.session_state.get('usuario_free', True):
+    st.warning("🔒 Este módulo es solo para usuarios premium")
+    #st.info("Puedes acceder al resto de módulos sin problema.")
+    st.stop()
     
 
 # Inicializa el estado si no existe

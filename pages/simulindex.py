@@ -5,7 +5,7 @@ from backend_comun import carga_rapida_sheets, carga_total_sheets, colores_preci
 
 from utilidades import generar_menu, init_app, init_app_index
 
-if not st.session_state.get('usuario_autenticado', False):
+if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
 
 

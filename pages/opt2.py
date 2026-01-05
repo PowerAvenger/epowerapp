@@ -8,10 +8,12 @@ from utilidades import generar_menu, init_app, init_app_index
 from backend_opt2 import leer_curva_normalizada, calcular_costes, funcion_objetivo, ajustar_potencias, grafico_costes_con, graficar_costes_opt, calcular_optimizacion, pyc_tp, tepp, meses
 from backend_curvadecarga import colores_periodo
 
-if not st.session_state.get('usuario_autenticado', False):
+if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
 
 generar_menu()
+
+
 
 if 'mantener_potencia' not in st.session_state:
     st.session_state.mantener_potencia = "Mantener" 
@@ -61,6 +63,10 @@ st.sidebar.radio(
     key='mantener_potencia'
 )
 
+if st.session_state.get('usuario_free', True):
+    st.warning("🔒 Este módulo es solo para usuarios premium")
+    #st.info("Puedes acceder al resto de módulos sin problema.")
+    st.stop()
     
 if 'atr_dfnorm' not in st.session_state:
     st.session_state.atr_dfnorm = 'Ninguno'
@@ -68,7 +74,8 @@ if 'atr_dfnorm' not in st.session_state:
 pot_con = st.session_state.df_pot["Potencia (kW)"].to_dict()
 fijar_P6 = st.session_state["mantener_potencia"] == "Mantener"
 
-
+if 'freq' not in st.session_state:
+    st.session_state.freq = 'None'
 
 
 #tab1, tab2 =st.tabs(['Optimizar', 'Verificar'])

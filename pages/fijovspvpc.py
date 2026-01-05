@@ -10,6 +10,9 @@ from datetime import timedelta
 import plotly.express as px
 from utilidades import generar_menu
 
+if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
+    st.switch_page('epowerapp.py')
+
 generar_menu()
 
 
@@ -18,8 +21,7 @@ url_linkedin = "https://www.linkedin.com/posts/josefvidalsierra_epowerapps-spo24
 url_bluesky = "https://bsky.app/profile/poweravenger.bsky.social"
 
 
-if not st.session_state.get('usuario_autenticado', False):
-    st.switch_page('epowerapp.py')
+
 
 
 #DEFINIMOS CONSTANTES---------------------
