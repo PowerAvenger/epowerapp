@@ -60,7 +60,7 @@ def _read_any(uploaded_or_path):
 
     # --- Leer según tipo ---
     if isinstance(uploaded_or_path, str):
-        print('Fichero seleccionado con ruta manual') #NO SE VA A USAR NUNCA PERO POR SI ACASO
+        print('Fichero seleccionado con ruta manual') #SOLO SE USARA EN CASO DE DEMO
         path = uploaded_or_path.lower()
         print(path)
         if path.endswith(".csv"):

@@ -63,10 +63,10 @@ st.sidebar.radio(
     key='mantener_potencia'
 )
 
-if st.session_state.get('usuario_free', True):
-    st.warning("🔒 Este módulo es solo para usuarios premium")
+#if st.session_state.get('usuario_free', True):
+#    st.warning("🔒 Este módulo es solo para usuarios premium")
     #st.info("Puedes acceder al resto de módulos sin problema.")
-    st.stop()
+#    st.stop()
     
 if 'atr_dfnorm' not in st.session_state:
     st.session_state.atr_dfnorm = 'Ninguno'

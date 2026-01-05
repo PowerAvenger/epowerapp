@@ -20,16 +20,20 @@ generar_menu()
 with st.sidebar:
     st.title("⚡:rainbow[PowerLoader]⚡")
     st.caption("Lee CSV/Excel, detecta columnas y normaliza horas al rango 0–23 del mismo día. Añade columnas adicionales.")
-
-    uploaded = st.file_uploader("📂 Sube un archivo CSV o Excel", type=["csv", "xlsx"])
+    if not st.session_state.get('usuario_autenticado', False):
+        st.warning("🔒 Este módulo es solo para usuarios premium. Lo que estás viendo es un fichero de ejemplo")
+        uploaded = f"curvas/qh anual demo.csv"
+    else:
+        uploaded = st.file_uploader("📂 Sube un archivo CSV o Excel", type=["csv", "xlsx"])
+        
     zona_mensajes = st.sidebar.empty()
     zona_mensajes2 = st.sidebar.empty()
     zona_mensajes3 = st.sidebar.empty()
     
-if st.session_state.get('usuario_free', True):
-    st.warning("🔒 Este módulo es solo para usuarios premium")
+#if st.session_state.get('usuario_free', True):
+#    st.warning("🔒 Este módulo es solo para usuarios premium")
     #st.info("Puedes acceder al resto de módulos sin problema.")
-    st.stop()
+#    st.stop()
     
 
 # Inicializa el estado si no existe
@@ -44,13 +48,15 @@ if 'frec' not in st.session_state:
 if 'modo_agrupacion' not in st.session_state:
     st.session_state.modo_agrupacion = "Horario" 
 if 'opcion_tipodia' not in st.session_state:
-    st.session_state.opcion_tipodia = "TOTAL"
+    st.session_state.opcion_tipodia = "Todos"
 
         
 
 if uploaded:
     try:
-        df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, atr_dfnorm, frec = normalize_curve_simple(uploaded, origin=uploaded.name)
+        #df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, atr_dfnorm, frec = normalize_curve_simple(uploaded, origin=uploaded.name)
+        df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, atr_dfnorm, frec = normalize_curve_simple(uploaded, origin=uploaded.name if hasattr(uploaded, "name") else uploaded)
+
         #st.session_state.df_norm = df_norm
 
         #print('mensaje periodos')

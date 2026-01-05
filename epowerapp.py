@@ -65,9 +65,11 @@ with c2:
             #acceso completo a la app
             acceso = st.button('🚀 Acceder a la aplicación', type='primary', use_container_width=True, disabled=False)
             st.session_state.usuario_autenticado = True
+            st.session_state.usuario_free = False
         elif st.session_state.acceso == st.secrets['KEY_FREE']:
             acceso = st.button('🚀 Acceder a la aplicación', type='primary', use_container_width=True, disabled=False)
-            st.session_state.usuario_free = True            
+            st.session_state.usuario_free = True    
+            st.session_state.usuario_autenticado = False        
         else:
             acceso = st.button('🚀 Acceder a la aplicación', type='primary', use_container_width=True, disabled=True)
 
