@@ -53,7 +53,10 @@ def init_app_index():
 
     if 'dias_seleccionados' not in st.session_state:
         #st.session_state.dia_seleccionado = st.session_state.ultima_fecha_sheets
-        ultima_fecha = st.session_state.ultima_fecha_sheets
+        if 'ultima_fecha_sheets' not in st.session_state:
+            ultima_fecha = datetime.date(2026,1,1)
+        else:
+            ultima_fecha = st.session_state.ultima_fecha_sheets
         if isinstance(ultima_fecha, datetime.datetime):
             ultima_fecha = ultima_fecha.date()
         inicio_rango = ultima_fecha
