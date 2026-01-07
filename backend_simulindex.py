@@ -322,7 +322,7 @@ def hist_mensual_ORIGINAL():
 
     return df_hist, df_mes
 
-@st.cache_data()
+#@st.cache_data()
 def hist_mensual(df_in):
     #df_in = st.session_state.df_sheets
 
