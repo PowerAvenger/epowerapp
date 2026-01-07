@@ -23,7 +23,8 @@ st.sidebar.header('⚡ Histórico de indexados ⚡')
 zona_mensajes = st.sidebar.empty()
 if 'df_sheets' not in st.session_state:
     zona_mensajes.warning('Cargando históricos de indexado. Espera a que estén disponibles...', icon = '⚠️')
-    init_app_index()
+
+init_app_index()
 #else:
 #    zona_mensajes.success('Cargados todos los históricos de indexado. Ya puedes consultar los datos.', icon = '👍')
 
@@ -40,6 +41,8 @@ if 'df_sheets' not in st.session_state:
 #    st.session_state.df_sheets = st.session_state.df_sheets_full
 #    zona_mensajes.success('Cargados todos los datos. Ya puedes consultar los históricos', icon = '👍')
 
+#if 'rango_temporal' not in st.session_state:
+#        st.session_state.rango_temporal = 'Selecciona un rango de fechas' 
 if "rango_curvadecarga" in st.session_state:
     if st.session_state.rango_temporal == "Selecciona un rango de fechas":
         st.session_state.dias_seleccionados = st.session_state.rango_curvadecarga

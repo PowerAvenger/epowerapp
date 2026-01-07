@@ -95,7 +95,9 @@ def carga_total_sheets(): #sheet_name=None
     # 🔹 Convertir todas las columnas a numérico (int o float según corresponda)
     st.session_state.df_sheets[columnas_numericas] = st.session_state.df_sheets[columnas_numericas].apply(pd.to_numeric, errors='coerce')
     
-    return st.session_state.df_sheets
+    st.session_state.worksheet = worksheet
+    return 
+    #return st.session_state.df_sheets
 
 #CARGAMOS MIBGAS DESDE SHEET DE DRIVE
 @st.cache_data
