@@ -23,11 +23,12 @@ st.sidebar.header('⚡ Histórico de indexados ⚡')
 zona_mensajes = st.sidebar.empty()
 if 'df_sheets' not in st.session_state:
     zona_mensajes.warning('Cargando históricos de indexado. Espera a que estén disponibles...', icon = '⚠️')
+    init_app_index()
 #else:
 #    zona_mensajes.success('Cargados todos los históricos de indexado. Ya puedes consultar los datos.', icon = '👍')
 
 
-init_app_index()
+#init_app_index()
 
 
 

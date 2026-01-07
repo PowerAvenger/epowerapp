@@ -73,7 +73,7 @@ def carga_rapida_sheets():
 
 
 #ESTE CÓDIGO ES PARA ACCEDER AL SHEETS COMPLETO DE INDEXADOS
-@st.cache_data
+#@st.cache_data
 def carga_total_sheets(): #sheet_name=None
     SPREADSHEET_ID = st.secrets['SHEET_INDEX_ID']
     sheet = st.session_state.client.open_by_key(SPREADSHEET_ID)
