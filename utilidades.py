@@ -76,7 +76,7 @@ def init_app_index():
             ultima_fecha = datetime.date(2026,1,1)
         else:
             ultima_fecha = st.session_state.ultima_fecha_sheets
-        st.session_state.texto_precios = f'Día seleccionado: {st.session_state.ultima_fecha_sheets}'
+        st.session_state.texto_precios = f'Día seleccionado: {ultima_fecha}'
 
 
 def init_app_json_escalacv():
