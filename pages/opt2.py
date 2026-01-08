@@ -99,18 +99,23 @@ else:
         dias_rango = (fecha_fin - fecha_ini).days + 1
         año_ver = fecha_ini.year
 
-        if dias_rango <= 31:
+        const_verif = 31
+        const_optim_inf = 320
+        const_optim_sup = 380
+        # mes natural: se puede verificar
+        if dias_rango <= const_verif:
             st.sidebar.info('Es posible verificar.')
             submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=True)
             submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=False)
             pyc_tp_ver = pyc_tp[año_ver][tarifa]
             tepp_ver = tepp[año_ver][tarifa]
-        elif 31 < dias_rango < 365:
+        # menos de 365 días o más de 366: no se puede hacer nada
+        elif (const_verif < dias_rango < const_optim_inf) or (dias_rango > const_optim_sup):
             st.sidebar.warning('No es posible ejecutar ninguna acción.', icon='⚠️')
             submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=True)
             submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=True)
-
-        if dias_rango in (365,366):
+        else:
+        # 365 días: se puede optimizar    
             st.sidebar.info('Es posible optimizar.')
             submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=False)
             submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=True)
