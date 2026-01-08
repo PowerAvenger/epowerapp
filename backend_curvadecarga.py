@@ -427,14 +427,14 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
     #print(df_in)
 
 
-    # --- DETECTAR FRECUENCIA ---
+    # --- DETECTAR RESOLUCIÓN TEMPORAL ---
     # Diferencia media en minutos
     delta_min = (dt0.diff().dt.total_seconds().dropna().median() / 60)
     if abs(delta_min - 60) < 1:
         freq = "H"      # Horaria
         ajuste_tiempo = pd.Timedelta(hours=1)
     elif abs(delta_min - 15) < 1:
-        freq = "15T"    # Cuartohoraria
+        freq = "QH"    # Cuartohoraria
         ajuste_tiempo = pd.Timedelta(minutes=15)
     else:
         freq = "desconocida"
@@ -458,7 +458,7 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
             dt_adj = dt0 - pd.Timedelta(hours=1)
         else:
             dt_adj = dt0.copy()
-    elif freq == "15T":
+    elif freq == "QH":
         # si empieza en 00:15, corregir desplazando 15min atrás
         if first_valid.minute == 15:
             dt_adj = dt0 - pd.Timedelta(minutes=15)
@@ -468,7 +468,12 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
         dt_adj = dt0.copy()
 
     # Redondeo y TZ
-    dt_adj = dt_adj.dt.floor(freq)
+    # Redondeo
+    PANDAS_FREQ = {
+        "H": "H",
+        "QH": "15T"
+    }
+    dt_adj = dt_adj.dt.floor(PANDAS_FREQ[freq])
     dt_tz = _localize_madrid(dt_adj)
 
     # obtención de periodos------------------------------------------------
@@ -618,7 +623,7 @@ def graficar_curva(df_norm, frec):
         orden_periodos = list(colores_periodo.keys())
         df_plot['periodo'] = pd.Categorical(df_plot['periodo'], categories=orden_periodos, ordered=True)
 
-        if frec=='15T':
+        if frec=='QH':
             titulo = 'Curva cuarto horaria de consumo (kWh)'
         else:
             titulo = 'Curva horaria de consumo (kWh)'
@@ -707,7 +712,7 @@ def graficar_curva(df_norm, frec):
     
     return fig
 
-def graficar_curva_neteo(df_norm):
+def graficar_curva_neteo(df_norm, frec):
     # Asegurar índice temporal
     df_norm = df_norm.set_index("fecha_hora")
 
@@ -715,6 +720,10 @@ def graficar_curva_neteo(df_norm):
     if st.session_state.modo_agrupacion == "Horario":
         df_plot = df_norm.reset_index()
 
+        if frec=='QH':
+            titulo = 'Curva cuarto horaria de demanda/vertido (kWh)'
+        else:
+            titulo = 'Curva horaria de demanda/vertido (kWh)'
         
         fig = px.bar(
             df_plot,
@@ -725,7 +734,7 @@ def graficar_curva_neteo(df_norm):
             #color_discrete_map=colores_periodo,
             color_discrete_map={"consumo_neto_kWh": "#e74c3c","vertido_neto_kWh": "#27ae60"},   
 
-            title="Curva horaria de demanda/vertido (kWh)"
+            title=titulo
         )
         fig.update_layout(
             xaxis_title="Fecha",

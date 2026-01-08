@@ -30,11 +30,6 @@ with st.sidebar:
     zona_mensajes2 = st.sidebar.empty()
     zona_mensajes3 = st.sidebar.empty()
     
-#if st.session_state.get('usuario_free', True):
-#    st.warning("🔒 Este módulo es solo para usuarios premium")
-    #st.info("Puedes acceder al resto de módulos sin problema.")
-#    st.stop()
-    
 
 # Inicializa el estado si no existe
 if "df_norm" not in st.session_state:
@@ -44,7 +39,7 @@ if "df_norm_h" not in st.session_state:
 if "df_in" not in st.session_state:
     st.session_state.df_in = None
 if 'frec' not in st.session_state:
-    st.session_state.frec = '15T'      
+    st.session_state.frec = 'QH'      
 if 'modo_agrupacion' not in st.session_state:
     st.session_state.modo_agrupacion = "Horario" 
 if 'opcion_tipodia' not in st.session_state:
@@ -74,17 +69,17 @@ if uploaded:
 
         # --- Obtención de periodos ------------------------------------------------
         if not flag_periodos_en_origen:
-            msg_periodos = 'Cargados periodos desde fichero auxiliar. Seleccione ATR (2.0/ 3.0 / 6.1)'
+            msg_periodos = 'Cargados periodos desde fichero auxiliar. Seleccione peaje de acceso (2.0/ 3.0 / 6.1)TD'
             zona_mensajes3.warning(msg_periodos, icon="⚠️")
 
             # --- Determinar ATR y tipo de calendario ---
             if atr_dfnorm == "2.0":
-                st.sidebar.success("✅ ATR detectado automáticamente: 2.0TD (3 periodos)")
+                st.sidebar.success("✅ Peaje de acceso detectado automáticamente: 2.0TD (3 periodos)")
                 tipo_periodo = "dh_3p"
             else:
-                st.sidebar.warning("⚙️ No se ha detectado ATR 2.0TD. Selección manual requerida:")
+                st.sidebar.warning("⚙️ No se ha detectado peaje de acceso 2.0TD. Selección manual requerida:")
                 atr_dfnorm = st.sidebar.selectbox(
-                    "Selecciona tipo de ATR:",
+                    "Selecciona peaje de acceso:",
                     ("2.0", "3.0", "6.1"),
                     index=0
                 )
@@ -132,32 +127,32 @@ if uploaded:
 
                 if not numeros.empty and numeros.max() == 3:
                     atr_dfnorm = "2.0"
-                    st.sidebar.success("✅ ATR detectado automáticamente: 2.0TD (3 periodos)")
+                    st.sidebar.success("✅ Peaje de acceso detectado automáticamente: 2.0TD (3 periodos)")
                 elif not numeros.empty and numeros.max() == 6:
-                    st.sidebar.warning("⚙️ ATR con 6 periodos detectado. Selección manual requerida:")
+                    st.sidebar.warning("⚙️ Peaje con 6 periodos detectado. Selección manual requerida:")
                     atr_dfnorm = st.sidebar.selectbox(
-                        "Selecciona tipo de ATR:",
+                        "Selecciona peaje de acceso:",
                         ("3.0", "6.1"),
                         index=0
                     )
                 else:
-                    st.sidebar.warning("⚙️ No se ha podido determinar el ATR. Selección manual:")
+                    st.sidebar.warning("⚙️ No se ha podido determinar el peaje de acceso. Selección manual:")
                     atr_dfnorm = st.sidebar.selectbox(
-                        "Selecciona tipo de ATR:",
+                        "Selecciona peaje de acceso:",
                         ("2.0", "3.0", "6.1"),
                         index=0
                     )
 
             else:
-                st.sidebar.warning("⚙️ No se ha podido determinar el ATR. Selección manual:")
+                st.sidebar.warning("⚙️ No se ha podido determinar el peaje de acceso. Selección manual:")
                 atr_dfnorm = st.sidebar.selectbox(
-                    "Selecciona tipo de ATR:",
+                    "Selecciona el peaje de acceso:",
                     ("2.0", "3.0", "6.1"),
                     index=0
                 )
         
 
-        if frec =='15T':
+        if frec =='QH':
             # Agregar cada 4 muestras por hora
             # Agrupar a nivel horario (suma de los 4 cuartos horarios)
             df_norm_h = (
@@ -214,8 +209,8 @@ else:
 
 if st.session_state.get('df_norm') is not None:
 
-    st.sidebar.write(f'ATR de la curva actual: **:orange[{st.session_state.atr_dfnorm}]**')
-    st.sidebar.write(f'Registros de la curva actual: **:orange[{st.session_state.freq}]**')
+    st.sidebar.markdown(f'Peaje de acceso de la curva: **:orange[{st.session_state.atr_dfnorm}]**')
+    st.sidebar.markdown(f'Resolución temporal de la curva: **:orange[{st.session_state.freq}]**')
     st.sidebar.radio(
         "Selecciona el tipo de gráfico",
         ["Horario", "Diario", "Mensual"],
@@ -262,7 +257,7 @@ if st.session_state.get('df_norm') is not None:
         # Mostrar gráfico
         graf_dfnorm = graficar_curva(st.session_state.df_norm, st.session_state.freq)
         st.plotly_chart(graf_dfnorm, use_container_width=True)
-        graf_dfneteo = graficar_curva_neteo(st.session_state.df_norm)
+        graf_dfneteo = graficar_curva_neteo(st.session_state.df_norm, st.session_state.frec)
         st.plotly_chart(graf_dfneteo, use_container_width=True)
     with c2:
         st.subheader("Consumo por periodos")

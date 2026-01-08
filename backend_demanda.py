@@ -179,7 +179,7 @@ def actualizar_historicos(datos_mensual):
 
 #GRÁFICO CON LA EVOLUCIÓN MENSUAL DE LA DEMANDA---------------------------------------------------------------------------------
 
-def graf_2(datos_mensual, mes_previsto_nombre, demanda_prevista):
+def graf_2(datos_mensual, mes_previsto_nombre, demanda_prevista, años_visibles):
     if datos_mensual is None or datos_mensual.empty:
         raise ValueError("Datos no disponibles o vacíos. Asegúrate de ejecutar download_esios_id primero.")
     
@@ -192,9 +192,9 @@ def graf_2(datos_mensual, mes_previsto_nombre, demanda_prevista):
     graf_2 = px.line(datos_mensual, x = 'mes_nombre', y = 'demanda_GWh', color = 'año', labels = {'demanda_GWh':'Demanda GWh','mes_nombre':'mes'}, title= titulo)
     #hacemos gruesa la del 2025
     #mostramos inicialmente estos años
-    años_visibles = ['2018', '2024', '2025']
+    #años_visibles = ['2024', '2025', '2026']
     for trace in graf_2.data:
-        if trace.name == '2025':
+        if trace.name == '2026':
             trace.update(line=dict(width=5))
         if trace.name not in años_visibles:
             trace.visible = 'legendonly'
@@ -225,7 +225,7 @@ def graf_2(datos_mensual, mes_previsto_nombre, demanda_prevista):
     
 
 #GRÁFICO CON LA EVOLUCIÓN MENSUAL ACUMULADA DE LA DEMANDA----------------------------------------------------------------------------------------------
-def graf_2b(datos, mes_previsto_nombre, demanda_prevista_acumulada):
+def graf_2b(datos, mes_previsto_nombre, demanda_prevista_acumulada, años_visibles):
     if datos is None or datos.empty:
         raise ValueError("Datos no disponibles o vacíos. Asegúrate de ejecutar download_esios_id primero.")
     
@@ -238,9 +238,9 @@ def graf_2b(datos, mes_previsto_nombre, demanda_prevista_acumulada):
     graf_2b = px.line(datos, x = 'mes_nombre', y = 'acumulado_GWh', color = 'año', labels = {'acumulado_GWh':'Demanda acumulada GWh','mes_nombre':'mes'}, title = titulo)
     #hacemos gruesa la del 2025
     #mostramos inicialmente estos años
-    años_visibles = ['2018', '2024', '2025']
+    #años_visibles = ['2018', '2024', '2025']
     for trace in graf_2b.data:
-        if trace.name == '2025':
+        if trace.name == '2026':
             trace.update(line=dict(width=5))
         if trace.name not in años_visibles:
             trace.visible = 'legendonly'
@@ -271,7 +271,7 @@ def graf_2b(datos, mes_previsto_nombre, demanda_prevista_acumulada):
     
 
 #GRÁFICO CON LA EVOLUCIÓN MENSUAL ACUMULADA DE LA DEMANDA----------------------------------------------------------------------------------------------
-def graf_2c(datos, mes_previsto_nombre, demanda_prevista_media):
+def graf_2c(datos, mes_previsto_nombre, demanda_prevista_media, años_visibles):
     if datos is None or datos.empty:
         raise ValueError("Datos no disponibles o vacíos. Asegúrate de ejecutar download_esios_id primero.")
     
@@ -284,9 +284,9 @@ def graf_2c(datos, mes_previsto_nombre, demanda_prevista_media):
     graf_2c = px.line(datos, x = 'mes_nombre', y = 'media_GWh', color = 'año', labels = {'media_GWh':'Demanda media GWh','mes_nombre':'mes'}, title = titulo)
     #hacemos gruesa la del 2025
     #mostramos inicialmente estos años
-    años_visibles = ['2018', '2024', '2025']
+    #años_visibles = ['2018', '2024', '2025']
     for trace in graf_2c.data:
-        if trace.name == '2025':
+        if trace.name == '2026':
             trace.update(line=dict(width=5))
         if trace.name not in años_visibles:
             trace.visible = 'legendonly'

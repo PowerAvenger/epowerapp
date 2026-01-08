@@ -309,7 +309,7 @@ else:
 
 
 
-
+años_visibles = ['2024', '2025', '2026']
 
 
 
@@ -393,15 +393,15 @@ with st.container():
             
     with col2:
         if st.session_state.añadir_autoconsumo:
-            st.plotly_chart(graf_2(datos_mensual, mes_previsto_nombre, demanda_prevista_total))
+            st.plotly_chart(graf_2(datos_mensual, mes_previsto_nombre, demanda_prevista_total, años_visibles))
             st.plotly_chart(graf_3bis(df_datos_anual_con_autoconsumo))
         else:
-            st.plotly_chart(graf_2(datos_mensual, mes_previsto_nombre, demanda_prevista))
+            st.plotly_chart(graf_2(datos_mensual, mes_previsto_nombre, demanda_prevista, años_visibles))
             st.plotly_chart(graf_3(datos_anual_real))
     with col3:
         # gráfico de acumulado anual
         #st.plotly_chart(graf_2b(datos_mensual, mes_previsto_nombre, demanda_prevista_acumulada))
-        st.plotly_chart(graf_2c(datos_mensual, mes_previsto_nombre, demanda_prevista_media))
+        st.plotly_chart(graf_2c(datos_mensual, mes_previsto_nombre, demanda_prevista_media, años_visibles))
         st.plotly_chart(graf_total_anual_ordenado)
 
 

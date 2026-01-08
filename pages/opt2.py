@@ -89,9 +89,11 @@ if 'df_norm' not in st.session_state:
     submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=True)
 else:
     tarifa = st.session_state.atr_dfnorm
-    if st.session_state.freq =='15T':
+    submit_opt = False
+    submit_ver = False
+    if st.session_state.freq =='QH':
         df_in = leer_curva_normalizada(pot_con)
-        st.sidebar.write(f'El peaje del suministro es {st.session_state.atr_dfnorm}')
+        st.sidebar.write(f'El peaje del suministro es **:orange[{st.session_state.atr_dfnorm}]**')
         st.sidebar.info('Pincha en la opción activada')
         fecha_ini, fecha_fin = st.session_state.rango_curvadecarga
         dias_rango = (fecha_fin - fecha_ini).days + 1
@@ -103,6 +105,10 @@ else:
             submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=False)
             pyc_tp_ver = pyc_tp[año_ver][tarifa]
             tepp_ver = tepp[año_ver][tarifa]
+        elif 31 < dias_rango < 365:
+            st.sidebar.warning('No es posible ejecutar ninguna acción.', icon='⚠️')
+            submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=True)
+            submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=True)
 
         if dias_rango in (365,366):
             st.sidebar.info('Es posible optimizar.')
@@ -110,7 +116,7 @@ else:
             submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=True)
 
     else:
-        st.sidebar.warning('Curva de carga horaria. No es posible ejecutar ninguna acción')
+        st.sidebar.warning('Curva de carga **:red[HORARIA]**. No es posible ejecutar ninguna acción', icon='⚠️')
         submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=True)
         submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=True)
 
