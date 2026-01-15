@@ -102,6 +102,7 @@ df_prev_año_hoy = pd.concat([punto_puente.to_frame().T, df_prev_año_hoy], igno
 # Reemplazar en df_demand
 df_demand = pd.concat([df_demand[~((df_demand['año'] == año_hoy) & (df_demand['short_name'] == 'Previsión diaria'))], df_prev_año_hoy], ignore_index=True)
 # Añadir columna para saber si el año es bisiesto
+df_demand['datetime'] = pd.to_datetime(df_demand['datetime'],errors='coerce')
 df_demand['bisiesto'] = df_demand['datetime'].dt.is_leap_year
 # Recalcular el día del año corrigiendo si NO es bisiesto
 # Esto evita que el 1-mar de un año no bisiesto se convierta en día 60
