@@ -528,7 +528,7 @@ with st.container():
         st.markdown("""
         <div style="background-color:#007BFF; padding: 5px 10px 5px 10px; border-radius: 10px;">
             <p style="color:white; font-weight:bold;">¡Interacciona!</p>
-            <p style="color:white;">Selecciona el mes a comparar de 2025. Obtendrás los diferenciales con el mismo mes de otros años, así como el ranking según la demanda (o consumo).</p>
+            <p style="color:white;">Selecciona el mes a comparar de 2026. Obtendrás los diferenciales con el mismo mes de otros años, así como el ranking según la demanda (o consumo).</p>
         </div>
         """, unsafe_allow_html=True)
         st.write('')
