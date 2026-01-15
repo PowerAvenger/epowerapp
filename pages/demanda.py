@@ -1,12 +1,14 @@
 import streamlit as st
-from backend_demanda import (download_esios_id_5m, graf_1, download_esios_id_month, graf_2, graf_2b, graf_2c,
-    calcular_datos_anual, graf_3, graf_3bis, actualizar_historicos, graf_ranking_mes, ranking_mensual, graf_diferencias, diferencias_mes
+from backend_demanda import (download_esios, download_esios_id_5m, graf_1, download_esios_id_month, graf_2, graf_2b, graf_2c,
+    calcular_datos_anual, graf_3, graf_3bis, actualizar_historicos, graf_ranking_mes, ranking_mensual, graf_diferencias, diferencias_mes,
+    graficar_media_diaria
     )
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
 from dateutil.relativedelta import relativedelta
 import plotly.express as px
 import base64
+import calendar
 from utilidades import generar_menu, init_app
 
 
@@ -17,42 +19,145 @@ generar_menu()
 
 
 
-#--------------------------------------------------------------------------------------------------
-
 if "cache_cleared" not in st.session_state:
     st.cache_data.clear()  # Limpiar caché al iniciar
     st.session_state.cache_cleared = True  # Evita que se borre en cada interacción
 
-
 if 'añadir_autoconsumo' not in st.session_state:
     st.session_state.añadir_autoconsumo = False
 
-fechahora_hoy = datetime.now() #formato fecha_hora
-fecha_hoy = datetime.now().date() #formato fecha
-fecha_ini_mes_anterior = (fecha_hoy.replace(day=1) - relativedelta(months=1)) #usado para download mensual del mes anterior y asegurar los datos en el cambio de mes
 
-##DESCARGAMOS DATOS DEL ID1293 DEMANDA REAL MW CINCOMINUTAL FECHA=HOY
-try:
-    datos, ultimo_registro = download_esios_id_5m('1293', fecha_hoy, fecha_hoy, 'five_minutes') #tipo_agregacion = 'sum'
-except Exception as e:
-    # por si realizamos la descarga durante la primera hora del mes
-    datos, ultimo_registro = None, None
+#fechahora_hoy = datetime.now() #formato fecha_hora
+#fecha_hoy = datetime.now().date() #formato fecha
+#fecha_ini_mes_anterior = (fecha_hoy.replace(day=1) - relativedelta(months=1)) #usado para download mensual del mes anterior y asegurar los datos en el cambio de mes
 
-#print(horas_transcurridas)
+
+
+
+
+
+# Descargamos la demanda real peninsular para el mes en curso
+fecha_hoy = datetime.now()
+año_hoy = fecha_hoy.year
+num_mes_hoy = fecha_hoy.month
+#dia_hoy = fecha_hoy.day
+#fecha_ayer = fecha_hoy - timedelta(days=1)
+
+años = [2026, 2025, 2019]
+id_dem_real = 1293
+agrupacion = 'day'
+tipo_agregacion = 'average'
+lista_dfs = []
+for año in años:
+    fecha_ini = f'{año}-{num_mes_hoy:02d}-01'
+    ultimo_dia_mes = calendar.monthrange(año, num_mes_hoy)[1]
+    fecha_fin = f'{año}-{num_mes_hoy:02d}-{ultimo_dia_mes:02d}'
     
-##DESCARGAMOS DATOS DEL ID1293 DEMANDA MEDIA REAL MENSUAL MW FECHA=HOY. USADOS PARA LA GRAFICA 2
-try:
-    datos_mensual, mes_previsto, demanda_real, mes_previsto_nombre, meses_seleccion, media_real = download_esios_id_month('1293', fecha_ini_mes_anterior, fecha_hoy, 'month', 'average', ultimo_registro)
-except Exception as e:
-    datos_mensual, mes_previsto, demanda_real, mes_previsto_nombre, meses_seleccion, media_real = None, None, None, None, None, None
-    print(f'error {e}')
+    df_in = download_esios(id_dem_real, fecha_ini, fecha_fin, agrupacion, tipo_agregacion)
+    lista_dfs.append(df_in)
+df_dem_real = pd.concat(lista_dfs, ignore_index=True)
 
 
+# Descargamos la demanda prevista REE
+id_dem_prevista = 460
+fecha_mañana = (fecha_hoy + timedelta(days=1))
+fecha_mañana_api=fecha_mañana.strftime('%Y-%m-%d')
+fecha_final = fecha_mañana + timedelta(days=15)
+fecha_final_api = fecha_final.strftime('%Y-%m-%d')
+df_dem_prevista = download_esios(id_dem_prevista, fecha_mañana_api, fecha_final_api, agrupacion, tipo_agregacion)
+
+# Unimos real con prevista
+df_dem_real = df_dem_real.copy()
+df_dem_prevista = df_dem_prevista.copy()
+df_demand = pd.concat([df_dem_real, df_dem_prevista], ignore_index=True).sort_values('datetime').reset_index(drop=True)
+
+# Añadimos columnas y arreglamos datos
+df_demand['año'] = df_demand['datetime'].dt.year
+df_demand['mes'] = df_demand['datetime'].dt.month
+df_demand['dia'] = df_demand['datetime'].dt.day
+df_demand['value'] = df_demand['value'].astype(float)
+df_demand['value'] = df_demand['value'].round(2)
+df_demand['value'] /= 1000
+df_demand.rename(columns={'value': 'GW'}, inplace=True)
+meses = {
+    1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril', 5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto', 9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
+}
+df_demand['mes_nombre'] = df_demand['mes'].map(meses)
+meses_seleccion = df_demand['mes_nombre'].unique()
+df_demand['media_evol'] = df_demand.groupby('año')['GW'].expanding().mean().reset_index(level=0, drop=True)
+df_demand['suma_evol'] = df_demand.groupby('año')['GW'].expanding().sum().reset_index(level=0, drop=True)
+df_demand['media_mensual'] = df_demand.groupby(['año', 'mes'])['GW'].expanding().mean().reset_index(level=[0,1], drop=True)
+
+
+# MODIFICAMOS DF DEMAND CON UN PUNTO DE UNIÓN ENTRE LA DEMANDA REAL Y LA PREVISTA
+df_real_año_hoy = df_demand[(df_demand['año'] == año_hoy) & (df_demand['short_name'] == 'Demanda real')]
+ultimo_real = df_real_año_hoy.sort_values('dia').iloc[-1]
+# Previsión 2026
+df_prev_año_hoy = df_demand[(df_demand['año'] == año_hoy) & (df_demand['short_name'] == 'Previsión diaria')]
+# Crear punto puente
+punto_puente = ultimo_real.copy()
+punto_puente['short_name'] = 'Previsión diaria'
+# Insertar al inicio de la previsión
+df_prev_año_hoy = pd.concat([punto_puente.to_frame().T, df_prev_año_hoy], ignore_index=True)
+# Reemplazar en df_demand
+df_demand = pd.concat([df_demand[~((df_demand['año'] == año_hoy) & (df_demand['short_name'] == 'Previsión diaria'))], df_prev_año_hoy], ignore_index=True)
+# Añadir columna para saber si el año es bisiesto
+df_demand['bisiesto'] = df_demand['datetime'].dt.is_leap_year
+# Recalcular el día del año corrigiendo si NO es bisiesto
+# Esto evita que el 1-mar de un año no bisiesto se convierta en día 60
+df_demand['dia_anual'] = df_demand.apply(
+    lambda row: row['datetime'].timetuple().tm_yday if row['bisiesto'] else (
+        row['datetime'].timetuple().tm_yday if row['datetime'].month < 3 else row['datetime'].timetuple().tm_yday + 1
+    ), axis=1
+)
+# Ahora puedes generar la fecha ficticia sin errores ni desplazamientos
+df_demand['fecha_ficticia'] = pd.to_datetime('2020-01-01') + pd.to_timedelta(df_demand['dia_anual'] - 1, unit='D')
+
+print('df_demand')
+print(df_demand)
+
+
+# FILTRAMOS DF DEMAND CON EL AÑO ACTUAL PARA OBTENER VALORES DE DEMANDA REAL Y PREVISTA
+df_año_hoy = df_demand[df_demand['año'] == año_hoy]
+
+# Demanda real → última disponible en el año en curso
+idx_real = (df_año_hoy[df_año_hoy['short_name'] == 'Demanda real']['datetime'].idxmax())
+ultimo_datetime_real = df_año_hoy.loc[idx_real, 'datetime']
+ultimo_registro = ultimo_datetime_real
+mes_actual_nombre = df_año_hoy.loc[idx_real, 'mes_nombre']
+mes_actual_num = df_año_hoy.loc[idx_real, 'mes']
+media_real_GW = df_año_hoy.loc[idx_real, 'media_mensual']
+año_actual = df_año_hoy.loc[idx_real, 'año']
+# Calculamos la demanda real en GWh
+df_mes_real = df_año_hoy[(df_año_hoy['short_name'] == 'Demanda real') & (df_año_hoy['año'] == año_actual) & (df_año_hoy['mes'] == mes_actual_num)]
+dias_mes = calendar.monthrange(año_actual, mes_actual_num)[1]
+horas_mes = dias_mes * 24
+demanda_real_GWh = (df_mes_real['GW'] * 24).sum()
+
+# Previsión diaria → última disponible en 2026
+idx_prev = (df_año_hoy[df_año_hoy['short_name'] == 'Previsión diaria']['datetime'].idxmax())
+media_prevista_GW = df_año_hoy.loc[idx_prev, 'media_mensual']
+demanda_prevista_GWh = media_prevista_GW * horas_mes
+
+
+
+#demanda_real = "{:,}".format(int(demanda_real)).replace(",", ".")
+#media_real = "{:,.2f}".format(float(media_real)).replace(".", ",")
+
+
+# CREAMOS UN DF DE UNA LÍNEA CON LOS DATOS ACTUALIZADOS DE DEMANDA PREVISTA PARA AÑADIR A LOS HISTÓRICOS
+df_mes_actual = pd.DataFrame([{
+    'demanda_media_GW': media_prevista_GW,
+    'año': año_actual,
+    'mes': mes_actual_num,
+    'mes_nombre': mes_actual_nombre,
+    'horas_mes': horas_mes,
+    'demanda_real_GWh': demanda_prevista_GWh
+}])
 ##OBTENEMOS HISTORICOS Y LOS ACTUALIZAMOS CON LOS DATOS MENSUALES API REE. USADOS PARA LA GRAFICA 2
-datos_mensual, años_registro = actualizar_historicos(datos_mensual) #demanda_prevista_acumulada, demanda_prevista_media
+#datos_mensual, años_registro = actualizar_historicos(datos_mensual)
+datos_mensual, años_registro = actualizar_historicos(df_mes_actual) 
 
-demanda_real = "{:,}".format(int(demanda_real)).replace(",", ".")
-media_real = "{:,.2f}".format(float(media_real)).replace(".", ",")
 
 
 #todas estas variables son str
@@ -63,14 +168,9 @@ año_anterior = int(años_lista[-2])
 año_pordefecto_1 = (años_lista[-3])
 año_pordefecto_2 = (años_lista[-2])
 
-#if 'mes_seleccionado' not in st.session_state:
-#    st.session_state.mes_seleccionado = 12
-#    st.session_state.mes_numero = 12
-#    st.session_state.año_seleccionado_1 = año_pordefecto_1
-#    st.session_state.año_seleccionado_2 = año_pordefecto_2
 
-
-if datos is not None and not datos.empty:
+#if datos is not None and not datos.empty:
+if df_mes_real is not None and not df_mes_real.empty:
     fecha_ultimo_registro = ultimo_registro.strftime("%d.%m.%Y")
     hora_ultimo_registro = ultimo_registro.strftime("%H:%M")
 
@@ -113,6 +213,7 @@ if st.session_state.añadir_autoconsumo:
     datos_mensual['demanda_GWh'] = datos_mensual['demanda_real_GWh'] + datos_mensual['autogen']
 else:
     datos_mensual['demanda_GWh'] = datos_mensual['demanda_real_GWh']
+
 datos_mensual['acumulado_GWh'] = datos_mensual.groupby('año')['demanda_GWh'].cumsum()
 datos_mensual['media_GWh'] = datos_mensual.groupby('año')['demanda_GWh'].expanding().mean().reset_index(level=0, drop=True)
 demanda_prevista_acumulada = datos_mensual['acumulado_GWh'].iloc[-1]
@@ -213,8 +314,8 @@ graf_total_anual_ordenado.update_xaxes(
 #----------------------------------------------------------------------------------------------------------------
 
 
-demanda_prevista = datos_mensual['demanda_real_GWh'].iloc[-1] 
-demanda_prevista_mostrar = "{:,}".format(int(demanda_prevista)).replace(",", ".")
+#demanda_prevista = datos_mensual['demanda_real_GWh'].iloc[-1] 
+#demanda_prevista_mostrar = "{:,}".format(int(demanda_prevista)).replace(",", ".")
 demanda_prevista_total = datos_mensual['demanda_GWh'].iloc[-1]
 
 if 'año_seleccionado_1' not in st.session_state:
@@ -229,7 +330,7 @@ if 'mes_seleccionado_nombre_año' not in st.session_state:
     #st.session_state.año_seleccionado_1 = año_pordefecto_1
     #st.session_state.año_seleccionado_2 = año_pordefecto_2
 if 'mes_seleccionado_nombre' not in st.session_state:
-    st.session_state.mes_seleccionado_nombre = mes_previsto_nombre
+    st.session_state.mes_seleccionado_nombre = mes_actual_nombre
     st.session_state.mes_numero = fecha_hoy.month
 
 
@@ -238,7 +339,7 @@ def actualizar_mes():
     Actualiza el mes seleccionado según el año seleccionado.
     """
     if st.session_state.año_seleccionado_1 == año_actual or st.session_state.año_seleccionado_2 == año_actual:
-        st.session_state.mes_seleccionado_nombre_año = mes_previsto_nombre
+        st.session_state.mes_seleccionado_nombre_año = mes_actual_nombre
         st.session_state.mes_numero_año = fecha_hoy.month
         #st.session_state.mes_seleccionado_año = mes_previsto
         print ('hola')
@@ -308,60 +409,70 @@ else:
 
 
 
-
-años_visibles = ['2024', '2025', '2026']
-
+# GRAFICAR EVOLUCIÓN DE LA DEMANDA MEDIA DIARIA: REAL Y PREVISTA
+años_visibles = ['2025', '2026']
+graf_media_evol_mes = graficar_media_diaria(df_demand, años_visibles, mes_actual_nombre, año_hoy)
 
 
 
 
 
 # VISUALIZACIÓN +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
-#CONFIGURACIÓN PARA EL PRIMER GRUPO DE DATOS-----------------------------------------------------------------
-col1, col2, col3 = st.columns([0.25, 0.4, 0.4])
-
-
-with st.container():
-    with col1:
-        # cabecera
-        st.subheader("Demanda mensual y acumulada", divider ='rainbow')
-        # info
-        st.info(f'Incluye la demanda prevista para el mes en curso ({mes_previsto_nombre} de {año_actual}). Último registro {fecha_ultimo_registro} {hora_ultimo_registro}',icon="ℹ️")
-        # datos del mes en curso: media, real y prevista.
-        col1a, col1b, col1c = st.columns(3)
-        with col1a:
-            st.metric('Demanda real media GW', value = media_real)
-        with col1b:
-            st.metric('Demanda real GWh', value = demanda_real)
-        with col1c:
-            st.metric('Demanda prevista GWh', value = demanda_prevista_mostrar)
-        
-        # interacción autoconsumo
-        #FF5722 amarillo anaranjado
-        #007BFF azul 
-        st.markdown("""
+with st.sidebar:
+    st.markdown("""
         <div style="background-color:#FF5722; padding: 5px 10px 5px 10px; border-radius: 10px;"> 
             <p style="color:white; font-weight:bold;">¡Interacciona!</p>
             <p style="color:white;">Dale al selector y obtendrás la estimación del CONSUMO (DEMANDA REAL + AUTOCONSUMO)</p>
         </div>
         """, unsafe_allow_html=True)
-        st.write('')
-        colx, coly = st.columns([.6, .4])
-        with colx:
-            st.toggle('Estimar el autoconsumo', help = 'Datos de APPA. 2025 es una estimación propia', key = 'añadir_autoconsumo') #,value=st.session_state.get('añadir_autoconsumo',False))
-        with coly:
-            #st.image('arrow-5818_256.gif', )
-            def get_base64_gif(file_path):
-                with open(file_path, "rb") as gif_file:
-                    return base64.b64encode(gif_file.read()).decode("utf-8")
+    st.write('')
+    colx, coly = st.columns([.6, .4])
+    with colx:
+        st.toggle('Estimar el autoconsumo', help = 'Datos de APPA. 2025 es una estimación propia', key = 'añadir_autoconsumo') #,value=st.session_state.get('añadir_autoconsumo',False))
+    with coly:
+        #st.image('arrow-5818_256.gif', )
+        def get_base64_gif(file_path):
+            with open(file_path, "rb") as gif_file:
+                return base64.b64encode(gif_file.read()).decode("utf-8")
 
-            gif_base64 = get_base64_gif("images/arrow-5818_256.gif")
+        gif_base64 = get_base64_gif("images/arrow-5818_256.gif")
 
-            st.markdown(
-                f'<img src="data:image/gif;base64,{gif_base64}" width="250" height="50">',
-                unsafe_allow_html=True
-            )
+        st.markdown(
+            f'<img src="data:image/gif;base64,{gif_base64}" width="250" height="50">',
+            unsafe_allow_html=True
+        )
+
+#media_real_GW = "{:,.2f}".format(float(media_real_GW)).replace(".", ",")
+#demanda_real_GWh = "{:,}".format(int(demanda_real_GWh)).replace(",", ".")
+#media_prevista_GW = "{:,.2f}".format(float(media_prevista_GW)).replace(".", ",")
+#demanda_prevista_GWh = "{:,}".format(int(demanda_prevista_GWh)).replace(",", ".")
+
+#CONFIGURACIÓN PARA EL PRIMER GRUPO DE DATOS-----------------------------------------------------------------
+#col1, col2, col3 = st.columns([0.25, 0.4, 0.4])
+col1, col2, col3 = st.columns(3)
+
+
+with st.container():
+    with col1:
+        st.subheader("Demanda media mensual: REAL y PREVISTA", divider ='rainbow')
+        st.info(f'Incluye la demanda peninsular real y prevista para el mes en curso ({mes_actual_nombre} de {año_actual}). Último registro {fecha_ultimo_registro} {hora_ultimo_registro}',icon="ℹ️")
+        col1a, col1b, col1c, col1d = st.columns(4)
+        with col1a:
+            st.metric('Demanda real media GW', value = f'{media_real_GW:,.2f}'.replace(".", ","))
+        with col1b:
+            st.metric('Demanda real GWh', value = f'{demanda_real_GWh:,.0f}'.replace(",", "X").replace(".", ",").replace("X", "."))
+        with col1c:
+            st.metric('Demanda prevista media GW', value = f'{media_prevista_GW:,.2f}'.replace(".", ","))
+        with col1d:
+            st.metric('Demanda prevista GWh', value = f'{demanda_prevista_GWh:,.0f}'.replace(",", "X").replace(".", ",").replace("X", "."))
+        
+        st.plotly_chart(graf_media_evol_mes)
+
+        
+        # interacción autoconsumo
+        #FF5722 amarillo anaranjado
+        #007BFF azul 
+        
         # interacción años
         st.markdown("""
         <div style="background-color:#007BFF; padding: 5px 10px 5px 10px; border-radius: 10px;">
@@ -393,15 +504,15 @@ with st.container():
             
     with col2:
         if st.session_state.añadir_autoconsumo:
-            st.plotly_chart(graf_2(datos_mensual, mes_previsto_nombre, demanda_prevista_total, años_visibles))
+            st.plotly_chart(graf_2(datos_mensual, mes_actual_nombre, demanda_prevista_total, años_visibles))
             st.plotly_chart(graf_3bis(df_datos_anual_con_autoconsumo))
         else:
-            st.plotly_chart(graf_2(datos_mensual, mes_previsto_nombre, demanda_prevista, años_visibles))
+            st.plotly_chart(graf_2(datos_mensual, mes_actual_nombre, demanda_prevista_GWh, años_visibles))
             st.plotly_chart(graf_3(datos_anual_real))
     with col3:
         # gráfico de acumulado anual
         #st.plotly_chart(graf_2b(datos_mensual, mes_previsto_nombre, demanda_prevista_acumulada))
-        st.plotly_chart(graf_2c(datos_mensual, mes_previsto_nombre, demanda_prevista_media, años_visibles))
+        st.plotly_chart(graf_2c(datos_mensual, mes_actual_nombre, demanda_prevista_media, años_visibles))
         st.plotly_chart(graf_total_anual_ordenado)
 
 
@@ -445,30 +556,25 @@ with st.container():
             col3a, col3b = st.columns([.65, .35])
             with col3a:
                 st.plotly_chart(graf_ranking_mes)
+            
 
 
 
 
 
-        
- 
-#st.dataframe(datos_mensual_tabla_mostrar, use_container_width=True)
 
+##DESCARGAMOS DATOS DEL ID1293 DEMANDA REAL MW CINCOMINUTAL FECHA=HOY
+#try:
+#    datos, ultimo_registro = download_esios_id_5m('1293', fecha_hoy, fecha_hoy, 'five_minutes') #tipo_agregacion = 'sum'
+#except Exception as e:
+    # por si realizamos la descarga durante la primera hora del mes
+#    datos, ultimo_registro = None, None
 
-#PRIMER GRÁFICO---------------------------------------------------------------------
-#col1,col2=st.columns([0.2,0.8])
-#with col1:
-#    if datos is not None and not datos.empty:
-#        st.plotly_chart(graf_1(datos))
-#    else:
-#        st.error('No se disponen de datos.')
+#print(horas_transcurridas)
     
-#with col2:
-#    st.subheader("Datos del último registro",divider='rainbow')
-#    st.info('De este bloque da datos y gráficos, sólo nos interesa la fecha y hora del  último registro esios id1293.',icon="ℹ️")
-    #usado cuando ultimo registro lo obtenía de esios 5min
-    #fecha_ultimo_registro=ultimo_registro.strftime("%d.%m.%Y")
-
-
-#st.session_state
-
+##DESCARGAMOS DATOS DEL ID1293 DEMANDA MEDIA REAL MENSUAL MW FECHA=HOY. USADOS PARA LA GRAFICA 2
+#try:
+#    datos_mensual, mes_previsto, demanda_real, mes_previsto_nombre, meses_seleccion, media_real = download_esios_id_month('1293', fecha_ini_mes_anterior, fecha_hoy, 'month', 'average', ultimo_registro)
+#except Exception as e:
+#    datos_mensual, mes_previsto, demanda_real, mes_previsto_nombre, meses_seleccion, media_real = None, None, None, None, None, None
+#    print(f'error {e}')

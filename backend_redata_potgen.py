@@ -65,17 +65,22 @@ def tablas_diario(df_in_gen, df_in_pot, horas_eqmax):
     df_out.rename(columns={'porc_gen':'%_mix_gen', 'porc_pot':'%_mix_pot'}, inplace=True)
     print('DF DIARIO TODOS LOS DIAS DESDE 2018')
     print (df_out)
+
+    df_check = df_out.copy()
+
+    print("Total filas:", len(df_check))
+    print("NaN en %_mix_gen:", df_check['%_mix_gen'].isna().sum())
+    print("Ceros en %_mix_gen:", (df_check['%_mix_gen'] == 0).sum())
+    print("Mín %_mix_gen:", df_check['%_mix_gen'].min())
+    print("Máx %_mix_gen:", df_check['%_mix_gen'].max())
     
     return df_out
 
 # TABLAS RESUMEN DE TECNOLOGIAS PARA UN AÑO DETERMINADO+++++++++++++++++++++++++++++++++++++++++++++++++++++  
 def tablas_salida(df, tec_filtro):
     #df es un df con los datos diarios del año seleccionado
-    #tec_filtro son las tecnologías que se muestran
-    
-    #DATAFRAME PARA GRÁFICO FC DE DISPERSIÓN
-    df_out_fc = df[df['tecnologia'].isin(tec_filtro)].copy()
-
+    #tec_filtro son las tecnologías principales que se muestran. El resto se agrupan en 'resto'.
+   
     #tabla datos anual por tecnología. usada para grafico bolas, fu y mix    
     df_anual = df.groupby('tecnologia').agg({
         'gen_GWh_dia':'sum',
@@ -93,12 +98,11 @@ def tablas_salida(df, tec_filtro):
     df_anual = df_anual[~df_anual['tecnologia'].isin(['Generación total', 'Potencia total'])]
     #calculamos totales de generacion y potencia
     gen_total = round(df_anual['generacion_GWh'].sum(), 1)
+    #gen_total = df_anual['generacion_GWh'].sum()
     pot_total = round(df_anual['pot_GW'].sum(), 1)
+    #añadimos %_mix_gen correctamente
+    #df_anual['%_mix_gen'] = df_anual['generacion_GWh'] / gen_total
     
-    #print ('df_anual')
-    #print(df_anual)
-    #print(df_anual['tecnologia'].unique())
-
     #creamos un df solo con las tecnologias seleccionadas
     df_anual_select = df_anual[df_anual['tecnologia'].isin(tec_filtro)].copy()
     df_anual_select['FNU'] = 1 - df_anual_select['FU']
@@ -106,22 +110,15 @@ def tablas_salida(df, tec_filtro):
     print ('df para visualización bolas, fc, fu y mix')
     print (df_anual_select)
 
-    #DATAFRAMES PARA GRÁFICO DE BOLAS
-    df_out_bolas = df_anual_select.sort_values(['FC'], ascending = False) 
-    
-    
-    #añadimos columnas FC y %mix
-    
-    #df_out_ratio['FC'] = round(df_out_ratio['horas_eq'] / horas, 3)
-    #df_out_ratio['%_mix'] = round(df_out_ratio['generacion_GWh'] / gen_total, 3)
-    
+
+    # Dataframe para gráfico de bolas FC
+    df_out_bolas = df_anual_select.sort_values(['FC'], ascending = False)
+    # Dataframe para gráfico de dispersión FC
+    df_out_fc = df[df['tecnologia'].isin(tec_filtro)].copy()
+    # Dataframe para gráfico de barras FU 
     df_out_fu = df_anual_select.sort_values(['FU'], ascending=False)
+    # Dataframe para gráfico mix de generación
     df_out_mix = df_anual_select.sort_values(['%_mix_gen'], ascending = False)
-
-    #print (df_out_ratio_select_fc)
-    #print (df_out_ratio_select_fu)
-
-    #añadimos al mix 'resto' de tecnologías
     mix_tec_select = df_out_mix['%_mix_gen'].sum()
     mix_resto = round(1-mix_tec_select,3)
     gen_resto = round(gen_total-df_out_mix['generacion_GWh'].sum(), 1)
@@ -136,22 +133,11 @@ def tablas_salida(df, tec_filtro):
         'horas_eqmax': None,
         'FU': None
         }
-    #print(pot_total,pot_resto)
     df_out_mix = pd.concat([df_out_mix, pd.DataFrame([nueva_fila])], ignore_index=True)
-
-    #DATAFRAME PARA GRÁFICO MIX GENERACIÓN
     df_out_mix = df_out_mix.sort_values(['%_mix_gen'], ascending=False)
-    #print ('df mix')
-    #print (df_out_ratio_select_mix)
+    
 
-    
-    
-    
-    
-    print('df_out_new_fc')
-    #print(df_out_fc)
-
-    return df_out_bolas, df_out_fc, df_out_fu, df_out_mix #, df_out_ratio_select_mix, 
+    return df_out_bolas, df_out_fc, df_out_fu, df_out_mix 
 
 # GRAFICO 1. DE BOLAS --------------------------------------------------------------------------------------------
 def graficar_bolas(df, colores_tecnologia):
@@ -365,53 +351,78 @@ def graficar_mix_queso(df, colores_tecnologia):
 
 
 
-# NUEVO GRÁFICO DE EVOLUCION DE LOS FC Y % MIX GEN +++++++++++++++++++++++++++++++++++++++
+# DATAFRAME DE EVOLUCION DE LOS FC, % MIX GEN y GENERACIÓN +++++++++++++++++++++++++++++++++++++++
 def gen_evol(df_out_equiparado):
     #recibimos un df con valores diarios de todos los años. Depende del toogle, 
     df_in = df_out_equiparado.copy()
-    #df_out_evol = df_out_evol[(df_out_evol['tecnologia'] == st.session_state.tec_select_1) | (df_out_evol['tecnologia'] == st.session_state.tec_select_2)]
     if not st.session_state.tec_seleccionadas:
         return pd.DataFrame(columns=['año', 'tecnologia', 'FC', '%_mix_gen', 'gen_GWh_dia'])
     
     df_out = df_in[df_in['tecnologia'].isin(st.session_state.tec_seleccionadas)]
-    #df_out.rename(columns = {'porc_gen':'%_mix'}, inplace = True)
-    
+        
     print('df_out')
     print(df_out)
     
     #df_out2 = df_out.pivot_table(
-    #    index = 'tecnologia',
-    #    columns = 'año',
-    #    values = ['FC', '%_mix_gen'],
-    #    aggfunc = 'mean'
+    #    index='tecnologia',
+    #    columns='año',
+    #    values=['FC', '%_mix_gen', 'gen_GWh_dia'],
+    #    aggfunc={'FC': 'mean', '%_mix_gen': 'mean', 'gen_GWh_dia': 'sum'}
     #)
-    df_out2 = df_out.pivot_table(
-        index='tecnologia',
-        columns='año',
-        values=['FC', '%_mix_gen', 'gen_GWh_dia'],
-        aggfunc={'FC': 'mean', '%_mix_gen': 'mean', 'gen_GWh_dia': 'sum'}
+
+    # % MIX (solo depende de %_mix_gen)
+    df_mix = (
+        df_out
+        .groupby(['año', 'tecnologia'])['%_mix_gen']
+        .mean()
+        .reset_index()
     )
 
-    df_fc = df_out2['FC'].transpose().reset_index().rename(columns = {'index':'año'})
-    df_fc = df_fc.melt(id_vars = 'año', var_name = 'tecnologia', value_name = 'FC')
-    df_mix = df_out2['%_mix_gen'].transpose().reset_index().rename(columns = {'index':'año'})
-    df_mix = df_mix.melt(id_vars = 'año', var_name = 'tecnologia', value_name = '%_mix_gen')
-    df_gen = df_out2['gen_GWh_dia'].transpose().reset_index().rename(columns = {'index':'año'})
-    df_gen = df_gen.melt(id_vars = 'año', var_name = 'tecnologia', value_name = 'gen_GWh')
+    # FC
+    df_fc = (
+        df_out
+        .groupby(['año', 'tecnologia'])['FC']
+        .mean()
+        .reset_index()
+    )
 
-    #df_out_evol = pd.merge(df_fc, df_mix, df_gen, on = ['año', 'tecnologia'])
+    # GENERACIÓN
+    df_gen = (
+        df_out
+        .groupby(['año', 'tecnologia'])['gen_GWh_dia']
+        .sum()
+        .reset_index()
+    )
+
     df_out_evol = (
-        pd.merge(df_fc, df_mix, on=['año', 'tecnologia'])
+        df_fc
+        .merge(df_mix, on=['año', 'tecnologia'])
         .merge(df_gen, on=['año', 'tecnologia'])
     )
 
+    #df_out_evol['%_mix_gen'] *= 100
+
+    #df_fc = df_out2['FC'].transpose().reset_index().rename(columns = {'index':'año'})
+    #df_fc = df_fc.melt(id_vars = 'año', var_name = 'tecnologia', value_name = 'FC')
+    #df_mix = df_out2['%_mix_gen'].transpose().reset_index().rename(columns = {'index':'año'})
+    #df_mix = df_mix.melt(id_vars = 'año', var_name = 'tecnologia', value_name = '%_mix_gen')
+    #df_gen = df_out2['gen_GWh_dia'].transpose().reset_index().rename(columns = {'index':'año'})
+    #df_gen = df_gen.melt(id_vars = 'año', var_name = 'tecnologia', value_name = 'gen_GWh')
+
+    #df_out_evol = pd.merge(df_fc, df_mix, df_gen, on = ['año', 'tecnologia'])
+    #df_out_evol = (
+    #    pd.merge(df_fc, df_mix, on=['año', 'tecnologia'])
+    #    .merge(df_gen, on=['año', 'tecnologia'])
+    #)
+
     #print ('df_out_evol')
     #print (df_out_evol)
-
+    df_out_evol = df_out_evol.rename(columns ={'gen_GWh_dia': 'gen_GWh'})
     df_out_evol['%_mix_gen'] = df_out_evol['%_mix_gen']*100
     
     print ('df_out_evol')
     print (df_out_evol)
+
     return df_out_evol
 
 def graficar_evol(df, colores_tecnologia, param):

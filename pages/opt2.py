@@ -91,7 +91,7 @@ else:
     tarifa = st.session_state.atr_dfnorm
     submit_opt = False
     submit_ver = False
-    if st.session_state.freq =='QH':
+    if st.session_state.freq =='QH' or st.session_state.freq =='H':
         df_in = leer_curva_normalizada(pot_con)
         st.sidebar.write(f'El peaje del suministro es **:orange[{st.session_state.atr_dfnorm}]**')
         st.sidebar.info('Pincha en la opción activada')
@@ -120,15 +120,29 @@ else:
             submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=False)
             submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=True)
 
+        if st.session_state.freq =='H':
+            coef_excesos = 2
+            st.sidebar.warning('Cálculo de excesos con curva HORARIA', icon='⚠️')
+        else:
+            coef_excesos = 1
     else:
-        st.sidebar.warning('Curva de carga **:red[HORARIA]**. No es posible ejecutar ninguna acción', icon='⚠️')
+        #st.sidebar.warning('Curva de carga **:red[HORARIA]**. No es posible ejecutar ninguna acción', icon='⚠️')
+        st.sidebar.error('No es posible ejecutar ninguna acción', icon='⚠️')
         submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=True)
         submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=True)
 
     
     año_opt = 2026
     pyc_tp_opt = pyc_tp[año_opt][tarifa]
-    tepp_opt = tepp[año_opt][tarifa]
+    #tepp_opt = tepp[año_opt][tarifa]
+    tepp_opt = {
+        k: v * coef_excesos
+        for k, v in tepp[año_opt][tarifa].items()
+    }
+    tepp_ver = {
+        k: v * coef_excesos
+        for k, v in tepp[año_ver][tarifa].items()
+    }
     
 
 #with tab1:    

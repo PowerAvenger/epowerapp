@@ -5,156 +5,101 @@ import plotly.graph_objects as go
 import streamlit as st
 from datetime import datetime
 
-# Obtenemos el último registro de esios
 @st.cache_data
-def download_esios_id_5m(id, fecha_ini, fecha_fin, agrupacion):
-    
-    token = st.secrets['ESIOS_API_KEY']
-    cab = {
-        'User-Agent': 'Mozilla/5.0',
-        'x-api-key' : token
-    }
-
-    url_id = 'https://api.esios.ree.es/indicators'
-    url=f'{url_id}/{id}?&start_date={fecha_ini}T00:00:00&end_date={fecha_fin}T23:59:59&time_trunc={agrupacion}'
-    print(url)
-    response = requests.get(url, headers = cab)
-    print(response)
-    datos_origen = response.json()
-    
-    datos=pd.DataFrame(datos_origen['indicator']['values'])
-    datos = (datos
-        .assign(datetime=lambda vh_: pd #formateamos campo fecha, desde un str con diferencia horaria a un naive
-            .to_datetime(vh_['datetime'],utc=True)  # con la fecha local
-            .dt
-            .tz_convert('Europe/Madrid')
-            .dt
-            .tz_localize(None)
-            ) 
-        .loc[:,['datetime','value']]
-        )
-    #datos['fecha']=datos['datetime'].dt.date
-    #datos['hora']=datos['datetime'].dt.hour
-    #datos['dia']=datos['datetime'].dt.day
-    #datos['mes']=datos['datetime'].dt.month
-    #datos['año']=datos['datetime'].dt.year
-    
-    ultimo_registro = datos['datetime'].max()
-        
-    return datos, ultimo_registro #, horas_transcurridas
-
-#NO USADO
-def graf_1(datos):
-    if datos is None or datos.empty:
-        #raise ValueError("Datos no disponibles o vacíos. Asegúrate de ejecutar download_esios_id primero.")
-        error = 'Datos no disponibles.'
-        return error
-    else:
-        graf_1=px.line(datos, x='datetime', y='value', labels={'value':'Demanda MW','datetime':'hora'}, title="Demanda real PENÍNSULA hoy (granulado = 5 minutos)")
-        graf_1.update_layout(title={'x':0.5,'xanchor':'center'})
-    
-        return graf_1
-        
-    
-
-@st.cache_data #(ttl=300)        
-def download_esios_id_month(id, fecha_ini, fecha_fin, agrupacion, tipo_agregacion, ultimo_registro):
-        
-    token = st.secrets['ESIOS_API_KEY']
-    cab = {
-        'User-Agent': 'Mozilla/5.0',
-        'x-api-key' : token
-    }
+def download_esios (id, fecha_ini, fecha_fin, agrupacion, tipo_agregacion):
+    cab = dict()
+    cab ['x-api-key']=st.secrets['ESIOS_API_KEY']
     url_id = 'https://api.esios.ree.es/indicators'
     url=f'{url_id}/{id}?&start_date={fecha_ini}T00:00:00&end_date={fecha_fin}T23:59:59&time_trunc={agrupacion}&time_agg={tipo_agregacion}'
     print(url)
-    #datos_origen = requests.get(url, headers=cab).json()
-    response = requests.get(url, headers=cab)
-    print(response)
-    datos_origen = response.json()
-    
-    datos=pd.DataFrame(datos_origen['indicator']['values'])
-    datos = (datos
-        .assign(datetime=lambda vh_: pd #formateamos campo fecha, desde un str con diferencia horaria a un naive
-            .to_datetime(vh_['datetime'],utc=True)  # con la fecha local
+    datos_origen = requests.get(url, headers = cab).json()
+    print(datos_origen)
+    short_name = datos_origen['indicator']['short_name']
+    name = datos_origen['indicator']['name']
+    df_in = pd.DataFrame(datos_origen['indicator']['values'])
+    df_in = (df_in
+        .assign(datetime = lambda vh_: pd #formateamos campo fecha, desde un str con diferencia horaria a un naive
+            .to_datetime(vh_['datetime'], utc = True)  # con la fecha local
             .dt
             .tz_convert('Europe/Madrid')
             .dt
-            .tz_localize(None)
-                ) 
-        .loc[:,['datetime','value']]
-        )
-    
-    
-    #añadimos columnas año y mes
-    datos['año'] = datos['datetime'].dt.year
-    datos['mes'] = datos['datetime'].dt.month
-    #formateo de año
-    datos['año'] = datos['año'].astype(int)
+            .tz_localize(None),
+            short_name = short_name,
+            name = name
+            ) 
+            .loc[:,['datetime','value', 'short_name', 'name']]
+    )    
+    return df_in
 
-    
-    #calculo de las horas transcurridas del mes en curso
-    #lo usaremos para calcular la demanda del mes en curso en GWh a partir de la media de la demanda real en MW obtenida del id1293
-    
-    
-    if ultimo_registro !=None:
-        fecha_hora_objetivo = pd.Timestamp(ultimo_registro)
-        inicio_mes = pd.Timestamp(year=fecha_hora_objetivo.year, month=fecha_hora_objetivo.month, day=1, hour=0, minute=0, second=0)
-        diferencia = fecha_hora_objetivo - inicio_mes
-        horas_transcurridas = diferencia.total_seconds() / 3600
-    else:
-        horas_transcurridas = 0
-    #eliminamos datetime
-    datos=datos.drop(columns=['datetime'])
-    
-    #añadimos la columna mes_nombre
-    meses = {
-        1: 'Enero',
-        2: 'Febrero',
-        3: 'Marzo',
-        4: 'Abril',
-        5: 'Mayo',
-        6: 'Junio',
-        7: 'Julio',
-        8: 'Agosto',
-        9: 'Septiembre',
-        10: 'Octubre',
-        11: 'Noviembre',
-        12: 'Diciembre'
-    }
-    datos['mes_nombre']=datos['mes'].map(meses)
-    meses_seleccion=datos['mes_nombre'].unique()
-            
-    
-    ##añadimos una columna con las horas de cada mes
-    #calculamos las horas según el mes
-    dias_por_mes = {
-        1: 31, 2: 28, 3: 31, 4: 30, 5: 31, 6: 30,
-        7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31
-        }
-    def calcular_horas(row):
-        mes = row['mes']
-        dias = dias_por_mes[mes]
-        return dias*24
-    datos['horas_mes'] = datos.apply(calcular_horas, axis=1)
-    
-    #pasamos value a GWh
-    datos['value']=datos['value']/1000
-    #calculamos demanda mensual en GWh
-    datos['demanda']=datos['value']*datos['horas_mes']
-    #renombramos
-    datos = datos.rename(columns={'demanda':'demanda_real_GWh'})
-    datos = datos.rename(columns={'value':'demanda_media_GW'})
-    
-    num_mes_previsto = datos['mes'].iloc[-1]
-    mes_previsto_nombre = datos['mes_nombre'].iloc[-1] #es el mes (nombre) del cual hacemos la prevision. mes actual
-    media_real = datos['demanda_media_GW'].iloc[-1]
-    #print(media_real)
-    #calculamos demanda del mes en curso
-    demanda_real = media_real * horas_transcurridas
-    
-    return datos, num_mes_previsto, demanda_real, mes_previsto_nombre, meses_seleccion, media_real
-     
+def graficar_media_diaria(df_demand, años_visibles, mes_nombre_actual, año_actual):
+    graf_media_evol_mes = px.line(df_demand, x = 'fecha_ficticia', y = 'media_mensual', 
+        color = 'año', 
+        #color_discrete_sequence = colores_años,
+        #width = 1000,
+        #height= 600,
+        labels = {'media_mensual':'GW', 'fecha_ficticia':'día'},
+        #title = f'Evolución mensual de la {tecnologia} - media diaria (GWh)',
+        title = f'Evolución mensual de la demanda media diaria (GW) en {mes_nombre_actual} de {año_actual}',
+        custom_data = df_demand[['short_name', 'año', 'mes_nombre']],
+        #facet_col = 'mes_nombre',
+        #facet_col_wrap = 6,
+        line_dash='short_name',
+        line_dash_map={
+            'Demanda real': 'solid',
+            'Previsión diaria': 'dot'
+            },
+    )
+
+    for trace in graf_media_evol_mes.data:
+        if trace.name.startswith(str(año_actual)):
+            trace.update(line=dict(width=5))
+        # Control de visibilidad por año
+        año_trace = trace.name.split(',')[0]  # '2026'
+        if año_trace not in map(str, años_visibles):
+            trace.visible = 'legendonly'
+
+    graf_media_evol_mes.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
+
+    # Rotos los ejes para que no se sincronicen todos (sol un mes en cada facet col)
+    graf_media_evol_mes.update_xaxes(matches=None)
+    graf_media_evol_mes.update_xaxes(
+        #tickformat='%d-%b',
+        tickformat='%d', 
+        hoverformat="%d %B",                  # Forza formato uniforme
+        showgrid=True
+    )
+
+    graf_media_evol_mes.update_layout(
+        xaxis = dict(
+            #tickformat = '%d-%b',
+            tickformat = '%d',
+            #tick0='2020-01-01',       # Primer tick el 1-Ene
+            dtick='D1',               # Un tick por mes
+            showgrid=True,            # Asegura grid visible
+            matches = None 
+            ),
+        hovermode='x unified',
+        legend=dict(
+            orientation="h",        # horizontal
+            yanchor="bottom",
+            y=1.02,                 # un poco por encima del gráfico
+            xanchor="center",
+            x=0.5,                  # centrada horizontalmente
+            title_text=None         # sin cabecera
+        )
+    )
+
+    #graf_media_evol_mes.update_traces(
+    #    hovertemplate = '%{customdata[0]}<br>Año: %{customdata[1]} Mes: %{customdata[2]} Día: %{x}<br>Evol media diaria(GWh): %{y:.2f}<extra></extra>',
+    #)
+    graf_media_evol_mes.update_traces(
+        hovertemplate=(
+            "Año %{fullData.name}: %{y:.2f} GW"
+            "<extra></extra>"
+        )
+    )
+
+    return graf_media_evol_mes 
 
 def actualizar_historicos(datos_mensual):
     historicos=pd.read_csv('local_bbdd/demanda_mensual.csv',sep=';')
@@ -567,7 +512,7 @@ def graf_ranking_mes(datos_mensual_mes_encurso_ordenado):
 
 
 
-# NO SE GASTA------------------------------------------------------------------------
+# NO SE GASTA------------------------------------------------------------------------!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 @st.cache_data    
 def download_esios_id_hour(id,fecha_ini,fecha_fin,agrupacion,tipo_agregacion,horas_transcurridas):
@@ -658,3 +603,153 @@ def download_esios_id_hour(id,fecha_ini,fecha_fin,agrupacion,tipo_agregacion,hor
      
 
 
+
+# Obtenemos el último registro de esios. NO USADO
+@st.cache_data
+def download_esios_id_5m(id, fecha_ini, fecha_fin, agrupacion):
+    
+    token = st.secrets['ESIOS_API_KEY']
+    cab = {
+        'User-Agent': 'Mozilla/5.0',
+        'x-api-key' : token
+    }
+
+    url_id = 'https://api.esios.ree.es/indicators'
+    url=f'{url_id}/{id}?&start_date={fecha_ini}T00:00:00&end_date={fecha_fin}T23:59:59&time_trunc={agrupacion}'
+    print(url)
+    response = requests.get(url, headers = cab)
+    print(response)
+    datos_origen = response.json()
+    
+    datos=pd.DataFrame(datos_origen['indicator']['values'])
+    datos = (datos
+        .assign(datetime=lambda vh_: pd #formateamos campo fecha, desde un str con diferencia horaria a un naive
+            .to_datetime(vh_['datetime'],utc=True)  # con la fecha local
+            .dt
+            .tz_convert('Europe/Madrid')
+            .dt
+            .tz_localize(None)
+            ) 
+        .loc[:,['datetime','value']]
+        )
+    #datos['fecha']=datos['datetime'].dt.date
+    #datos['hora']=datos['datetime'].dt.hour
+    #datos['dia']=datos['datetime'].dt.day
+    #datos['mes']=datos['datetime'].dt.month
+    #datos['año']=datos['datetime'].dt.year
+    
+    ultimo_registro = datos['datetime'].max()
+        
+    return datos, ultimo_registro #, horas_transcurridas
+
+#NO USADO
+def graf_1(datos):
+    if datos is None or datos.empty:
+        #raise ValueError("Datos no disponibles o vacíos. Asegúrate de ejecutar download_esios_id primero.")
+        error = 'Datos no disponibles.'
+        return error
+    else:
+        graf_1=px.line(datos, x='datetime', y='value', labels={'value':'Demanda MW','datetime':'hora'}, title="Demanda real PENÍNSULA hoy (granulado = 5 minutos)")
+        graf_1.update_layout(title={'x':0.5,'xanchor':'center'})
+    
+        return graf_1
+        
+    
+
+@st.cache_data #(ttl=300)        NO USADO!!!!
+def download_esios_id_month(id, fecha_ini, fecha_fin, agrupacion, tipo_agregacion, ultimo_registro):
+        
+    token = st.secrets['ESIOS_API_KEY']
+    cab = {
+        'User-Agent': 'Mozilla/5.0',
+        'x-api-key' : token
+    }
+    url_id = 'https://api.esios.ree.es/indicators'
+    url=f'{url_id}/{id}?&start_date={fecha_ini}T00:00:00&end_date={fecha_fin}T23:59:59&time_trunc={agrupacion}&time_agg={tipo_agregacion}'
+    print(url)
+    #datos_origen = requests.get(url, headers=cab).json()
+    response = requests.get(url, headers=cab)
+    print(response)
+    datos_origen = response.json()
+    
+    datos=pd.DataFrame(datos_origen['indicator']['values'])
+    datos = (datos
+        .assign(datetime=lambda vh_: pd #formateamos campo fecha, desde un str con diferencia horaria a un naive
+            .to_datetime(vh_['datetime'],utc=True)  # con la fecha local
+            .dt
+            .tz_convert('Europe/Madrid')
+            .dt
+            .tz_localize(None)
+                ) 
+        .loc[:,['datetime','value']]
+        )
+    
+    
+    #añadimos columnas año y mes
+    datos['año'] = datos['datetime'].dt.year
+    datos['mes'] = datos['datetime'].dt.month
+    #formateo de año
+    datos['año'] = datos['año'].astype(int)
+
+    
+    #calculo de las horas transcurridas del mes en curso
+    #lo usaremos para calcular la demanda del mes en curso en GWh a partir de la media de la demanda real en MW obtenida del id1293
+    
+    
+    if ultimo_registro !=None:
+        fecha_hora_objetivo = pd.Timestamp(ultimo_registro)
+        inicio_mes = pd.Timestamp(year=fecha_hora_objetivo.year, month=fecha_hora_objetivo.month, day=1, hour=0, minute=0, second=0)
+        diferencia = fecha_hora_objetivo - inicio_mes
+        horas_transcurridas = diferencia.total_seconds() / 3600
+    else:
+        horas_transcurridas = 0
+    #eliminamos datetime
+    datos=datos.drop(columns=['datetime'])
+    
+    #añadimos la columna mes_nombre
+    meses = {
+        1: 'Enero',
+        2: 'Febrero',
+        3: 'Marzo',
+        4: 'Abril',
+        5: 'Mayo',
+        6: 'Junio',
+        7: 'Julio',
+        8: 'Agosto',
+        9: 'Septiembre',
+        10: 'Octubre',
+        11: 'Noviembre',
+        12: 'Diciembre'
+    }
+    datos['mes_nombre']=datos['mes'].map(meses)
+    meses_seleccion=datos['mes_nombre'].unique()
+            
+    
+    ##añadimos una columna con las horas de cada mes
+    #calculamos las horas según el mes
+    dias_por_mes = {
+        1: 31, 2: 28, 3: 31, 4: 30, 5: 31, 6: 30,
+        7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31
+        }
+    def calcular_horas(row):
+        mes = row['mes']
+        dias = dias_por_mes[mes]
+        return dias*24
+    datos['horas_mes'] = datos.apply(calcular_horas, axis=1)
+    
+    #pasamos value a GWh
+    datos['value']=datos['value']/1000
+    #calculamos demanda mensual en GWh
+    datos['demanda']=datos['value']*datos['horas_mes']
+    #renombramos
+    datos = datos.rename(columns={'demanda':'demanda_real_GWh'})
+    datos = datos.rename(columns={'value':'demanda_media_GW'})
+    
+    num_mes_previsto = datos['mes'].iloc[-1]
+    mes_previsto_nombre = datos['mes_nombre'].iloc[-1] #es el mes (nombre) del cual hacemos la prevision. mes actual
+    media_real = datos['demanda_media_GW'].iloc[-1]
+    #print(media_real)
+    #calculamos demanda del mes en curso
+    demanda_real = media_real * horas_transcurridas
+    
+    return datos, num_mes_previsto, demanda_real, mes_previsto_nombre, meses_seleccion, media_real

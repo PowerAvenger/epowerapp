@@ -377,17 +377,22 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
                 # Detectar casos con formato HH:MM o HH:MM:SS
                 if hora_raw.str.contains(":").any():
                     print("contiene :")
+                    print(d.head(24))
 
                     minutos = hora_raw.str.extract(r":(\d{2})")[0].astype(float)
 
                     if minutos.max() == 0:
                         # Horario tipo “01:00”
-                        print("horarios")
+                        print("Registros horarios")
                         #dt0 = d + pd.to_timedelta(hora_raw + ":00")
-                        dt0 = d + pd.to_timedelta(hora_raw, errors="coerce")
+                        #dt0 = d + pd.to_timedelta(hora_raw, errors="coerce")
+                        dt0 = d + pd.to_timedelta(hora_raw +":00", errors="coerce")
+                        print(dt0)
 
                         # Ajuste por casos 01:00→00:00 del día siguiente
-                        if dt0.dt.hour.min() == 1 and dt0.dt.hour.max() == 0:
+                        #if dt0.dt.hour.min() == 1 and dt0.dt.hour.max() == 0:
+                        if dt0.dt.hour.min() == 1: #and dt0.dt.hour.max() == 0:
+                            print('Hora mínima = 1')
                             dt0 = dt0 - pd.Timedelta(hours=1)
 
                         

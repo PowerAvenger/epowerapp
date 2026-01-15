@@ -82,8 +82,8 @@ if año_bisiesto:
 else:
     horas_año = 8760
 
-horas_2025_transcurridas = ((ultima_fecha_registro - date(2025, 1, 1)).days + 1) * 24
-coef_horas = horas_año / horas_2025_transcurridas
+horas_2026_transcurridas = ((ultima_fecha_registro - date(2026, 1, 1)).days + 1) * 24
+coef_horas = horas_año / horas_2026_transcurridas
 print(f'coef horas =  {coef_horas}')
 
 
@@ -126,17 +126,17 @@ else:
     df_omie_filtrado = pd.DataFrame()
 
 # usado para los gráficos 5,6,9, donde comparamos todos los años
-df_out_equiparado = df_diario_all.copy()
+df_out_equiparado_ini = df_diario_all.copy()
 
 if st.session_state.get('dias_equiparados', True):
-    df_out_equiparado = df_out_equiparado[
-        (df_out_equiparado['mes_num'] < mes_ult) |
-        ((df_out_equiparado['mes_num'] == mes_ult) & (df_out_equiparado['fecha'].dt.day <= dia_ult))
+    df_out_equiparado = df_out_equiparado_ini[
+        (df_out_equiparado_ini['mes_num'] < mes_ult) |
+        ((df_out_equiparado_ini['mes_num'] == mes_ult) & (df_out_equiparado_ini['fecha'].dt.day <= dia_ult))
     ]
 else:
     # 🔹 SOLO años completos (excluye el año en curso)
-    df_out_equiparado = df_out_equiparado[
-        df_out_equiparado['año'] < año_actual
+    df_out_equiparado = df_out_equiparado_ini[
+        df_out_equiparado_ini['año'] < año_actual
     ]
 
 
@@ -164,6 +164,16 @@ print(df_out_equiparado)
 
 print('df out filtrado')
 print(df_año_filtrado)
+
+df_test1 = df_año_filtrado[df_año_filtrado['tecnologia'] == 'Eólica']
+print("Días en tablas_salida:", df_test1['fecha'].nunique())
+print("Total filas:", len(df_test1))
+
+df_test2 = df_out_equiparado[(df_out_equiparado['año'] == 2025) & (df_out_equiparado['tecnologia'] == 'Eólica')]
+print("Días en gen_evol:", df_test2['fecha'].nunique())
+print("Total filas:", len(df_test2))
+
+
 
 #dfs con el año seleccionado
 df_out_bolas, df_out_fc, df_out_fu, df_out_mix  = tablas_salida(df_año_filtrado, tec_filtro) 
