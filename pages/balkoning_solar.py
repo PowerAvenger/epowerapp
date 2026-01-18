@@ -31,7 +31,9 @@ if 'longitud' not in st.session_state:
 if 'precio_energia' not in st.session_state:
     st.session_state.precio_energia = 11    
 if 'coste_inversion' not in st.session_state:
-    st.session_state.coste_inversion = 350    
+    st.session_state.coste_inversion = 350
+if 'use_horizon' not in st.session_state:
+    st.session_state.use_horizon = False       
 
 
 potencia_paneles = st.session_state.potencia_paneles / 1000 # potencia en kWp
@@ -50,10 +52,22 @@ az_inicio = orientacion - ancho_obstaculo
 az_fin = orientacion + ancho_obstaculo
 def norm_az(az):
     return az % 360
+userhorizon = []
+
+for az in range(0, 360, 10):
+    az_n = norm_az(az)
+    if norm_az(az_inicio) <= az_n <= norm_az(az_fin):
+        userhorizon.append(angulo_horizonte)
+    else:
+        userhorizon.append(0)
+
+if st.session_state.use_horizon:
+    use_horizon = True
+else:
+    use_horizon = False
 
 
-
-df_pvgis_ini = obtener_pvgis_horario(latitud, longitud, año_pvgis, inclinacion, orientacion, potencia_paneles)
+df_pvgis_ini = obtener_pvgis_horario(latitud, longitud, año_pvgis, inclinacion, orientacion, potencia_paneles, use_horizon, userhorizon)
 
 df_pvgis = arreglar_pvgis(df_pvgis_ini)
 
@@ -206,7 +220,7 @@ with st.container():
 
         # Mostrar mapa
         st.caption('Introduce las coordenadas de la ubicación')
-        mapa = st_folium(m, height=400, width=700)
+        mapa = st_folium(m, height=300, width=700)
 
         # Leer coordenadas clicadas
         if mapa["last_clicked"]:
@@ -215,9 +229,10 @@ with st.container():
 
         st.write(f"📍 Latitud: {st.session_state.latitud:.5f}")
         st.write(f"📍 Longitud: {st.session_state.longitud:.5f}")
+        st.toggle('Usar horizonte personalizado (finca=obstáculo)', key = 'use_horizon')
 
         st.number_input('Introduce el precio medio de la energía (en c€/kWh)', min_value=8, max_value=25, step=1, key='precio_energia')
-        st.number_input('Introduce el coste de la inversión IVA INCLUIDO (en €)', min_value=100, max_value=10000, step=100, key='coste_inversion')
+        st.number_input('Introduce el coste de la inversión IVA INCLUIDO (en €)', min_value=100, max_value=10000, step=50, key='coste_inversion')
 
     with c2:
         st.subheader('Balance energético')

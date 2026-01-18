@@ -5,7 +5,7 @@ import pvlib
 import streamlit as st
 
 @st.cache_data()
-def obtener_pvgis_horario(latitud, longitud, año_pvgis, inclinacion, orientacion, potencia_paneles):
+def obtener_pvgis_horario(latitud, longitud, año_pvgis, inclinacion, orientacion, potencia_paneles, use_horizon, user_horizon):
     df_pvgis =pvlib.iotools.get_pvgis_hourly(
         latitude=latitud,
         longitude=longitud,
@@ -13,7 +13,7 @@ def obtener_pvgis_horario(latitud, longitud, año_pvgis, inclinacion, orientacio
         raddatabase='PVGIS-ERA5', components=False, 
         surface_tilt=inclinacion, surface_azimuth=orientacion, #slope=surface_tilt, azimuth: ATENCIÓN la convención de pvgis es sur=0, pero pvlib sur=180
         outputformat='json', 
-        usehorizon=False, userhorizon=None, 
+        usehorizon=use_horizon, userhorizon=user_horizon, 
         pvcalculation=True, peakpower=potencia_paneles, pvtechchoice='crystSi', mountingplace='free', #peakpower en kWp instalados de paneles
         loss=14, trackingtype=0, optimal_surface_tilt=False, optimalangles=False, 
         url='https://re.jrc.ec.europa.eu/api/', 
