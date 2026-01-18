@@ -47,7 +47,7 @@ altura = 6 # metros
 
 
 
-df_pvgis_ini, meta, inputs = obtener_pvgis_horario(latitud, longitud, año_pvgis, inclinacion, orientacion, potencia_paneles)
+df_pvgis_ini, _, _ = obtener_pvgis_horario(latitud, longitud, año_pvgis, inclinacion, orientacion, potencia_paneles)
 
 df_pvgis = arreglar_pvgis(df_pvgis_ini)
 
