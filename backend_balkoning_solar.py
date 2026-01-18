@@ -5,7 +5,7 @@ import pvlib
 import streamlit as st
 @st.cache_data()
 def obtener_pvgis_horario(latitud, longitud, año_pvgis, inclinacion, orientacion, potencia_paneles):
-    df_pvgis, _, _,=pvlib.iotools.get_pvgis_hourly(
+    df_pvgis, _, _=pvlib.iotools.get_pvgis_hourly(
         latitude=latitud,
         longitude=longitud,
         start=año_pvgis, end=año_pvgis, 
