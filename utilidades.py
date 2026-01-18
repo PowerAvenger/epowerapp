@@ -24,6 +24,7 @@ def generar_menu():
         st.page_link('pages/telemindex.py', label = 'Telemindex', icon = "📈")
         st.page_link('pages/simulindex.py', label = 'Simulindex', icon = "🔮")
         st.page_link('pages/fijovspvpc.py', label = 'FijovsPVPC', icon = "⚖️")
+        st.page_link('pages/balkoning_solar.py', label = 'Balkoning Solar', icon = "🏊‍♂️")
         st.page_link('pages/escalacv.py', label = 'Escala CV', icon = "📊")
         st.page_link('pages/excedentes.py', label = 'Excedentes', icon = "💰")
         st.page_link('pages/demanda.py', label = 'Demanda', icon = "🏭")
