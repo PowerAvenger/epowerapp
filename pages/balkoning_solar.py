@@ -44,10 +44,16 @@ año_pvgis = 2023
 # definimos obstáculo finca delante de la nuestra
 distancia = 15 #metros
 altura = 6 # metros
+angulo_horizonte = np.degrees(np.arctan(altura / distancia))
+ancho_obstaculo = 40  # grados
+az_inicio = orientacion - ancho_obstaculo
+az_fin = orientacion + ancho_obstaculo
+def norm_az(az):
+    return az % 360
 
 
 
-df_pvgis_ini, _, _ = obtener_pvgis_horario(latitud, longitud, año_pvgis, inclinacion, orientacion, potencia_paneles)
+df_pvgis_ini = obtener_pvgis_horario(latitud, longitud, año_pvgis, inclinacion, orientacion, potencia_paneles)
 
 df_pvgis = arreglar_pvgis(df_pvgis_ini)
 
