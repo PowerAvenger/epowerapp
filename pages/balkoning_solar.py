@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy_financial as npf
+import numpy as np
 import folium
 from streamlit_folium import st_folium
 from backend_balkoning_solar import (
@@ -39,6 +40,11 @@ orientacion = st.session_state.orientacion #azimuth: ATENCIÓN la convención de
 latitud = st.session_state.latitud
 longitud = st.session_state.longitud
 año_pvgis = 2023
+
+# definimos obstáculo finca delante de la nuestra
+distancia = 15 #metros
+altura = 6 # metros
+
 
 
 df_pvgis_ini, meta, inputs = obtener_pvgis_horario(latitud, longitud, año_pvgis, inclinacion, orientacion, potencia_paneles)
