@@ -53,18 +53,27 @@ with col24:
     st.page_link('pages/redata_potgen.py', label = 'Tecnologías de generación', icon = "🔀")
     st.image('images/redata.jpg')
 with col25:
-    st.subheader('Gas & Furious',divider='rainbow')
-    st.page_link("pages/mibgas.py", label="Pasado, presente y futuro del gas", icon="🔥", use_container_width=True)
-    st.image('images/gas.jpg')
+    st.subheader('Balkoning Solar FV',divider='rainbow')
+    st.page_link("pages/balkoning_solar.py", label="Pasado, presente y futuro del gas", icon="🏊‍♂️", use_container_width=True)
+    st.image('images/balkoning.jpg')
 
 col31,col32,col33,col34,col35=st.columns(5)
 with col31:
+    st.subheader('Gas & Furious',divider='rainbow')
+    st.page_link("pages/mibgas.py", label="Pasado, presente y futuro del gas", icon="🔥", use_container_width=True)
+    st.image('images/gas.jpg')
+with col32:
     st.subheader('Tecnologías Marginales',divider='rainbow')
     st.page_link('pages/marginales.py', label = 'Tecnologías que casan precio marginal', icon = "⚡️")
     st.image('images/marginales.jpg')
-with col32:
-    url10 = "https://spo2425-josevidal.streamlit.app/"
+with col33:
+    url10 = "https://spo-epowerapp.streamlit.app/"
     st.subheader('SPO: Super Power OMIE',divider='rainbow')
     st.write("Gana el [MVPStarPower](%s) del año y bate a OMIP!" % url10)
     st.image('images/spo.jpg')
+with col34:
+    url10 = "https://interpolados-epowerapp.streamlit.app/"
+    st.subheader('Interpolados qh REE',divider='rainbow')
+    st.write("Cuando la [interpolación](%s) REE apenas tiene impacto" % url10)
+    st.image('images/interpolados.jpg')
 
