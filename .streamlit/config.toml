@@ -3,4 +3,5 @@ showSidebarNavigation = false
 [theme]
 base="dark"
 primaryColor="#4be2ff"
-secondaryBackgroundColor="#b0bef3"
+secondaryBackgroundColor="#3d3e4c"
+
