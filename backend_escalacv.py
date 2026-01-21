@@ -11,8 +11,6 @@ import json
 import numpy as np
 
 
-#if 'componente' not in st.session_state:
-#        st.session_state.componente = 'SPOT'
 
 meses_español = {1: "ene", 2: "feb", 3: "mar", 4: "abr", 5: "may", 6: "jun",
     7: "jul", 8: "ago", 9: "sep", 10: "oct", 11: "nov", 12: "dic"
@@ -291,10 +289,13 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
 
 # VALORES MEDIOS DIARIOS DEL AÑO SELECCIONADO+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-def diarios(datos, fecha_ini, fecha_fin):    
+#def diarios(datos, fecha_ini, fecha_fin): 
+def diarios(datos, fecha_ini, fecha_fin, datos_comparar):       
     datos_dia = datos.copy()
     datos_dia = datos_dia.drop(columns=['hora'])
     datos_dia['mes_nombre']=datos_dia['mes'].map(meses_español)
+
+    
 
     print('datos_dia')
     print(datos_dia)
@@ -327,7 +328,8 @@ def diarios(datos, fecha_ini, fecha_fin):
         datos_dia['media'] = datos_dia['value'].expanding().mean()
         datos_dia['media_movil'] = datos_dia['value'].rolling(window=14, min_periods=1).mean()
         
-            
+    
+
     datos_dia['value'] = datos_dia['value'].round(2)
     datos_dia[['dia','mes','año']] = datos_dia[['dia','mes','año']].astype(int)
     
@@ -344,6 +346,36 @@ def diarios(datos, fecha_ini, fecha_fin):
     
     #datos_dia['media'] = datos_dia['value'].expanding().mean()
     #datos_dia.reset_index(inplace=True)
+
+    datos_comp = datos_comparar.copy()
+    datos_comp['fecha'] = pd.to_datetime(
+        datos_comp['fecha'],
+        errors='coerce'
+    )
+    datos_comp['media'] = datos_comp['value'].expanding().mean()
+    # extraemos mes y día del año comparado
+    datos_comp['mes'] = datos_comp['fecha'].dt.month
+    datos_comp['dia'] = datos_comp['fecha'].dt.day
+
+    print('datos a comparar')
+    print(datos_comp)
+
+    # reconstruimos la fecha usando el AÑO SELECCIONADO
+    año_base = st.session_state.año_seleccionado_esc
+
+    datos_comp['fecha_alineada'] = pd.to_datetime(
+        dict(
+            year=año_base,
+            month=datos_comp['mes'],
+            day=datos_comp['dia']
+        ),
+        errors='coerce'
+    )
+
+    # eliminamos 29 de febrero si no existe en el año base
+    datos_comp = datos_comp.dropna(subset=['fecha_alineada'])
+
+
 
     #GRÁFICO PRINCIPAL CON LOS PRECIOS MEDIOS DIARIOS DEL AÑO. ecv es escala cavero vidal------------------
     componente = st.session_state.get('componente', 'SPOT')
@@ -409,11 +441,23 @@ def diarios(datos, fecha_ini, fecha_fin):
                 y = datos_dia['media_movil'],
                 mode = 'lines',
                 name = 'media_movil',
-                line = dict(color = 'yellow', dash = 'dot')
+                line = dict(color = 'orange', dash = 'dot'),
+                visible='legendonly'   # 👈 MISMO EFECTO que en demanda
             )
         )
 
-    # añadimos gráfico de línea para la media
+    # añadimos gráfico de línea para la media del año a comparar
+
+    graf_ecv_diario.add_trace(
+        go.Scatter(
+            x=datos_comp['fecha_alineada'],
+            y=datos_comp['media'],
+            mode='lines',
+            name=f"Media acumulada {st.session_state.año_seleccionado_comp}",
+            line=dict(color='#5F7D8C', width=2, dash='dot'),
+            visible='legendonly'   # 👈 MISMO EFECTO que en demanda
+        )
+    )
     
 
     graf_ecv_diario.update_xaxes(

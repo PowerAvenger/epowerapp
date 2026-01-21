@@ -25,6 +25,9 @@ mes_actual = meses_español[num_mes_actual]
 if 'año_seleccionado_esc' not in st.session_state:
     st.session_state.año_seleccionado_esc = 2026
     st.session_state.año_anterior_esc = 2026
+if 'año_seleccionado_comp' not in st.session_state:
+    st.session_state.año_seleccionado_comp = 2025
+    st.session_state.año_anterior_comp = 2025
 
 if 'mes_seleccionado_esc' not in st.session_state:
     st.session_state.mes_seleccionado_esc = mes_actual
@@ -56,9 +59,13 @@ fecha_max_diario_total = datos_totales.loc[datos_totales['value'].idxmax(), 'fec
 #FILTRAMOS POR EL AÑO SELECCIONADO
 datos_año_filtrado = datos_total[datos_total['año'] == st.session_state.año_seleccionado_esc]
 fecha_ini_año = datos_año_filtrado['fecha'].min()
-fecha_fin_año = datetime(st.session_state.año_seleccionado_esc, 12, 31) #datos_año_filtrado['fecha'].max()
+fecha_fin_año = datetime(st.session_state.año_seleccionado_esc, 12, 31) 
+#FILTRAMOS POR EL AÑO COMPARADO
+datos_año_comparado = datos_totales[datos_totales['año'] == st.session_state.año_seleccionado_comp]
+
 #datos diarios
-datos_dia, graf_ecv_diario = diarios(datos_año_filtrado, fecha_ini_año, fecha_fin_año)
+#datos_dia, graf_ecv_diario = diarios(datos_año_filtrado, fecha_ini_año, fecha_fin_año)
+datos_dia, graf_ecv_diario = diarios(datos_año_filtrado, fecha_ini_año, fecha_fin_año, datos_año_comparado)
 valor_medio_diario = round(datos_dia['value'].mean(),2)
 valor_minimo_diario = datos_dia['value'].min()
 valor_maximo_diario = datos_dia['value'].max()
@@ -118,6 +125,10 @@ medias_horarias_filtrado, graf_medias_horarias = medias_horarias(datos_año_filt
     #st.write(ultima_descarga)
 
 años_lista = list(range(2018, 2027)) #se pone un año más del actual
+años_comp = [
+    a for a in años_lista
+    if a != st.session_state.año_seleccionado_esc
+]
 meses_lista = ['todos', 'ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']
 
 
@@ -125,7 +136,8 @@ meses_lista = ['todos', 'ene','feb','mar','abr','may','jun','jul','ago','sep','o
 #st.sidebar.header('', divider='rainbow')
 st.sidebar.subheader('Escala Cavero-Vidal')
 st.sidebar.markdown(f':blue-background[Sección dedicada a **Roberto Cavero García**]')
-st.sidebar.selectbox('Selecciona el año', options = años_lista, key = 'año_seleccionado_esc')
+st.sidebar.selectbox('Selecciona el año a visualizar', options = años_lista, key = 'año_seleccionado_esc')
+st.sidebar.selectbox('Selecciona el año a comparar la media anual', options = años_comp, key = 'año_seleccionado_comp')
 st.sidebar.selectbox('Selecciona el mes', options = meses_lista, key = 'mes_seleccionado_esc')
 st.sidebar.date_input('Selecciona el día', min_value= fecha_min_select_dia, max_value=fecha_max_select_dia, key = 'dia_seleccionado_esc')
 st.sidebar.radio('Selecciona el componente de mercado', options=['SPOT', 'SSAA', 'SPOT+SSAA'], key = 'componente')
