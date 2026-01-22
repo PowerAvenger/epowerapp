@@ -46,7 +46,35 @@ df_pot_edit = st.sidebar.data_editor(
     num_rows="fixed",
 )
 
+MIN_P1 = 0.1
+MIN_P6 = 50.01
+def validar_potencias(df):
+    errores = []
+
+    # mínimos
+    if df.loc["P1", "Potencia (kW)"] < MIN_P1:
+        errores.append("P1 debe ser ≥ 0,1 kW")
+
+    if df.loc["P6", "Potencia (kW)"] < MIN_P6:
+        errores.append("P6 debe ser ≥ 50,01 kW")
+
+    # orden P1 ≤ P2 ≤ ... ≤ P6
+    potencias = df["Potencia (kW)"].values
+    if not all(potencias[i] <= potencias[i+1] for i in range(len(potencias)-1)):
+        errores.append("Debe cumplirse P1 ≤ P2 ≤ P3 ≤ P4 ≤ P5 ≤ P6")
+
+    return errores
+
+
 if st.sidebar.button('Cargar potencias contratadas', use_container_width=True, type='primary'):
+    errores = validar_potencias(df_pot_edit)
+
+    if errores:
+        for e in errores:
+            st.sidebar.error(e)
+    else:
+        st.session_state.df_pot = df_pot_edit
+        st.sidebar.success("Potencias cargadas correctamente")
     st.session_state.df_pot = df_pot_edit
 
 
@@ -80,7 +108,7 @@ if 'freq' not in st.session_state:
 
 #tab1, tab2 =st.tabs(['Optimizar', 'Verificar'])
 
-if 'df_norm' not in st.session_state:
+if 'df_norm' not in st.session_state or st.session_state.df_norm is None:
     st.session_state.df_norm = None
     st.sidebar.warning('Por favor introduce una curva de carga')
 #    with tab1:
@@ -92,6 +120,7 @@ else:
     submit_opt = False
     submit_ver = False
     #if st.session_state.freq =='QH' or st.session_state.freq =='H':
+
     if tarifa != '2.0':
         df_in = leer_curva_normalizada(pot_con)
         st.sidebar.write(f'El peaje del suministro es **:orange[{st.session_state.atr_dfnorm}]**')
@@ -103,13 +132,24 @@ else:
         const_verif = 31
         const_optim_inf = 320
         const_optim_sup = 380
+
+        if st.session_state.freq =='H':
+            coef_excesos = 2
+            st.sidebar.warning('Cálculo de excesos con curva HORARIA', icon='⚠️')
+        else:
+            coef_excesos = 1
+
         # mes natural: se puede verificar
         if dias_rango <= const_verif:
             st.sidebar.info('Es posible verificar.')
             submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=True)
             submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=False)
             pyc_tp_ver = pyc_tp[año_ver][tarifa]
-            tepp_ver = tepp[año_ver][tarifa]
+            tepp_ver = {
+                k: v * coef_excesos
+                for k, v in tepp[año_ver][tarifa].items()
+            }
+            #tepp_ver = tepp[año_ver][tarifa]
         # menos de 365 días o más de 366: no se puede hacer nada
         elif (const_verif < dias_rango < const_optim_inf) or (dias_rango > const_optim_sup):
             st.sidebar.warning('No es posible ejecutar ninguna acción.', icon='⚠️')
@@ -120,24 +160,14 @@ else:
             st.sidebar.info('Es posible optimizar.')
             submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=False)
             submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=True)
-
-        if st.session_state.freq =='H':
-            coef_excesos = 2
-            st.sidebar.warning('Cálculo de excesos con curva HORARIA', icon='⚠️')
-        else:
-            coef_excesos = 1
-
-        año_opt = 2026
-        pyc_tp_opt = pyc_tp[año_opt][tarifa]
+            año_opt = 2026
+            pyc_tp_opt = pyc_tp[año_opt][tarifa]
         #tepp_opt = tepp[año_opt][tarifa]
-        tepp_opt = {
-            k: v * coef_excesos
-            for k, v in tepp[año_opt][tarifa].items()
-        }
-        tepp_ver = {
-            k: v * coef_excesos
-            for k, v in tepp[año_ver][tarifa].items()
-        }
+            tepp_opt = {
+                k: v * coef_excesos
+                for k, v in tepp[año_opt][tarifa].items()
+            }
+        
     else:
         #st.sidebar.warning('Curva de carga **:red[HORARIA]**. No es posible ejecutar ninguna acción', icon='⚠️')
         st.sidebar.error('No es posible ejecutar ninguna acción. El peaje de acceso es 2.0TD', icon='⚠️')

@@ -273,5 +273,7 @@ if st.session_state.get('df_norm') is not None:
 
     # --- Descarga ---
     csv_bytes = st.session_state.df_norm.reset_index().to_csv(index=False, sep=";").encode("utf-8")
-    st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes,
-                       "curva_normalizada.csv", "text/csv")
+    if not st.session_state.get('usuario_autenticado', False):
+        st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=True)
+    else:
+        st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=False)

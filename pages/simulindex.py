@@ -2,7 +2,7 @@ import streamlit as st
 from backend_comun import autenticar_google_sheets
 from backend_simulindex import obtener_historicos_meff, obtener_meff_trimestral, obtener_grafico_meff_simulindex, obtener_grafico_cober, obtener_meff_mensual, hist_mensual, graf_hist, resumen_periodos_simulado, estilo_excel
 from backend_comun import carga_rapida_sheets, carga_total_sheets, colores_precios
-
+import pandas as pd
 from utilidades import generar_menu, init_app, init_app_index
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
@@ -47,9 +47,20 @@ if 'trimestre_cobertura' not in st.session_state:
 
 # obtenemos históricos de medias mensuales de omie df_mes y un filtrado hist de los últimos 12 meses 
 if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None:
-    df_hist, df_mes = hist_mensual(st.session_state.df_curva_sheets)
+    def n_meses_df(df, col_fecha="fecha"):
+        return (
+            pd.to_datetime(df[col_fecha])
+            .dt.to_period("M")
+            .nunique()
+        )
+    MIN_MESES_OPT = 10
+    if n_meses_df(st.session_state.df_curva_sheets) >= MIN_MESES_OPT:
+        df_hist, df_mes = hist_mensual(st.session_state.df_curva_sheets)
+    else:
+        df_hist, df_mes = hist_mensual(st.session_state.df_sheets)
 else:
     df_hist, df_mes = hist_mensual(st.session_state.df_sheets)
+
 
 grafico, simul20, simul30, simul61, simulcurva = graf_hist(df_hist, st.session_state.omip_slider, colores_precios)
 
@@ -57,7 +68,7 @@ grafico, simul20, simul30, simul61, simulcurva = graf_hist(df_hist, st.session_s
 if 'margen_simulindex' not in st.session_state:
     st.session_state.margen_simulindex = 0
     
-if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None:
+if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None and simulcurva is not None:
     df_int, df_resumen_simul = resumen_periodos_simulado(df_curva = st.session_state.df_curva_sheets, simul_curva = simulcurva)  
 
 # a los precios simulados resultantes le incrementamos el coste medio de los pyc 2025
@@ -97,7 +108,7 @@ zona_mensajes = st.sidebar.empty()
 simul20_margen = simul20 + st.session_state.margen_simulindex / 10
 simul30_margen = simul30 + st.session_state.margen_simulindex / 10
 simul61_margen = simul61 + st.session_state.margen_simulindex / 10
-if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None:
+if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None and simulcurva is not None:
     simulcurva_margen = simulcurva + st.session_state.margen_simulindex / 10
 
 ##LAYOUT DE LA PÁGINA PRINCIPAL-----------------------------------------------------------------------------------------------------------------------------
@@ -133,19 +144,19 @@ with col1:
             st.metric(':orange[Precio 2.0] c€/kWh', value = simul20, help = 'Este el precio 2.0 medio simulado a un año vista')
             st.metric(':red[Precio 3.0] c€/kWh', value = simul30, help = 'Este el precio 3.0 medio simulado a un año vista')
             st.metric(':blue[Precio 6.1] c€/kWh', value = simul61, help='Este el precio 6.1 medio simulado a un año vista')
-            if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None:
+            if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None and simulcurva is not None:
                 st.metric(f':green[Precio CURVA {st.session_state.atr_dfnorm}]  c€/kWh', value = simulcurva, help='Este el precio medio ponderado simulado a un año vista')
         with col14:
             st.text('Precios con margen')
             st.metric(':orange[Precio 2.0] c€/kWh', value = round(simul20_margen, 2), help = 'Este el precio 2.0 con el margen añadido')
             st.metric(':red[Precio 3.0] c€/kWh', value = round(simul30_margen, 2), help = 'Este el precio 3.0 con el margen añadido')
             st.metric(':blue[Precio 6.1] c€/kWh', value = round(simul61_margen, 2), help = 'Este el precio 6.1 con el margen añadido')
-            if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None:
+            if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None and simulcurva is not None:
                 st.metric(f':green[Precio CURVA {st.session_state.atr_dfnorm}]  c€/kWh', value = simulcurva_margen, help='Este el precio medio ponderado con el margen añadido')
 with col2:
     st.info('**¿Cómo funciona?** Los :orange[puntos] son valores de indexado de los 12 últimos meses. Las :orange[líneas] reflejan una tendencia. Los :orange[círculos] simulan los precios medios de indexado a un año vista en base al valor de OMIE estimado.',icon="ℹ️")
     st.plotly_chart(grafico)
-    if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None:
+    if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None and simulcurva is not None:
         st.write(f'Tabla resumen de datos para el suministro :green[{st.session_state.atr_dfnorm}] con OMIE a :green[{st.session_state.omip_slider}]€/MWh')
         st.dataframe(estilo_excel(df_resumen_simul))
     #st.write("df_curva_sheets shape", st.session_state.df_curva_sheets.shape)

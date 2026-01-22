@@ -222,6 +222,7 @@ with zona_grafica.container():
     with col2:
         if media_atr_curva is not None:
             st.subheader("Perfil de consumo", divider='rainbow')
+            st.session_state.opcion_tipodia = "Todos"
             graf_medias_horarias=graficar_media_horaria(st.session_state.df_norm)
             st.plotly_chart(graf_medias_horarias, use_container_width=True)
 
