@@ -6,9 +6,7 @@ from backend_curvadecarga import (normalize_curve_simple,
     graficar_media_horaria, graficar_media_horaria_combinada, graficar_media_horaria_combinada_2,
     graficar_neteo_horario,
     )
-    
-from backend_comun import carga_total_sheets
-from utilidades import generar_menu, init_app, init_app_index
+from utilidades import generar_menu
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
