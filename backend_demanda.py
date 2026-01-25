@@ -396,30 +396,33 @@ def diferencias_mes(datos_mensual_tabla, datos_mensual_tabla_mostrar, año_actua
     #buscamos la demanda mensual GWh del año y mes seleccionados.
     año_seleccionado_2_int = int(st.session_state.año_seleccionado_2)
     año_seleccionado_2_int = int(año_actual)
+    año_seleccionado_2_int = int(st.session_state.año_seleccionado_pormeses)
     #demanda_mensual_seleccionada=datos_mensual.loc[(datos_mensual['año']==año_actual_int) & (datos_mensual['mes_nombre']==mes_seleccionado_nombre), 'demanda_GWh'].values[0]
     #demanda_mensual_seleccionada=datos_mensual_tabla.loc[datos_mensual_tabla['año']==año_actual,mes_seleccionado_nombre].values[0]
-    demanda_mensual_seleccionada_2 = datos_mensual_tabla.loc[año_seleccionado_2_int, st.session_state.mes_seleccionado_nombre]
+    demanda_mensual_seleccionada_2 = datos_mensual_tabla.loc[año_seleccionado_2_int, st.session_state.mes_seleccionado_nombre_pormeses]
+    
+    print('demanda_mensual_seleccionada_2')
     print(demanda_mensual_seleccionada_2)
 
     demanda_mensual_seleccionada_2 = round(demanda_mensual_seleccionada_2)
 
     #generamos tabla con las diferencias en valores absolutos
     diferencias_meses  = datos_mensual_tabla_mostrar.data - demanda_mensual_seleccionada_2
-    diferencias_mes = diferencias_meses[st.session_state.mes_seleccionado_nombre]*(-1)
+    diferencias_mes = diferencias_meses[st.session_state.mes_seleccionado_nombre_pormeses]*(-1)
     df_diferencias_mes = diferencias_mes.to_frame()
     diferencias_mes_mostrar = df_diferencias_mes.style.background_gradient(axis=None)
 
     #generamos tabla con las diferencias en porcentajes
-    diferencias_mes_porc = df_diferencias_mes[st.session_state.mes_seleccionado_nombre]/datos_mensual_tabla[st.session_state.mes_seleccionado_nombre]*100
+    diferencias_mes_porc = df_diferencias_mes[st.session_state.mes_seleccionado_nombre_pormeses]/datos_mensual_tabla[st.session_state.mes_seleccionado_nombre_pormeses]*100
     #diferencias_mes_porc=df_diferencias_mes[mes_previsto_nombre]/datos_mensual_tabla[mes_previsto_nombre]*100
     df_diferencias_mes_porc = diferencias_mes_porc.to_frame()
-    df_diferencias_mes_porc = df_diferencias_mes_porc.rename(columns={st.session_state.mes_seleccionado_nombre:'%'})
+    df_diferencias_mes_porc = df_diferencias_mes_porc.rename(columns={st.session_state.mes_seleccionado_nombre_pormeses:'%'})
     #df_diferencias_mes_porc=df_diferencias_mes_porc.rename(columns={mes_previsto_nombre:'%'})
 
     #generamos tabla con ambas diferencias
     df_diferencias_mes_completo=pd.concat([df_diferencias_mes,df_diferencias_mes_porc],axis=1)
     df_diferencias_mes_completo=df_diferencias_mes_completo.iloc[:-1]
-    df_diferencias_mes_completo=df_diferencias_mes_completo.rename(columns={st.session_state.mes_seleccionado_nombre:'Dif. GWh'})
+    df_diferencias_mes_completo=df_diferencias_mes_completo.rename(columns={st.session_state.mes_seleccionado_nombre_pormeses:'Dif. GWh'})
     #df_diferencias_mes_completo=df_diferencias_mes_completo.rename(columns={mes_previsto_nombre:'Dif. GWh'})
     df_diferencias_mes_completo['%']=df_diferencias_mes_completo['%'].round(2)
 
@@ -448,7 +451,7 @@ def graf_diferencias(df_diferencias_mes_completo_graf, año_actual):
         xaxis = dict(
             tickmode='linear'
             ),
-        title = {'text' : f'Diferencia con {st.session_state.mes_seleccionado_nombre} {año_actual} (GWh)', 'x' : 0.5, 'xanchor' : 'center'},
+        title = {'text' : f'Diferencia con {st.session_state.mes_seleccionado_nombre_pormeses} {st.session_state.año_seleccionado_pormeses} (GWh)', 'x' : 0.5, 'xanchor' : 'center'},
         legend = dict(
             orientation="h",  # Leyenda en horizontal
             x=0.5,  # Posición horizontal centrada
@@ -463,7 +466,7 @@ def graf_diferencias(df_diferencias_mes_completo_graf, año_actual):
 def ranking_mensual(datos_mensual_tabla, año_actual):
 
     datos_mensual_tabla_graf=datos_mensual_tabla
-    datos_mensual_mes_encurso=datos_mensual_tabla_graf[st.session_state.mes_seleccionado_nombre]
+    datos_mensual_mes_encurso=datos_mensual_tabla_graf[st.session_state.mes_seleccionado_nombre_pormeses]
     datos_mensual_mes_encurso=datos_mensual_mes_encurso.to_frame(name='demanda')
     datos_mensual_mes_encurso=datos_mensual_mes_encurso.reset_index()
     datos_mensual_mes_encurso_ordenado=datos_mensual_mes_encurso.sort_values(by='demanda', ascending=False)

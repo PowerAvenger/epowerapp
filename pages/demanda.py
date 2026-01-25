@@ -316,6 +316,8 @@ if 'año_seleccionado_1' not in st.session_state:
     st.session_state.año_seleccionado_1 = año_pordefecto_1
 if 'año_seleccionado_2' not in st.session_state:
     st.session_state.año_seleccionado_2 = año_pordefecto_2
+if 'año_seleccionado_pormeses' not in st.session_state:
+    st.session_state.año_seleccionado_pormeses = año_actual
 
 
 if 'mes_seleccionado_nombre_año' not in st.session_state:
@@ -326,11 +328,14 @@ if 'mes_seleccionado_nombre_año' not in st.session_state:
 if 'mes_seleccionado_nombre' not in st.session_state:
     st.session_state.mes_seleccionado_nombre = mes_actual_nombre
     st.session_state.mes_numero = fecha_hoy.month
+if 'mes_seleccionado_nombre_pormeses' not in st.session_state:
+    st.session_state.mes_seleccionado_nombre_pormeses = mes_actual_nombre
+    st.session_state.mes_numero_año_pormeses = fecha_hoy.month
 
 
-def actualizar_mes():
+def actualizar_mes_comp_anual():
     """
-    Actualiza el mes seleccionado según el año seleccionado.
+    Actualiza el mes seleccionado según el año seleccionado para las comparativas anuales
     """
     if st.session_state.año_seleccionado_1 == año_actual or st.session_state.año_seleccionado_2 == año_actual:
         st.session_state.mes_seleccionado_nombre_año = mes_actual_nombre
@@ -340,22 +345,33 @@ def actualizar_mes():
     else:
         st.session_state.mes_seleccionado_nombre_año = 'Diciembre'
         st.session_state.mes_numero_año = 12
-        #st.session_state.mes_seleccionado_año = meses_invertidos.get(st.session_state.mes_seleccionado_nombre_año)
+
+def actualizar_mes_comp_mensual():
+    """
+    Actualiza el mes seleccionado según el año seleccionado para las comparativas anuales
+    """
+    if st.session_state.año_seleccionado_pormeses == año_actual:
+        st.session_state.mes_seleccionado_nombre_pormeses = mes_actual_nombre
+        st.session_state.mes_numero_año_pormeses = fecha_hoy.month
+        #st.session_state.mes_seleccionado_año = mes_previsto
+        print ('hola')
+    else:
+        st.session_state.mes_seleccionado_nombre_pormeses = 'Diciembre'
+        st.session_state.mes_numero_año_pormeses = 12
 
 
-#if 'mes_seleccionado_año' not in st.session_state:
-#    st.session_state.mes_seleccionado_año = 12
-#    st.session_state.año_seleccionado_1 = año_pordefecto_1
-#    st.session_state.año_seleccionado_2 = año_pordefecto_2
-    #st.session_state.mes_numero = 12
+#meses_hasta_actual_comp_anual = {num: nombre for num, nombre in meses.items() if num <= st.session_state.mes_numero_año}
 
-#st.session_state
+#print('meses hasta el actual para comparativa mensual')
+#print(meses_hasta_actual_comp_anual)
+#meses_invertidos_anual = {nombre: num for num, nombre in meses_hasta_actual_comp_anual.items()}
 
-#nombre_mes = meses[st.session_state.mes_numero]
 
-meses_hasta_actual = {num: nombre for num, nombre in meses.items() if num <= st.session_state.mes_numero_año}
-print(meses_hasta_actual)
-meses_invertidos = {nombre: num for num, nombre in meses_hasta_actual.items()}
+meses_hasta_actual_comp_mensual = {num: nombre for num, nombre in meses.items() if num <= st.session_state.mes_numero_año_pormeses}
+
+print('meses hasta el actual para comparativa mensual')
+print(meses_hasta_actual_comp_mensual)
+meses_invertidos = {nombre: num for num, nombre in meses_hasta_actual_comp_mensual.items()}
 
 
 
@@ -477,11 +493,11 @@ with st.container():
         st.write('')
         col1aa, col1bb, col1cc = st.columns(3)
         with col1aa:
-            st.selectbox('Año a comparar', options = años_lista, key = 'año_seleccionado_1', on_change = actualizar_mes) 
+            st.selectbox('Año a comparar', options = años_lista, key = 'año_seleccionado_1', on_change = actualizar_mes_comp_anual) 
             
         # año 2 a seleccionar para la comparativa
         with col1bb:
-            st.selectbox('Año a comparar', options = años_lista, key = 'año_seleccionado_2', on_change = actualizar_mes) #index = años_lista.index(año_pordefecto_2)
+            st.selectbox('Año a comparar', options = años_lista, key = 'año_seleccionado_2', on_change = actualizar_mes_comp_anual) #index = años_lista.index(año_pordefecto_2)
             
         # selección del mes (hasta)
         col1aaa, col1bbb, col1ccc = st.columns(3)
@@ -521,7 +537,7 @@ with st.container():
         st.markdown("""
         <div style="background-color:#007BFF; padding: 5px 10px 5px 10px; border-radius: 10px;">
             <p style="color:white; font-weight:bold;">¡Interacciona!</p>
-            <p style="color:white;">Selecciona el mes a comparar de 2026. Obtendrás los diferenciales con el mismo mes de otros años, así como el ranking según la demanda (o consumo).</p>
+            <p style="color:white;">Selecciona el mes a comparar del año seleccionado. Obtendrás los diferenciales con el mismo mes de otros años, así como el ranking según la demanda (o consumo).</p>
         </div>
         """, unsafe_allow_html=True)
         st.write('')
@@ -532,13 +548,15 @@ with st.container():
         col11a, col11b, col11c = st.columns(3)
         # año 1 a seleccionar para la comparativa
         with col11a:
-            st.selectbox('Mes a comparar', options = meses_invertidos, key = 'mes_seleccionado_nombre') #index = st.session_state.mes_numero - 1
+            st.selectbox('Año de referencia', options = años_lista, key = 'año_seleccionado_pormeses', on_change=actualizar_mes_comp_mensual)
+        with col11b:
+            st.selectbox('Mes a comparar', options = meses_invertidos, key = 'mes_seleccionado_nombre_pormeses') #index = st.session_state.mes_numero - 1
 
 
         
     with col21:
         
-        st.subheader(f'{st.session_state.mes_seleccionado_nombre} {año_actual}: Diferencias respecto al mismo mes (GWh) - {texto_dif}', divider = 'rainbow')
+        st.subheader(f'{st.session_state.mes_seleccionado_nombre_pormeses} {st.session_state.año_seleccionado_pormeses}: Diferencias respecto al mismo mes (GWh) - {texto_dif}', divider = 'rainbow')
         col2a, col2b, col2c = st.columns([.25, 0.10, .65])
         with col2a:
             st.dataframe(diferencias_mes_completo_mostrar)
@@ -546,7 +564,7 @@ with st.container():
             st.write(graf_diferencias)
     with col31:
             
-            st.subheader(f'Ranking de {st.session_state.mes_seleccionado_nombre}s - {texto_dif}', divider = 'rainbow')
+            st.subheader(f'Ranking de {st.session_state.mes_seleccionado_nombre_pormeses}s - {texto_dif}', divider = 'rainbow')
             col3a, col3b = st.columns([.65, .35])
             with col3a:
                 st.plotly_chart(graf_ranking_mes)
@@ -554,21 +572,3 @@ with st.container():
 
 
 
-
-
-
-##DESCARGAMOS DATOS DEL ID1293 DEMANDA REAL MW CINCOMINUTAL FECHA=HOY
-#try:
-#    datos, ultimo_registro = download_esios_id_5m('1293', fecha_hoy, fecha_hoy, 'five_minutes') #tipo_agregacion = 'sum'
-#except Exception as e:
-    # por si realizamos la descarga durante la primera hora del mes
-#    datos, ultimo_registro = None, None
-
-#print(horas_transcurridas)
-    
-##DESCARGAMOS DATOS DEL ID1293 DEMANDA MEDIA REAL MENSUAL MW FECHA=HOY. USADOS PARA LA GRAFICA 2
-#try:
-#    datos_mensual, mes_previsto, demanda_real, mes_previsto_nombre, meses_seleccion, media_real = download_esios_id_month('1293', fecha_ini_mes_anterior, fecha_hoy, 'month', 'average', ultimo_registro)
-#except Exception as e:
-#    datos_mensual, mes_previsto, demanda_real, mes_previsto_nombre, meses_seleccion, media_real = None, None, None, None, None, None
-#    print(f'error {e}')
