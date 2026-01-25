@@ -6,6 +6,7 @@ import io, re
 from unidecode import unidecode
 from zoneinfo import ZoneInfo
 from datetime import timedelta, timezone
+import altair as alt
 
 TZ = "Europe/Madrid"
 
@@ -17,6 +18,11 @@ colores_periodo = {
         "P5": "#7CFC00",
         "P6": "green"
     }
+
+colores_neteo= {
+    "consumo_neto_kWh": "#e74c3c",   # rojo
+    "vertido_neto_kWh": "#27ae60"    # verde
+}
 
 # ===============================
 #  Utilidades base
@@ -616,107 +622,185 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
 # GRÁFICOS
 #=================================================================================
 
+def graficar_curva_horaria(df_norm, frec):
 
-def graficar_curva(df_norm, frec):
-    # Asegurar índice temporal
-    df_norm = df_norm.set_index("fecha_hora")
+    df_plot = df_norm.reset_index()
 
-    # --- Modo HORARIO ---
-    if st.session_state.modo_agrupacion == "Horario":
-        df_plot = df_norm.reset_index()
-        # Asegurar orden lógico de periodos (P1→P6)
-        orden_periodos = list(colores_periodo.keys())
-        df_plot['periodo'] = pd.Categorical(df_plot['periodo'], categories=orden_periodos, ordered=True)
+    orden_periodos = list(colores_periodo.keys())
+    df_plot['periodo'] = pd.Categorical(
+        df_plot['periodo'],
+        categories=orden_periodos,
+        ordered=True
+    )
 
-        if frec=='QH':
-            titulo = 'Curva cuarto horaria de consumo (kWh)'
-        else:
-            titulo = 'Curva horaria de consumo (kWh)'
-        
-        fig = px.bar(
-            df_plot,
-            x="fecha_hora",
-            y="consumo_kWh",
-            labels={"fecha_hora": "Fecha y hora", "consumo_kWh": "Consumo (kWh)"},
-            color='periodo',
-            color_discrete_map=colores_periodo,
-            category_orders={'periodo': orden_periodos},  # 👈 fuerza el orden
-            #title="Curva horaria de consumo (kWh)"
-            title=titulo
-        )
-        fig.update_layout(
-            xaxis_title="Fecha",
-            yaxis_title="Consumo (kWh)",
-            #plot_bgcolor="white",
-            bargap=0.1,
-            legend=dict(
-                orientation="h",        # horizontal
-                yanchor="bottom",       # anclaje vertical inferior
-                y=1.02,                 # un poco por encima del gráfico
-                xanchor="center",       # anclaje horizontal centrado
-                x=0.5,                  # centrado
-                title_text=""           # sin título
-            )
-        )
-        #fig.update_traces(mode="lines", line=dict(color="cyan"))
+    titulo = (
+        "Curva cuarto horaria de consumo (kWh)"
+        if frec == "QH"
+        else "Curva horaria de consumo (kWh)"
+    )
 
-    # --- Modo DIARIO ---
-    elif st.session_state.modo_agrupacion == "Diario":
-        df_plot = df_norm.resample("D")["consumo_kWh"].sum().reset_index()
-        fig = px.bar(
-            df_plot,
-            x="fecha_hora",
-            y="consumo_kWh",
-            labels={"fecha_hora": "Fecha", "consumo_kWh": "Consumo (kWh)"},
-            color="consumo_kWh",
-            color_continuous_scale="Blues",
-            title="Consumo diario (kWh)"
-        )
-        fig.update_layout(
-            xaxis_title="Fecha",
-            yaxis_title="Consumo (kWh)",
-            #plot_bgcolor="white",
-            bargap=0.1,
-            legend=dict(
-                orientation="h",        # horizontal
-                yanchor="bottom",       # anclaje vertical inferior
-                y=1.02,                 # un poco por encima del gráfico
-                xanchor="center",       # anclaje horizontal centrado
-                x=0.5,                  # centrado
-                title_text=""           # sin título
-            )
-        )
+    fig = px.bar(
+        df_plot,
+        x="fecha_hora",
+        y="consumo_kWh",
+        color="periodo",
+        color_discrete_map=colores_periodo,
+        category_orders={"periodo": orden_periodos},
+        labels={
+            "fecha_hora": "Fecha y hora",
+            "consumo_kWh": "Consumo (kWh)"
+        },
+        title=titulo
+    )
 
-    # --- Modo MENSUAL ---
-    elif st.session_state.modo_agrupacion == "Mensual":
-        df_plot = df_norm.resample("M")["consumo_kWh"].sum().reset_index()
-        df_plot["Mes"] = df_plot["fecha_hora"].dt.strftime("%b %Y")
-        fig = px.bar(
-            df_plot,
-            x="Mes",
-            y="consumo_kWh",
-            labels={"Mes": "Mes", "consumo_kWh": "Consumo (kWh)"},
-            color="consumo_kWh",
-            color_continuous_scale="Blues",
-            title="Consumo mensual (kWh)"
+    fig.update_layout(
+        bargap=0.1,
+        legend=dict(
+            orientation="h",
+            y=1.02,
+            x=0.5,
+            xanchor="center",
+            title_text=""
         )
-        fig.update_layout(
-            xaxis_title="Mes",
-            yaxis_title="Consumo (kWh)",
-            #plot_bgcolor="white",
-            bargap=0.1,
-            legend=dict(
-                orientation="h",        # horizontal
-                yanchor="bottom",       # anclaje vertical inferior
-                y=1.02,                 # un poco por encima del gráfico
-                xanchor="center",       # anclaje horizontal centrado
-                x=0.5,                  # centrado
-                title_text=""           # sin título
-            )
-        )
-    
+    )
+
     return fig
 
+
+def graficar_diario_apilado(df_norm):
+
+    df_plot = (
+        df_norm
+        .reset_index()
+        .assign(dia=lambda d: d["fecha_hora"].dt.date)
+        .groupby(["dia", "periodo"], as_index=False)["consumo_kWh"]
+        .sum()
+    )
+
+    orden_periodos = list(colores_periodo.keys())
+    df_plot["periodo"] = pd.Categorical(
+        df_plot["periodo"],
+        categories=orden_periodos,
+        ordered=True
+    )
+
+    fig = px.bar(
+        df_plot,
+        x="dia",
+        y="consumo_kWh",
+        color="periodo",
+        color_discrete_map=colores_periodo,
+        category_orders={"periodo": orden_periodos},
+        labels={
+            "dia": "Día",
+            "consumo_kWh": "Consumo diario (kWh)"
+        },
+        title="Consumo diario por periodos (kWh)"
+    )
+
+    fig.update_layout(
+        bargap=0.2,
+        legend=dict(
+            orientation="h",
+            y=1.02,
+            x=0.5,
+            xanchor="center",
+            title_text=""
+        )
+    )
+
+    return fig
+
+
+def graficar_mensual_apilado(df_norm):
+
+    df_plot = (
+        df_norm
+        .assign(
+            mes=lambda d: d["fecha_hora"].dt.to_period("M").dt.to_timestamp()
+        )
+        .groupby(["mes", "periodo"], as_index=False)["consumo_kWh"]
+        .sum()
+    )
+
+    # Orden lógico de periodos
+    orden_periodos = list(colores_periodo.keys())
+    df_plot["periodo"] = pd.Categorical(
+        df_plot["periodo"],
+        categories=orden_periodos,
+        ordered=True
+    )
+
+    # Etiqueta de mes bonita
+    df_plot["Mes"] = df_plot["mes"].dt.strftime("%b %Y")
+
+    fig = px.bar(
+        df_plot,
+        x="Mes",
+        y="consumo_kWh",
+        color="periodo",
+        color_discrete_map=colores_periodo,
+        category_orders={"periodo": orden_periodos},
+        labels={
+            "Mes": "Mes",
+            "consumo_kWh": "Consumo mensual (kWh)"
+        },
+        title="Consumo mensual por periodos (kWh)"
+    )
+
+    fig.update_layout(
+        bargap=0.3,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="center",
+            x=0.5,
+            title_text=""
+        )
+    )
+
+    return fig
+
+
+def graficar_neteo_horario(df_norm, frec):
+
+    df_plot = df_norm.copy()
+
+    titulo = (
+        "Curva cuarto horaria de demanda / vertido (kWh)"
+        if frec == "QH"
+        else "Curva horaria de demanda / vertido (kWh)"
+    )
+
+    fig = px.bar(
+        df_plot,
+        x="fecha_hora",
+        y=["consumo_neto_kWh", "vertido_neto_kWh"],
+        labels={
+            "fecha_hora": "Fecha y hora",
+            "value": "kWh"
+        },
+        color_discrete_map=colores_neteo,
+        title=titulo
+    )
+
+    fig.update_layout(
+        bargap=0.1,
+        legend=dict(
+            orientation="h",
+            y=1.02,
+            x=0.5,
+            xanchor="center",
+            title_text=""
+        ),
+        yaxis_title="kWh"
+    )
+
+    return fig
+
+
+#NO USADA!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 def graficar_curva_neteo(df_norm, frec):
     # Asegurar índice temporal
     df_norm = df_norm.set_index("fecha_hora")
@@ -816,27 +900,27 @@ def graficar_curva_neteo(df_norm, frec):
     
     return fig
 
-def graficar_media_horaria(df_norm):
-    
 
+
+def graficar_media_horaria(tipo_dia, ymax=None):
+    
+    df = st.session_state.df_norm
     # Filtrar según opción
-    if st.session_state.opcion_tipodia == "L-V":
-        df_sel = df_norm[df_norm["tipo_dia"] == "L-V"]
+    if tipo_dia == "L-V":
+        df_sel = df[df["tipo_dia"] == "L-V"].copy()
         add_title='LUNES A VIERNES'
-    elif st.session_state.opcion_tipodia == "FS":
-        df_sel = df_norm[df_norm["tipo_dia"] == "FS"]
+    elif tipo_dia == "FS":
+        df_sel = df[df["tipo_dia"] == "FS"].copy()
         add_title='FIN DE SEMANA'
     else:
-        df_sel = df_norm.copy()
+        df_sel = df.copy()
         add_title='TOTAL'
 
     # Calcular media por hora
     df_horas = (df_sel.resample("H", on="fecha_hora")["consumo_kWh"].sum().reset_index())
-    #df_sel["hora"] = df_sel["fecha_hora"].dt.hour
     df_horas["hora"] = df_horas["fecha_hora"].dt.hour
     df_horas = (
         df_horas.groupby("hora", as_index=False)["consumo_kWh"]
-        #df_sel.groupby("hora", as_index=False)["consumo_kWh"]
         .mean()
         .rename(columns={"consumo_kWh": "media_kWh"})
     )
@@ -850,15 +934,334 @@ def graficar_media_horaria(df_norm):
         labels={"hora": "Hora del día", "media_kWh": "Consumo medio (kWh)"},
         color="media_kWh",
         color_continuous_scale="Blues",
-        title=f"Perfil medio horario: {add_title}"
+        #title=f"Perfil medio horario: {add_title}"
     )
+
+    if ymax is None:
+        ymax = df_horas["media_kWh"].max() * 1.05
     fig.update_layout(
+        title=dict(
+            text=f"Perfil medio horario: <span style='color:orange'>{add_title}</span>",
+            x=0.5,
+            xanchor="center"
+        ),
         xaxis=dict(dtick=1),
         yaxis_title="kWh medios",
-        #plot_bgcolor="white"
+        coloraxis_showscale=False,
+        yaxis=dict(
+            range=[0, ymax]
+        )
+
     )
 
     return fig
+
+def graficar_media_horaria_combinada():
+    
+    df = st.session_state.df_norm
+
+    def perfil_por_tipo(df, filtro=None):
+        if filtro is not None:
+            df = df[df["tipo_dia"] == filtro].copy()
+
+        df_h = (
+            df.resample("H", on="fecha_hora")["consumo_kWh"]
+            .sum()
+            .reset_index()
+        )
+        df_h["hora"] = df_h["fecha_hora"].dt.hour
+
+        return (
+            df_h.groupby("hora", as_index=False)["consumo_kWh"]
+            .mean()
+            .rename(columns={"consumo_kWh": "media_kWh"})
+        )
+
+    # Perfiles
+    df_lv = perfil_por_tipo(df, "L-V")
+    df_lv["perfil"] = "L-V"
+
+    df_fs = perfil_por_tipo(df, "FS")
+    df_fs["perfil"] = "FS"
+
+    df_total = perfil_por_tipo(df)
+    df_total["perfil"] = "TOTAL"
+
+    ymax = df_total["media_kWh"].max() * 1.05
+    ymin = 0
+
+    # Unimos
+    df_plot = pd.concat([df_lv, df_fs, df_total], ignore_index=True)
+
+    # Gráfico
+    fig = px.line(
+        df_plot,
+        x="hora",
+        y="media_kWh",
+        color="perfil",
+        labels={
+            "hora": "Hora del día",
+            "media_kWh": "Consumo medio (kWh)",
+            "perfil": "Tipo de día"
+        },
+        title="Perfil medio horario: L-V vs Fin de Semana"
+    )
+
+    # Estilo de líneas
+    fig.update_traces(line=dict(width=3))
+
+    # Colores manuales
+    fig.for_each_trace(lambda t: t.update(
+        line=dict(
+            color={
+                "L-V": "#6a0dad",   # morado
+                "FS": "#2e8b57",    # verde
+                "TOTAL": "#999999" # gris apagado
+            }[t.name]
+        ),
+        visible="legendonly" if t.name == "TOTAL" else True
+    ))
+
+    fig.update_layout(
+        xaxis=dict(dtick=1),
+        yaxis_title="kWh medios",
+        yaxis=dict(
+            range=[ymin, ymax]
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="center",
+            x=0.5
+        )
+    )
+
+    return fig, ymax
+
+
+def graficar_media_horaria_combinada_3():
+
+    df = st.session_state.df_norm
+
+    # --- Función interna de perfil ---
+    def perfil_por_tipo(df, filtro=None):
+        if filtro is not None:
+            df = df[df["tipo_dia"] == filtro].copy()
+
+        df_h = (
+            df.resample("H", on="fecha_hora")["consumo_kWh"]
+            .sum()
+            .reset_index()
+        )
+        df_h["hora"] = df_h["fecha_hora"].dt.hour
+
+        return (
+            df_h.groupby("hora", as_index=False)["consumo_kWh"]
+            .mean()
+            .rename(columns={"consumo_kWh": "media_kWh"})
+        )
+
+    # --- Perfiles ---
+    df_lv = perfil_por_tipo(df, "L-V")
+    df_fs = perfil_por_tipo(df, "FS")
+    df_total = perfil_por_tipo(df)
+
+    ymax = df_total["media_kWh"].max() * 1.05
+
+    # =====================
+    #   L-V (Área + Línea)
+    # =====================
+    area_lv = alt.Chart(df_lv).mark_area(
+        interpolate="monotone",
+        line={"color": "#6a0dad"},
+        color=alt.Gradient(
+            gradient="linear",
+            stops=[
+                alt.GradientStop(color="#6a0dad", offset=0.0),   # justo en la línea
+                alt.GradientStop(color="#6a0dad", offset=0.15),  # aún visible
+                alt.GradientStop(color="rgba(255,255,255,0)", offset=0.35),
+                alt.GradientStop(color="rgba(255,255,255,0)", offset=1.0),
+            ],
+            x1=0, x2=0, y1=0, y2=1
+        )
+    ).encode(
+        x=alt.X("hora:Q", scale=alt.Scale(domain=[0, 23]), title="Hora del día"),
+        y=alt.Y("media_kWh:Q", scale=alt.Scale(domain=[0, ymax]), title="kWh medios"),
+        tooltip=["hora", "media_kWh"]
+    )
+
+    line_lv = alt.Chart(df_lv).mark_line(
+        color="#6a0dad",
+        strokeWidth=3
+    ).encode(
+        x="hora:Q",
+        y="media_kWh:Q"
+    )
+
+    # =====================
+    #   FS (Área + Línea)
+    # =====================
+    area_fs = alt.Chart(df_fs).mark_area(
+        interpolate="monotone",
+        line={"color": "#2e8b57"},
+        color=alt.Gradient(
+            gradient="linear",
+            stops=[
+                alt.GradientStop(color="#2e8b57", offset=0),
+                alt.GradientStop(color="#2e8b57", offset=0.5),
+                alt.GradientStop(color="rgba(255,255,255,0)", offset=1),
+            ],
+            x1=0, x2=0, y1=0, y2=1
+        )
+    ).encode(
+        x="hora:Q",
+        y="media_kWh:Q"
+    )
+
+    line_fs = alt.Chart(df_fs).mark_line(
+        color="#2e8b57",
+        strokeWidth=3
+    ).encode(
+        x="hora:Q",
+        y="media_kWh:Q"
+    )
+
+    # =====================
+    #   TOTAL (línea tenue)
+    # =====================
+    line_total = alt.Chart(df_total).mark_line(
+        color="#999999",
+        strokeWidth=2,
+        strokeDash=[6, 4]
+    ).encode(
+        x="hora:Q",
+        y="media_kWh:Q"
+    )
+
+    # --- Composición final ---
+    chart = (
+        area_lv + area_fs +
+        line_lv + line_fs +
+        line_total
+    ).properties(
+        width="container",
+        height=420,
+        title="Perfil medio horario: L-V vs Fin de Semana"
+    ).configure_axis(
+        grid=True,
+        gridOpacity=0.2
+    ).configure_view(
+        strokeOpacity=0
+    )
+
+    return chart
+
+
+def graficar_media_horaria_combinada_2():
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import streamlit as st
+
+    df = st.session_state.df_norm
+
+    # -------- Perfil horario --------
+    def perfil_por_tipo(df, filtro=None):
+        if filtro is not None:
+            df = df[df["tipo_dia"] == filtro].copy()
+
+        df_h = (
+            df.resample("H", on="fecha_hora")["consumo_kWh"]
+            .sum()
+            .reset_index()
+        )
+        df_h["hora"] = df_h["fecha_hora"].dt.hour
+
+        return (
+            df_h.groupby("hora", as_index=False)["consumo_kWh"]
+            .mean()
+            .rename(columns={"consumo_kWh": "media_kWh"})
+        )
+
+    df_lv = perfil_por_tipo(df, "L-V")
+    df_fs = perfil_por_tipo(df, "FS")
+    df_total = perfil_por_tipo(df)
+
+    horas = df_lv["hora"].values
+    lv = df_lv["media_kWh"].values
+    fs = df_fs["media_kWh"].values
+    total = df_total["media_kWh"].values
+
+    ymax = total.max() * 1.08
+
+    # -------- Figura --------
+    fig, ax = plt.subplots(figsize=(9, 4), facecolor="#0e1117")
+    ax.set_facecolor("#0e1117")
+
+    # -------- Glow L-V (morado) --------
+    for i, alpha in enumerate([0.35, 0.28, 0.22, 0.16, 0.10, 0.06]):
+        ax.fill_between(
+            horas,
+            lv - (i + 1) * ymax * 0.015,
+            lv,
+            color="#6a0dad",
+            alpha=alpha,
+            linewidth=0
+        )
+
+    # -------- Glow FS (verde) --------
+    for i, alpha in enumerate([0.30, 0.22, 0.15, 0.08]):
+        ax.fill_between(
+            horas,
+            fs - (i + 1) * ymax * 0.015,
+            fs,
+            color="#2e8b57",
+            alpha=alpha,
+            linewidth=0
+        )
+
+    # -------- Líneas --------
+    ax.plot(horas, lv, color="#6a0dad", linewidth=2.8, label="L-V", zorder=5)
+    ax.plot(horas, fs, color="#2e8b57", linewidth=2.8, label="FS", zorder=5)
+
+    ax.plot(
+        horas,
+        total,
+        color="#aaaaaa",
+        linewidth=1.8,
+        linestyle="--",
+        alpha=0.8,
+        label="TOTAL",
+        zorder=4
+    )
+
+    # -------- Estética --------
+    ax.set_xlim(0, 23)
+    ax.set_ylim(0, ymax)
+    ax.set_xticks(range(0, 24))
+    ax.set_xlabel("Hora del día", color="white")
+    ax.set_ylabel("kWh medios", color="white")
+
+    ax.set_title(
+        "Perfil medio horario: L-V vs Fin de Semana",
+        color="white",
+        pad=12
+    )
+
+    ax.tick_params(colors="white")
+    ax.grid(color="white", alpha=0.12)
+
+    ax.legend(
+        loc="upper center",
+        ncol=3,
+        frameon=False,
+        labelcolor="white"
+    )
+
+    return fig
+
+
 
 
 
