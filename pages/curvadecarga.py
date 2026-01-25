@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from backend_curvadecarga import (normalize_curve_simple,
     graficar_curva_horaria, graficar_diario_apilado, graficar_mensual_apilado, graficar_queso_periodos, 
-    graficar_media_horaria, graficar_media_horaria_combinada, graficar_media_horaria_combinada_2,
+    graficar_media_horaria, graficar_media_horaria_combinada,
     graficar_neteo_horario,
     )
 from utilidades import generar_menu
@@ -276,7 +276,7 @@ if st.session_state.get('df_norm') is not None:
     with tab2:
         
         graf_medias_horarias_combinadas, ymax = graficar_media_horaria_combinada()
-        graf = graficar_media_horaria_combinada_2()
+        #graf = graficar_media_horaria_combinada_2()
         graf_medias_horarias_total=graficar_media_horaria('Todos', ymax = None)
         graf_medias_horarias_lab=graficar_media_horaria('L-V',ymax)
         graf_medias_horarias_ffss=graficar_media_horaria('FS', ymax)
