@@ -17,8 +17,6 @@ if not st.session_state.get('usuario_autenticado', False) and not st.session_sta
 
 generar_menu()
 
-
-
 if "cache_cleared" not in st.session_state:
     st.cache_data.clear()  # Limpiar caché al iniciar
     st.session_state.cache_cleared = True  # Evita que se borre en cada interacción
@@ -30,9 +28,6 @@ if 'añadir_autoconsumo' not in st.session_state:
 #fechahora_hoy = datetime.now() #formato fecha_hora
 #fecha_hoy = datetime.now().date() #formato fecha
 #fecha_ini_mes_anterior = (fecha_hoy.replace(day=1) - relativedelta(months=1)) #usado para download mensual del mes anterior y asegurar los datos en el cambio de mes
-
-
-
 
 
 
@@ -62,9 +57,11 @@ df_dem_real = pd.concat(lista_dfs, ignore_index=True)
 id_dem_prevista = 460
 fecha_mañana = (fecha_hoy + timedelta(days=1))
 fecha_mañana_api=fecha_mañana.strftime('%Y-%m-%d')
-fecha_final = fecha_mañana + timedelta(days=15)
+#fecha_final = fecha_mañana + timedelta(days=15)
+fecha_final = datetime(año_hoy, num_mes_hoy, calendar.monthrange(año_hoy, num_mes_hoy)[1])
 fecha_final_api = fecha_final.strftime('%Y-%m-%d')
 df_dem_prevista = download_esios(id_dem_prevista, fecha_mañana_api, fecha_final_api, agrupacion, tipo_agregacion)
+
 
 # Unimos real con prevista
 df_dem_real = df_dem_real.copy()
@@ -140,10 +137,6 @@ idx_prev = (df_año_hoy[df_año_hoy['short_name'] == 'Previsión diaria']['datet
 media_prevista_GW = df_año_hoy.loc[idx_prev, 'media_mensual']
 demanda_prevista_GWh = media_prevista_GW * horas_mes
 
-
-
-#demanda_real = "{:,}".format(int(demanda_real)).replace(",", ".")
-#media_real = "{:,.2f}".format(float(media_real)).replace(".", ",")
 
 
 # CREAMOS UN DF DE UNA LÍNEA CON LOS DATOS ACTUALIZADOS DE DEMANDA PREVISTA PARA AÑADIR A LOS HISTÓRICOS
