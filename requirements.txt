@@ -1,7 +1,7 @@
 pandas
 openpyxl
 plotly.express
-streamlit
+#streamlit
 google-auth
 gspread
 xlrd
@@ -13,5 +13,6 @@ unidecode
 pvlib
 numpy_financial
 streamlit_folium
-
+altair<5
+streamlit==1.36.0
 
