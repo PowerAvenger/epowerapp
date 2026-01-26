@@ -105,7 +105,7 @@ if (
     and st.session_state.get("atr_dfnorm") in ("2.0", "3.0", "6.1")
 ):
 
-    st.sidebar.markdown(f'Peaje de acceso de la curva: **:orange[{st.session_state.atr_dfnorm}]**')
+    st.sidebar.markdown(f'Peaje actualmente seleccionado: **:orange[{st.session_state.atr_dfnorm}]**')
     st.sidebar.markdown(f'Resolución temporal de la curva: **:orange[{st.session_state.freq}]**')
     
     tab1, tab2, tab3 = st.tabs(['Resumen', 'Perfiles Horarios', 'Autoconsumo'])
