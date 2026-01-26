@@ -14,8 +14,8 @@ if not st.session_state.get('usuario_autenticado', False) and not st.session_sta
 
 generar_menu()
 
-#if "curva_procesada" not in st.session_state:
-#    st.session_state.curva_procesada = False
+if "uploaded_file" not in st.session_state:
+    st.session_state.uploaded_file = None
 if "curva_normalizada" not in st.session_state:
     st.session_state.curva_normalizada = False
 if "atr_dfnorm_ui" not in st.session_state:
@@ -34,6 +34,9 @@ with st.sidebar:
     else:
         uploaded = st.file_uploader("📂 Sube un archivo CSV o Excel", type=["csv", "xlsx"])
     
+    if uploaded is not None:
+        st.session_state.uploaded_file = uploaded
+    
     st.selectbox(
         "Peaje de acceso",
         ("2.0", "3.0", "6.1"),
@@ -41,6 +44,7 @@ with st.sidebar:
         key="atr_dfnorm_ui"
     )
 
+    
     ejecutar = st.button(
         "🔄 Normalizar curva",
         type="primary",
@@ -63,10 +67,10 @@ if 'frec' not in st.session_state:
     st.session_state.frec = 'QH'      
 
 
-if uploaded and ejecutar:
+if st.session_state.uploaded_file and ejecutar:
 
     try:
-        resultado = procesar_curva_completa(uploaded, st.session_state.atr_dfnorm_ui)
+        resultado = procesar_curva_completa(st.session_state.uploaded_file, st.session_state.atr_dfnorm_ui)
 
         print('resultado obtenido')
 
@@ -94,7 +98,7 @@ if not st.session_state.curva_normalizada:
 
 
 
-#if st.session_state.get('df_norm') is not None:
+
 if (
     st.session_state.get("curva_normalizada", False)
     and st.session_state.get("df_norm") is not None
