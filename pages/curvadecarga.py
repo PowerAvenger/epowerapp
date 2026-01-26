@@ -16,6 +16,8 @@ generar_menu()
 
 if "curva_procesada" not in st.session_state:
     st.session_state.curva_procesada = False
+if "atr_dfnorm" not in st.session_state:
+    st.session_state.atr_dfnorm = None
 
 # ===============================
 #  Interfaz Streamlit
@@ -77,6 +79,7 @@ if uploaded and not st.session_state.curva_procesada:
         # ---- Guardar en session_state ----
         for k, v in resultado.items():
             st.session_state[k] = v
+        st.session_state.curva_procesada = True
 
     except Exception as e:
         zona_mensajes.error(f"❌ Error al normalizar: {e}")
