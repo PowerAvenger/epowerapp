@@ -90,7 +90,7 @@ if not st.session_state.curva_normalizada:
         
 
         
-st.session_state
+#st.session_state
 
 
 
