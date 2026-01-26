@@ -505,6 +505,7 @@ def diarios(datos, fecha_ini, fecha_fin, datos_comparar):
             tick0=0,                      # Comenzar en 0
             dtick=tick_y                      # Incrementos de 20
         ),
+        height = 500
     )
     
     return datos_dia, graf_ecv_diario

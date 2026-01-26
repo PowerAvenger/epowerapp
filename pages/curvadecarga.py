@@ -111,7 +111,7 @@ if (
     tab1, tab2, tab3 = st.tabs(['Resumen', 'Perfiles Horarios', 'Autoconsumo'])
 
     with tab1:
-        altura_df = 300
+        altura_df = 250
         c1,c2,c3=st.columns([.35,.35,.3])
         with c1:
             # Visor del df in
