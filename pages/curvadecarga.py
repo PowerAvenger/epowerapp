@@ -14,6 +14,9 @@ if not st.session_state.get('usuario_autenticado', False) and not st.session_sta
 
 generar_menu()
 
+if "curva_procesada" not in st.session_state:
+    st.session_state.curva_procesada = False
+
 # ===============================
 #  Interfaz Streamlit
 # ===============================
@@ -43,7 +46,7 @@ if 'frec' not in st.session_state:
     st.session_state.frec = 'QH'      
 
 
-if uploaded:
+if uploaded and not st.session_state.curva_procesada:
 
     try:
         # Selección ATR solo si hace falta
