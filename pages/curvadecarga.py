@@ -51,42 +51,39 @@ if 'frec' not in st.session_state:
 if uploaded and not st.session_state.curva_procesada:
 
     try:
-        # Selección ATR solo si hace falta
         atr_forzado = None
 
-        # Ejecutamos pipeline completo (cacheado)
         resultado = procesar_curva_completa(uploaded, atr_forzado)
 
-        # Si el ATR no es 2.0, pedimos confirmación
+        # Si el ATR no es 2.0, pedir selección (una sola vez)
         if resultado["atr_dfnorm"] != "2.0":
+
             st.sidebar.warning("⚙️ Selecciona peaje de acceso")
             atr_sel = st.sidebar.selectbox(
                 "Peaje de acceso:",
                 ("3.0", "6.1"),
-                index=0
+                index=0,
+                key="atr_manual"
             )
 
-            if st.sidebar.button("🔄 Aplicar peaje", use_container_width=True, type='primary'):
-                resultado = procesar_curva_completa(uploaded, atr_sel)
-            #else:
-            #    st.stop()
+            if not st.sidebar.button("🔄 Aplicar peaje", use_container_width=True, type="primary"):
+                st.stop()
 
-        # ---- Mensajes UX ----
+            resultado = procesar_curva_completa(uploaded, atr_sel)
+
+        # Guardar resultado
+        for k, v in resultado.items():
+            st.session_state[k] = v
+
+        st.session_state.curva_procesada = True
+
         zona_mensajes.success("✅ Curva normalizada correctamente")
         if resultado["msg_unidades"]:
             zona_mensajes2.info(resultado["msg_unidades"], icon="ℹ️")
 
-        # ---- Guardar en session_state ----
-        for k, v in resultado.items():
-            st.session_state[k] = v
-        st.session_state.curva_procesada = True
-
     except Exception as e:
         zona_mensajes.error(f"❌ Error al normalizar: {e}")
         st.stop()
-
-else:
-    zona_mensajes.info("⬆️ Sube un archivo CSV o Excel para comenzar.")
 
     
 
