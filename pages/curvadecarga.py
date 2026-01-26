@@ -112,7 +112,7 @@ if (
 
     with tab1:
         altura_df = 300
-        c1,c2,c3,c4,c5=st.columns([.35,.35,.1,.1,.1])
+        c1,c2,c3=st.columns([.35,.35,.3])
         with c1:
             # Visor del df in
             st.subheader("📄 Vista previa del archivo original")
@@ -123,18 +123,22 @@ if (
             st.dataframe(st.session_state.df_norm, height=altura_df)
         with c3:
             # --- Resumen registros---
-            st.subheader("Resumen registros")
-            st.metric("Número de registros", f"{len(st.session_state.df_norm):,.0f}".replace(",", "."))
-            st.metric("Fecha inicio", st.session_state.df_norm["fecha_hora"].min().strftime("%d.%m.%Y"))
-            st.metric("Fecha final", st.session_state.df_norm["fecha_hora"].max().strftime("%d.%m.%Y"))
-        with c4:
-            st.subheader("Resumen datos")
-            st.metric("Consumo total KWh", f"{st.session_state.consumo_total:,.0f}".replace(",", "."))
-            st.metric("Vertido total KWh", f"{st.session_state.vertido_total:,.0f}".replace(",", "."))
-        with c5:
-            st.subheader("Resumen datos")
-            st.metric("Consumo neteo KWh", f"{st.session_state.consumo_neto:,.0f}".replace(",", "."))
-            st.metric("Vertido neteo KWh", f"{st.session_state.vertido_neto:,.0f}".replace(",", "."))
+            st.subheader("Resumen de datos")
+            c31,c32,c33 = st.columns(3)
+            with c31:
+                st.metric("Número de registros", f"{len(st.session_state.df_norm):,.0f}".replace(",", "."))
+                st.metric("Fecha inicio", st.session_state.df_norm["fecha_hora"].min().strftime("%d.%m.%Y"))
+                st.metric("Fecha final", st.session_state.df_norm["fecha_hora"].max().strftime("%d.%m.%Y"))
+            with c32:
+                #st.subheader("Resumen datos")
+                st.metric("Consumo total KWh", f"{st.session_state.consumo_total:,.0f}".replace(",", "."))
+                st.metric("Vertido total KWh", f"{st.session_state.vertido_total:,.0f}".replace(",", "."))
+            with c33:
+                #st.subheader("Resumen datos")
+                st.metric("Consumo neteo KWh", f"{st.session_state.consumo_neto:,.0f}".replace(",", "."))
+                st.metric("Vertido neteo KWh", f"{st.session_state.vertido_neto:,.0f}".replace(",", "."))
+
+
         # --- Gráfico ---
 
         c1,c2=st.columns([.7,.3])
