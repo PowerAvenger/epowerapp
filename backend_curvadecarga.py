@@ -531,7 +531,8 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
     df_norm["vertido_neto_kWh"] = np.where(saldo_horario < 0, -saldo_horario, 0)
 
     
-        
+    print('atr dentro de la función')    
+    print(atr_dfnorm)
 
     print('df norm dentro de la funcion')
     print(df_norm)
@@ -559,7 +560,18 @@ def procesar_curva_completa(uploaded, atr_forzado=None):
     )
 
     # --- 2. Decisión de ATR ---
-    atr_final = atr_forzado if atr_forzado is not None else atr_detectado
+    # --- 2. Decisión de ATR (CORREGIDA Y SEGURA) ---
+    if atr_forzado is not None:
+        atr_final = atr_forzado
+    elif atr_detectado is not None:
+        atr_final = atr_detectado
+    else:
+        raise ValueError(
+            "ATR no definido. El usuario debe seleccionar el peaje de acceso (2.0, 3.0 o 6.1)."
+        )
+
+    print('atr final')
+    print(atr_final)
 
     # --- 3. Obtención de periodos (TU CÓDIGO TAL CUAL) ---
     if not flag_periodos_en_origen:

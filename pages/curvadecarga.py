@@ -14,10 +14,12 @@ if not st.session_state.get('usuario_autenticado', False) and not st.session_sta
 
 generar_menu()
 
-if "curva_procesada" not in st.session_state:
-    st.session_state.curva_procesada = False
-if "atr_dfnorm" not in st.session_state:
-    st.session_state.atr_dfnorm = None
+#if "curva_procesada" not in st.session_state:
+#    st.session_state.curva_procesada = False
+if "curva_normalizada" not in st.session_state:
+    st.session_state.curva_normalizada = False
+if "atr_dfnorm_ui" not in st.session_state:
+    st.session_state.atr_dfnorm_ui = '2.0'
 
 # ===============================
 #  Interfaz Streamlit
@@ -31,6 +33,19 @@ with st.sidebar:
         uploaded = f"curvas/qh anual demo.csv" #es la --> qh 30 con aut anual Carles ES0031--01HS.csv
     else:
         uploaded = st.file_uploader("📂 Sube un archivo CSV o Excel", type=["csv", "xlsx"])
+    
+    st.selectbox(
+        "Peaje de acceso",
+        ("2.0", "3.0", "6.1"),
+        #index=0,
+        key="atr_dfnorm_ui"
+    )
+
+    ejecutar = st.button(
+        "🔄 Normalizar curva",
+        type="primary",
+        use_container_width=True
+    )
         
     zona_mensajes = st.sidebar.empty()
     zona_mensajes2 = st.sidebar.empty()
@@ -48,69 +63,47 @@ if 'frec' not in st.session_state:
     st.session_state.frec = 'QH'      
 
 
-if uploaded and not st.session_state.curva_procesada:
+if uploaded and ejecutar:
 
     try:
-        atr_forzado = None
+        resultado = procesar_curva_completa(uploaded, st.session_state.atr_dfnorm_ui)
 
-        resultado = procesar_curva_completa(uploaded, atr_forzado)
+        print('resultado obtenido')
 
-        # Si el ATR no es 2.0, pedir selección (una sola vez)
-        if resultado["atr_dfnorm"] != "2.0":
-
-            st.sidebar.warning("⚙️ Selecciona peaje de acceso")
-            atr_sel = st.sidebar.selectbox(
-                "Peaje de acceso:",
-                ("3.0", "6.1"),
-                index=0,
-                key="atr_manual"
-            )
-
-            if not st.sidebar.button("🔄 Aplicar peaje", use_container_width=True, type="primary"):
-                st.stop()
-
-            resultado = procesar_curva_completa(uploaded, atr_sel)
-
-        # Guardar resultado
         for k, v in resultado.items():
             st.session_state[k] = v
 
-        st.session_state.curva_procesada = True
+        st.session_state.curva_normalizada = True
 
         zona_mensajes.success("✅ Curva normalizada correctamente")
-        if resultado["msg_unidades"]:
+
+        if resultado.get("msg_unidades"):
             zona_mensajes2.info(resultado["msg_unidades"], icon="ℹ️")
 
     except Exception as e:
         zona_mensajes.error(f"❌ Error al normalizar: {e}")
         st.stop()
 
-    
 
+if not st.session_state.curva_normalizada:
+    zona_mensajes.info("⬆️ Sube un archivo, selecciona el peaje y pulsa *Normalizar curva*")
         
 
+        
+st.session_state
 
 
 
-if st.session_state.get('df_norm') is not None:
+#if st.session_state.get('df_norm') is not None:
+if (
+    st.session_state.get("curva_normalizada", False)
+    and st.session_state.get("df_norm") is not None
+    and st.session_state.get("atr_dfnorm") in ("2.0", "3.0", "6.1")
+):
 
     st.sidebar.markdown(f'Peaje de acceso de la curva: **:orange[{st.session_state.atr_dfnorm}]**')
     st.sidebar.markdown(f'Resolución temporal de la curva: **:orange[{st.session_state.freq}]**')
-    #st.sidebar.radio(
-    #    "Selecciona el tipo de gráfico",
-    #    ["Horario", "Diario", "Mensual"],
-    #    horizontal=True,
-    #    key='modo_agrupacion'
-    #)
-
-    #st.sidebar.radio(
-    #    "Selecciona el tipo de día:",
-    #    ["Todos", "L-V", "FS"],
-    #    horizontal=True,
-    #    key='opcion_tipodia'
-    #)
-
-
+    
     tab1, tab2, tab3 = st.tabs(['Resumen', 'Perfiles Horarios', 'Autoconsumo'])
 
     with tab1:
