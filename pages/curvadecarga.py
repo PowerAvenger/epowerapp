@@ -61,7 +61,7 @@ if uploaded:
                 index=0
             )
 
-            if st.sidebar.button("🔄 Aplicar peaje", use_container_width=True):
+            if st.sidebar.button("🔄 Aplicar peaje", use_container_width=True, type='primary'):
                 resultado = procesar_curva_completa(uploaded, atr_sel)
             else:
                 st.stop()
