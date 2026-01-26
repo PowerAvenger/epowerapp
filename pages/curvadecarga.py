@@ -38,7 +38,7 @@ with st.sidebar:
         st.session_state.uploaded_file = uploaded
     
     st.selectbox(
-        "Peaje de acceso",
+        "Selecciona el peaje de acceso",
         ("2.0", "3.0", "6.1"),
         #index=0,
         key="atr_dfnorm_ui"
