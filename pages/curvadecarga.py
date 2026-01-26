@@ -63,8 +63,8 @@ if uploaded:
 
             if st.sidebar.button("🔄 Aplicar peaje", use_container_width=True, type='primary'):
                 resultado = procesar_curva_completa(uploaded, atr_sel)
-            else:
-                st.stop()
+            #else:
+            #    st.stop()
 
         # ---- Mensajes UX ----
         zona_mensajes.success("✅ Curva normalizada correctamente")
