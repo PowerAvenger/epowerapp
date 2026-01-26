@@ -113,84 +113,6 @@ def _read_any(uploaded_or_path):
 
     return df, (header_row or 0)
 
-def _read_any_nofunciona(uploaded_or_path):
-    """
-    Lee CSV o Excel forzando texto (sin autoconversión de fechas) y
-    detecta automáticamente la fila de cabecera real si NO existe ya.
-    """
-
-    def detect_header_row(df):
-        for i in range(min(10, len(df))):
-            row = df.iloc[i].astype(str).tolist()
-            row_values = " ".join(row).lower()
-
-            if not any(k in row_values for k in ["fecha", "hora", "consumo", "energ", "cups"]):
-                continue
-
-            non_empty = [x for x in row if x.strip() not in ["", "nan", "none"]]
-            text_like = sum(1 for x in non_empty if not any(ch.isdigit() for ch in x))
-            ratio_text = text_like / max(len(non_empty), 1)
-
-            if ratio_text > 0.7 and len(non_empty) >= 2:
-                return i
-
-        return None
-
-    def looks_like_header(cols):
-        cols = [_clean(c) for c in cols]
-        joined = " ".join(cols)
-        return any(k in joined for k in ["fecha", "hora", "consumo", "energ", "periodo"])
-
-    # --- Leer según tipo (PRIMERA LECTURA NORMAL) ---
-    if isinstance(uploaded_or_path, str):
-        if uploaded_or_path.lower().endswith(".csv"):
-            df = pd.read_csv(uploaded_or_path, dtype=str)
-        else:
-            df = pd.read_excel(uploaded_or_path, dtype=str)
-    else:
-        uploaded_or_path.seek(0)  # ✅ AQUÍ FALTABA
-        if uploaded_or_path.name.lower().endswith(".csv"):
-            df = pd.read_csv(uploaded_or_path, dtype=str)
-        else:
-            df = pd.read_excel(uploaded_or_path, dtype=str)
-
-    # --- SI YA ES TABULAR, SALIR ---
-    if not df.empty and looks_like_header(df.columns):
-        df = df.dropna(axis=1, how="all")
-        return df.reset_index(drop=True), 0
-
-    # --- SI NO, RELEER SIN CABECERA Y DETECTAR ---
-    if isinstance(uploaded_or_path, str):
-        if uploaded_or_path.lower().endswith(".csv"):
-            df = pd.read_csv(uploaded_or_path, dtype=str, header=None, skip_blank_lines=True)
-        else:
-            df = pd.read_excel(uploaded_or_path, dtype=str, header=None)
-    else:
-        uploaded_or_path.seek(0)  # ✅ AQUÍ TAMBIÉN
-        if uploaded_or_path.name.lower().endswith(".csv"):
-            content = uploaded_or_path.read()
-            sample = content[:4096].decode("utf-8", errors="ignore")
-            sep = ";" if sample.count(";") > sample.count(",") else ","
-            df = pd.read_csv(io.BytesIO(content), sep=sep, dtype=str, header=None)
-        else:
-            df = pd.read_excel(uploaded_or_path, dtype=str, header=None)
-
-    df = df.dropna(how="all").reset_index(drop=True)
-
-    if df.empty:
-        raise ValueError("Archivo sin datos legibles")
-
-    header_row = detect_header_row(df)
-
-    if header_row is None:
-        header_row = 0  # fallback seguro
-
-    df.columns = df.iloc[header_row]
-    df = df.iloc[header_row + 1:].reset_index(drop=True)
-    df = df.dropna(axis=1, how="all")
-
-    return df, header_row
-
 
 def _guess_cols(df: pd.DataFrame):
     cols = list(df.columns)
@@ -616,6 +538,90 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
 
 
     return df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, atr_dfnorm, freq
+
+
+
+@st.cache_data(show_spinner="⏳ Procesando curva de carga...")
+def procesar_curva_completa(uploaded, atr_forzado=None):
+
+    # --- 1. Normalización base (INTACTA) ---
+    (
+        df_in,
+        df_norm,
+        msg_unidades,
+        flag_periodos_en_origen,
+        df_periodos,
+        atr_detectado,
+        frec
+    ) = normalize_curve_simple(
+        uploaded,
+        origin=uploaded.name if hasattr(uploaded, "name") else uploaded
+    )
+
+    # --- 2. Decisión de ATR ---
+    atr_final = atr_forzado if atr_forzado is not None else atr_detectado
+
+    # --- 3. Obtención de periodos (TU CÓDIGO TAL CUAL) ---
+    if not flag_periodos_en_origen:
+
+        tipo_periodo = "dh_3p" if atr_final == "2.0" else "dh_6p"
+
+        if "periodo" not in df_norm.columns or df_norm["periodo"].isna().all():
+            if "periodo" in df_norm.columns:
+                df_norm = df_norm.drop(columns=["periodo"])
+
+            df_norm = pd.merge(
+                df_norm,
+                df_periodos[["fecha_hora", tipo_periodo]]
+                    .rename(columns={tipo_periodo: "periodo"}),
+                on="fecha_hora",
+                how="left"
+            )
+
+        df_norm["periodo"] = df_norm["periodo"].astype(str).str.strip()
+
+        if df_norm["periodo"].isna().any() or (df_norm["periodo"] == "nan").any():
+            df_norm["periodo"] = df_norm["periodo"].replace("nan", np.nan).ffill()
+
+    # --- 4. df_norm_h (TU CÓDIGO) ---
+    if frec == "QH":
+        df_norm_h = (
+            df_norm.groupby(["fecha", "hora"], as_index=False)
+            .agg({
+                "consumo_neto_kWh": "sum",
+                "vertido_neto_kWh": "sum",
+                "periodo": "first"
+            })
+        )
+    else:
+        df_norm_h = df_norm[
+            ["fecha_hora", "fecha", "hora",
+             "consumo_neto_kWh", "vertido_neto_kWh", "periodo"]
+        ].copy()
+
+    # --- 5. Métricas ---
+    consumo_total = df_norm["consumo_kWh"].sum()
+    vertido_total = df_norm["excedentes_kWh"].sum()
+    consumo_neto = df_norm["consumo_neto_kWh"].sum()
+    vertido_neto = df_norm["vertido_neto_kWh"].sum()
+
+    fecha_ini = df_norm_h["fecha"].min()
+    fecha_fin = df_norm_h["fecha"].max()
+
+    return {
+        "df_in": df_in,
+        "df_norm": df_norm,
+        "df_norm_h": df_norm_h,
+        "atr_dfnorm": atr_final,
+        "freq": frec,
+        "msg_unidades": msg_unidades,
+        "consumo_total": consumo_total,
+        "vertido_total": vertido_total,
+        "consumo_neto": consumo_neto,
+        "vertido_neto": vertido_neto,
+        "rango_curvadecarga": (fecha_ini, fecha_fin)
+    }
+
 
 
 # ================================================================================

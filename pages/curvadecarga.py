@@ -1,7 +1,7 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-from backend_curvadecarga import (normalize_curve_simple,
+from backend_curvadecarga import (normalize_curve_simple, procesar_curva_completa,
     graficar_curva_horaria, graficar_diario_apilado, graficar_mensual_apilado, graficar_queso_periodos, 
     graficar_media_horaria, graficar_media_horaria_combinada,
     graficar_neteo_horario,
@@ -41,22 +41,72 @@ if "df_in" not in st.session_state:
     st.session_state.df_in = None
 if 'frec' not in st.session_state:
     st.session_state.frec = 'QH'      
-if 'modo_agrupacion' not in st.session_state:
-    st.session_state.modo_agrupacion = "Horario" 
-#if 'opcion_tipodia' not in st.session_state:
-#    st.session_state.opcion_tipodia = "Todos"
+
+
+if uploaded:
+
+    try:
+        # Selección ATR solo si hace falta
+        atr_forzado = None
+
+        # Ejecutamos pipeline completo (cacheado)
+        resultado = procesar_curva_completa(uploaded, atr_forzado)
+
+        # Si el ATR no es 2.0, pedimos confirmación
+        if resultado["atr_dfnorm"] != "2.0":
+            st.sidebar.warning("⚙️ Selecciona peaje de acceso")
+            atr_sel = st.sidebar.selectbox(
+                "Peaje de acceso:",
+                ("3.0", "6.1"),
+                index=0
+            )
+
+            if st.sidebar.button("🔄 Aplicar peaje", use_container_width=True):
+                resultado = procesar_curva_completa(uploaded, atr_sel)
+            else:
+                st.stop()
+
+        # ---- Mensajes UX ----
+        zona_mensajes.success("✅ Curva normalizada correctamente")
+        if resultado["msg_unidades"]:
+            zona_mensajes2.info(resultado["msg_unidades"], icon="ℹ️")
+
+        # ---- Guardar en session_state ----
+        for k, v in resultado.items():
+            st.session_state[k] = v
+
+    except Exception as e:
+        zona_mensajes.error(f"❌ Error al normalizar: {e}")
+        st.stop()
+
+else:
+    zona_mensajes.info("⬆️ Sube un archivo CSV o Excel para comenzar.")
+
+    
 
         
 
-if uploaded:
+uploaded_old = False
+if uploaded_old:
     try:
-        #df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, atr_dfnorm, frec = normalize_curve_simple(uploaded, origin=uploaded.name)
         df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, atr_dfnorm, frec = normalize_curve_simple(uploaded, origin=uploaded.name if hasattr(uploaded, "name") else uploaded)
 
-        #st.session_state.df_norm = df_norm
+        # --- Decisión de ATR ---
+        if atr_dfnorm == "2.0":
+            atr_seleccionado = "2.0"
+            ejecutar = True
+            st.sidebar.success("✅ Peaje 2.0TD detectado automáticamente")
 
-        #print('mensaje periodos')
-        #print(msg_periodos)
+        else:
+            st.sidebar.warning("⚙️ Selecciona el peaje de acceso para normalizar la curva")
+            atr_seleccionado = st.sidebar.selectbox(
+                "Peaje de acceso:",
+                ("3.0", "6.1"),
+                index=0
+            )
+            ejecutar = st.sidebar.button("🔄 Normalizar curva")
+
+        
 
         consumo_total=df_norm['consumo_kWh'].sum()
         vertido_total=df_norm['excedentes_kWh'].sum()
