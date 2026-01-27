@@ -18,8 +18,8 @@ generar_menu()
 #    st.session_state.uploaded_file = None
 if "curva_normalizada" not in st.session_state:
     st.session_state.curva_normalizada = False
-if "atr_dfnorm_ui" not in st.session_state:
-    st.session_state.atr_dfnorm_ui = '3.0'
+#if "atr_dfnorm_ui" not in st.session_state:
+#    st.session_state.atr_dfnorm_ui = '3.0'
 
 # ===============================
 #  Interfaz Streamlit
@@ -31,8 +31,8 @@ with st.sidebar:
     if not st.session_state.get('usuario_autenticado', False):
         st.warning("🔒 Este módulo es solo para usuarios premium. Lo que estás viendo es un fichero de ejemplo")
         uploaded = f"curvas/qh anual demo.csv" #es la --> qh 30 con aut anual Carles ES0031--01HS.csv
-        st.session_state.atr_dfnorm_ui = '3.0'
-        st.selectbox("Peaje de acceso", ("2.0", "3.0", "6.1"), key="atr_dfnorm_ui", disabled=True)
+        #st.session_state.atr_dfnorm_ui = '3.0'
+        #st.selectbox("Peaje de acceso", ("2.0", "3.0", "6.1"), key="atr_dfnorm_ui", disabled=True)
         #ejecutar = not st.session_state.curva_normalizada
         
     else:
