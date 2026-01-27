@@ -192,7 +192,7 @@ submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', us
     
     
 
-  
+# OPTIMIZACIÓN DE POTENCIA. USADO EN MODO PREMIUM Y MODO DEMO.  
 if submit_opt and st.session_state.df_norm is not None:
         
         
@@ -230,7 +230,7 @@ if submit_opt and st.session_state.df_norm is not None:
         with c13:
             st.write(fig1)
 
-#with tab2:
+# VERIFICACIÓN DE EXCESOS. NO SE USA EN MODO DEMO
 if submit_ver and st.session_state.df_norm is not None:
         coste_potfra_potcon, coste_excesos_potcon, coste_tp_potcon, df_coste_potfra_potcon, df_coste_excesos_potcon = calcular_costes(df_in, tarifa, pyc_tp_ver, tepp_ver, meses, pot_con)
 
