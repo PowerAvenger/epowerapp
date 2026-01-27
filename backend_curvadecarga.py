@@ -542,7 +542,7 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
 
 
 
-#@st.cache_data(show_spinner="⏳ Procesando curva de carga...")
+@st.cache_data(show_spinner="⏳ Procesando curva de carga...")
 def procesar_curva_completa(uploaded, atr_forzado=None):
 
     # --- 1. Normalización base (INTACTA) ---
