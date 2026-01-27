@@ -103,7 +103,7 @@ if (
 ):
 
     st.sidebar.markdown(f'Peaje actualmente seleccionado: **:orange[{st.session_state.atr_dfnorm}]**')
-    st.sidebar.markdown(f'Resolución temporal de la curva: **:orange[{st.session_state.freq}]**')
+    st.sidebar.markdown(f'Resolución temporal de la curva: **:orange[{st.session_state.frec}]**')
     
     tab1, tab2, tab3 = st.tabs(['Resumen', 'Perfiles Horarios', 'Autoconsumo'])
 
@@ -142,7 +142,7 @@ if (
         with c1:
             st.subheader("Gráfico de consumo")
             # Mostrar gráfico
-            graf_horario = graficar_curva_horaria(st.session_state.df_norm, st.session_state.freq)
+            graf_horario = graficar_curva_horaria(st.session_state.df_norm, st.session_state.frec)
             st.plotly_chart(graf_horario, use_container_width=True)
             
 
