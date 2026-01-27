@@ -57,7 +57,7 @@ with st.sidebar:
 if "df_norm" not in st.session_state:
     st.session_state.df_norm = None
 if "df_norm_h" not in st.session_state:
-    st.session_state.df_norm = None  
+    st.session_state.df_norm_h = None  
 if "df_in" not in st.session_state:
     st.session_state.df_in = None
 if 'frec' not in st.session_state:
