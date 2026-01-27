@@ -14,12 +14,12 @@ if not st.session_state.get('usuario_autenticado', False) and not st.session_sta
 
 generar_menu()
 
-if "uploaded_file" not in st.session_state:
-    st.session_state.uploaded_file = None
+#if "uploaded_file" not in st.session_state:
+#    st.session_state.uploaded_file = None
 if "curva_normalizada" not in st.session_state:
     st.session_state.curva_normalizada = False
 if "atr_dfnorm_ui" not in st.session_state:
-    st.session_state.atr_dfnorm_ui = '2.0'
+    st.session_state.atr_dfnorm_ui = '3.0'
 
 # ===============================
 #  Interfaz Streamlit
@@ -37,14 +37,14 @@ with st.sidebar:
         
     else:
         uploaded = st.file_uploader("📂 Sube un archivo CSV o Excel", type=["csv", "xlsx"])
-        st.selectbox("Selecciona el peaje de acceso", ("2.0", "3.0", "6.1"), key="atr_dfnorm_ui", disabled=False)
+        #st.selectbox("Selecciona el peaje de acceso", ("2.0", "3.0", "6.1"), key="atr_dfnorm_ui", disabled=False)
         
     
-    if uploaded is not None:
-        st.session_state.uploaded_file = uploaded
+    #if uploaded is not None:
+    #    st.session_state.uploaded_file = uploaded
     
     
-    ejecutar = st.button("🔄 Normalizar curva", type="primary", use_container_width=True)
+    #ejecutar = st.button("🔄 Normalizar curva", type="primary", use_container_width=True)
     
     
         
@@ -63,24 +63,24 @@ if "df_in" not in st.session_state:
 if 'frec' not in st.session_state:
     st.session_state.frec = 'QH'      
 
-if uploaded and ejecutar:
+if uploaded: # and ejecutar:
     try:
         df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, atr_dfnorm, frec = normalize_curve_simple(uploaded, origin=uploaded.name if hasattr(uploaded, "name") else uploaded)
 
         # --- Decisión de ATR ---
-        if atr_dfnorm == "2.0":
-            atr_seleccionado = "2.0"
-            ejecutar = True
-            st.sidebar.success("✅ Peaje 2.0TD detectado automáticamente")
+        #if atr_dfnorm == "2.0":
+        #    atr_seleccionado = "2.0"
+            #ejecutar = True
+        #    st.sidebar.success("✅ Peaje 2.0TD detectado automáticamente")
 
-        else:
-            st.sidebar.warning("⚙️ Selecciona el peaje de acceso para normalizar la curva")
-            atr_seleccionado = st.sidebar.selectbox(
-                "Peaje de acceso:",
-                ("3.0", "6.1"),
-                index=0
-            )
-            ejecutar = st.sidebar.button("🔄 Normalizar curva")
+        #else:
+        #    st.sidebar.warning("⚙️ Selecciona el peaje de acceso para normalizar la curva")
+        #    atr_seleccionado = st.sidebar.selectbox(
+        #        "Peaje de acceso:",
+        #        ("3.0", "6.1"),
+        #        index=0
+        #    )
+            #ejecutar = st.sidebar.button("🔄 Normalizar curva")
 
         
 
@@ -141,42 +141,45 @@ if uploaded and ejecutar:
         else:
             msg_periodos = 'Cargados periodos desde fichero origen'
             zona_mensajes3.info(msg_periodos, icon="ℹ️")
-
-            # --- Detectar ATR según los periodos en el origen ---
-            if "periodo" in df_norm.columns:
-                numeros = (
-                    df_norm["periodo"]
-                    .astype(str)
-                    .str.extract(r"P?(\d+)", expand=False)
-                    .dropna()
-                    .astype(int)
-                )
-
-                if not numeros.empty and numeros.max() == 3:
-                    atr_dfnorm = "2.0"
-                    st.sidebar.success("✅ Peaje de acceso detectado automáticamente: 2.0TD (3 periodos)")
-                elif not numeros.empty and numeros.max() == 6:
-                    st.sidebar.warning("⚙️ Peaje con 6 periodos detectado. Selección manual requerida:")
-                    atr_dfnorm = st.sidebar.selectbox(
-                        "Selecciona peaje de acceso:",
-                        ("3.0", "6.1"),
-                        index=0
+            if not st.session_state.get('usuario_free', False):
+                # --- Detectar ATR según los periodos en el origen ---
+                if "periodo" in df_norm.columns:
+                    numeros = (
+                        df_norm["periodo"]
+                        .astype(str)
+                        .str.extract(r"P?(\d+)", expand=False)
+                        .dropna()
+                        .astype(int)
                     )
+
+                    if not numeros.empty and numeros.max() == 3:
+                        atr_dfnorm = "2.0"
+                        st.sidebar.success("✅ Peaje de acceso detectado automáticamente: 2.0TD (3 periodos)")
+                    elif not numeros.empty and numeros.max() == 6:
+                        st.sidebar.warning("⚙️ Peaje con 6 periodos detectado. Selección manual requerida:")
+                        atr_dfnorm = st.sidebar.selectbox(
+                            "Selecciona peaje de acceso:",
+                            ("3.0", "6.1"),
+                            index=0
+                        )
+                    else:
+                        st.sidebar.warning("⚙️ No se ha podido determinar el peaje de acceso. Selección manual:")
+                        atr_dfnorm = st.sidebar.selectbox(
+                            "Selecciona peaje de acceso:",
+                            ("2.0", "3.0", "6.1"),
+                            index=0
+                        )
+
                 else:
                     st.sidebar.warning("⚙️ No se ha podido determinar el peaje de acceso. Selección manual:")
                     atr_dfnorm = st.sidebar.selectbox(
-                        "Selecciona peaje de acceso:",
+                        "Selecciona el peaje de acceso:",
                         ("2.0", "3.0", "6.1"),
                         index=0
                     )
-
+            
             else:
-                st.sidebar.warning("⚙️ No se ha podido determinar el peaje de acceso. Selección manual:")
-                atr_dfnorm = st.sidebar.selectbox(
-                    "Selecciona el peaje de acceso:",
-                    ("2.0", "3.0", "6.1"),
-                    index=0
-                )
+                atr_dfnorm = "3.0"
         
 
         if frec =='QH':
@@ -224,13 +227,9 @@ else:
 
 
 
-
-
-if (
-    st.session_state.get("curva_normalizada", False)
-    and st.session_state.get("df_norm") is not None
-    and st.session_state.get("atr_dfnorm") in ("2.0", "3.0", "6.1")
-):
+#st.session_state.get("atr_dfnorm") in ("2.0", "3.0", "6.1")
+#st.session_state.get("curva_normalizada", False)
+if st.session_state.get("df_norm") is not None:
 
     st.sidebar.markdown(f'Peaje actualmente seleccionado: **:orange[{st.session_state.atr_dfnorm}]**')
     st.sidebar.markdown(f'Resolución temporal de la curva: **:orange[{st.session_state.frec}]**')
@@ -323,6 +322,9 @@ if (
     # --- Descarga ---
     csv_bytes = st.session_state.df_norm.reset_index().to_csv(index=False, sep=";").encode("utf-8")
     if not st.session_state.get('usuario_autenticado', False):
-        st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=True)
+        habilitar_descarga = False
+        #st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=True)
     else:
-        st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=False)
+        habilitar_descarga = True
+        #st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=False)
+    st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=not habilitar_descarga, use_container_width=True)

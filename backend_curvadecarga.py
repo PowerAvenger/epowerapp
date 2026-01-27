@@ -541,7 +541,7 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
     return df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, atr_dfnorm, freq
 
 
-
+#NO USADO!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 @st.cache_data(show_spinner="⏳ Procesando curva de carga...")
 def procesar_curva_completa(uploaded, atr_forzado=None):
 
