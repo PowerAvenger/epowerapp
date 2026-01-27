@@ -31,25 +31,22 @@ with st.sidebar:
     if not st.session_state.get('usuario_autenticado', False):
         st.warning("🔒 Este módulo es solo para usuarios premium. Lo que estás viendo es un fichero de ejemplo")
         uploaded = f"curvas/qh anual demo.csv" #es la --> qh 30 con aut anual Carles ES0031--01HS.csv
+        st.session_state.atr_dfnorm_ui = '3.0'
+        st.selectbox("Peaje de acceso", ("2.0", "3.0", "6.1"), key="atr_dfnorm_ui", disabled=True)
+        ejecutar = True
+        
     else:
         uploaded = st.file_uploader("📂 Sube un archivo CSV o Excel", type=["csv", "xlsx"])
+        st.selectbox("Selecciona el peaje de acceso", ("2.0", "3.0", "6.1"), key="atr_dfnorm_ui", disabled=False)
+        ejecutar = st.button("🔄 Normalizar curva", type="primary", use_container_width=True)
     
     if uploaded is not None:
         st.session_state.uploaded_file = uploaded
     
-    st.selectbox(
-        "Selecciona el peaje de acceso",
-        ("2.0", "3.0", "6.1"),
-        #index=0,
-        key="atr_dfnorm_ui"
-    )
-
     
-    ejecutar = st.button(
-        "🔄 Normalizar curva",
-        type="primary",
-        use_container_width=True
-    )
+    #ejecutar = st.button("🔄 Normalizar curva", type="primary", use_container_width=True)
+    
+    
         
     zona_mensajes = st.sidebar.empty()
     zona_mensajes2 = st.sidebar.empty()
