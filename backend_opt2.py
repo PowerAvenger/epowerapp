@@ -283,7 +283,7 @@ meses = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', '
 
 
 def leer_curva_normalizada(pot_con):
-    df_in = st.session_state.df_norm
+    df_in = st.session_state.df_norm.copy()
     # --- Leer CSV detectando delimitador automáticamente ---
     #df_in = pd.read_csv(curva, sep=None, engine='python', encoding='utf-8')
     print("📄 Fichero leído correctamente:")
