@@ -330,7 +330,7 @@ def leer_curva_normalizada(pot_con):
     }
 
     df_in['pot_con'] = df_in['periodo'].map(pot_con)
-    if st.session_state.freq == 'QH':
+    if st.session_state.frec == 'QH':
         df_in['potencia'] = df_in['consumo'] * 4
     else:
         df_in['potencia'] = df_in['consumo']
