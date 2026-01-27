@@ -16,10 +16,13 @@ generar_menu()
 
 #if "uploaded_file" not in st.session_state:
 #    st.session_state.uploaded_file = None
-if "curva_normalizada" not in st.session_state:
-    st.session_state.curva_normalizada = False
+#if "curva_normalizada" not in st.session_state:
+#    st.session_state.curva_normalizada = False
 #if "atr_dfnorm_ui" not in st.session_state:
 #    st.session_state.atr_dfnorm_ui = '3.0'
+
+if "demo_ejecutado" not in st.session_state:
+    st.session_state.demo_ejecutado = False
 
 # ===============================
 #  Interfaz Streamlit
@@ -63,7 +66,11 @@ if "df_in" not in st.session_state:
 if 'frec' not in st.session_state:
     st.session_state.frec = 'QH'      
 
-if uploaded: # and ejecutar:
+#if uploaded: # and ejecutar:
+if uploaded and (
+    st.session_state.get("usuario_autenticado", False)
+    or not st.session_state.demo_ejecutado
+):
     try:
         df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, atr_dfnorm, frec = normalize_curve_simple(uploaded, origin=uploaded.name if hasattr(uploaded, "name") else uploaded)
 
@@ -217,6 +224,8 @@ if uploaded: # and ejecutar:
         print('df norm horaria')
         print(df_norm_h)
 
+        st.session_state.demo_ejecutado = True
+        
     except Exception as e:
         zona_mensajes.error(f"❌ Error al normalizar: {e}")
         st.stop()
@@ -317,7 +326,7 @@ if st.session_state.get("df_norm") is not None:
 
     with tab3:
         graf_horario_neteo = graficar_neteo_horario(st.session_state.df_norm, st.session_state.frec)
-        st.plotly_chart(graf_horario_neteo, use_container_width=True)
+        st.plotly_chart(graf_horario_neteo, use_container_width=True)   
 
     # --- Descarga ---
     csv_bytes = st.session_state.df_norm.reset_index().to_csv(index=False, sep=";").encode("utf-8")
