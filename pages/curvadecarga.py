@@ -63,35 +63,165 @@ if "df_in" not in st.session_state:
 if 'frec' not in st.session_state:
     st.session_state.frec = 'QH'      
 
-
-if st.session_state.uploaded_file and ejecutar:
-
+if uploaded and ejecutar:
     try:
-        resultado = procesar_curva_completa(st.session_state.uploaded_file, st.session_state.atr_dfnorm_ui)
+        df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, atr_dfnorm, frec = normalize_curve_simple(uploaded, origin=uploaded.name if hasattr(uploaded, "name") else uploaded)
 
-        print('resultado obtenido')
+        # --- Decisión de ATR ---
+        if atr_dfnorm == "2.0":
+            atr_seleccionado = "2.0"
+            ejecutar = True
+            st.sidebar.success("✅ Peaje 2.0TD detectado automáticamente")
 
-        for k, v in resultado.items():
-            st.session_state[k] = v
+        else:
+            st.sidebar.warning("⚙️ Selecciona el peaje de acceso para normalizar la curva")
+            atr_seleccionado = st.sidebar.selectbox(
+                "Peaje de acceso:",
+                ("3.0", "6.1"),
+                index=0
+            )
+            ejecutar = st.sidebar.button("🔄 Normalizar curva")
 
-        st.session_state.curva_normalizada = True
+        
+
+        consumo_total=df_norm['consumo_kWh'].sum()
+        vertido_total=df_norm['excedentes_kWh'].sum()
+        consumo_neto=df_norm['consumo_neto_kWh'].sum()
+        vertido_neto=df_norm['vertido_neto_kWh'].sum()
+
 
         zona_mensajes.success("✅ Curva normalizada correctamente")
+        if msg_unidades != "":
+            zona_mensajes2.info(msg_unidades, icon="ℹ️")
 
-        if resultado.get("msg_unidades"):
-            zona_mensajes2.info(resultado["msg_unidades"], icon="ℹ️")
+        # --- Obtención de periodos ------------------------------------------------
+        if not flag_periodos_en_origen:
+            msg_periodos = 'Cargados periodos desde fichero auxiliar. Seleccione peaje de acceso (2.0/ 3.0 / 6.1)TD'
+            zona_mensajes3.warning(msg_periodos, icon="⚠️")
+
+            # --- Determinar ATR y tipo de calendario ---
+            if atr_dfnorm == "2.0":
+                st.sidebar.success("✅ Peaje de acceso detectado automáticamente: 2.0TD (3 periodos)")
+                tipo_periodo = "dh_3p"
+            else:
+                st.sidebar.warning("⚙️ No se ha detectado peaje de acceso 2.0TD. Selección manual requerida:")
+                atr_dfnorm = st.sidebar.selectbox(
+                    "Selecciona peaje de acceso:",
+                    ("2.0", "3.0", "6.1"),
+                    index=0
+                )
+                if atr_dfnorm == "2.0":
+                    tipo_periodo = "dh_3p"
+                else:
+                    tipo_periodo = "dh_6p"   # ambos ATR 3.0 y 6.1 usan 6 periodos
+
+            # --- Si la columna 'periodo' no existe o está vacía ---
+            if "periodo" not in df_norm.columns or df_norm["periodo"].isna().all():
+                if "periodo" in df_norm.columns:
+                    df_norm = df_norm.drop(columns=["periodo"])
+
+                df_norm = pd.merge(
+                    df_norm,
+                    df_periodos[["fecha_hora", tipo_periodo]].rename(columns={tipo_periodo: "periodo"}),
+                    on="fecha_hora",
+                    how='left'
+                )
+
+            # --- Normalizar la columna 'periodo' ---
+            df_norm["periodo"] = df_norm["periodo"].astype(str).str.strip()
+
+            # --- Rellenar periodos faltantes (curvas QH) ---
+            if df_norm["periodo"].isna().any() or (df_norm["periodo"] == "nan").any():
+                df_norm["periodo"] = (
+                    df_norm["periodo"]
+                    .replace("nan", np.nan)
+                    .ffill()
+                )
+
+        else:
+            msg_periodos = 'Cargados periodos desde fichero origen'
+            zona_mensajes3.info(msg_periodos, icon="ℹ️")
+
+            # --- Detectar ATR según los periodos en el origen ---
+            if "periodo" in df_norm.columns:
+                numeros = (
+                    df_norm["periodo"]
+                    .astype(str)
+                    .str.extract(r"P?(\d+)", expand=False)
+                    .dropna()
+                    .astype(int)
+                )
+
+                if not numeros.empty and numeros.max() == 3:
+                    atr_dfnorm = "2.0"
+                    st.sidebar.success("✅ Peaje de acceso detectado automáticamente: 2.0TD (3 periodos)")
+                elif not numeros.empty and numeros.max() == 6:
+                    st.sidebar.warning("⚙️ Peaje con 6 periodos detectado. Selección manual requerida:")
+                    atr_dfnorm = st.sidebar.selectbox(
+                        "Selecciona peaje de acceso:",
+                        ("3.0", "6.1"),
+                        index=0
+                    )
+                else:
+                    st.sidebar.warning("⚙️ No se ha podido determinar el peaje de acceso. Selección manual:")
+                    atr_dfnorm = st.sidebar.selectbox(
+                        "Selecciona peaje de acceso:",
+                        ("2.0", "3.0", "6.1"),
+                        index=0
+                    )
+
+            else:
+                st.sidebar.warning("⚙️ No se ha podido determinar el peaje de acceso. Selección manual:")
+                atr_dfnorm = st.sidebar.selectbox(
+                    "Selecciona el peaje de acceso:",
+                    ("2.0", "3.0", "6.1"),
+                    index=0
+                )
+        
+
+        if frec =='QH':
+            # Agregar cada 4 muestras por hora
+            # Agrupar a nivel horario (suma de los 4 cuartos horarios)
+            df_norm_h = (
+                df_norm.groupby(["fecha", "hora"], as_index=False)
+                .agg({
+                    "consumo_neto_kWh": "sum",
+                    "vertido_neto_kWh": "sum",
+                    "periodo": "first"
+                })
+            )
+        else:
+            # Ya está en frecuencia horaria → copiar
+            df_norm_h = df_norm[["fecha_hora", "fecha", "hora","consumo_neto_kWh", "vertido_neto_kWh", "periodo"]].copy()
+
+        consumototalhorario= df_norm_h['consumo_neto_kWh'].sum()
+        print(f'consumo total df_norm_h: {consumototalhorario}')
+        
+        st.session_state.df_norm = df_norm
+        st.session_state.atr_dfnorm = atr_dfnorm
+        st.session_state.df_norm_h = df_norm_h
+        st.session_state.freq = frec
+        st.session_state.df_in = df_in
+        st.session_state.consumo_total=consumo_total
+        st.session_state.vertido_total=vertido_total
+        st.session_state.consumo_neto=consumo_neto
+        st.session_state.vertido_neto=vertido_neto
+        # Obtener fechas mínima y máxima del df_norm_h y guardar para telemindex
+        fecha_ini = df_norm_h["fecha"].min()
+        fecha_fin = df_norm_h["fecha"].max()
+        st.session_state.rango_curvadecarga = (fecha_ini, fecha_fin)
+
+        print('df norm horaria')
+        print(df_norm_h)
 
     except Exception as e:
         zona_mensajes.error(f"❌ Error al normalizar: {e}")
         st.stop()
 
+else:
+    zona_mensajes.info("⬆️ Sube un archivo CSV o Excel para comenzar.")
 
-if not st.session_state.curva_normalizada:
-    zona_mensajes.info("⬆️ Sube un archivo, selecciona el peaje y pulsa *Normalizar curva*")
-        
 
-        
-#st.session_state
 
 
 
