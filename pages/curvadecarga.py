@@ -38,13 +38,13 @@ with st.sidebar:
     else:
         uploaded = st.file_uploader("📂 Sube un archivo CSV o Excel", type=["csv", "xlsx"])
         st.selectbox("Selecciona el peaje de acceso", ("2.0", "3.0", "6.1"), key="atr_dfnorm_ui", disabled=False)
-        ejecutar = st.button("🔄 Normalizar curva", type="primary", use_container_width=True)
+        
     
     if uploaded is not None:
         st.session_state.uploaded_file = uploaded
     
     
-    #ejecutar = st.button("🔄 Normalizar curva", type="primary", use_container_width=True)
+    ejecutar = st.button("🔄 Normalizar curva", type="primary", use_container_width=True)
     
     
         
