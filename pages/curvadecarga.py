@@ -33,7 +33,7 @@ with st.sidebar:
         uploaded = f"curvas/qh anual demo.csv" #es la --> qh 30 con aut anual Carles ES0031--01HS.csv
         st.session_state.atr_dfnorm_ui = '3.0'
         st.selectbox("Peaje de acceso", ("2.0", "3.0", "6.1"), key="atr_dfnorm_ui", disabled=True)
-        ejecutar = True
+        ejecutar = not st.session_state.curva_normalizada
         
     else:
         uploaded = st.file_uploader("📂 Sube un archivo CSV o Excel", type=["csv", "xlsx"])
