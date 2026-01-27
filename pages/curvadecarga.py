@@ -203,7 +203,7 @@ if uploaded: # and ejecutar:
         st.session_state.df_norm = df_norm
         st.session_state.atr_dfnorm = atr_dfnorm
         st.session_state.df_norm_h = df_norm_h
-        st.session_state.freq = frec
+        st.session_state.frec = frec
         st.session_state.df_in = df_in
         st.session_state.consumo_total=consumo_total
         st.session_state.vertido_total=vertido_total
