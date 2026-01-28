@@ -37,17 +37,19 @@ with st.sidebar:
         #st.session_state.atr_dfnorm_ui = '3.0'
         #st.selectbox("Peaje de acceso", ("2.0", "3.0", "6.1"), key="atr_dfnorm_ui", disabled=True)
         #ejecutar = not st.session_state.curva_normalizada
+        ejecutar = st.button("🔄 Normalizar curva", type="primary", use_container_width=True)
         
     else:
         uploaded = st.file_uploader("📂 Sube un archivo CSV o Excel", type=["csv", "xlsx"])
         #st.selectbox("Selecciona el peaje de acceso", ("2.0", "3.0", "6.1"), key="atr_dfnorm_ui", disabled=False)
+        ejecutar = True
         
     
     #if uploaded is not None:
     #    st.session_state.uploaded_file = uploaded
     
     
-    #ejecutar = st.button("🔄 Normalizar curva", type="primary", use_container_width=True)
+    
     
     
         
@@ -67,10 +69,8 @@ if 'frec' not in st.session_state:
     st.session_state.frec = 'QH'      
 
 #if uploaded: # and ejecutar:
-if uploaded and (
-    st.session_state.get("usuario_autenticado", False)
-    or not st.session_state.demo_ejecutado
-):
+#if uploaded and (st.session_state.get("usuario_autenticado", False) or not st.session_state.demo_ejecutado):
+if uploaded and ejecutar:
     try:
         df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, atr_dfnorm, frec = normalize_curve_simple(uploaded, origin=uploaded.name if hasattr(uploaded, "name") else uploaded)
 
