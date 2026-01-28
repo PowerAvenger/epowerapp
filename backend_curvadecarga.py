@@ -4,9 +4,7 @@ import pandas as pd
 import numpy as np
 import io, re
 from unidecode import unidecode
-from zoneinfo import ZoneInfo
-from datetime import timedelta, timezone
-import altair as alt
+
 
 TZ = "Europe/Madrid"
 

@@ -1,7 +1,7 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-from backend_curvadecarga import (normalize_curve_simple, procesar_curva_completa,
+from backend_curvadecarga import (normalize_curve_simple, 
     graficar_curva_horaria, graficar_diario_apilado, graficar_mensual_apilado, graficar_queso_periodos, 
     graficar_media_horaria, graficar_media_horaria_combinada,
     graficar_neteo_horario,

@@ -1,11 +1,9 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from scipy.optimize import minimize
-import numpy as np
 import plotly.express as px
-from utilidades import generar_menu, init_app, init_app_index
-from backend_opt2 import leer_curva_normalizada, calcular_costes, funcion_objetivo, ajustar_potencias, grafico_costes_con, graficar_costes_opt, calcular_optimizacion, pyc_tp, tepp, meses
+from utilidades import generar_menu
+from backend_opt2 import leer_curva_normalizada, calcular_costes, calcular_optimizacion, pyc_tp, tepp, meses
 from backend_curvadecarga import colores_periodo
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):

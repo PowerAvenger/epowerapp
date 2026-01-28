@@ -1,18 +1,12 @@
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-#from dateutil.relativedelta import relativedelta
-#import pvlib
 import numpy as np
-import cvxpy as cp
 from scipy.optimize import minimize
 import plotly.graph_objects as go
 import math
-
-#import plotly.io as pio
-#import dataframe_image as dfi
-#import nest_asyncio
 import streamlit as st
+import gc 
 
 pyc_tp = {
     2025: {
@@ -114,59 +108,6 @@ pyc_tp = {
             'P5': 0.492827,
             'P6': 0.230511
         }
-    }
-}
-
-
-# VALORES TEPp PARA 2026 (€/kW)
-tepp = {
-    '2.0': {
-        'P1': 2.968850,
-        'P2': 0.056473,
-        'P3': None,
-        'P4': None,
-        'P5': None,
-        'P6': None
-    },
-    '3.0': {
-        'P1': 3.325715,
-        'P2': 1.757877,
-        'P3': 0.557353,
-        'P4': 0.427494,
-        'P5': 0.119179,
-        'P6': 0.119179
-    },
-    '6.1': {
-        'P1': 3.431797,
-        'P2': 1.818277,
-        'P3': 0.680379,
-        'P4': 0.478581,
-        'P5': 0.010172,
-        'P6': 0.008984
-    },
-    '6.2': {
-        'P1': 3.243495,
-        'P2': 1.826897,
-        'P3': 0.483612,
-        'P4': 0.294055,
-        'P5': 0.011467,
-        'P6': 0.010143
-    },
-    '6.3': {
-        'P1': 3.063808,
-        'P2': 1.844204,
-        'P3': 0.617738,
-        'P4': 0.402624,
-        'P5': 0.013069,
-        'P6': 0.011406
-    },
-    '6.4': {
-        'P1': 2.736629,
-        'P2': 1.630338,
-        'P3': 0.409096,
-        'P4': 0.284221,
-        'P5': 0.008441,
-        'P6': 0.005787
     }
 }
 
@@ -351,7 +292,6 @@ def leer_curva_normalizada(pot_con):
 
 
 # Función para calcular los costes a partir de las potencias
-#def calcular_costes(potencias, df_in, tarifa, pyc_tp, kp, tep, meses, pot_con):
 def calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, potencias):
     # Obtenemos los valores pyc_tp, kp y tep según la tarifa del suministro
     #pyc_tp_tarifa = pyc_tp.get(tarifa, {})
@@ -866,6 +806,10 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
         legend_title_text="Tipo de coste",
         margin=dict(t=60, b=40, l=40, r=40)
     )
+
+    del df_plot
+    del data
+    gc.collect()
 
     return graf_costes_potcon, fig2, coste_tp_potcon, coste_tp_potopt, ahorro_opt, ahorro_opt_porc, df_potencias, fig_ahorro, fig1, fig
 
