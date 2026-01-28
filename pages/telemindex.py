@@ -1,6 +1,6 @@
 import streamlit as st
 from backend_telemindex import filtrar_datos, aplicar_margen, graf_principal, pt5_trans, pt1, pt7_trans, costes_indexado, evol_mensual, construir_df_curva_sheets, añadir_costes_curva 
-from backend_comun import autenticar_google_sheets, carga_rapida_sheets, carga_total_sheets, colores_precios
+from backend_comun import colores_precios
 from backend_curvadecarga import graficar_media_horaria, graficar_queso_periodos
 
 import pandas as pd
@@ -56,7 +56,8 @@ except:
     st.session_state.dia_seleccionado = datetime.date(2025,1,1)
     df_filtrado, lista_meses = filtrar_datos()
 
-if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
+#if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
+if "df_norm" in st.session_state and st.session_state.df_norm is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
     df_curva_sheets = construir_df_curva_sheets(df_filtrado)
     df_curva_sheets = añadir_costes_curva(df_curva_sheets)
     #st.session_state.df_curva_sheets = df_curva_sheets
@@ -103,7 +104,8 @@ sobrecoste_ssaa = ((media_combo / media_spot) - 1) * 100
 
 
 
-if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
+#if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
+if "df_norm" in st.session_state and st.session_state.df_norm is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
     media_atr_curva = media_atr_curva / 10
     apuntamiento_spot = round(media_spot_curva/media_spot,3)
 

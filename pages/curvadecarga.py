@@ -191,27 +191,28 @@ if uploaded:
                 atr_dfnorm = "3.0"
         
 
-        if frec =='QH':
-            # Agregar cada 4 muestras por hora
+        #if frec =='QH':
+        #    # Agregar cada 4 muestras por hora
             # Agrupar a nivel horario (suma de los 4 cuartos horarios)
-            df_norm_h = (
-                df_norm.groupby(["fecha", "hora"], as_index=False)
-                .agg({
-                    "consumo_neto_kWh": "sum",
-                    "vertido_neto_kWh": "sum",
-                    "periodo": "first"
-                })
-            )
-        else:
+        #    df_norm_h = (
+        #        df_norm.groupby(["fecha", "hora"], as_index=False)
+        #        .agg({
+        #            "consumo_neto_kWh": "sum",
+        #            "vertido_neto_kWh": "sum",
+        #            "periodo": "first"
+        #        })
+        #    )
+        #else:
             # Ya está en frecuencia horaria → copiar
-            df_norm_h = df_norm[["fecha_hora", "fecha", "hora","consumo_neto_kWh", "vertido_neto_kWh", "periodo"]].copy()
+        #    df_norm_h = df_norm[["fecha_hora", "fecha", "hora","consumo_neto_kWh", "vertido_neto_kWh", "periodo"]].copy()
 
-        consumototalhorario= df_norm_h['consumo_neto_kWh'].sum()
+        #consumototalhorario= df_norm_h['consumo_neto_kWh'].sum()
+        consumototalhorario= df_norm['consumo_neto_kWh'].sum()
         print(f'consumo total df_norm_h: {consumototalhorario}')
         
         st.session_state.df_norm = df_norm
         st.session_state.atr_dfnorm = atr_dfnorm
-        st.session_state.df_norm_h = df_norm_h
+        #st.session_state.df_norm_h = df_norm_h
         st.session_state.frec = frec
         st.session_state.df_in = df_in
         st.session_state.consumo_total=consumo_total
@@ -219,8 +220,10 @@ if uploaded:
         st.session_state.consumo_neto=consumo_neto
         st.session_state.vertido_neto=vertido_neto
         # Obtener fechas mínima y máxima del df_norm_h y guardar para telemindex
-        fecha_ini = df_norm_h["fecha"].min()
-        fecha_fin = df_norm_h["fecha"].max()
+        #fecha_ini = df_norm_h["fecha"].min()
+        #fecha_fin = df_norm_h["fecha"].max()
+        fecha_ini = df_norm["fecha"].min()
+        fecha_fin = df_norm["fecha"].max()
         st.session_state.rango_curvadecarga = (fecha_ini, fecha_fin)
 
         print('df norm horaria')
