@@ -470,7 +470,7 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
 
             periodo = np.nan
 
-            print(df_periodos)
+            #print(df_periodos)
                         
             #periodo = df_merge["periodo"].astype(str).str.upper().str.strip()
 
@@ -539,98 +539,6 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
     return df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, atr_dfnorm, freq
 
 
-#NO USADO!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-@st.cache_data(show_spinner="⏳ Procesando curva de carga...")
-def procesar_curva_completa(uploaded, atr_forzado=None):
-
-    # --- 1. Normalización base (INTACTA) ---
-    (
-        df_in,
-        df_norm,
-        msg_unidades,
-        flag_periodos_en_origen,
-        df_periodos,
-        atr_detectado,
-        frec
-    ) = normalize_curve_simple(
-        uploaded,
-        origin=uploaded.name if hasattr(uploaded, "name") else uploaded
-    )
-
-    # --- 2. Decisión de ATR ---
-    # --- 2. Decisión de ATR (CORREGIDA Y SEGURA) ---
-    if atr_forzado is not None:
-        atr_final = atr_forzado
-    elif atr_detectado is not None:
-        atr_final = atr_detectado
-    else:
-        raise ValueError(
-            "ATR no definido. El usuario debe seleccionar el peaje de acceso (2.0, 3.0 o 6.1)."
-        )
-
-    print('atr final')
-    print(atr_final)
-
-    # --- 3. Obtención de periodos (TU CÓDIGO TAL CUAL) ---
-    if not flag_periodos_en_origen:
-
-        tipo_periodo = "dh_3p" if atr_final == "2.0" else "dh_6p"
-
-        if "periodo" not in df_norm.columns or df_norm["periodo"].isna().all():
-            if "periodo" in df_norm.columns:
-                df_norm = df_norm.drop(columns=["periodo"])
-
-            df_norm = pd.merge(
-                df_norm,
-                df_periodos[["fecha_hora", tipo_periodo]]
-                    .rename(columns={tipo_periodo: "periodo"}),
-                on="fecha_hora",
-                how="left"
-            )
-
-        df_norm["periodo"] = df_norm["periodo"].astype(str).str.strip()
-
-        if df_norm["periodo"].isna().any() or (df_norm["periodo"] == "nan").any():
-            df_norm["periodo"] = df_norm["periodo"].replace("nan", np.nan).ffill()
-
-    # --- 4. df_norm_h (TU CÓDIGO) ---
-    if frec == "QH":
-        df_norm_h = (
-            df_norm.groupby(["fecha", "hora"], as_index=False)
-            .agg({
-                "consumo_neto_kWh": "sum",
-                "vertido_neto_kWh": "sum",
-                "periodo": "first"
-            })
-        )
-    else:
-        df_norm_h = df_norm[
-            ["fecha_hora", "fecha", "hora",
-             "consumo_neto_kWh", "vertido_neto_kWh", "periodo"]
-        ].copy()
-
-    # --- 5. Métricas ---
-    consumo_total = df_norm["consumo_kWh"].sum()
-    vertido_total = df_norm["excedentes_kWh"].sum()
-    consumo_neto = df_norm["consumo_neto_kWh"].sum()
-    vertido_neto = df_norm["vertido_neto_kWh"].sum()
-
-    fecha_ini = df_norm_h["fecha"].min()
-    fecha_fin = df_norm_h["fecha"].max()
-
-    return {
-        "df_in": df_in,
-        "df_norm": df_norm,
-        "df_norm_h": df_norm_h,
-        "atr_dfnorm": atr_final,
-        "freq": frec,
-        "msg_unidades": msg_unidades,
-        "consumo_total": consumo_total,
-        "vertido_total": vertido_total,
-        "consumo_neto": consumo_neto,
-        "vertido_neto": vertido_neto,
-        "rango_curvadecarga": (fecha_ini, fecha_fin)
-    }
 
 
 
