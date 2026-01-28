@@ -224,7 +224,7 @@ if uploaded:
         st.session_state.rango_curvadecarga = (fecha_ini, fecha_fin)
 
         print('df norm horaria')
-        print(df_norm_h)
+        #print(df_norm_h)
 
         #st.session_state.demo_ejecutado = True
         
