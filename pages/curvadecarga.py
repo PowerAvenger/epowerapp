@@ -21,8 +21,8 @@ generar_menu()
 #if "atr_dfnorm_ui" not in st.session_state:
 #    st.session_state.atr_dfnorm_ui = '3.0'
 
-if "demo_ejecutado" not in st.session_state:
-    st.session_state.demo_ejecutado = False
+#if "demo_ejecutado" not in st.session_state:
+#    st.session_state.demo_ejecutado = False
 
 # ===============================
 #  Interfaz Streamlit
@@ -71,8 +71,8 @@ if 'frec' not in st.session_state:
     st.session_state.frec = 'QH'      
 
 #if uploaded: # and ejecutar:
-if uploaded and (st.session_state.get("usuario_autenticado", False) or not st.session_state.demo_ejecutado):
-#if uploaded and ejecutar:
+#if uploaded and (st.session_state.get("usuario_autenticado", False) or not st.session_state.demo_ejecutado):
+if uploaded:
     try:
         df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, atr_dfnorm, frec = normalize_curve_simple(uploaded, origin=uploaded.name if hasattr(uploaded, "name") else uploaded)
 
@@ -226,7 +226,7 @@ if uploaded and (st.session_state.get("usuario_autenticado", False) or not st.se
         print('df norm horaria')
         print(df_norm_h)
 
-        st.session_state.demo_ejecutado = True
+        #st.session_state.demo_ejecutado = True
         
     except Exception as e:
         zona_mensajes.error(f"❌ Error al normalizar: {e}")
