@@ -28,6 +28,8 @@ if "demo_ejecutado" not in st.session_state:
 #  Interfaz Streamlit
 # ===============================
 
+ejecutar = False
+
 with st.sidebar:
     st.title("⚡:rainbow[PowerLoader]⚡")
     st.caption("Lee CSV/Excel, detecta columnas y normaliza horas al rango 0–23 del mismo día. Añade columnas adicionales.")
