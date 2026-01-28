@@ -234,7 +234,8 @@ else:
     zona_mensajes.info("⬆️ Sube un archivo CSV o Excel para comenzar.")
 
 
-
+st.session_state._cdc_reruns = st.session_state.get("_cdc_reruns", 0) + 1
+st.sidebar.write("CDC reruns:", st.session_state._cdc_reruns)
 
 #st.session_state.get("atr_dfnorm") in ("2.0", "3.0", "6.1")
 #st.session_state.get("curva_normalizada", False)
