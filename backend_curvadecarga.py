@@ -974,7 +974,7 @@ def graficar_curva_horaria(df_norm, frec):
             title_text=""
         ),
         xaxis=dict(
-            range=[df_norm['fecha_hora'].iloc[0],df_norm['fecha_hora'].iloc[744]],
+            range=[df_norm['fecha_hora'].iloc[0],df_norm['fecha_hora'].iloc[100]],
         )
     )
 
