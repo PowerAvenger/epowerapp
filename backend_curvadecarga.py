@@ -915,11 +915,12 @@ def graficar_curva_horaria(df, frec):
         ordered=True
     )
 
-    titulo = (
-        "Curva cuarto horaria de consumo (kWh)"
-        if frec == "QH"
-        else "Curva horaria de consumo (kWh)"
-    )
+    #titulo = (
+    #    "Curva cuarto horaria de consumo (kWh)"
+    #    if frec == "QH"
+    #    else "Curva horaria de consumo (kWh)"
+    #)
+    titulo = 'Curva HORARIA de consumo (kWh)'
 
     fig = px.bar(
         df_plot,
