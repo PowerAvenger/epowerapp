@@ -302,7 +302,7 @@ if st.session_state.get("df_norm") is not None:
             st.subheader("Gráfico de consumo")
             # Mostrar gráfico
             graf_horario = graficar_curva_horaria(st.session_state.df_norm, st.session_state.frec)
-            #st.plotly_chart(graf_horario, use_container_width=True)
+            st.plotly_chart(graf_horario, use_container_width=True)
             
 
 
