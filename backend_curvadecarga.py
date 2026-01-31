@@ -903,39 +903,9 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
 #=================================================================================
 
 
-def formato_es(x, decimales=0):
-    """
-    Devuelve un string en formato español:
-    12345.67 -> '12.345,67'
-    """
-    if x is None:
-        return ""
-    fmt = f"{{:,.{decimales}f}}"
-    return fmt.format(x).replace(",", "X").replace(".", ",").replace("X", ".")
+def graficar_curva_horaria(df_norm_h, frec):
 
-def aplicar_formato_es_plotly(
-    fig,
-    campo_valor,
-    unidad="kWh",
-    decimales=0,
-    etiqueta="Valor"
-):
-    """
-    Aplica formato español SOLO a la visualización (hover).
-    """
-    fig.update_traces(
-        hovertemplate=(
-            f"{etiqueta}: "
-            f"%{{customdata}} {unidad}"
-            "<extra></extra>"
-        )
-    )
-
-    return fig
-
-def graficar_curva_horaria(df_norm, frec):
-
-    df_plot = df_norm.reset_index()
+    df_plot = df_norm_h.reset_index()
 
     orden_periodos = list(colores_periodo.keys())
     df_plot['periodo'] = pd.Categorical(
@@ -973,9 +943,9 @@ def graficar_curva_horaria(df_norm, frec):
             xanchor="center",
             title_text=""
         ),
-        xaxis=dict(
-            range=[df_norm['fecha_hora'].iloc[0],df_norm['fecha_hora'].iloc[100]],
-        )
+        #xaxis=dict(
+        #    range=[df_norm['fecha_hora'].iloc[0],df_norm['fecha_hora'].iloc[100]],
+        #)
     )
 
     return fig
