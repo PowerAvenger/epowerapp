@@ -905,7 +905,8 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
 
 def graficar_curva_horaria(df, frec):
 
-    df_plot = df.reset_index()
+    #df_plot = df.reset_index()
+    df_plot = df.copy()
 
     orden_periodos = list(colores_periodo.keys())
     df_plot['periodo'] = pd.Categorical(
@@ -923,13 +924,13 @@ def graficar_curva_horaria(df, frec):
     fig = px.bar(
         df_plot,
         x="fecha_hora",
-        y="consumo_kWh",
+        y="consumo_neto_kWh",
         color="periodo",
         color_discrete_map=colores_periodo,
         category_orders={"periodo": orden_periodos},
         labels={
             "fecha_hora": "Fecha y hora",
-            "consumo_kWh": "Consumo (kWh)"
+            "consumo_neto_kWh": "Consumo NETO (kWh)"
         },
         title=titulo
     )

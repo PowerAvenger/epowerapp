@@ -522,25 +522,25 @@ def construir_df_curva_sheets(df_filtrado):
     con los datos filtrados del Sheets.
     """
 
-    if st.session_state.frec =='QH':
+    #if st.session_state.frec =='QH':
         # Agregar cada 4 muestras por hora
         # Agrupar a nivel horario (suma de los 4 cuartos horarios)
-        df_norm_h = (
-            st.session_state.df_norm.groupby(["fecha", "hora"], as_index=False)
-            .agg({
-                "consumo_neto_kWh": "sum",
-                "vertido_neto_kWh": "sum",
-                "periodo": "first"
-            })
-        )
-    else:
+    #    df_norm_h = (
+    #        st.session_state.df_norm.groupby(["fecha", "hora"], as_index=False)
+    #        .agg({
+    #            "consumo_neto_kWh": "sum",
+    #            "vertido_neto_kWh": "sum",
+    #            "periodo": "first"
+    #        })
+    #    )
+    #else:
         # Ya está en frecuencia horaria → copiar
-        df_norm_h = st.session_state.df_norm[["fecha_hora", "fecha", "hora","consumo_neto_kWh", "vertido_neto_kWh", "periodo"]].copy()
+    #    df_norm_h = st.session_state.df_norm[["fecha_hora", "fecha", "hora","consumo_neto_kWh", "vertido_neto_kWh", "periodo"]].copy()
 
 
 
-    #df_norm = st.session_state.df_norm_h.copy()
-    df_norm = df_norm_h.copy()
+    df_norm = st.session_state.df_norm_h.copy()
+    #df_norm = df_norm_h.copy()
 
     # Asegurar que 'fecha' es date en ambos DF
     df_norm["fecha"] = pd.to_datetime(df_norm["fecha"]).dt.date

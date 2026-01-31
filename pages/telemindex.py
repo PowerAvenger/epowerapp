@@ -56,8 +56,8 @@ except:
     st.session_state.dia_seleccionado = datetime.date(2025,1,1)
     df_filtrado, lista_meses = filtrar_datos()
 
-#if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
-if "df_norm" in st.session_state and st.session_state.df_norm is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
+if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
+#if "df_norm" in st.session_state and st.session_state.df_norm is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
     df_curva_sheets = construir_df_curva_sheets(df_filtrado)
     df_curva_sheets = añadir_costes_curva(df_curva_sheets)
     #st.session_state.df_curva_sheets = df_curva_sheets
@@ -104,8 +104,8 @@ sobrecoste_ssaa = ((media_combo / media_spot) - 1) * 100
 
 
 
-#if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
-if "df_norm" in st.session_state and st.session_state.df_norm is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
+if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
+#if "df_norm" in st.session_state and st.session_state.df_norm is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
     media_atr_curva = media_atr_curva / 10
     apuntamiento_spot = round(media_spot_curva/media_spot,3)
 
@@ -258,17 +258,3 @@ with zona_grafica.container():
             
             st.text ('Margen')
             st.dataframe(tabla_margen, use_container_width=True )
-
-
-            #print(tabla_precios)
-            #print(tabla_costes)
-            #print(tabla_atr)
-        
-
-
-#if 'df_sheets_full' not in st.session_state:
-#    zona_mensajes.warning('Cargados datos iniciales. Espera a que estén disponibles todos los datos', icon = '⚠️')
-#    #SPREADSHEET_ID = st.secrets['SHEET_INDEX_ID']
-#    st.session_state.df_sheets_full = carga_total_sheets()
-#    st.session_state.df_sheets = st.session_state.df_sheets_full
-#    zona_mensajes.success('Cargados todos los datos. Ya puedes consultar los históricos', icon = '👍')

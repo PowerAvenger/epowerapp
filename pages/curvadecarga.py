@@ -11,24 +11,11 @@ from utilidades import generar_menu
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
 
-
 generar_menu()
-
-#if "uploaded_file" not in st.session_state:
-#    st.session_state.uploaded_file = None
-#if "curva_normalizada" not in st.session_state:
-#    st.session_state.curva_normalizada = False
-#if "atr_dfnorm_ui" not in st.session_state:
-#    st.session_state.atr_dfnorm_ui = '3.0'
-
-#if "demo_ejecutado" not in st.session_state:
-#    st.session_state.demo_ejecutado = False
 
 # ===============================
 #  Interfaz Streamlit
 # ===============================
-
-
 
 with st.sidebar:
     st.title("⚡:rainbow[PowerLoader]⚡")
@@ -36,25 +23,15 @@ with st.sidebar:
     if not st.session_state.get('usuario_autenticado', False):
         st.warning("🔒 Este módulo es solo para usuarios premium. Lo que estás viendo es un fichero de ejemplo")
         uploaded = f"curvas/qh anual demo.csv" #es la --> qh 30 con aut anual Carles ES0031--01HS.csv
-        #st.session_state.atr_dfnorm_ui = '3.0'
-        #st.selectbox("Peaje de acceso", ("2.0", "3.0", "6.1"), key="atr_dfnorm_ui", disabled=True)
-        #ejecutar = not st.session_state.curva_normalizada
-        #ejecutar = st.button("🔄 Normalizar curva", type="primary", use_container_width=True)
         atr_dfnorm = '3.0'
         
     else:
         uploaded = st.file_uploader("📂 Sube un archivo CSV o Excel", type=["csv", "xlsx"])
-        #st.selectbox("Selecciona el peaje de acceso", ("2.0", "3.0", "6.1"), key="atr_dfnorm_ui", disabled=False)
-        #ejecutar = True
         atr_dfnorm = st.sidebar.selectbox(
                     "Selecciona peaje de acceso:",
                     ("2.0", "3.0", "6.1"),
                     index=0
                 )
-        
-    
-    #if uploaded is not None:
-    #    st.session_state.uploaded_file = uploaded
     normalizar = st.button('Normalizar curva de carga', type='primary', use_container_width=True)
     
     
@@ -205,28 +182,36 @@ if normalizar and uploaded:
                 atr_dfnorm = "3.0"
         
 
-        #if frec =='QH':
-        #    # Agregar cada 4 muestras por hora
+        if frec =='QH':
+            # Agregar cada 4 muestras por hora
             # Agrupar a nivel horario (suma de los 4 cuartos horarios)
-        #    df_norm_h = (
-        #        df_norm.groupby(["fecha", "hora"], as_index=False)
-        #        .agg({
-        #            "consumo_neto_kWh": "sum",
-        #            "vertido_neto_kWh": "sum",
-        #            "periodo": "first"
-        #        })
-        #    )
-        #else:
+            df_norm_h = (
+                df_norm.groupby(["fecha", "hora"], as_index=False)
+                .agg({
+                    "consumo_neto_kWh": "sum",
+                    "vertido_neto_kWh": "sum",
+                    "periodo": "first"
+                })
+            )
+            df_norm_h["fecha_hora"] = pd.to_datetime(
+                df_norm_h["fecha"].astype(str)
+                + " "
+                + df_norm_h["hora"].astype(str)
+                + ":00",
+                dayfirst=True,
+                errors="coerce"
+            )
+        else:
             # Ya está en frecuencia horaria → copiar
-        #    df_norm_h = df_norm[["fecha_hora", "fecha", "hora","consumo_neto_kWh", "vertido_neto_kWh", "periodo"]].copy()
+            df_norm_h = df_norm[["fecha_hora", "fecha", "hora","consumo_neto_kWh", "vertido_neto_kWh", "periodo"]].copy()
 
         #consumototalhorario= df_norm_h['consumo_neto_kWh'].sum()
-        consumototalhorario= df_norm['consumo_neto_kWh'].sum()
+        consumototalhorario= df_norm_h['consumo_neto_kWh'].sum()
         print(f'consumo total df_norm_h: {consumototalhorario}')
         
         st.session_state.df_norm = df_norm
         st.session_state.atr_dfnorm = atr_dfnorm
-        #st.session_state.df_norm_h = df_norm_h
+        st.session_state.df_norm_h = df_norm_h
         st.session_state.frec = frec
         st.session_state.df_in = df_in
         st.session_state.consumo_total=consumo_total
@@ -241,7 +226,7 @@ if normalizar and uploaded:
         st.session_state.rango_curvadecarga = (fecha_ini, fecha_fin)
 
         print('df norm horaria')
-        #print(df_norm_h)
+        print(df_norm_h)
 
         #st.session_state.demo_ejecutado = True
         
