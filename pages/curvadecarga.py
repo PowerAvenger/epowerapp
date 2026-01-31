@@ -201,6 +201,11 @@ if normalizar and uploaded:
                 dayfirst=True,
                 errors="coerce"
             )
+            # 🔑 reconstrucción correcta de fecha_hora
+            df_norm_h["fecha_hora"] = (
+                pd.to_datetime(df_norm_h["fecha"])
+                + pd.to_timedelta(df_norm_h["hora"], unit="h")
+            )
         else:
             # Ya está en frecuencia horaria → copiar
             df_norm_h = df_norm[["fecha_hora", "fecha", "hora","consumo_neto_kWh", "vertido_neto_kWh", "periodo"]].copy()

@@ -578,8 +578,6 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
             # Disponemos de fecha y hora en la misma columna
             sample = str(df[c_dt].dropna().iloc[0]).strip()
             print('Intentamos entrar por datetime')
-            #print(sample)
-
             # Detectar si TIENE hora → patrón HH:MM
             tiene_hora = re.search(r"\d{1,2}:\d{2}", sample) is not None
     
@@ -641,16 +639,9 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
                 endesa_qh = True
 
             else:
-                # 🔽 aquí sigue EXACTAMENTE tu código actual
-
-                print(df[c_time].head())
-
                 # --- Fecha y hora en columnas separadas ---
                 d = _parse_date_ddmmyyyy(df[c_date])
                 hora_raw = df[c_time].astype(str).str.strip()
-
-                print("hora_raw")
-                print(hora_raw)
 
                 # --- Corregir valores 24:00 ---
                 mask_24 = hora_raw.isin(["24:00", "24:00:00"])
@@ -661,31 +652,23 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
                 # Detectar casos con formato HH:MM o HH:MM:SS
                 if hora_raw.str.contains(":").any():
                     print("contiene :")
-                    print(d.head(24))
+                    #print(d.head(24))
 
                     minutos = hora_raw.str.extract(r":(\d{2})")[0].astype(float)
 
                     if minutos.max() == 0:
                         # Horario tipo “01:00”
                         print("Registros horarios")
-                        #dt0 = d + pd.to_timedelta(hora_raw + ":00")
-                        #dt0 = d + pd.to_timedelta(hora_raw, errors="coerce")
                         dt0 = d + pd.to_timedelta(hora_raw +":00", errors="coerce")
                         print(dt0)
 
                         # Ajuste por casos 01:00→00:00 del día siguiente
-                        #if dt0.dt.hour.min() == 1 and dt0.dt.hour.max() == 0:
-                        if dt0.dt.hour.min() == 1: #and dt0.dt.hour.max() == 0:
+                        if dt0.dt.hour.min() == 1:
                             print('Hora mínima = 1')
                             dt0 = dt0 - pd.Timedelta(hours=1)
-
-                        
-                        print(dt0.head(24))
-
                     else:
                         # Cuartohoraria (00:15, 00:30…)
-                        print("cuarto horarios")
-                        #h = pd.to_timedelta(hora_raw.where(hora_raw.str.count(":") == 2, hora_raw + ":00"), errors="coerce")
+                        print("Registros cuarto horarios")
                         h = pd.to_timedelta(hora_raw, errors="coerce")
                         dt0 = d + h
 
@@ -694,11 +677,10 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
                     h = _parse_time_to_hour(df[c_time]).fillna(0)
                     dt0 = d + pd.to_timedelta(h, unit="h")
 
-                    print("DEBUG --- dt0 primeras filas:")
-                    print(dt0.head(10))
-
-                    print("DEBUG --- diferencias en minutos:")
-                    print(dt0.diff().dt.total_seconds().head(10))
+                    #print("DEBUG --- dt0 primeras filas:")
+                    #print(dt0.head(10))
+                    #print("DEBUG --- diferencias en minutos:")
+                    #print(dt0.diff().dt.total_seconds().head(10))
     
     except Exception as e:
         print("ERROR DETECTADO:")
@@ -843,7 +825,7 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
         # Extraemos el número del periodo (P1→1, etc.)
         numeros = periodo.dropna().str.extract(r"P(\d+)")[0].astype(float)
         if not numeros.empty and numeros.max() == 3:
-            st.sidebar.info("La curva parece compatible con 2.0TD (3 periodos). Verifique el ATR seleccionado.")
+            st.sidebar.warning("La curva parece compatible con 2.0TD (3 periodos). Verifique el ATR seleccionado.")
                 #atr_dfnorm = "2.0"
             #else:
             #    atr_dfnorm = None
@@ -940,7 +922,7 @@ def graficar_curva_horaria(df, frec):
         bargap=0.1,
         legend=dict(
             orientation="h",
-            y=1.02,
+            y=1.15,
             x=0.5,
             xanchor="center",
             title_text=""
