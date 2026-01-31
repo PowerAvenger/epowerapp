@@ -903,9 +903,9 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
 #=================================================================================
 
 
-def graficar_curva_horaria(df_norm_h, frec):
+def graficar_curva_horaria(df, frec):
 
-    df_plot = df_norm_h.reset_index()
+    df_plot = df.reset_index()
 
     orden_periodos = list(colores_periodo.keys())
     df_plot['periodo'] = pd.Categorical(
