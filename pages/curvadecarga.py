@@ -80,8 +80,8 @@ if 'frec' not in st.session_state:
 #if uploaded and (st.session_state.get("usuario_autenticado", False) or not st.session_state.demo_ejecutado):
 #if uploaded:
 if normalizar and uploaded:    
-    st.session_state._cdc_reruns = st.session_state.get("_cdc_reruns", 0) + 1
-    st.sidebar.write("CDC reruns:", st.session_state._cdc_reruns)
+    #st.session_state._cdc_reruns = st.session_state.get("_cdc_reruns", 0) + 1
+    #st.sidebar.write("CDC reruns:", st.session_state._cdc_reruns)
     try:
         #df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, atr_dfnorm, frec = normalize_curve_simple(uploaded, origin=uploaded.name if hasattr(uploaded, "name") else uploaded)
         df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, frec = normalize_curve_simple(uploaded, origin=uploaded.name if hasattr(uploaded, "name") else uploaded)
@@ -258,6 +258,8 @@ else:
 #st.session_state.get("atr_dfnorm") in ("2.0", "3.0", "6.1")
 #st.session_state.get("curva_normalizada", False)
 if st.session_state.get("df_norm") is not None:
+    st.session_state._cdc_reruns = st.session_state.get("_cdc_reruns", 0) + 1
+    st.sidebar.write("CDC reruns:", st.session_state._cdc_reruns)
 
     st.sidebar.markdown(f'Peaje actualmente seleccionado: **:orange[{st.session_state.atr_dfnorm}]**')
     st.sidebar.markdown(f'Resolución temporal de la curva: **:orange[{st.session_state.frec}]**')
