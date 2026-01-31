@@ -301,8 +301,8 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
                 d = _parse_date_ddmmyyyy(df[c_date])
                 print('Datos de la columna fecha')
                 print(d.head(24))
-                hora_raw = df[c_time].astype(str).str.strip()
 
+                hora_raw = df[c_time].astype(str).str.strip()
                 print('hora_raw')
                 print(hora_raw)
 
@@ -311,10 +311,14 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
                 if mask_24.any():
                     hora_raw.loc[mask_24] = "00:00"
                     d.loc[mask_24] = d.loc[mask_24] + pd.Timedelta(days=1)
+                    print('Datos de la columna fecha con retoque 24:00 (tipo DATADIS)')
+                    print(d.head(24))
+                    print('Columna hora modificada (origen 24:00)')
+                    print(hora_raw.head(24))
 
                 # Detectar casos con formato HH:MM o HH:MM:SS
                 if hora_raw.str.contains(":").any():
-                    print("contiene :")
+                    print("La columna hora contiene ':'")
                     #print(d.head(24))
 
                     minutos = hora_raw.str.extract(r":(\d{2})")[0].astype(float)
@@ -323,7 +327,14 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
                         # Horario tipo “01:00”
                         print("Registros horarios")
                         #dt0 = d + pd.to_timedelta(hora_raw +":00", errors="coerce")
-                        dt0 = d + pd.to_timedelta(hora_raw, errors="coerce")
+                        #dt0 = d + pd.to_timedelta(hora_raw, errors="coerce")
+                        hora_norm = hora_raw.copy()
+
+                        # HH:MM → añadir segundos
+                        mask_horario = hora_norm.str.count(":") == 1
+                        hora_norm.loc[mask_horario] = hora_norm.loc[mask_horario] + ":00"
+
+                        dt0 = d + pd.to_timedelta(hora_norm, errors="coerce")
                         print(dt0)
 
                         # Ajuste por casos 01:00→00:00 del día siguiente
