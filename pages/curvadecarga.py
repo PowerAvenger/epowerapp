@@ -4,7 +4,7 @@ import pandas as pd
 from backend_curvadecarga import (normalize_curve_simple, 
     graficar_curva_horaria, graficar_diario_apilado, graficar_mensual_apilado, graficar_queso_periodos, 
     graficar_media_horaria, graficar_media_horaria_combinada,
-    graficar_neteo_horario,
+    graficar_neteo_horario, graficar_neteo_mensual
     )
 from utilidades import generar_menu
 
@@ -40,16 +40,22 @@ with st.sidebar:
         #st.selectbox("Peaje de acceso", ("2.0", "3.0", "6.1"), key="atr_dfnorm_ui", disabled=True)
         #ejecutar = not st.session_state.curva_normalizada
         #ejecutar = st.button("🔄 Normalizar curva", type="primary", use_container_width=True)
+        atr_dfnorm = '3.0'
         
     else:
         uploaded = st.file_uploader("📂 Sube un archivo CSV o Excel", type=["csv", "xlsx"])
         #st.selectbox("Selecciona el peaje de acceso", ("2.0", "3.0", "6.1"), key="atr_dfnorm_ui", disabled=False)
         #ejecutar = True
+        atr_dfnorm = st.sidebar.selectbox(
+                    "Selecciona peaje de acceso:",
+                    ("2.0", "3.0", "6.1"),
+                    index=0
+                )
         
     
     #if uploaded is not None:
     #    st.session_state.uploaded_file = uploaded
-    
+    normalizar = st.button('Normalizar curva de carga', type='primary', use_container_width=True)
     
     
     
@@ -72,9 +78,13 @@ if 'frec' not in st.session_state:
 
 #if uploaded: # and ejecutar:
 #if uploaded and (st.session_state.get("usuario_autenticado", False) or not st.session_state.demo_ejecutado):
-if uploaded:
+#if uploaded:
+if normalizar and uploaded:    
+    st.session_state._cdc_reruns = st.session_state.get("_cdc_reruns", 0) + 1
+    st.sidebar.write("CDC reruns:", st.session_state._cdc_reruns)
     try:
-        df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, atr_dfnorm, frec = normalize_curve_simple(uploaded, origin=uploaded.name if hasattr(uploaded, "name") else uploaded)
+        #df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, atr_dfnorm, frec = normalize_curve_simple(uploaded, origin=uploaded.name if hasattr(uploaded, "name") else uploaded)
+        df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, frec = normalize_curve_simple(uploaded, origin=uploaded.name if hasattr(uploaded, "name") else uploaded)
 
         # --- Decisión de ATR ---
         #if atr_dfnorm == "2.0":
@@ -105,24 +115,25 @@ if uploaded:
 
         # --- Obtención de periodos ------------------------------------------------
         if not flag_periodos_en_origen:
-            msg_periodos = 'Cargados periodos desde fichero auxiliar. Seleccione peaje de acceso (2.0/ 3.0 / 6.1)TD'
+            #msg_periodos = 'Cargados periodos desde fichero auxiliar. Seleccione peaje de acceso (2.0/ 3.0 / 6.1)TD'
+            msg_periodos = 'Cargados periodos desde fichero auxiliar.'
             zona_mensajes3.warning(msg_periodos, icon="⚠️")
 
             # --- Determinar ATR y tipo de calendario ---
             if atr_dfnorm == "2.0":
-                st.sidebar.success("✅ Peaje de acceso detectado automáticamente: 2.0TD (3 periodos)")
+                #st.sidebar.success("✅ Peaje de acceso detectado automáticamente: 2.0TD (3 periodos)")
                 tipo_periodo = "dh_3p"
             else:
-                st.sidebar.warning("⚙️ No se ha detectado peaje de acceso 2.0TD. Selección manual requerida:")
-                atr_dfnorm = st.sidebar.selectbox(
-                    "Selecciona peaje de acceso:",
-                    ("2.0", "3.0", "6.1"),
-                    index=0
-                )
-                if atr_dfnorm == "2.0":
-                    tipo_periodo = "dh_3p"
-                else:
-                    tipo_periodo = "dh_6p"   # ambos ATR 3.0 y 6.1 usan 6 periodos
+                #st.sidebar.warning("⚙️ No se ha detectado peaje de acceso 2.0TD. Selección manual requerida:")
+                #atr_dfnorm = st.sidebar.selectbox(
+                #    "Selecciona peaje de acceso:",
+                #    ("2.0", "3.0", "6.1"),
+                #    index=0
+                #)
+                #if atr_dfnorm == "2.0":
+                #    tipo_periodo = "dh_3p"
+                #else:
+                tipo_periodo = "dh_6p"   # ambos ATR 3.0 y 6.1 usan 6 periodos
 
             # --- Si la columna 'periodo' no existe o está vacía ---
             if "periodo" not in df_norm.columns or df_norm["periodo"].isna().all():
@@ -163,29 +174,32 @@ if uploaded:
 
                     if not numeros.empty and numeros.max() == 3:
                         atr_dfnorm = "2.0"
-                        st.sidebar.success("✅ Peaje de acceso detectado automáticamente: 2.0TD (3 periodos)")
-                    elif not numeros.empty and numeros.max() == 6:
-                        st.sidebar.warning("⚙️ Peaje con 6 periodos detectado. Selección manual requerida:")
-                        atr_dfnorm = st.sidebar.selectbox(
-                            "Selecciona peaje de acceso:",
-                            ("3.0", "6.1"),
-                            index=0
-                        )
+                        #st.sidebar.success("✅ Peaje de acceso detectado automáticamente: 2.0TD (3 periodos)")
+                        st.sidebar.success("Tres periodos detectados.")
+                    #elif not numeros.empty and numeros.max() == 6:
                     else:
-                        st.sidebar.warning("⚙️ No se ha podido determinar el peaje de acceso. Selección manual:")
-                        atr_dfnorm = st.sidebar.selectbox(
-                            "Selecciona peaje de acceso:",
-                            ("2.0", "3.0", "6.1"),
-                            index=0
-                        )
+                        st.sidebar.warning("Seis periodos detectados")
+                        #atr_dfnorm = st.sidebar.selectbox(
+                        #    "Selecciona peaje de acceso:",
+                        #    ("3.0", "6.1"),
+                        #    index=0
+                        #)
+                    #else:
+                    #    st.sidebar.warning("⚙️ No se ha podido determinar el peaje de acceso. Selección manual:")
+                    #    atr_dfnorm = st.sidebar.selectbox(
+                    #        "Selecciona peaje de acceso:",
+                    #        ("2.0", "3.0", "6.1"),
+                    #        index=0
+                    #    )
 
                 else:
-                    st.sidebar.warning("⚙️ No se ha podido determinar el peaje de acceso. Selección manual:")
-                    atr_dfnorm = st.sidebar.selectbox(
-                        "Selecciona el peaje de acceso:",
-                        ("2.0", "3.0", "6.1"),
-                        index=0
-                    )
+                    #st.sidebar.warning("⚙️ No se ha podido determinar el peaje de acceso. Selección manual:")
+                    st.sidebar.warning("ATENCIÓN: NO HAY PERIODOS DETECTADOS")
+                    #atr_dfnorm = st.sidebar.selectbox(
+                    #    "Selecciona el peaje de acceso:",
+                    #    ("2.0", "3.0", "6.1"),
+                    #    index=0
+                    #)
             
             else:
                 atr_dfnorm = "3.0"
@@ -239,8 +253,7 @@ else:
     zona_mensajes.info("⬆️ Sube un archivo CSV o Excel para comenzar.")
 
 
-#st.session_state._cdc_reruns = st.session_state.get("_cdc_reruns", 0) + 1
-#st.sidebar.write("CDC reruns:", st.session_state._cdc_reruns)
+
 
 #st.session_state.get("atr_dfnorm") in ("2.0", "3.0", "6.1")
 #st.session_state.get("curva_normalizada", False)
@@ -332,7 +345,12 @@ if st.session_state.get("df_norm") is not None:
 
     with tab3:
         graf_horario_neteo = graficar_neteo_horario(st.session_state.df_norm, st.session_state.frec)
-        st.plotly_chart(graf_horario_neteo, use_container_width=True)   
+        st.plotly_chart(graf_horario_neteo, use_container_width=True)
+
+        c1,c2,c3 = st.columns(3)   
+        with c1:
+            graf_mensual_neteo = graficar_neteo_mensual(st.session_state.df_norm)
+            st.plotly_chart(graf_mensual_neteo)
 
     # --- Descarga ---
     csv_bytes = st.session_state.df_norm.reset_index().to_csv(index=False, sep=";").encode("utf-8")
