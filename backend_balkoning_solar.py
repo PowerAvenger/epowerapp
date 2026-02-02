@@ -41,16 +41,19 @@ def arreglar_pvgis(df):
     return df_pvgis
 
 @st.cache_data()
-def leer_curva_normalizada(curva):
+def leer_curva_normalizada(curva,demo):
+    if demo:
     # --- Leer CSV detectando delimitador automáticamente ---
-    df_in = pd.read_csv(curva, sep=None, engine='python', encoding='utf-8')
+        df_in = pd.read_csv(curva, sep=None, engine='python', encoding='utf-8')
+    else:
+        df_in = st.session_state.df_norm_h
     print("📄 Fichero leído correctamente:")
     print(df_in.head())
 
     # --- Renombrar columnas clave para homogeneizar ---
     renombrar = {
-        'consumo_kWh': 'consumo',
-        'excedentes_kWh': 'vertidos',
+        'consumo_neto_kWh': 'consumo',
+        'excedentes_neto_kWh': 'vertidos',
         'reactiva_kVArh': 'reactiva',
         'capacitiva_kVArh': 'capacitiva',
         'fecha_hora': 'fecha_hora',

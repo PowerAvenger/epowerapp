@@ -28,8 +28,8 @@ if 'latitud' not in st.session_state:
     st.session_state.latitud = 39.501
 if 'longitud' not in st.session_state:
     st.session_state.longitud = -0.443
-if 'precio_energia' not in st.session_state:
-    st.session_state.precio_energia = 11    
+if 'precio_energia_bs' not in st.session_state:
+    st.session_state.precio_energia_bs = 11    
 if 'coste_inversion' not in st.session_state:
     st.session_state.coste_inversion = 350
 if 'use_horizon' not in st.session_state:
@@ -71,9 +71,18 @@ df_pvgis_ini = obtener_pvgis_horario(latitud, longitud, año_pvgis, inclinacion,
 
 df_pvgis = arreglar_pvgis(df_pvgis_ini)
 
-curva = 'curvas/curva_normalizada_casa_2025.csv'
+if 'df_norm_h' in st.session_state and "atr_dfnorm" in st.session_state and st.session_state.atr_dfnorm == "2.0":
+    curva = st.session_state.df_norm_h
+    demo = False
+    print('Entramos en modo curva de carga uploaded')
+else:
+    curva = 'curvas/curva_normalizada_casa_2025.csv'
+    demo = True
+    print('Entramos en modo demo')
+zona_mensajes = st.empty()
+#curva = 'curvas/curva_normalizada_casa_2025.csv'
 
-df_in = leer_curva_normalizada(curva)
+df_in = leer_curva_normalizada(curva, demo)
 
 df_gen_dem = combo_gen_dem(df_in, df_pvgis)
 
@@ -149,9 +158,9 @@ m.add_child(folium.LatLngPopup())
 iee = .051127
 iva = .21
 impuestos = (1 + iee) * (1 + iva)
-coste_sin_aut = round(total_consumo * st.session_state.precio_energia / 100, 2) # el precio viene inicialmente en c€/kWh
+coste_sin_aut = round(total_consumo * st.session_state.precio_energia_bs / 100, 2) # el precio viene inicialmente en c€/kWh
 coste_sin_aut = coste_sin_aut * impuestos
-coste_con_aut = round(total_demanda * st.session_state.precio_energia / 100, 2)
+coste_con_aut = round(total_demanda * st.session_state.precio_energia_bs / 100, 2)
 coste_con_aut = coste_con_aut * impuestos
 ahorro = round(coste_sin_aut - coste_con_aut, 2)
 ahorro_porc = round(ahorro * 100 / coste_sin_aut, 1)
@@ -207,6 +216,12 @@ graf_amortizacion = graficar_amortizacion(df_amortizacion, coste_inversion)
 # VISUALICIÓN
 # ========================================================================================================
 
+with st.sidebar:
+    st.header('Balkoning Solar')
+    if not st.session_state.get('usuario_autenticado', False):
+        st.warning('🔒 Estas viendo un ejemplo con curva de carga predeterminada. Si quieres usar curvas personalizadas (usarios premium), pasa por caja.')
+    else: 
+        st.warning('Usa tu curva de carga para personalizar resultados.')
 st.header('Balkoning Solar: ¿Es para todos? No te tires a la piscina sin comprobar si hay agua...', divider='rainbow')
 
 with st.container():
@@ -231,7 +246,7 @@ with st.container():
         st.write(f"📍 Longitud: {st.session_state.longitud:.5f}")
         st.toggle('Usar horizonte personalizado (finca=obstáculo)', key = 'use_horizon')
 
-        st.number_input('Introduce el precio medio de la energía (en c€/kWh)', min_value=8, max_value=25, step=1, key='precio_energia')
+        st.number_input('Introduce el precio medio de la energía (en c€/kWh)', min_value=8, max_value=25, step=1, key='precio_energia_bs')
         st.number_input('Introduce el coste de la inversión IVA INCLUIDO (en €)', min_value=100, max_value=10000, step=50, key='coste_inversion')
 
     with c2:
@@ -257,8 +272,8 @@ with st.container():
 
         c31, c32, c33 = st.columns([.3,.3, .4])
         with c31:
-            st.metric("Coste SIN autoconsumo (€)", f"{coste_sin_aut:,.2f}".replace(".", ","))
-            st.metric("Coste CON autoconsumo (€)", f"{coste_con_aut:,.2f}".replace(".", ","))
+            st.metric("Coste SIN autoconsumo (€)", f"{coste_sin_aut:,.2f}".replace(".", "X").replace(",", ".").replace("X", ","))
+            st.metric("Coste CON autoconsumo (€)", f"{coste_con_aut:,.2f}".replace(".", "X").replace(",", ".").replace("X", ","))
             st.metric("Ahorro (€)", f"{ahorro:,.2f}".replace(".", ","), delta=f"{ahorro_porc:,.1f}%".replace(".", ","),)
         with c32:
             st.metric("Ahorro acumulado (€)", f"{ahorro_acumulado:,.2f}".replace(".", "X").replace(",", ".").replace("X", ","))

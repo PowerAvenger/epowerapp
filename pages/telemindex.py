@@ -41,10 +41,10 @@ except:
     df_filtrado, lista_meses = filtrar_datos()
 
 if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
-#if "df_norm" in st.session_state and st.session_state.df_norm is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
+
     df_curva_sheets = construir_df_curva_sheets(df_filtrado)
     df_curva_sheets = añadir_costes_curva(df_curva_sheets)
-    #st.session_state.df_curva_sheets = df_curva_sheets
+    
     print("df_curva_sheets generado correctamente")
     df_uso = df_curva_sheets.copy()
     df_uso = df_uso.drop_duplicates(subset=["fecha", "hora", "spot"])

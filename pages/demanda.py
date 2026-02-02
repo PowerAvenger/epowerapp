@@ -38,7 +38,7 @@ num_mes_hoy = fecha_hoy.month
 #dia_hoy = fecha_hoy.day
 #fecha_ayer = fecha_hoy - timedelta(days=1)
 
-años = [2026, 2025, 2019]
+años = [2026, 2025, 2018]
 id_dem_real = 1293
 agrupacion = 'day'
 tipo_agregacion = 'average'

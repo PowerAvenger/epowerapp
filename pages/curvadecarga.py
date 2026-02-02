@@ -53,32 +53,9 @@ if "df_in" not in st.session_state:
 if 'frec' not in st.session_state:
     st.session_state.frec = 'QH'      
 
-#if uploaded: # and ejecutar:
-#if uploaded and (st.session_state.get("usuario_autenticado", False) or not st.session_state.demo_ejecutado):
-#if uploaded:
 if normalizar and uploaded:    
-    #st.session_state._cdc_reruns = st.session_state.get("_cdc_reruns", 0) + 1
-    #st.sidebar.write("CDC reruns:", st.session_state._cdc_reruns)
     try:
-        #df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, atr_dfnorm, frec = normalize_curve_simple(uploaded, origin=uploaded.name if hasattr(uploaded, "name") else uploaded)
         df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, frec = normalize_curve_simple(uploaded, origin=uploaded.name if hasattr(uploaded, "name") else uploaded)
-
-        # --- Decisión de ATR ---
-        #if atr_dfnorm == "2.0":
-        #    atr_seleccionado = "2.0"
-            #ejecutar = True
-        #    st.sidebar.success("✅ Peaje 2.0TD detectado automáticamente")
-
-        #else:
-        #    st.sidebar.warning("⚙️ Selecciona el peaje de acceso para normalizar la curva")
-        #    atr_seleccionado = st.sidebar.selectbox(
-        #        "Peaje de acceso:",
-        #        ("3.0", "6.1"),
-        #        index=0
-        #    )
-            #ejecutar = st.sidebar.button("🔄 Normalizar curva")
-
-        
 
         consumo_total=df_norm['consumo_kWh'].sum()
         vertido_total=df_norm['excedentes_kWh'].sum()
@@ -92,24 +69,13 @@ if normalizar and uploaded:
 
         # --- Obtención de periodos ------------------------------------------------
         if not flag_periodos_en_origen:
-            #msg_periodos = 'Cargados periodos desde fichero auxiliar. Seleccione peaje de acceso (2.0/ 3.0 / 6.1)TD'
             msg_periodos = 'Cargados periodos desde fichero auxiliar.'
             zona_mensajes3.warning(msg_periodos, icon="⚠️")
 
             # --- Determinar ATR y tipo de calendario ---
             if atr_dfnorm == "2.0":
-                #st.sidebar.success("✅ Peaje de acceso detectado automáticamente: 2.0TD (3 periodos)")
                 tipo_periodo = "dh_3p"
             else:
-                #st.sidebar.warning("⚙️ No se ha detectado peaje de acceso 2.0TD. Selección manual requerida:")
-                #atr_dfnorm = st.sidebar.selectbox(
-                #    "Selecciona peaje de acceso:",
-                #    ("2.0", "3.0", "6.1"),
-                #    index=0
-                #)
-                #if atr_dfnorm == "2.0":
-                #    tipo_periodo = "dh_3p"
-                #else:
                 tipo_periodo = "dh_6p"   # ambos ATR 3.0 y 6.1 usan 6 periodos
 
             # --- Si la columna 'periodo' no existe o está vacía ---
@@ -245,12 +211,8 @@ else:
 
 
 
-#st.session_state.get("atr_dfnorm") in ("2.0", "3.0", "6.1")
-#st.session_state.get("curva_normalizada", False)
-if st.session_state.get("df_norm") is not None:
-    #st.session_state._cdc_reruns = st.session_state.get("_cdc_reruns", 0) + 1
-    #st.sidebar.write("CDC reruns:", st.session_state._cdc_reruns)
 
+if st.session_state.get("df_norm") is not None:
     st.sidebar.markdown(f'Peaje actualmente seleccionado: **:orange[{st.session_state.atr_dfnorm}]**')
     st.sidebar.markdown(f'Resolución temporal de la curva: **:orange[{st.session_state.frec}]**')
     
