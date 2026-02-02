@@ -1,8 +1,8 @@
 import streamlit as st
 from backend_telemindex import filtrar_datos, aplicar_margen, graf_principal, pt5_trans, pt1, pt7_trans, costes_indexado, evol_mensual, construir_df_curva_sheets, añadir_costes_curva 
-from backend_comun import colores_precios
+from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen
 from backend_curvadecarga import graficar_media_horaria, graficar_queso_periodos
-
+import plotly.graph_objects as go
 import pandas as pd
 import datetime
 
@@ -12,7 +12,8 @@ from utilidades import generar_menu, init_app, init_app_index
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
 
-
+if "df_ofertas_fijas" not in st.session_state:
+    st.session_state.df_ofertas_fijas = pd.DataFrame()
 
 
 #inicializamos variables de sesión
@@ -25,24 +26,7 @@ if 'df_sheets' not in st.session_state:
     zona_mensajes.warning('Cargando históricos de indexado. Espera a que estén disponibles...', icon = '⚠️')
 
 init_app_index()
-#else:
-#    zona_mensajes.success('Cargados todos los históricos de indexado. Ya puedes consultar los datos.', icon = '👍')
 
-
-#init_app_index()
-
-
-
-
-#if 'df_sheets_full' not in st.session_state:
-#    zona_mensajes.warning('Cargados datos iniciales. Espera a que estén disponibles todos los datos', icon = '⚠️')
-#    #SPREADSHEET_ID = st.secrets['SHEET_INDEX_ID']
-#    st.session_state.df_sheets_full = carga_total_sheets()
-#    st.session_state.df_sheets = st.session_state.df_sheets_full
-#    zona_mensajes.success('Cargados todos los datos. Ya puedes consultar los históricos', icon = '👍')
-
-#if 'rango_temporal' not in st.session_state:
-#        st.session_state.rango_temporal = 'Selecciona un rango de fechas' 
 if "rango_curvadecarga" in st.session_state:
     if st.session_state.rango_temporal == "Selecciona un rango de fechas":
         st.session_state.dias_seleccionados = st.session_state.rango_curvadecarga
@@ -76,7 +60,7 @@ if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None an
 
     coste_total_curva = round(df_uso['coste_total'].sum()+consumo_total_curva*st.session_state.margen/1000,2)
 
-    df_uso.to_excel("df_uso.xlsx", index=False)
+    #df_uso.to_excel("df_uso.xlsx", index=False)
     
 else:
     st.session_state.df_curva_sheets = None
@@ -170,91 +154,295 @@ with st.sidebar.container():
 
 
 
-zona_grafica = st.empty()
+#zona_grafica = st.empty()
 
 # ZONA PRINCIPAL DE GRÁFICOS++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-with zona_grafica.container():
 
-    col1, col2 = st.columns([.7,.3])
+tab1, tab2 = st.tabs(['Principal', 'Comparativa'])
 
-    #COLUMNA PRINCIPAL
-    with col1:
-        st.subheader(f'Resumen de precios medios minoristas por peaje de acceso. **:orange[{st.session_state.texto_precios}]**', divider = 'rainbow')
-        
-        with st.container():
-            col5, col6, col7, col8, col9 = st.columns(5)
-            with col5:
-                #st.metric(':orange[Precio medio 2.0 c€/kWh]',value = media_20)
-                st.metric(':orange[Precio medio 2.0 c€/kWh]',value = f"{media_20:.2f}".replace('.', ','))
-                if media_atr_curva is not None:
-                    st.metric(f'Precio medio curva {st.session_state.atr_dfnorm} c€/kWh',value = f"{media_atr_curva:.2f}".replace('.', ','))
-            with col6:
-                st.metric(':red[Precio medio 3.0 c€/kWh]',value = f"{media_30:.2f}".replace('.', ','))
-                if media_atr_curva is not None:
-                    st.metric(f'Consumo curva kWh',value = f"{consumo_total_curva:,.0f}".replace(',', '.'))
-            with col7:
-                st.metric(':blue[Precio medio 6.1 c€/kWh]',value = f"{media_61:.2f}".replace('.', ','))
-                if media_atr_curva is not None:
-                    st.metric('Coste total curva €',value = f"{coste_total_curva:,.0f}".replace(',', '.'), delta=f"{desvio_coste_total_porc:,.2f}%".replace('.',','), delta_color='inverse', help = 'El % indica el desvío con respecto al coste medio aritmético')
-            with col8:
-                st.metric(':green[Precio medio Spot €/MWh]',value = f"{media_spot:.2f}".replace('.', ','))
-                if media_atr_curva is not None:
-                    st.metric('Precio medio Spot curva €/MWh',value = f"{media_spot_curva:.2f}".replace('.', ','), delta=f"{apuntamiento_spot:,.3f}".replace('.', ','), delta_color='inverse', help = 'Se indica apuntamiento.')
-            with col9:
-                st.metric(':violet[Precio medio SSAA €/MWh]', value = f"{media_ssaa:.2f}".replace('.', ','), delta = f'{sobrecoste_ssaa:,.1f}%', delta_color = 'inverse', help= 'Se indica su valor medio y en qué % aumenta el precio medio Spot')
-        st.empty()
-        # gráfico principal de barras y lineas precios medios y omie+ssaa
-        #st.plotly_chart(graf_principal(df_filtrado, colores_precios))
-        st.plotly_chart(graf_principal(df_uso, colores_precios))
-        st.empty()
-        st.subheader("Peso de los componentes por peaje de acceso", divider='rainbow')
-        _, graf20, graf30, graf61 = pt1(df_filtrado)
-        col10,col11,col12=st.columns(3)
-        with col10:
-            st.write(graf20)    
-        with col11:
-            st.write(graf30)
-        with col12:
-            st.write(graf61)
+with tab1:
+    #with zona_grafica.container():
+
+        col1, col2 = st.columns([.7,.3])
+
+        #COLUMNA PRINCIPAL
+        with col1:
+            st.subheader(f'Resumen de precios medios minoristas por peaje de acceso. **:orange[{st.session_state.texto_precios}]**', divider = 'rainbow')
             
-        # gráfico de evolución de los precios medios mensuales
-        st.subheader("Evolución de los precios medios de indexado", divider='rainbow')
-        st.plotly_chart(graf_mensual)
-
-    with col2:
-        if media_atr_curva is not None:
-            st.subheader("Perfil de consumo", divider='rainbow')
-            st.session_state.opcion_tipodia = "Todos"
-            #graf_medias_horarias=graficar_media_horaria(st.session_state.df_norm)
-            graf_medias_horarias=graficar_media_horaria('Total')
-            
-            st.plotly_chart(graf_medias_horarias, use_container_width=True)
-
-            st.subheader("Consumo por periodos")
-            graf_periodos=graficar_queso_periodos(st.session_state.df_norm)
-            st.plotly_chart(graf_periodos, use_container_width=True)
-        st.subheader("Tabla resumen de precios por peaje de acceso", divider='rainbow')
-        with st.expander("Nota sobre los precios de indexado:"):
-            st.caption("Basados en las fórmulas tipo con todos los componentes de mercado y costes regulados. Se incluye FNEE, SRAD y 1€/MWh por diferencias con los SSAA C2. Por supuesto peajes y cargos según tarifa de acceso. Añadir margen al gusto en 'Opciones' de la barra lateral")
-            
-        with st.container():
-
-            tabla_margen = pd.DataFrame(columns = tabla_precios.columns, index = ['margen_2.0', 'margen_3.0', 'margen_6.1'])
-            tabla_margen = tabla_margen.fillna(st.session_state.margen / 10)
+            with st.container():
+                col5, col6, col7, col8, col9 = st.columns(5)
+                with col5:
+                    #st.metric(':orange[Precio medio 2.0 c€/kWh]',value = media_20)
+                    st.metric(':orange[Precio medio 2.0 c€/kWh]',value = f"{media_20:.2f}".replace('.', ','))
+                    if media_atr_curva is not None:
+                        st.metric(f'Precio medio curva {st.session_state.atr_dfnorm} c€/kWh',value = f"{media_atr_curva:.2f}".replace('.', ','))
+                with col6:
+                    st.metric(':red[Precio medio 3.0 c€/kWh]',value = f"{media_30:.2f}".replace('.', ','))
+                    if media_atr_curva is not None:
+                        st.metric(f'Consumo curva kWh',value = f"{consumo_total_curva:,.0f}".replace(',', '.'))
+                with col7:
+                    st.metric(':blue[Precio medio 6.1 c€/kWh]',value = f"{media_61:.2f}".replace('.', ','))
+                    if media_atr_curva is not None:
+                        st.metric('Coste total curva €',value = f"{coste_total_curva:,.0f}".replace(',', '.'), delta=f"{desvio_coste_total_porc:,.2f}%".replace('.',','), delta_color='inverse', help = 'El % indica el desvío con respecto al coste medio aritmético')
+                with col8:
+                    st.metric(':green[Precio medio Spot €/MWh]',value = f"{media_spot:.2f}".replace('.', ','))
+                    if media_atr_curva is not None:
+                        st.metric('Precio medio Spot curva €/MWh',value = f"{media_spot_curva:.2f}".replace('.', ','), delta=f"{apuntamiento_spot:,.3f}".replace('.', ','), delta_color='inverse', help = 'Se indica apuntamiento.')
+                with col9:
+                    st.metric(':violet[Precio medio SSAA €/MWh]', value = f"{media_ssaa:.2f}".replace('.', ','), delta = f'{sobrecoste_ssaa:,.1f}%', delta_color = 'inverse', help= 'Se indica su valor medio y en qué % aumenta el precio medio Spot')
+            st.empty()
+            # gráfico principal de barras y lineas precios medios y omie+ssaa
+            #st.plotly_chart(graf_principal(df_filtrado, colores_precios))
+            st.plotly_chart(graf_principal(df_uso, colores_precios))
+            st.empty()
+            st.subheader("Peso de los componentes por peaje de acceso", divider='rainbow')
+            _, graf20, graf30, graf61 = pt1(df_filtrado)
+            col10,col11,col12=st.columns(3)
+            with col10:
+                st.write(graf20)    
+            with col11:
+                st.write(graf30)
+            with col12:
+                st.write(graf61)
                 
-            texto_precios=f'{st.session_state.texto_precios}. Precios en c€/kWh'
-            st.caption(st.session_state.texto_precios)
+            # gráfico de evolución de los precios medios mensuales
+            st.subheader("Evolución de los precios medios de indexado", divider='rainbow')
+            st.plotly_chart(graf_mensual)
 
-            st.text ('Precios medios de indexado', help='PRECIO MEDIO (FINAL) DE LA ENERGÍA.Suma de costes (energía y ATR)')
-            #st.dataframe(tabla_precios, use_container_width=True)
-            st.dataframe(tabla_precios, use_container_width=True)
+        with col2:
+            if media_atr_curva is not None:
+                st.subheader("Perfil de consumo", divider='rainbow')
+                #st.session_state.opcion_tipodia = "Todos"
+                #graf_medias_horarias=graficar_media_horaria(st.session_state.df_norm)
+
+                df_coste = st.session_state.df_curva_sheets.copy()
+                df_coste_h = (
+                    df_coste
+                    .groupby("hora", as_index=False)["coste_total"]
+                    .mean()
+                )
+                graf_medias_horarias=graficar_media_horaria('Total')
+                graf_medias_horarias.add_trace(
+                    go.Scatter(
+                        x=df_coste_h["hora"],
+                        y=df_coste_h["coste_total"],
+                        mode="lines",
+                        name="Coste medio",
+                        line=dict(
+                            color="#E91E63",
+                            width=5
+                        ),
+                        yaxis="y2"
+                    )
+                )
+                graf_medias_horarias.update_layout(
+                    yaxis2=dict(
+                        title="Coste medio (€)",
+                        overlaying="y",
+                        side="right",
+                        showgrid=False
+                    )
+                )
+                
+
+
+                
+                st.plotly_chart(graf_medias_horarias, use_container_width=True)
+
+                st.subheader("Consumo por periodos")
+                graf_periodos, df_periodos=graficar_queso_periodos(st.session_state.df_norm_h)
+                st.plotly_chart(graf_periodos, use_container_width=True)
+            st.subheader("Tabla resumen de precios por peaje de acceso", divider='rainbow')
+            with st.expander("Nota sobre los precios de indexado:"):
+                st.caption("Basados en las fórmulas tipo con todos los componentes de mercado y costes regulados. Se incluye FNEE, SRAD y 1€/MWh por diferencias con los SSAA C2. Por supuesto peajes y cargos según tarifa de acceso. Añadir margen al gusto en 'Opciones' de la barra lateral")
+                
+            with st.container():
+
+                tabla_margen = pd.DataFrame(columns = tabla_precios.columns, index = ['margen_2.0', 'margen_3.0', 'margen_6.1'])
+                tabla_margen = tabla_margen.fillna(st.session_state.margen / 10)
+                    
+                texto_precios=f'{st.session_state.texto_precios}. Precios en c€/kWh'
+                st.caption(st.session_state.texto_precios)
+
+                st.text ('Precios medios de indexado', help='PRECIO MEDIO (FINAL) DE LA ENERGÍA.Suma de costes (energía y ATR)')
+                #st.dataframe(tabla_precios, use_container_width=True)
+                st.dataframe(tabla_precios, use_container_width=True)
+                
+                st.text ('Costes medios de indexado', help = 'COSTE MEDIO DE LA ENERGÍA, sin incluir ATR.')
+                st.dataframe(tabla_costes, use_container_width=True)
+                
+                st.text ('Costes de ATR')
+                #tabla_atr['Media'] = (tabla_precios['Media'] - tabla_costes['Media']).fillna(0)
+                st.dataframe(tabla_atr, use_container_width=True )
+                
+                st.text ('Margen')
+                st.dataframe(tabla_margen, use_container_width=True )
+
+with tab2:
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        
+        # TABLA RESUMEN DE CONSUMOS, COSTES Y PRECIOS MEDIOS DE INDEXADO PONDERADOS A LA CURVA DE CARGA
+
+        print('df_uso para usar en resumen')
+        print(df_uso)
+        df_resumen = obtener_df_resumen(df_uso, None, 0.0)
+        df_resumen_view = formatear_df_resumen(df_resumen)
+        st.subheader(f'Tabla resumen para el suministro con peaje de acceso :orange[{st.session_state.atr_dfnorm}]')
+        st.dataframe(
+            df_resumen_view,
+            use_container_width=True
+        )
+
+        # CARGAR EXCEL CON PRECIOS FIJOS
+
+        uploaded_file = st.file_uploader(
+            "Sube el Excel con ofertas de precio fijo",
+            type=["xlsx", "xls"]
+        )
+
+        if uploaded_file is not None:
+
+            # 🔥 CLAVE: empezar siempre de cero
+            st.session_state.df_ofertas_fijas = None
+
+            df_new = pd.read_excel(uploaded_file)
+            df_new.columns = df_new.columns.str.strip()
+
+            # Primera columna = oferta
+            col_oferta = df_new.columns[0]
+            df_new = df_new.rename(columns={col_oferta: "oferta"})
+
+            periodos = [f"P{i}" for i in range(1, 7)]
+
+            faltan = set(periodos) - set(df_new.columns)
+            if faltan:
+                st.error(f"Faltan columnas de periodos: {faltan}")
+                st.stop()
+
+            for p in periodos:
+                df_new[p] = pd.to_numeric(df_new[p], errors="coerce")
+
+            if df_new[periodos].isna().any().any():
+                st.error("Hay valores no numéricos en los precios")
+                st.stop()
+
             
-            st.text ('Costes medios de indexado', help = 'COSTE MEDIO DE LA ENERGÍA, sin incluir ATR.')
-            st.dataframe(tabla_costes, use_container_width=True)
-            
-            st.text ('Costes de ATR')
-            #tabla_atr['Media'] = (tabla_precios['Media'] - tabla_costes['Media']).fillna(0)
-            st.dataframe(tabla_atr, use_container_width=True )
-            
-            st.text ('Margen')
-            st.dataframe(tabla_margen, use_container_width=True )
+
+            # 🔁 Reemplazar directamente
+            st.session_state.df_ofertas_fijas = df_new.copy()
+
+            st.subheader("Ofertas fijas cargadas")
+
+            if st.session_state.df_ofertas_fijas.empty:
+                st.info("Aún no hay ofertas cargadas")
+            else:
+                st.dataframe(
+                    st.session_state.df_ofertas_fijas,
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+
+        with c2:
+
+            import pandas as pd
+            import plotly.express as px
+
+            periodos = [f"P{i}" for i in range(1, 7)]
+
+            # Consumos por periodo
+            consumos = df_resumen.loc["Consumo (kWh)", periodos]
+
+            resultados = []
+
+            # Ofertas fijas
+            for _, row in st.session_state.df_ofertas_fijas.iterrows():
+                coste_total = (consumos * row[periodos]).sum()
+                energia_total = consumos.sum()
+                precio_medio = coste_total / energia_total
+
+                resultados.append({
+                    "Oferta": row["oferta"],
+                    "Tipo": "Fijo",
+                    "Coste anual (€)": coste_total,
+                    "Precio medio (€/kWh)": precio_medio
+                })
+
+            # Indexado
+            precios_index = df_resumen.loc["Precio medio (€/kWh)", periodos]
+            coste_index = (consumos * precios_index).sum()
+            precio_medio_index = coste_index / consumos.sum()
+
+            resultados.append({
+                "Oferta": "Indexado",
+                "Tipo": "Indexado",
+                "Coste anual (€)": coste_index,
+                "Precio medio (€/kWh)": precio_medio_index
+            })
+
+            df_resultados = pd.DataFrame(resultados)
+            # Ordenar por coste anual (de más barato a más caro)
+            df_resultados = df_resultados.sort_values("Coste anual (€)").reset_index(drop=True)
+
+            coste_min = df_resultados["Coste anual (€)"].iloc[0]
+
+            df_resultados["% sobre la más barata"] = (
+                (df_resultados["Coste anual (€)"] - coste_min) / coste_min * 100
+            )
+
+            df_resultados["Δ vs más barata (€)"] = (
+                df_resultados["Coste anual (€)"] - coste_min
+            )
+
+            #df_resultados = df_resultados.sort_values("Coste anual (€)")
+
+            df_view = df_resultados.copy()
+
+            df_view["Coste anual (€)"] = df_view["Coste anual (€)"].apply(
+                lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            )
+
+            df_view["Precio medio (€/kWh)"] = df_view["Precio medio (€/kWh)"].apply(
+                lambda x: f"{x:,.6f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            )
+
+            df_view["Δ vs más barata (€)"] = df_view["Δ vs más barata (€)"].apply(
+                lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            )
+            df_view["% sobre la más barata"] = df_view["% sobre la más barata"].apply(
+                lambda x: f"{x:,.1f} %".replace(",", "X").replace(".", ",").replace("X", ".")
+            )
+
+
+            st.subheader("📊 Comparativa TOTALPOWER")
+            st.dataframe(df_view, use_container_width=True)
+
+            orden_ofertas = df_resultados["Oferta"].tolist()
+
+            fig = px.bar(
+                df_resultados,
+                x="Oferta",
+                y="Coste anual (€)",
+                color="Tipo",
+                title="Coste anual por oferta",
+                text_auto=".2f",
+                category_orders={"Oferta": orden_ofertas}
+            )
+
+            fig.update_layout(
+                yaxis_title="Coste anual (€)",
+                xaxis_title="",
+                legend_title="",
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+
+
+       
+
+
+
+

@@ -273,7 +273,7 @@ def pt5_trans(df_filtrado_final):
 
 
         pt5_trans = pt5_trans.div(10)
-        pt5_trans = pt5_trans.round(1)
+        pt5_trans = pt5_trans.round(4)
         pt5_trans = pt5_trans.apply(pd.to_numeric, errors = 'coerce')
         
 

@@ -139,6 +139,7 @@ def obtener_grafico_cober(df_FTB_trimestral_cobertura, df_mes, trimestre_cobertu
     #print(df_FTB_trimestral_cobertura)
     # Colores para cada mes del trimestre
     colores_mes = ['red', 'green', 'yellow']
+    colores_mes = ['#FF8C00', '#00E676', '#FFD600']
 
     # Mapa de trimestres a meses numéricos
     mapa_trimestres = {
@@ -156,12 +157,12 @@ def obtener_grafico_cober(df_FTB_trimestral_cobertura, df_mes, trimestre_cobertu
     }
 
     # Separar Qx y año
-    trimestre, anio_corto = trimestre_cobertura.split('-')
-    anio = 2000 + int(anio_corto)
+    trimestre, año_corto = trimestre_cobertura.split('-')
+    año = 2000 + int(año_corto)
 
-    # Meses del trimestre
+    # Meses del trimestre (tipo [1,2,3])
     meses_trimestre = mapa_trimestres[trimestre]
-    #print(meses_trimestre)
+    print(meses_trimestre)
 
     # Convertir índice a datetime
     df_mes.index = pd.to_datetime(df_mes.index)
@@ -172,10 +173,15 @@ def obtener_grafico_cober(df_FTB_trimestral_cobertura, df_mes, trimestre_cobertu
         x='Fecha',
         y='Precio',
         labels={'Precio': '€/MWh'},
-        title=f"OMIP {trimestre_cobertura} vs OMIE"
+        #title=f"OMIP {trimestre_cobertura} vs OMIE"
     )
 
     graf_omip_trim_cober.update_layout(
+        title=dict(
+            text = f"OMIP {trimestre_cobertura} vs OMIE",
+            x = 0.5,
+            xanchor = 'center'
+        ),
         xaxis=dict(
             rangeslider=dict(
                 visible=True,
@@ -190,15 +196,16 @@ def obtener_grafico_cober(df_FTB_trimestral_cobertura, df_mes, trimestre_cobertu
             )
         ),
         xaxis_title="Fecha",
-        yaxis_title="Precio",
-        showlegend=False
+        yaxis_title="€/MWh",
+        showlegend=False,
+        height = 500
     )
 
     # Añadir las tres líneas horizontales
     for i, mes_num in enumerate(meses_trimestre):
         # Filtrar el valor spot para ese mes y año
         # Filtrar datos del mes y año
-        filtro = (df_mes.index.month == mes_num) & (df_mes.index.year == anio)
+        filtro = (df_mes.index.month == mes_num) & (df_mes.index.year == año)
         df_filtrado = df_mes.loc[filtro, 'spot']
 
         if df_filtrado.empty:
@@ -210,7 +217,7 @@ def obtener_grafico_cober(df_FTB_trimestral_cobertura, df_mes, trimestre_cobertu
 
 
 
-        mes_label = f"{meses_esp[mes_num]}-{str(anio)[2:]}"
+        mes_label = f"{meses_esp[mes_num]}-{str(año)[2:]}"
         texto_anotacion = f"{mes_label}: {spot_val_mes:.2f}"
 
         graf_omip_trim_cober.add_hline(
@@ -218,8 +225,12 @@ def obtener_grafico_cober(df_FTB_trimestral_cobertura, df_mes, trimestre_cobertu
             line_dash="dash",
             line_color=colores_mes[i],
             annotation_text=texto_anotacion,
-            annotation_position="top left"
+            annotation_position="top left",
+            annotation_font_size=14,          # 👈 tamaño del texto
+            annotation_font_color=colores_mes[i],  # opcional
+            annotation_font_family="Arial"    # opcional
         )
+
     return graf_omip_trim_cober
 
 

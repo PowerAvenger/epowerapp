@@ -614,7 +614,7 @@ def graficar_queso_periodos(df_norm):
     
     # Agrupar por periodo
     df_periodos = (
-        df_norm.groupby("periodo", as_index=False)["consumo_kWh"]
+        df_norm.groupby("periodo", as_index=False)["consumo_neto_kWh"]
         .sum()
         .sort_values("periodo")
     )
@@ -625,8 +625,8 @@ def graficar_queso_periodos(df_norm):
     df_periodos = df_periodos.sort_values("periodo")
 
     # Calcular porcentaje
-    total = df_periodos["consumo_kWh"].sum()
-    df_periodos["porcentaje"] = (df_periodos["consumo_kWh"] / total * 100).round(1)
+    total = df_periodos["consumo_neto_kWh"].sum()
+    df_periodos["porcentaje"] = (df_periodos["consumo_neto_kWh"] / total * 100).round(1)
 
     #Seleccionar paleta de colores
     colores_periodo = COLORES_3P if st.session_state.atr_dfnorm == "2.0" else COLORES_6P
@@ -635,7 +635,7 @@ def graficar_queso_periodos(df_norm):
     fig = px.pie(
         df_periodos,
         names="periodo",
-        values="consumo_kWh",
+        values="consumo_neto_kWh",
         color="periodo",
         color_discrete_map=colores_periodo,
         title="Consumo por periodo tarifario",
@@ -656,7 +656,7 @@ def graficar_queso_periodos(df_norm):
         font=dict(size=18)
     )
 
-    return fig
+    return fig, df_periodos
 
 def graficar_diario_apilado(df_norm):
 

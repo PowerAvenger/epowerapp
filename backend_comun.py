@@ -10,6 +10,7 @@ import locale
 
 
 
+
 colores_precios = {'precio_2.0': 'goldenrod', 'precio_3.0': 'darkred', 'precio_6.1': '#1C83E1', 'precio_curva': 'limegreen'}
 
 def rango_componentes():
@@ -127,3 +128,181 @@ def carga_mibgas(): #sheet_name=None
     print(df)
     
     return df
+
+
+
+def obtener_df_resumen(df_curva, simul_curva=None,margen_eur_kWh=0.0):
+    """
+    Construye el df_resumen canónico para Telemindex y Simulindex.
+
+    - simul_curva = None  → Telemindex (datos reales)
+    - simul_curva != None → Simulindex (datos simulados)
+    """
+
+    orden = [f"P{i}" for i in range(1, 7)]
+
+    # ======================
+    # CONSUMOS
+    # ======================
+    consumo = (
+        df_curva.groupby("periodo")["consumo_neto_kWh"]
+        .sum()
+        .reindex(orden)
+        .fillna(0)
+    )
+    consumo["TOTAL"] = consumo.sum()
+
+
+    # ======================
+    # COSTE BASE (real)
+    # ======================
+    coste_base = (
+        df_curva.groupby("periodo")["coste_total"]
+        .sum()
+        .reindex(orden)
+        .fillna(0)
+    )
+    coste_base["TOTAL"] = coste_base.sum()
+
+    # ======================
+    # PRECIO REAL MEDIO
+    # ======================
+    precio_real = coste_base / consumo
+    precio_real_total = precio_real["TOTAL"]
+
+    # ======================
+    # SI HAY SIMULACIÓN
+    # ======================
+    if simul_curva is not None:
+        # ratios históricos
+        ratios = precio_real / precio_real_total
+
+        # precio total simulado (€/kWh)
+        precio_sim_total = simul_curva / 100 + margen_eur_kWh
+
+        # precios simulados por periodo
+        precio = ratios * precio_sim_total
+        precio["TOTAL"] = precio_sim_total
+
+        # costes simulados
+        coste = consumo * precio
+
+    else:
+        # modo real (Telemindex)
+        precio = precio_real
+        coste = coste_base
+
+    # ======================
+    # DF RESUMEN CANÓNICO
+    # ======================
+    df_resumen = pd.DataFrame({
+        "Consumo (kWh)": consumo,
+        "Coste (€)": coste,
+        "Precio medio (€/kWh)": coste / consumo
+    }).T
+
+    print('df_resumen')
+    print(df_resumen)
+
+    return df_resumen
+
+
+def formatear_df_resumen(df_resumen):
+    """
+    Aplica formato español a un df_resumen ya etiquetado.
+    Solo presentación.
+    """
+
+    styler = df_resumen.style
+
+    # ======================
+    # Consumo (kWh)
+    # ======================
+    if "Consumo (kWh)" in df_resumen.index:
+        styler = styler.format(
+            subset=pd.IndexSlice["Consumo (kWh)", :],
+            formatter=lambda x: (
+                f"{x:,.0f}".replace(",", ".")
+                if pd.notnull(x) else ""
+            )
+        )
+
+    # ======================
+    # Precio medio (€/kWh)
+    # ======================
+    if "Precio medio (€/kWh)" in df_resumen.index:
+        styler = styler.format(
+            subset=pd.IndexSlice["Precio medio (€/kWh)", :],
+            formatter=lambda x: (
+                f"{x:,.6f}".replace(".", ",")
+                if pd.notnull(x) else ""
+            )
+        )
+
+    # ======================
+    # Coste (€)
+    # ======================
+    if "Coste (€)" in df_resumen.index:
+        styler = styler.format(
+            subset=pd.IndexSlice["Coste (€)", :],
+            formatter=lambda x: (
+                f"{x:,.2f} €".replace(",", ".")
+                if pd.notnull(x) else ""
+            )
+        )
+
+    # ======================
+    # Estilo general
+    # ======================
+    styler = styler.set_properties(**{"text-align": "right"})
+
+    styler = styler.set_table_styles([
+        {
+            "selector": "th.col_heading",
+            "props": "background-color: #F0F4F8; font-weight: bold; text-align: center;"
+        },
+        {
+            "selector": "th.row_heading",
+            "props": "background-color: #F7F7F7; font-weight: bold;"
+        },
+        {
+            "selector": "td",
+            "props": "padding: 6px;"
+        },
+    ])
+
+    return styler
+
+def formatear_df_resultados(df):
+    """
+    Formato SOLO de presentación para tabla de comparación de ofertas
+    (columnas, no índice)
+    """
+
+    styler = df.style
+
+    styler = styler.format({
+        "Coste anual (€)": lambda x: f"{x:,.2f} €"
+            .replace(",", "X").replace(".", ",").replace("X", "."),
+        "Precio medio (€/kWh)": lambda x: f"{x:.6f}".replace(".", ","),
+        "% sobre la más barata": lambda x: f"{x:.2f} %".replace(".", ","),
+        "Δ vs más barata (€)": lambda x: f"{x:,.2f} €"
+            .replace(",", "X").replace(".", ",").replace("X", "."),
+    })
+
+    # Alineación
+    styler = styler.set_properties(**{"text-align": "right"})
+
+    # Estilos visuales (coherentes con el resto)
+    styler = styler.set_table_styles([
+        {
+            "selector": "th.col_heading",
+            "props": "background-color: #F0F4F8; font-weight: bold; text-align: center;"
+        },
+        {
+            "selector": "td",
+            "props": "padding: 6px;"
+        },
+    ])
+
+    return styler

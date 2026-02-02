@@ -298,7 +298,7 @@ if st.session_state.get("df_norm") is not None:
 
         with c2:
             st.subheader("Consumo por periodos")
-            graf_periodos=graficar_queso_periodos(st.session_state.df_norm)
+            graf_periodos, df_periodos = graficar_queso_periodos(st.session_state.df_norm)
             st.plotly_chart(graf_periodos, use_container_width=True)
             #st.subheader("Medias horarias")
             #graf_medias_horarias=graficar_media_horaria(st.session_state.df_norm)
@@ -336,12 +336,12 @@ if st.session_state.get("df_norm") is not None:
             
 
     with tab3:
-        graf_horario_neteo = graficar_neteo_horario(st.session_state.df_norm, st.session_state.frec)
+        graf_horario_neteo = graficar_neteo_horario(st.session_state.df_norm_h, st.session_state.frec)
         st.plotly_chart(graf_horario_neteo, use_container_width=True)
 
         c1,c2,c3 = st.columns(3)   
         with c1:
-            graf_mensual_neteo = graficar_neteo_mensual(st.session_state.df_norm)
+            graf_mensual_neteo = graficar_neteo_mensual(st.session_state.df_norm_h)
             st.plotly_chart(graf_mensual_neteo)
 
     # --- Descarga ---
