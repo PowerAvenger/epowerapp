@@ -24,7 +24,7 @@ with c2:
     with zona_objetos.container():
         st.title(':orange[e]PowerAPP© ⚡️:rainbow[TOTALPOWER]⚡️')
         st.subheader('Todo lo que necesitas para energizarte.')
-        st.caption("Copyright by Jose Vidal 2024-2025 :ok_hand:")
+        st.caption("Copyright by Jose Vidal 2024-2026 :ok_hand:")
         
 
         with open("images/banner.png", "rb") as f:

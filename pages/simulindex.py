@@ -204,7 +204,7 @@ with tab2:
             
         c11, c12, c13, c14 = st.columns(4)
         with c11:
-            margen_simul = st.number_input("Margen (€/MWh)", min_value=0.0, max_value=50.0, value=10.0, step=1.1) / 1000   # → €/kWh        
+            margen_simul = st.number_input("Margen (€/MWh)", min_value=0.0, max_value=50.0, value=10.0, step=1.1) / 10   # → c€/kWh        
         with c12:
             simul_a = st.number_input("OMIE simulado A (€/MWh)", value=55.0)
         with c13:
@@ -216,10 +216,13 @@ with tab2:
 
         escenarios = []
         
+        print(f'margen_simul: {margen_simul}')
 
         for etiqueta, omie_value in zip(["A", "B", "C"], lista_simul):
             _, _, _, _, simul_curva = graf_hist(df_hist, omie_value, colores_precios)
+            print(f'simul_curva antes de añadir margen: {simul_curva}')
             simul_curva = simul_curva + margen_simul
+            print(f'simul_curva después de añadir margen: {simul_curva}')
             df_resumen_simul = obtener_df_resumen(df_uso, simul_curva, 0.0)
 
             escenarios.append({
