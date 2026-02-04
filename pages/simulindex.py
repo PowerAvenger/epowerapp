@@ -102,6 +102,7 @@ if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is
     df_resumen_simul = obtener_df_resumen(st.session_state.df_curva_sheets, simulcurva_margen, 0.0)
     df_resumen_simul_view = formatear_df_resumen(df_resumen_simul)
     df_uso = st.session_state.df_curva_sheets.copy()
+
     
 
 
@@ -175,6 +176,9 @@ with tab1:
 
 with tab2:
 
+    if 'df_curva_sheets' not in st.session_state or st.session_state.df_curva_sheets is None or simulcurva is None:
+        st.warning('Introduce una curva de carga anual')
+        st.stop()
     c1, c2, c3 = st.columns(3)
     with c1:
         
