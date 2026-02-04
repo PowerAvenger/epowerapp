@@ -468,7 +468,7 @@ def calc_efi(df, coef):
     df_out = pd.merge(df_pot, df_gen, on='año')
     
     if not st.session_state.get('dias_equiparados', True):
-        df_out.loc[df_out['año'] == 2025, 'gen_GWh'] *= coef
+        df_out.loc[df_out['año'] == 2026, 'gen_GWh'] *= coef
 
         horas_anuales = {
             2018: 365 * 24,  # 8760
@@ -478,7 +478,8 @@ def calc_efi(df, coef):
             2022: 365 * 24,  # 8760
             2023: 365 * 24,  # 8760
             2024: 366 * 24,  # 8784 (bisiesto)
-            2025: 365 * 24   # 8760
+            2025: 365 * 24,  # 8760
+            2026: 365 * 24  # 8760
         }
     
         df_out['gen_max'] = df_out['pot_GW'] * df_out['año'].map(horas_anuales)
@@ -608,45 +609,4 @@ def graficar_gen_diaria(df, df_omie, colores_tecnologia):
 
 
 
-
-#NO USADO+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-def graficar_FC(df_out_ratio_select_fc, colores_tecnologia):
-    graf_FC = px.bar(df_out_ratio_select_fc, x = 'FC', y = 'tecnologia',
-                        orientation='h',
-                        color=df_out_ratio_select_fc['tecnologia'], 
-                        hover_name=df_out_ratio_select_fc['tecnologia'],
-                        color_discrete_map=colores_tecnologia,
-                        text_auto=True,
-                        hover_data={
-                            'tecnologia':False,
-                            'horas_eq':True
-                        },
-                        text='FC',
-                        
-                        )
-    graf_FC.update_traces(
-        texttemplate='%{text:.1%}',
-        textposition='inside', 
-        
-        )
-    graf_FC.update_layout(
-        #title=dict(
-        #    text='Factor de carga (%)',
-        #    x=.5,
-        #    xanchor='center',
-        #),
-        xaxis_tickformat='.0%',
-        bargap=.4,
-        showlegend=False,
-        yaxis=dict(visible=True, title_text=None),
-    )
-
-    graf_FC.update_xaxes(
-        showgrid=True,
-        range=[0,1.01],
-        dtick=0.2,
-        tickmode='linear'
-    )
-
-    return graf_FC
 
