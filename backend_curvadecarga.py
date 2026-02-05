@@ -664,7 +664,7 @@ def graficar_diario_apilado(df_norm):
         df_norm
         .reset_index()
         .assign(dia=lambda d: d["fecha_hora"].dt.date)
-        .groupby(["dia", "periodo"], as_index=False)["consumo_kWh"]
+        .groupby(["dia", "periodo"], as_index=False)["consumo_neto_kWh"]
         .sum()
     )
 
@@ -681,7 +681,7 @@ def graficar_diario_apilado(df_norm):
     fig = px.bar(
         df_plot,
         x="dia",
-        y="consumo_kWh",
+        y="consumo_neto_kWh",
         color="periodo",
         color_discrete_map=colores_periodo,
         category_orders={"periodo": orden_periodos},
@@ -713,7 +713,7 @@ def graficar_mensual_apilado(df_norm):
         .assign(
             mes=lambda d: d["fecha_hora"].dt.to_period("M").dt.to_timestamp()
         )
-        .groupby(["mes", "periodo"], as_index=False)["consumo_kWh"]
+        .groupby(["mes", "periodo"], as_index=False)["consumo_neto_kWh"]
         .sum()
     )
 
@@ -734,13 +734,13 @@ def graficar_mensual_apilado(df_norm):
     fig = px.bar(
         df_plot,
         x="Mes",
-        y="consumo_kWh",
+        y="consumo_neto_kWh",
         color="periodo",
         color_discrete_map=colores_periodo,
         category_orders={"periodo": orden_periodos},
         labels={
             "Mes": "Mes",
-            "consumo_kWh": "Consumo mensual (kWh)"
+            "consumo_neto_kWh": "Consumo mensual (kWh)"
         },
         title="Consumo mensual por periodos (kWh)"
     )
@@ -846,7 +846,7 @@ def graficar_neteo_horario(df_norm, frec):
 
 def graficar_media_horaria(tipo_dia, ymax=None, ordenar=False):
     
-    df = st.session_state.df_norm
+    df = st.session_state.df_norm_h.copy()
     # Filtrar según opción
     if tipo_dia == "L-V":
         df_sel = df[df["tipo_dia"] == "L-V"].copy()
@@ -859,12 +859,12 @@ def graficar_media_horaria(tipo_dia, ymax=None, ordenar=False):
         add_title='TOTAL'
 
     # Calcular media por hora
-    df_horas = (df_sel.resample("H", on="fecha_hora")["consumo_kWh"].sum().reset_index())
+    df_horas = (df_sel.resample("H", on="fecha_hora")["consumo_neto_kWh"].sum().reset_index())
     df_horas["hora"] = df_horas["fecha_hora"].dt.hour
     df_horas = (
-        df_horas.groupby("hora", as_index=False)["consumo_kWh"]
+        df_horas.groupby("hora", as_index=False)["consumo_neto_kWh"]
         .mean()
-        .rename(columns={"consumo_kWh": "media_kWh"})
+        .rename(columns={"consumo_neto_kWh": "media_kWh"})
     )
 
     # 🔑 ORDENACIÓN OPCIONAL
@@ -921,23 +921,23 @@ def graficar_media_horaria(tipo_dia, ymax=None, ordenar=False):
 
 def graficar_media_horaria_combinada():
     
-    df = st.session_state.df_norm
+    df = st.session_state.df_norm_h.copy()
 
     def perfil_por_tipo(df, filtro=None):
         if filtro is not None:
             df = df[df["tipo_dia"] == filtro].copy()
 
         df_h = (
-            df.resample("H", on="fecha_hora")["consumo_kWh"]
+            df.resample("H", on="fecha_hora")["consumo_neto_kWh"]
             .sum()
             .reset_index()
         )
         df_h["hora"] = df_h["fecha_hora"].dt.hour
 
         return (
-            df_h.groupby("hora", as_index=False)["consumo_kWh"]
+            df_h.groupby("hora", as_index=False)["consumo_neto_kWh"]
             .mean()
-            .rename(columns={"consumo_kWh": "media_kWh"})
+            .rename(columns={"consumo_neto_kWh": "media_kWh"})
         )
 
     # Perfiles
@@ -1005,7 +1005,7 @@ def graficar_media_horaria_combinada():
 
 def graficar_ranking_horas_consumo(tipo_dia, ymax=None):
     
-    df = st.session_state.df_norm
+    df = st.session_state.df_norm_h.copy()
 
     # Filtro por tipo de día
     if tipo_dia == "L-V":
@@ -1070,3 +1070,42 @@ def graficar_ranking_horas_consumo(tipo_dia, ymax=None):
     )
 
     return fig
+
+
+def graficar_boxplot_horario(tipo_dia):
+    
+    df = st.session_state.df_norm_h.copy()
+
+    if tipo_dia == "L-V":
+        df = df[df["tipo_dia"] == "L-V"]
+        add_title = "LUNES A VIERNES"
+    elif tipo_dia == "FS":
+        df = df[df["tipo_dia"] == "FS"]
+        add_title = "FIN DE SEMANA"
+    else:
+        add_title = "TOTAL"
+
+    df["hora"] = df["fecha_hora"].dt.hour
+
+    fig = px.box(
+        df,
+        x="hora",
+        y="consumo_neto_kWh",
+        points="outliers",   # o False si lo quieres más limpio
+        labels={
+            "hora": "Hora del día",
+            "consumo_kWh": "Consumo (kWh)"
+        }
+    )
+
+    fig.update_layout(
+        title=dict(
+            text=f"Distribución del consumo por hora: <span style='color:orange'>{add_title}</span>",
+            x=0.5,
+            xanchor='center'
+        ),
+        xaxis=dict(dtick=1)
+    )
+
+    return fig
+

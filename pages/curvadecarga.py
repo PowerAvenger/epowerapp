@@ -4,7 +4,7 @@ import pandas as pd
 from backend_curvadecarga import (
     normalize_curve_simple, 
     graficar_curva_horaria, graficar_diario_apilado, graficar_mensual_apilado, graficar_queso_periodos, 
-    graficar_media_horaria, graficar_media_horaria_combinada, graficar_ranking_horas_consumo,
+    graficar_media_horaria, graficar_media_horaria_combinada, graficar_boxplot_horario,
     graficar_neteo_horario, graficar_neteo_mensual
     )
 from utilidades import generar_menu
@@ -157,7 +157,8 @@ if normalizar and uploaded:
                 .agg({
                     "consumo_neto_kWh": "sum",
                     "vertido_neto_kWh": "sum",
-                    "periodo": "first"
+                    "periodo": "first",
+                    "tipo_dia":"first"
                 })
             )
             df_norm_h["fecha_hora"] = pd.to_datetime(
@@ -175,7 +176,7 @@ if normalizar and uploaded:
             )
         else:
             # Ya está en frecuencia horaria → copiar
-            df_norm_h = df_norm[["fecha_hora", "fecha", "hora","consumo_neto_kWh", "vertido_neto_kWh", "periodo"]].copy()
+            df_norm_h = df_norm[["fecha_hora", "fecha", "hora","consumo_neto_kWh", "vertido_neto_kWh", "periodo", "tipo_dia"]].copy()
 
         #consumototalhorario= df_norm_h['consumo_neto_kWh'].sum()
         consumototalhorario= df_norm_h['consumo_neto_kWh'].sum()
@@ -261,7 +262,7 @@ if st.session_state.get("df_norm") is not None:
 
         with c2:
             st.subheader("Consumo por periodos")
-            graf_periodos, df_periodos = graficar_queso_periodos(st.session_state.df_norm)
+            graf_periodos, df_periodos = graficar_queso_periodos(st.session_state.df_norm_h)
             st.plotly_chart(graf_periodos, use_container_width=True)
             #st.subheader("Medias horarias")
             #graf_medias_horarias=graficar_media_horaria(st.session_state.df_norm)
@@ -269,10 +270,10 @@ if st.session_state.get("df_norm") is not None:
         
         c1,c2,c3=st.columns([.4,.3,.3])
         with c1:
-            graf_diario = graficar_diario_apilado(st.session_state.df_norm)
+            graf_diario = graficar_diario_apilado(st.session_state.df_norm_h)
             st.plotly_chart(graf_diario, use_container_width=True)
         with c2:
-            graf_mensual = graficar_mensual_apilado(st.session_state.df_norm)
+            graf_mensual = graficar_mensual_apilado(st.session_state.df_norm_h)
             st.plotly_chart(graf_mensual, use_container_width=True)
         with c3:
             graf_medias_horarias_total=graficar_media_horaria('Todos', ymax = None)
@@ -291,16 +292,23 @@ if st.session_state.get("df_norm") is not None:
         graf_medias_horarias_lab_ranking = graficar_media_horaria('L-V', ymax, ordenar=True)
         graf_medias_horarias_ffss_ranking = graficar_media_horaria('FS', ymax, ordenar=True)
 
+        graf_bigotes_total = graficar_boxplot_horario('Todos')
+        graf_bigotes_lab = graficar_boxplot_horario('L-V')
+        graf_bigotes_ffss = graficar_boxplot_horario('FS')
+
         c1, c2, c3, c4 = st.columns(4)
         with c1:
             st.plotly_chart(graf_medias_horarias_total, use_container_width=True)
             st.plotly_chart(graf_medias_horarias_total_ranking, use_container_width=True)
+            st.plotly_chart(graf_bigotes_total, use_container_width=True)
         with c2:
             st.plotly_chart(graf_medias_horarias_lab, use_container_width=True)
             st.plotly_chart(graf_medias_horarias_lab_ranking, use_container_width=True)
+            st.plotly_chart(graf_bigotes_lab, use_container_width=True)
         with c3:
             st.plotly_chart(graf_medias_horarias_ffss, use_container_width=True)
             st.plotly_chart(graf_medias_horarias_ffss_ranking, use_container_width=True)
+            st.plotly_chart(graf_bigotes_ffss, use_container_width=True)
         with c4:
             st.plotly_chart(graf_medias_horarias_combinadas, use_container_width=True)
             
