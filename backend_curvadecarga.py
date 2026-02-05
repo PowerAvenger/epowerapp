@@ -844,7 +844,7 @@ def graficar_neteo_horario(df_norm, frec):
 
 
 
-def graficar_media_horaria(tipo_dia, ymax=None):
+def graficar_media_horaria(tipo_dia, ymax=None, ordenar=False):
     
     df = st.session_state.df_norm
     # Filtrar según opción
@@ -867,11 +867,21 @@ def graficar_media_horaria(tipo_dia, ymax=None):
         .rename(columns={"consumo_kWh": "media_kWh"})
     )
 
+    # 🔑 ORDENACIÓN OPCIONAL
+    if ordenar:
+        df_horas = df_horas.sort_values("media_kWh", ascending=False)
+        df_horas["hora_cat"] = df_horas["hora"].astype(str)
+        x_col = "hora_cat"
+        title = "Hora del día (ordenada por consumo)"
+    else:
+        x_col = "hora"
+        title = f"Perfil medio horario: <span style='color:orange'>{add_title}</span>"
     # Gráfico
     
     fig = px.bar(
         df_horas,
-        x="hora",
+        #x="hora",
+        x=x_col,
         y="media_kWh",
         labels={"hora": "Hora del día", "media_kWh": "Consumo medio (kWh)"},
         color="media_kWh",
@@ -881,13 +891,15 @@ def graficar_media_horaria(tipo_dia, ymax=None):
 
     if ymax is None:
         ymax = df_horas["media_kWh"].max() * 1.05
+
     fig.update_layout(
         title=dict(
-            text=f"Perfil medio horario: <span style='color:orange'>{add_title}</span>",
+            #text=f"Perfil medio horario: <span style='color:orange'>{add_title}</span>",
+            text=title,
             x=0.5,
             xanchor="center"
         ),
-        xaxis=dict(dtick=1),
+        #xaxis=dict(dtick=1),
         yaxis_title="kWh medios",
         coloraxis_showscale=False,
         yaxis=dict(
@@ -895,6 +907,15 @@ def graficar_media_horaria(tipo_dia, ymax=None):
         )
 
     )
+    # 🔒 Forzar orden solo si ordenar=True
+    if ordenar:
+        fig.update_xaxes(
+            type='category',
+            categoryorder="array",
+            categoryarray=df_horas["hora_cat"].tolist()
+        )
+    else:
+        fig.update_xaxes(dtick=1)
 
     return fig
 
@@ -982,12 +1003,70 @@ def graficar_media_horaria_combinada():
     return fig, ymax
 
 
+def graficar_ranking_horas_consumo(tipo_dia, ymax=None):
+    
+    df = st.session_state.df_norm
 
+    # Filtro por tipo de día
+    if tipo_dia == "L-V":
+        df_sel = df[df["tipo_dia"] == "L-V"].copy()
+        add_title = "LUNES A VIERNES"
+    elif tipo_dia == "FS":
+        df_sel = df[df["tipo_dia"] == "FS"].copy()
+        add_title = "FIN DE SEMANA"
+    else:
+        df_sel = df.copy()
+        add_title = "TOTAL"
 
+    # Media por hora (misma lógica que perfil)
+    df_horas = (
+        df_sel
+        .resample("H", on="fecha_hora")["consumo_kWh"]
+        .sum()
+        .reset_index()
+    )
+    df_horas["hora"] = df_horas["fecha_hora"].dt.hour
 
+    df_horas = (
+        df_horas
+        .groupby("hora", as_index=False)["consumo_kWh"]
+        .mean()
+        .rename(columns={"consumo_kWh": "media_kWh"})
+        .sort_values("media_kWh", ascending=True)
+    )
 
+    if ymax is None:
+        ymax = df_horas["media_kWh"].max() * 1.05
 
+    # Gráfico vertical ordenado
+    fig = px.bar(
+        df_horas,
+        x="hora",
+        y="media_kWh",
+        labels={
+            "hora": "Hora del día (ordenada por consumo)",
+            "media_kWh": "Consumo medio (kWh)"
+        },
+        color="media_kWh",
+        color_continuous_scale="Blues"
+    )
 
+    # 🔑 Forzar orden del eje X
+    fig.update_layout(
+        title=dict(
+            text=f"Ranking de horas por consumo medio: <span style='color:orange'>{add_title}</span>",
+            x=0.5
+        ),
+        xaxis=dict(
+            categoryorder="array",
+            categoryarray=df_horas["hora"].astype(str).tolist(),
+            dtick=1
+        ),
+        yaxis=dict(
+            range=[0, ymax],
+            title="kWh medios"
+        ),
+        coloraxis_showscale=False
+    )
 
-
-
+    return fig

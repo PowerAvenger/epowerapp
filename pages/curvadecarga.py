@@ -1,9 +1,10 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-from backend_curvadecarga import (normalize_curve_simple, 
+from backend_curvadecarga import (
+    normalize_curve_simple, 
     graficar_curva_horaria, graficar_diario_apilado, graficar_mensual_apilado, graficar_queso_periodos, 
-    graficar_media_horaria, graficar_media_horaria_combinada,
+    graficar_media_horaria, graficar_media_horaria_combinada, graficar_ranking_horas_consumo,
     graficar_neteo_horario, graficar_neteo_mensual
     )
 from utilidades import generar_menu
@@ -282,17 +283,24 @@ if st.session_state.get("df_norm") is not None:
         
         graf_medias_horarias_combinadas, ymax = graficar_media_horaria_combinada()
         #graf = graficar_media_horaria_combinada_2()
-        graf_medias_horarias_total=graficar_media_horaria('Todos', ymax = None)
+        graf_medias_horarias_total=graficar_media_horaria('Todos', ymax)
         graf_medias_horarias_lab=graficar_media_horaria('L-V',ymax)
         graf_medias_horarias_ffss=graficar_media_horaria('FS', ymax)
+
+        graf_medias_horarias_total_ranking = graficar_media_horaria('Todos', ymax, ordenar=True)
+        graf_medias_horarias_lab_ranking = graficar_media_horaria('L-V', ymax, ordenar=True)
+        graf_medias_horarias_ffss_ranking = graficar_media_horaria('FS', ymax, ordenar=True)
 
         c1, c2, c3, c4 = st.columns(4)
         with c1:
             st.plotly_chart(graf_medias_horarias_total, use_container_width=True)
+            st.plotly_chart(graf_medias_horarias_total_ranking, use_container_width=True)
         with c2:
             st.plotly_chart(graf_medias_horarias_lab, use_container_width=True)
+            st.plotly_chart(graf_medias_horarias_lab_ranking, use_container_width=True)
         with c3:
             st.plotly_chart(graf_medias_horarias_ffss, use_container_width=True)
+            st.plotly_chart(graf_medias_horarias_ffss_ranking, use_container_width=True)
         with c4:
             st.plotly_chart(graf_medias_horarias_combinadas, use_container_width=True)
             
