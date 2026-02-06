@@ -77,20 +77,29 @@ def tablas_diario(df_in_gen, df_in_pot, horas_eqmax):
     return df_out
 
 # TABLAS RESUMEN DE TECNOLOGIAS PARA UN AÑO DETERMINADO+++++++++++++++++++++++++++++++++++++++++++++++++++++  
-def tablas_salida(df, tec_filtro):
+def tablas_año_seleccionado(df, tec_filtro):
     #df es un df con los datos diarios del año seleccionado
     #tec_filtro son las tecnologías principales que se muestran. El resto se agrupan en 'resto'.
+
+    # vamos a añadir una columna auxiliar para calcular el FC anual
+    df['pot_horas'] = df['pot_GW'] * 24
+
    
     #tabla datos anual por tecnología. usada para grafico bolas, fu y mix    
     df_anual = df.groupby('tecnologia').agg({
         'gen_GWh_dia':'sum',
         'pot_GW':'mean',
-        'FC':'mean',
+        'pot_horas':'sum',
+        #'FC':'mean',
         'horas_eq':'sum',
-        'FU':'mean',
+        #'FU':'mean',
         'horas_eqmax':'sum',
-        '%_mix_gen':'mean',
+        #'%_mix_gen':'mean',
     }).reset_index()
+
+    df_anual['FC'] = df_anual['gen_GWh_dia'] / df_anual['pot_horas']
+    df_anual['FU'] = df_anual['horas_eq'] / df_anual['horas_eqmax']
+
     
     df_anual.rename(columns = {'gen_GWh_dia':'generacion_GWh'}, inplace = True)
     df_anual['horas_eq'] = df_anual['horas_eq'].astype(int)
@@ -98,6 +107,7 @@ def tablas_salida(df, tec_filtro):
     df_anual = df_anual[~df_anual['tecnologia'].isin(['Generación total', 'Potencia total'])]
     #calculamos totales de generacion y potencia
     gen_total = round(df_anual['generacion_GWh'].sum(), 1)
+    df_anual['%_mix_gen'] = df_anual['generacion_GWh'] / gen_total
     #gen_total = df_anual['generacion_GWh'].sum()
     pot_total = round(df_anual['pot_GW'].sum(), 1)
     #añadimos %_mix_gen correctamente
@@ -363,61 +373,79 @@ def gen_evol(df_out_equiparado):
     print('df_out')
     print(df_out)
     
-    #df_out2 = df_out.pivot_table(
-    #    index='tecnologia',
-    #    columns='año',
-    #    values=['FC', '%_mix_gen', 'gen_GWh_dia'],
-    #    aggfunc={'FC': 'mean', '%_mix_gen': 'mean', 'gen_GWh_dia': 'sum'}
-    #)
-
-    # % MIX (solo depende de %_mix_gen)
-    df_mix = (
-        df_out
-        .groupby(['año', 'tecnologia'])['%_mix_gen']
-        .mean()
-        .reset_index()
-    )
-
-    # FC
-    df_fc = (
-        df_out
-        .groupby(['año', 'tecnologia'])['FC']
-        .mean()
-        .reset_index()
-    )
-
-    # GENERACIÓN
-    df_gen = (
+    # % MIX GEN
+    # calculamos la generación total por tecnología
+    df_gen_tec = (
         df_out
         .groupby(['año', 'tecnologia'])['gen_GWh_dia']
         .sum()
         .reset_index()
+        .rename(columns={'gen_GWh_dia': 'gen_GWh'})
     )
+    print('df gen tec')
+    print(df_gen_tec)
+    # calculamos la generación TOTAL
+    df_gen_total = (
+        df_in[df_in['tecnologia'] == 'Generación total']
+        .groupby('año')['gen_GWh_dia']
+        .sum()
+        .reset_index()
+        .rename(columns={'gen_GWh_dia': 'gen_total'})
+    )
+    # montamos df mix
+    df_mix = (
+        df_gen_tec
+        .merge(df_gen_total, on='año')
+    )
+    df_mix['%_mix_gen'] = df_mix['gen_GWh'] / df_mix['gen_total']
+
+    print ('df mix')
+    print (df_mix)
+
+
+    # FC
+    df_out = df_out.copy()
+    df_out['pot_horas'] = df_out['pot_GW'] * 24
+
+    df_fc = (
+        df_out
+        .groupby(['año', 'tecnologia'])
+        .agg(
+            gen_GWh=('gen_GWh_dia', 'sum'),
+            pot_horas=('pot_horas', 'sum')
+        )
+        .reset_index()
+    )
+    df_fc['FC'] = df_fc['gen_GWh'] / df_fc['pot_horas']
+
+    print('df FC')
+    print(df_fc)
+
+    # GENERACIÓN
+    #df_gen = (
+    #    df_out
+    #    .groupby(['año', 'tecnologia'])['gen_GWh_dia']
+    #    .sum()
+    #    .reset_index()
+    #)
 
     df_out_evol = (
-        df_fc
-        .merge(df_mix, on=['año', 'tecnologia'])
-        .merge(df_gen, on=['año', 'tecnologia'])
+        df_fc[['año', 'tecnologia', 'FC']]
+        .merge(
+            df_mix[['año', 'tecnologia', '%_mix_gen']],
+            on=['año', 'tecnologia'],
+            how='left'
+        )
+        .merge(
+            df_gen_tec[['año', 'tecnologia', 'gen_GWh']],
+            on=['año', 'tecnologia'],
+            how='left'
+        )
     )
-
-    #df_out_evol['%_mix_gen'] *= 100
-
-    #df_fc = df_out2['FC'].transpose().reset_index().rename(columns = {'index':'año'})
-    #df_fc = df_fc.melt(id_vars = 'año', var_name = 'tecnologia', value_name = 'FC')
-    #df_mix = df_out2['%_mix_gen'].transpose().reset_index().rename(columns = {'index':'año'})
-    #df_mix = df_mix.melt(id_vars = 'año', var_name = 'tecnologia', value_name = '%_mix_gen')
-    #df_gen = df_out2['gen_GWh_dia'].transpose().reset_index().rename(columns = {'index':'año'})
-    #df_gen = df_gen.melt(id_vars = 'año', var_name = 'tecnologia', value_name = 'gen_GWh')
-
-    #df_out_evol = pd.merge(df_fc, df_mix, df_gen, on = ['año', 'tecnologia'])
-    #df_out_evol = (
-    #    pd.merge(df_fc, df_mix, on=['año', 'tecnologia'])
-    #    .merge(df_gen, on=['año', 'tecnologia'])
-    #)
 
     #print ('df_out_evol')
     #print (df_out_evol)
-    df_out_evol = df_out_evol.rename(columns ={'gen_GWh_dia': 'gen_GWh'})
+    #df_out_evol = df_out_evol.rename(columns ={'gen_GWh_dia': 'gen_GWh'})
     df_out_evol['%_mix_gen'] = df_out_evol['%_mix_gen']*100
     
     print ('df_out_evol')

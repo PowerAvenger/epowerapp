@@ -1,7 +1,7 @@
 import streamlit as st
 from datetime import datetime, date
 from backend_redata_potgen import (
-    leer_json, tablas_diario, tablas_salida, 
+    leer_json, tablas_diario, tablas_año_seleccionado, 
     graficar_bolas,  graficar_new_fc, graficar_FU, graficar_mix, graficar_mix_queso,
     gen_evol, graficar_evol, calc_efi, graficar_efi_evol, graficar_gen_diaria
 )
@@ -176,7 +176,7 @@ print("Total filas:", len(df_test2))
 
 
 #dfs con el año seleccionado
-df_out_bolas, df_out_fc, df_out_fu, df_out_mix  = tablas_salida(df_año_filtrado, tec_filtro) 
+df_out_bolas, df_out_fc, df_out_fu, df_out_mix  = tablas_año_seleccionado(df_año_filtrado, tec_filtro) 
 
 graf_bolas = graficar_bolas(df_out_bolas, colores_tec)
 graf_fc = graficar_new_fc(df_out_fc, colores_tec)

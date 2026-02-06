@@ -38,34 +38,42 @@ if 'use_horizon' not in st.session_state:
 
 potencia_paneles = st.session_state.potencia_paneles / 1000 # potencia en kWp
 inclinacion = st.session_state.inclinacion #90 es vertical
-orientacion = st.session_state.orientacion #azimuth: ATENCIÓN la convención de pvgis es sur=0, pero pvlib sur=180. para SO 40 grados sería 180+40 = 220
+orientacion = st.session_state.orientacion #azimuth: ATENCIÓN la convención de pvgis web es sur=0, pero pvlib sur=180. para SO 40 grados sería 180+40 = 220
 latitud = st.session_state.latitud
 longitud = st.session_state.longitud
 año_pvgis = 2023
 
 # definimos obstáculo finca delante de la nuestra
-distancia = 15 #metros
+distancia = 20 #metros
 altura = 6 # metros
 angulo_horizonte = np.degrees(np.arctan(altura / distancia))
-ancho_obstaculo = 40  # grados
-az_inicio = orientacion - ancho_obstaculo
-az_fin = orientacion + ancho_obstaculo
-def norm_az(az):
-    return az % 360
+ancho_obstaculo = 90  # grados
+semi_ancho = ancho_obstaculo / 2
+az_inicio = orientacion - semi_ancho
+az_fin = orientacion + semi_ancho
+def az_en_rango(az, ini, fin):
+    az = az % 360
+    ini = ini % 360
+    fin = fin % 360
+    if ini <= fin:
+        return ini <= az <= fin
+    else:
+        return az >= ini or az <= fin
+    
 userhorizon = []
 
 for az in range(0, 360, 10):
-    az_n = norm_az(az)
-    if norm_az(az_inicio) <= az_n <= norm_az(az_fin):
+    if az_en_rango(az, az_inicio, az_fin):
         userhorizon.append(angulo_horizonte)
     else:
         userhorizon.append(0)
 
-if st.session_state.use_horizon:
-    use_horizon = True
-else:
-    use_horizon = False
+use_horizon = bool(st.session_state.use_horizon)
 
+print('use horizon')
+print(use_horizon)
+print('userhorizon')
+print(userhorizon)
 
 df_pvgis_ini = obtener_pvgis_horario(latitud, longitud, año_pvgis, inclinacion, orientacion, potencia_paneles, use_horizon, userhorizon)
 
