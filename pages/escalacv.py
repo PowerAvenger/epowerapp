@@ -7,7 +7,9 @@ from backend_escalacv import (diarios_totales, diarios, mensuales, horarios, med
                               obtener_df_scatter_mensual, 
                               graficar_estimacion_inicial,
                               obtener_punto_anual_real, recalibrar_intercepto_con_punto, graficar_scatter_combo, obtener_puntos_anuales, 
-                              graficar_simulacion_cuadratica
+                              graficar_simulacion_cuadratica,
+                              construir_simulacion_inversa, graficar_simulacion,
+                              construir_simulacion_log
 )
 import datetime
 from datetime import datetime
@@ -265,6 +267,12 @@ with st.container():
             nombre="Curva central",
             color="orange"
         )
+        
+        #sim = construir_simulacion_inversa(p_real, 45, 75, n=300, c=43)
+        
+
+
+        
         
         
 

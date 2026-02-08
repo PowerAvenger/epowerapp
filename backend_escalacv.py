@@ -1613,6 +1613,159 @@ def graficar_simulacion_cuadratica(fig, df_scatter_mensual, p, omie_input, nombr
     return fig, round(ssaa_sim, 2), modelo_quad
 
 
+def construir_simulacion_inversa(p, x_min, x_max, n=300, c=None):
+    """
+    Construye una curva SSAA = a + b/(OMIE - c)
+    FORZADA a pasar por las medias anuales 2025 y 2026
+    """
+
+    # =========================
+    # 1) Puntos anuales
+    # =========================
+    omie_25 = p[2025]["omie"]
+    ssaa_25 = p[2025]["ssaa"]
+    omie_26 = p[2026]["omie"]
+    ssaa_26 = p[2026]["ssaa"]
+
+    # =========================
+    # 2) Ajuste exacto
+    # =========================
+    b = (ssaa_25 - ssaa_26) / (1/(omie_25 - c) - 1/(omie_26 - c))
+    a = ssaa_25 - b / (omie_25 - c)
+
+    # =========================
+    # 3) Modelo
+    # =========================
+    def modelo(omie):
+        return a + b / (omie - c)
+
+    # =========================
+    # 4) Curva
+    # =========================
+    x_fit = np.linspace(x_min, x_max, n)
+    y_fit = modelo(x_fit)
+
+    # =========================
+    # 5) Punto simulado
+    # =========================
+    omie_input = st.session_state.omie_input
+    ssaa_sim = float(modelo(omie_input))
+
+    return {
+        "x_fit": x_fit,
+        "y_fit": y_fit,
+        "ssaa_sim": round(ssaa_sim, 2),
+        "modelo": modelo,
+        "parametros": {"a": a, "b": b, "c": c},
+        "anclas": {
+            "omie": [omie_25, omie_26],
+            "ssaa": [ssaa_25, ssaa_26],
+            "labels": ["2025", "2026"],
+        }
+    }
+
+
+def graficar_simulacion(fig, sim, nombre="Simulación inversa", color="green"):
+    # Curva
+    fig.add_scatter(
+        x=sim["x_fit"],
+        y=sim["y_fit"],
+        mode="lines",
+        name=nombre,
+        line=dict(color=color, width=2),
+        hoverinfo="skip",
+    )
+
+    # Punto simulado
+    fig.add_scatter(
+        x=[st.session_state.omie_input],
+        y=[sim["ssaa_sim"]],
+        mode="markers",
+        name="Simulación",
+        marker=dict(
+            color="rgba(255,255,255,0)",
+            size=20,
+            line=dict(width=5, color="goldenrod")
+        ),
+        hovertemplate=(
+            "<b>Simulación</b><br>"
+            "OMIE = %{x:.2f} €/MWh<br>"
+            "SSAA = %{y:.2f} €/MWh"
+            "<extra></extra>"
+        )
+    )
+
+    # Puntos anuales de referencia
+    fig.add_scatter(
+        x=sim["anclas"]["omie"],
+        y=sim["anclas"]["ssaa"],
+        mode="markers",
+        name="Medias anuales 2025–2026",
+        marker=dict(size=12, color="green", line=dict(width=2, color="black"))
+    )
+
+    return fig
+
+
+def ajustar_curva_log(omie1, ssaa1, omie2, ssaa2, x0, k):
+    L1 = np.log(1 + (omie1 - x0) / k)
+    L2 = np.log(1 + (omie2 - x0) / k)
+
+    b = (ssaa2 - ssaa1) / (L1 - L2)
+    a = ssaa1 + b * L1
+    return a, b
+    
+def construir_simulacion_log(
+    p,
+    omie_input,
+    x_min=45,
+    x_max=75,
+    n=300,
+    x0=58,
+    k=8
+):
+    """
+    Curva logarítmica SSAA vs OMIE
+    - subida fuerte por debajo de x0
+    - aplanamiento a la derecha
+    - forzada a pasar por 2025 y 2026
+    """
+
+    omie_25 = p[2025]["omie"]
+    ssaa_25 = p[2025]["ssaa"]
+    omie_26 = p[2026]["omie"]
+    ssaa_26 = p[2026]["ssaa"]
+
+    a, b = ajustar_curva_log(
+        omie_25, ssaa_25,
+        omie_26, ssaa_26,
+        x0=x0, k=k
+    )
+
+    def modelo(omie):
+        return a - b * np.log(1 + (omie - x0) / k)
+
+    x_fit = np.linspace(x_min, x_max, n)
+    y_fit = modelo(x_fit)
+    ssaa_sim = float(modelo(omie_input))
+
+    return {
+        "x_fit": x_fit,
+        "y_fit": y_fit,
+        "ssaa_sim": round(ssaa_sim, 2),
+        "modelo": modelo,
+        "parametros": {"a": a, "b": b, "x0": x0, "k": k},
+        "anclas": {
+            "omie": [omie_25, omie_26],
+            "ssaa": [ssaa_25, ssaa_26],
+            "labels": ["2025", "2026"],
+        }
+    }
+
+
+
+
+
 
 
 
