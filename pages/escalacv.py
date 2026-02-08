@@ -1,10 +1,19 @@
 import streamlit as st
-from utilidades import generar_menu, init_app_json_escalacv
+from utilidades import (generar_menu, init_app_json_escalacv, 
+                        init_app, init_app_index
+)
 
-from backend_escalacv import leer_json, diarios_totales, diarios, mensuales, horarios, medias_horarias, evolucion_mensual, meses_español
+from backend_escalacv import (diarios_totales, diarios, mensuales, horarios, medias_horarias, evolucion_mensual, meses_español, 
+                              obtener_df_scatter_mensual, 
+                              graficar_estimacion_inicial,
+                              obtener_punto_anual_real, recalibrar_intercepto_con_punto, graficar_scatter_combo, obtener_puntos_anuales, 
+                              graficar_simulacion_cuadratica
+)
 import datetime
 from datetime import datetime
+import numpy as np
 import pandas as pd
+import plotly.graph_objects as go 
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
@@ -38,7 +47,11 @@ if 'componente' not in st.session_state:
 
 
 
+
+
 init_app_json_escalacv()
+#init_datos_combinados_escalacv()
+
 datos_total = st.session_state.datos_total_escalacv
 fecha_ini = st.session_state.fecha_ini_escalacv
 fecha_fin = st.session_state.fecha_fin_escalacv
@@ -212,9 +225,96 @@ with st.container():
         st.metric(f'Precio máximo horario (hora: {hora_max_select})', value=valor_maximo_horario_select)
 
         #st.metric(f'Precio medio diario ( {fecha_min_horario})', value=valor_minimo_horario)
-        
+
+
+
                 
-        
-    
+with st.container():
+    col5,col6,col7=st.columns([.4,.4,.2])
+    with col5:
+        mostrar_combo = st.button('Mostrar simulación SSAA a partir de SPOT', use_container_width=True)
+
+    if mostrar_combo:
+        if "df_sheets" not in st.session_state:
+            init_app()
+            init_app_index()
+
+        # 2. Construimos DF mensual SOLO una vez
+        if "df_scatter_mensual" not in st.session_state:
+            obtener_df_scatter_mensual()
 
     
+    if 'df_scatter_mensual' in st.session_state:
+        print('df_scatter_mensual')
+        print(st.session_state.df_scatter_mensual)
+        #grafico base con los scatter omie ssaa mensuales
+        graf_scatter_combo = graficar_scatter_combo()
+              
+        if 'omie_input' not in st.session_state:
+            st.session_state.omie_input = 58
+        #añadimos 
+        p_real = obtener_puntos_anuales()
+        graf_scatter_combo, ssaa_simulada, _ = graficar_simulacion_cuadratica(
+            graf_scatter_combo,
+            st.session_state.df_scatter_mensual,
+            {
+                2025: p_real[2025],
+                2026: p_real[2026],
+            },
+            st.session_state.omie_input,
+            nombre="Curva central",
+            color="orange"
+        )
+        
+        
+
+        #graf_scatter_combo, ssaa_simulada, modelo_quad = graficar_simulacion_cuadratica(graf_scatter_combo,st.session_state.df_scatter_mensual, puntos_anuales, st.session_state.omie_input)
+
+        #graf_scatter_combo, ssaa_A, _ = graficar_simulacion_cuadratica(
+            graf_scatter_combo,
+            st.session_state.df_scatter_mensual,
+            {
+                2025: p_real[2025],
+                2026: {"omie": 54, "ssaa": 23},
+            },
+            st.session_state.omie_input,
+            nombre="Escenario A (54 → 23)",
+            color="#2CA02C"
+        )
+        
+
+        #graf_scatter_combo, ssaa_B, _ = graficar_simulacion_cuadratica(
+            graf_scatter_combo,
+            st.session_state.df_scatter_mensual,
+            {
+                2025: p_real[2025],
+                2026: {"omie": 58, "ssaa": 19},
+            },
+            st.session_state.omie_input,
+            nombre="Escenario B (58 → 19)",
+            color="#D62728"
+        )
+        
+        with col5:
+            st.subheader('Micropower 2026 combo SPOT+SSAA', divider='rainbow')
+            # 3. Input OMIE anual
+            st.number_input("OMIE medio anual esperado (€/MWh)", min_value=0.0, max_value=200.0, step=1.0, key='omie_input')
+            c55, c56, c57 =st.columns(3)
+            with c55:
+                st.metric('SPOT MEDIO', f'{st.session_state.omie_input:,.2f}') 
+            with c56:
+                st.metric('SSAA MEDIO', f'{ssaa_simulada:,.2f}') 
+                
+            with c57:
+                combo_estimado = st.session_state.omie_input+ssaa_simulada
+                st.metric('COMBO SPOT+SSAA',f'{combo_estimado:,.2f}')
+
+                    
+            st.plotly_chart(graf_scatter_combo, use_container_width=True)
+
+            
+
+                
+        
+
+        

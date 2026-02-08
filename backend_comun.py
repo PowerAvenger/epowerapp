@@ -306,3 +306,5 @@ def formatear_df_resultados(df):
     ])
 
     return styler
+
+

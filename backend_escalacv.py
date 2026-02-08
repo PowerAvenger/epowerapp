@@ -149,8 +149,8 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
 
     
 
-    print('datos diarios de todos los años')
-    print(datos_dia)
+    #print('datos diarios de todos los años')
+    #print(datos_dia)
 
     #GRÁFICO PRINCIPAL CON LOS PRECIOS MEDIOS DIARIOS DE TODOS LOS AÑOS. ecv es escala cavero vidal-----------------------------------------------------------
     #componente = st.session_state.get('componente', 'SPOT')
@@ -279,7 +279,8 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
 
     )
     
-    
+    print('datos dia')
+    print(datos_dia)
     
 
     return datos_dia, graf_ecv_diario
@@ -289,7 +290,7 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
 
 # VALORES MEDIOS DIARIOS DEL AÑO SELECCIONADO+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-#def diarios(datos, fecha_ini, fecha_fin): 
+
 def diarios(datos, fecha_ini, fecha_fin, datos_comparar):       
     datos_dia = datos.copy()
     datos_dia = datos_dia.drop(columns=['hora'])
@@ -1160,36 +1161,6 @@ def medias_horarias(datos):
 
     return datos_horarios_filtrado, graf_horaria_dia
     
-    
-#print(datos_mes)
-
-#datos_dia_queso=datos_dia.groupby(['escala'])['escala'].count()
-#print(datos_dia_queso)
-#datos_dia_queso=datos_dia_queso.reset_index(name='num_dias')
-#print (datos_dia_queso)
-
-
-    
-    
-    
-#print('datos mes')
-#print(datos_mes)
-
-    
-    
-#GRÁFICO DE QUESITOS------------------------------------------------------------------------------------------------------------------------------
-#graf_ecv_anual_queso=px.pie(datos_dia_queso, values='num_dias', names='escala',
-#    color='escala',
-#    color_discrete_map=colores,
-#    hole=.4,
-#    category_orders={'escala':escala_ordenada_dia},
-#    #labels={'num_dias':'num_dias', 'escala':'escala_cv'},
-#    title=f'% y número de días según la Escala CV. Año {st.session_state.año_seleccionado}',
-    #width=500
-#)
-#graf_ecv_anual_queso.update_layout(
-#    title={'x':0.5,'xanchor':'center'},
-#)
 
 
 
@@ -1234,8 +1205,416 @@ def diario_mes(datos_dia, escala_ordenada_dia):
     )
     return graf_ecv_anual_meses
 
-#return datos, datos_dia, datos_mes, graf_ecv_anual, graf_ecv_mensual, graf_horaria, graf_ecv_anual_meses, datos_horarios, pt_curva_horaria, colores #graf_ecv_anual_queso,
+
+
+# OBTENEMOS UN DF CON LOS VALORES MEDIOS DE OMIE Y SSAA POR AÑOS
+def obtener_df_scatter_mensual():
+    """
+    Construye un DataFrame mensual OMIE vs SSAA
+    a partir de datos horarios de telemindex.
+
+    Sólo se usan datos a partir de feb25 y se excluye may25
+
+    
+    """
+    fecha_ini = pd.to_datetime("2025-02-01").date()
+    excluir_may25=True
+    #excluir_may25=False
+
+    
+    df = st.session_state.df_sheets.copy()
+
+     # --- 1) FILTRO TEMPORAL REAL ---
+    df = df[df["fecha"] >= fecha_ini]
+
+    df_scatter_mensual = (
+            df
+            .groupby(["año", "mes"], as_index=False)
+            .agg(
+                omie_med=("spot", "mean"),
+                ssaa_med=("ssaa", "mean")
+            )
+        )
+    # fecha representativa del mes (para hover / plots)
+    df_scatter_mensual["fecha_mes"] = pd.to_datetime(
+        dict(
+            year=df_scatter_mensual["año"],
+            month=df_scatter_mensual["mes"],
+            day=1
+        )
+    )
+    df_scatter_mensual["año"] = df_scatter_mensual["año"].astype("category")
+    
+
+    # Exclusión explícita de mayo-25
+    if excluir_may25:
+        df_scatter_mensual = df_scatter_mensual[
+            ~(
+                (df_scatter_mensual['año'] == 2025) &
+                (df_scatter_mensual['mes'] == 5)
+            )
+        ]
+
+    # --- 5) ORDEN Y LIMPIEZA FINAL ---
+    df_scatter_mensual = (
+        df_scatter_mensual
+        .sort_values("fecha_mes")
+        .reset_index(drop=True)
+    )
+    st.session_state.df_scatter_mensual = df_scatter_mensual
+
+    return 
+
+
+
+# CREAMOS EL GRÁFICO BASE
+def graficar_scatter_combo():
+    df = st.session_state.df_scatter_mensual
+    fig = px.scatter(
+        df,
+        x="omie_med",
+        y="ssaa_med",
+        color="año",
+        category_orders={
+            "año": [2024, 2025, 2026]
+        },
+        color_discrete_map={
+            2024: "#FFB74D",
+            2025: "#804674",
+            2026: "#4FC3F7"
+        },
+        hover_data={
+            "fecha_mes": "|%b %Y",
+            "omie_med": ":.2f",
+            "ssaa_med": ":.2f"
+        },
+        labels={
+            "omie_med": "SPOT (€/MWh)",
+            "ssaa_med": "SSAA (€/MWh)"
+        },
+        title="Relación SPOT vs SSAA"
+    )
+
+    fig.update_layout(
+        title={
+            "x": 0.5,
+            'xanchor':'center',
+            },
+        height=500
+    )
+    fig.update_traces(
+        marker=dict(
+            size=8,                 # 👈 más gordos
+            symbol="square",         # 👈 cuadrados
+            line=dict(
+                width=.4,
+                color="rgba(255,255,255,0.5)"  # borde blanco suave
+            )
+        )
+    )
+
+    fig.update_xaxes(
+        dtick=5,
+        tick0=0,
+        showgrid=True,
+        gridcolor="rgba(255,255,255,0.1)"
+    )
+
+    return fig
+
+# PRIMERA REGRESION-------------------------------------------------------------------------------------
+def ajustar_regresion_omie_ssaa():
+    """
+    Ajusta una regresión lineal SSAA = a·OMIE + b
+    a partir del DataFrame mensual.
+
+    Devuelve:
+    - pendiente
+    - intercepto
+    - R²
+    """
+    df = st.session_state.df_scatter_mensual
+    X = df["omie_med"].values
+    Y = df["ssaa_med"].values
+
+    # Ajuste lineal
+    pendiente, intercepto = np.polyfit(X, Y, 1)
+
+    # Predicción y R²
+    Y_pred = pendiente * X + intercepto
+    ss_res = np.sum((Y - Y_pred) ** 2)
+    ss_tot = np.sum((Y - np.mean(Y)) ** 2)
+    r2 = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
+
+    return pendiente, intercepto, r2
+
+    
+
+#NO USADO
+def graficar_estimacion_inicial(fig):
+    """
+    Añade:
+    - recta de regresión al scatter
+    - punto estimado opcional (diamante)
+    """
+
+    df = st.session_state.df_scatter_mensual
+    omie = st.session_state.omie_input
+
+
+    # Recta de regresión
+    x_vals = np.linspace(
+        df["omie_med"].min() * 0.9,
+        df["omie_med"].max() * 1.05,
+        200
+    )
+
+    pendiente, intercepto, r2 = ajustar_regresion_omie_ssaa()
+    
+
+    y_vals = pendiente * x_vals + intercepto
+
+    fig.add_scatter(
+        x=x_vals,
+        y=y_vals,
+        mode="lines",
+        name="Regresión lineal",
+        line=dict(color='red', width=2, dash="dash"),
+        visible="legendonly"
+    )
+
+    # Punto estimado
+    if omie is not None:
+        ssaa = pendiente * omie + intercepto
+
+        fig.add_scatter(
+            x=[omie],
+            y=[ssaa],
+            mode="markers",
+            name="Estimación anual",
+            marker=dict(
+                size=15,
+                symbol="diamond",
+                color="red",
+                line=dict(width=2, color="white")
+            ),
+            visible="legendonly"
+        )
+
+    return fig
 
 
 
     
+
+# REGRESION CALIBRADA. NO USADO
+def obtener_punto_anual_real(df_comb, año=2025):
+    """
+    df_comb: index datetime, cols value_spot, value_ssaa
+    Devuelve (omie_anual, ssaa_anual) como medias del año.
+    """
+    df = df_comb.copy()
+    df_year = df[df['año'] == año]
+
+    omie_anual = df_year["spot"].mean()
+    ssaa_anual = df_year["ssaa"].mean()
+    return float(omie_anual), float(ssaa_anual)
+
+def recalibrar_intercepto_con_punto(pendiente, omie_ref, ssaa_ref):
+    """
+    Fuerza la recta SSAA = m·OMIE + b a pasar por (omie_ref, ssaa_ref)
+    manteniendo la misma pendiente.
+    """
+    intercepto_nuevo = ssaa_ref - pendiente * omie_ref
+    return float(intercepto_nuevo)
+
+#NO USADO
+def graficar_regresion_ajustada(fig, omie_2025, ssaa_2025):
+
+    # 2. Ajuste regresión
+    pendiente, intercepto, r2 = ajustar_regresion_omie_ssaa(st.session_state.df_scatter_mensual)
+    ssaa_estimado = estimar_ssaa_desde_omie(st.session_state.omie_input, pendiente, intercepto)
+
+    # 2) Punto real anual 2025
+    omie_2025, ssaa_2025 = obtener_punto_anual_real(st.session_state.df_sheets, año=2025)
+    # 3) Recalibración del intercepto manteniendo pendiente
+    intercepto_cal = recalibrar_intercepto_con_punto(pendiente, omie_2025, ssaa_2025)
+    # 4) Estimación ya calibrada
+    ssaa_estimado_cal = estimar_ssaa_desde_omie(st.session_state.omie_input, pendiente, intercepto_cal)
+
+        
+        
+        
+    fig.add_scatter(
+            x=[omie_2025], y=[ssaa_2025],        
+            mode="markers",
+            name="2025 real (anual)",
+            marker=dict(size=15, symbol="circle", line=dict(width=2, color="white"))
+        )
+
+        #rango X para la línea
+    x_vals = np.linspace(
+        st.session_state.df_scatter_mensual["omie_med"].min() * 0.9,
+        st.session_state.df_scatter_mensual["omie_med"].max() * 1.05,
+        200
+    )
+
+    y_vals_cal = pendiente * x_vals + intercepto_cal
+
+    graf_scatter_combo.add_scatter(
+        x=x_vals,
+        y=y_vals_cal,
+        mode="lines",
+        name="Regresión calibrada (2025)",
+        line=dict(
+            color="#81C784",
+            width=2,
+            dash="dot"
+        )
+    )
+
+
+
+@st.cache_data()
+def obtener_puntos_anuales():
+    """
+    Puntos anuales (omie, ssaa) calculados sobre datos horarios reales (df_sheets),
+    aplicando los mismos filtros que usas para el scatter:
+      - desde 2025-02-01
+      - excluye mayo 2025
+    """
+    fecha_ini = pd.to_datetime("2025-01-01").date()
+
+    df = st.session_state.df_sheets.copy()
+    df = df[df["fecha"] >= fecha_ini]
+
+    # excluir mayo 2025 (a nivel horario)
+    #df = df[~((df["año"] == 2025) & (df["mes"] == 5))]
+
+    puntos = {}
+    for año in [2025, 2026]:
+        df_año = df[df["año"] == año]
+        if not df_año.empty:
+            puntos[año] = {
+                "omie": df_año["spot"].mean(),
+                "ssaa": df_año["ssaa"].mean(),
+                "n": len(df_año)  # opcional: nº de horas usadas
+            }
+
+    return puntos
+
+
+
+def graficar_simulacion_cuadratica(fig, df_scatter_mensual, p, omie_input, nombre, color):
+    """
+    Curva cuadrática OMIE → SSAA
+    - Ajustada sobre los meses
+    - FORZADA a pasar por las medias anuales 2025 y 2026
+    """
+
+    # =========================
+    # 1) Puntos anuales (REFERENCIA)
+    # =========================
+    #p = st.session_state.puntos_anuales
+
+    omie_25 = p[2025]["omie"]
+    ssaa_25 = p[2025]["ssaa"]
+    omie_26 = p[2026]["omie"]
+    ssaa_26 = p[2026]["ssaa"]
+
+    # =========================
+    # 2) Datos mensuales (nube)
+    # =========================
+    x = df_scatter_mensual["omie_med"].values
+    y = df_scatter_mensual["ssaa_med"].values
+
+    # =========================
+    # 3) Cambio de variable (anclaje en 2025)
+    # =========================
+    dx = x - omie_25
+    dy = y - ssaa_25
+
+    # Forzamos que en dx = (omie_26 - omie_25) se llegue a ssaa_26
+    dx_26 = omie_26 - omie_25
+    dy_26 = ssaa_26 - ssaa_25
+
+    # Modelo: dy = a*dx^2 + b*dx
+    # (c = 0 por construcción)
+    X = np.column_stack([dx**2, dx])
+
+    a, b = np.linalg.lstsq(X, dy, rcond=None)[0]
+
+    # Ajustamos b para que pase EXACTO por 2026
+    b = (dy_26 - a*dx_26**2) / dx_26
+
+    # =========================
+    # 4) Modelo final
+    # =========================
+    def modelo_quad(xx):
+        dxx = xx - omie_25
+        return ssaa_25 + a*dxx**2 + b*dxx
+
+    # =========================
+    # 5) Curva suave
+    # =========================
+
+    x_min = 45
+    x_max = 75
+    x_fit = np.linspace(x_min, x_max, 300)
+    y_fit = modelo_quad(x_fit)
+
+    
+
+    # Curva cuadrática
+    fig.add_scatter(
+        x=x_fit,
+        y=y_fit,
+        mode="lines",
+        name=nombre,
+        line=dict(color=color, width=2, dash='dot'),
+        hoverinfo="skip",
+
+    )
+
+    # =========================
+    # 7) Punto simulado
+    # =========================
+    ssaa_sim = float(modelo_quad(omie_input))
+
+    fig.add_scatter(
+        x=[omie_input],
+        y=[ssaa_sim],
+        mode="markers",
+        name="Simulación",
+        marker=dict(
+            color="rgba(255,255,255,0)",
+            size=20,
+            line=dict(width=5, color="goldenrod")
+        ),
+        hovertemplate=(
+            "<b>Simulación</b><br>"
+            "OMIE = %{x:.2f} €/MWh<br>"
+            "SSAA = %{y:.2f} €/MWh"
+            "<extra></extra>"
+        )
+    )
+
+    # Puntos anuales de referencia
+    fig.add_scatter(
+        x=[omie_25, omie_26],
+        y=[ssaa_25, ssaa_26],
+        mode="markers",
+        name="Medias anuales 2025–2026",
+        marker=dict(size=12, color="green", line=dict(width=2, color="black"))
+    )
+
+    fig.update_layout(title={"x": 0.5})
+
+    return fig, round(ssaa_sim, 2), modelo_quad
+
+
+
+
+
+
+

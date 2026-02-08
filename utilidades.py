@@ -1,6 +1,6 @@
 import streamlit as st
-import datetime, pandas as pd
-from backend_comun import autenticar_google_sheets, carga_rapida_sheets, carga_total_sheets, colores_precios
+import datetime
+from backend_comun import autenticar_google_sheets, carga_total_sheets
 from backend_escalacv import leer_json
 
 def generar_menu():
@@ -8,13 +8,8 @@ def generar_menu():
         st.title('**:rainbow[TOTALPOWER]** :orange[e]PowerAPP©')
         st.image('images/banner.png')
         st.caption("Copyright 2024 by Jose Vidal :ok_hand:")
-        #url_apps = "https://powerappspy-josevidal.streamlit.app/"
-        #st.write("Visita mi página de [ePowerAPPs](%s) con un montón de utilidades." % url_apps)
-        #url_linkedin = "https://www.linkedin.com/posts/josefvidalsierra_epowerapps-spo2425-telemindex-activity-7281942697399967744-IpFK?utm_source=share&utm_medium=member_deskto"
-        #url_linkedin = 'https://www.linkedin.com/in/jfvidalsierra/'
         url_bluesky = "https://bsky.app/profile/poweravenger.bsky.social"
         #st.markdown(f"Deja tus comentarios y propuestas en mi perfil de [Linkedin]({url_linkedin}) - ¡Sígueme en [Bluesky]({url_bluesky})!")
-        #st.markdown(f"Deja tus comentarios y propuestas en mi perfil de [Linkedin]({url_linkedin})!")
         url_linkedin = 'https://www.linkedin.com/posts/josefvidalsierra_epowerapp-totalpower-activity-7382675731379830784-ObeG/?utm_source=share&utm_medium=member_desktop&rcm=ACoAAFYBwa4BRZN7ghU77azb6YGy123gZvYnqoE'
         st.markdown(f"Deja tus impresiones y valoraciones en [Linkedin]({url_linkedin}).")
 
@@ -85,10 +80,7 @@ def init_app_json_escalacv():
     Inicializa los datos OMIE (SPOT, SSAA o ambos combinados)
     y los guarda en st.session_state para uso compartido entre páginas.
     """
-    # Evita recargar si ya está en sesión
-    #if 'datos_total_escalacv' in st.session_state and 'fecha_ini_escalacv' in st.session_state and 'fecha_fin_escalacv' in st.session_state:
-    #    return
-
+    
     #CODIGO ORIGINAL DE escalacv.py-----------------------------------------------------------------------------
     CREDENTIALS = st.secrets['GOOGLE_SHEETS_CREDENTIALS']
     #componente = st.session_state.get('componente', 'SPOT')
@@ -129,7 +121,6 @@ def init_app_json_escalacv():
 
         fecha_ini = datos_total['fecha'].min()
         fecha_fin = datos_total['fecha'].max()
-    #CODIGO ORIGINAL DE escalacv.py-----------------------------------------------------------------------------
 
 
 
@@ -138,9 +129,7 @@ def init_app_json_escalacv():
     st.session_state.fecha_ini_escalacv = fecha_ini
     st.session_state.fecha_fin_escalacv = fecha_fin
 
-    
-    
-    
+ 
 
     
     

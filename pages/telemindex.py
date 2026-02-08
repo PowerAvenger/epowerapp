@@ -279,7 +279,9 @@ with tab1:
                 st.dataframe(tabla_margen, use_container_width=True )
 
 with tab2:
-
+    if 'df_curva_sheets' not in st.session_state or st.session_state.df_curva_sheets is None:
+        st.warning('Introduce una curva de carga anual')
+        st.stop()
     c1, c2, c3 = st.columns(3)
     with c1:
         
