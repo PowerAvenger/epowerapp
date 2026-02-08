@@ -271,29 +271,29 @@ with st.container():
         #graf_scatter_combo, ssaa_simulada, modelo_quad = graficar_simulacion_cuadratica(graf_scatter_combo,st.session_state.df_scatter_mensual, puntos_anuales, st.session_state.omie_input)
 
         #graf_scatter_combo, ssaa_A, _ = graficar_simulacion_cuadratica(
-            graf_scatter_combo,
-            st.session_state.df_scatter_mensual,
-            {
-                2025: p_real[2025],
-                2026: {"omie": 54, "ssaa": 23},
-            },
-            st.session_state.omie_input,
-            nombre="Escenario A (54 → 23)",
-            color="#2CA02C"
-        )
+        #    graf_scatter_combo,
+        #    st.session_state.df_scatter_mensual,
+        #    {
+        #        2025: p_real[2025],
+        #        2026: {"omie": 54, "ssaa": 23},
+        #    },
+        #    st.session_state.omie_input,
+        #    nombre="Escenario A (54 → 23)",
+        #    color="#2CA02C"
+        #)
         
 
         #graf_scatter_combo, ssaa_B, _ = graficar_simulacion_cuadratica(
-            graf_scatter_combo,
-            st.session_state.df_scatter_mensual,
-            {
-                2025: p_real[2025],
-                2026: {"omie": 58, "ssaa": 19},
-            },
-            st.session_state.omie_input,
-            nombre="Escenario B (58 → 19)",
-            color="#D62728"
-        )
+        #    graf_scatter_combo,
+        #    st.session_state.df_scatter_mensual,
+        #    {
+        #        2025: p_real[2025],
+        #        2026: {"omie": 58, "ssaa": 19},
+        #    },
+        #    st.session_state.omie_input,
+        #    nombre="Escenario B (58 → 19)",
+        #    color="#D62728"
+        #)
         
         with col5:
             st.subheader('Micropower 2026 combo SPOT+SSAA', divider='rainbow')
