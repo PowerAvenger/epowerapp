@@ -249,7 +249,7 @@ with col1:
         st.slider('Consumo :blue[ANUAL] estimado (kWh)',min_value = 500, max_value = 7000, step = 100, key = 'consumo_anual')
     with st.container(border=True):
         st.subheader('2.Introduce datos del contrato a precio fijo')
-        st.slider('Precio ofertado: término de potencia (€/kW año)', min_value = tp_boe_ref, max_value = 70.0, step =.1, key = 'tp_fijo')
+        st.slider('Precio ofertado: término de potencia (€/kW año)', min_value = tp_boe_ref, max_value = 80.0, step =.1, key = 'tp_fijo')
 
 
         st.toggle('Usar tres precios de energía (c€/kWh)', key = 'precios_3p')
