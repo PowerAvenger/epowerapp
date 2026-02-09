@@ -228,7 +228,16 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
 
     
     graf_ecv_diario.update_layout(
-        title={'x':0.5,'xanchor':'center'},
+        title=dict(
+            #text="Título del gráfico",
+            font=dict(
+                size=20,
+                #family="Arial",
+                #color="black"
+            ),
+            x=0.5,          # centra el título
+            xanchor="center"
+        ),
         xaxis=dict(
             range = [fecha_ini, fecha_fin],
             rangeslider=dict(
@@ -485,7 +494,16 @@ def diarios(datos, fecha_ini, fecha_fin, datos_comparar):
     ymax = datos_dia['value'].max()
 
     graf_ecv_diario.update_layout(
-        title={'x':0.5,'xanchor':'center'},
+        title=dict(
+            #text="Título del gráfico",
+            font=dict(
+                size=20,
+                #family="Arial",
+                #color="black"
+            ),
+            x=0.5,          # centra el título
+            xanchor="center"
+        ),
         xaxis=dict(
             range = [fecha_ini, fecha_fin],
             rangeslider=dict(
@@ -686,7 +704,16 @@ def mensuales(datos_dia):
         )
         
     graf_ecv_mensual.update_layout(
-        title={'x':0.5,'xanchor':'center'},
+        title=dict(
+            #text="Título del gráfico",
+            font=dict(
+                size=20,
+                #family="Arial",
+                #color="black"
+            ),
+            x=0.5,          # centra el título
+            xanchor="center"
+        ),
         xaxis = dict(
             tickmode = 'array',
             tickvals = orden_meses,
@@ -794,10 +821,10 @@ def evolucion_mensual(df):
         title = f'Precios medios mensuales del SPOT. Mes seleccionado: {st.session_state.mes_seleccionado_esc}'
         tick_y = 20
     elif componente in ['SPOT+SSAA']:
-        title = f'Precios medios mensuales del SPOT+SSAA. {st.session_state.mes_seleccionado_esc}'
+        title = f'Precios medios mensuales del SPOT+SSAA. Mes seleccionado: {st.session_state.mes_seleccionado_esc}'
         tick_y = 20
     else:
-        title = f'Precios medios mensuales de los SSAA. {st.session_state.mes_seleccionado_esc}'
+        title = f'Precios medios mensuales de los SSAA. Mes seleccionado: {st.session_state.mes_seleccionado_esc}'
         tick_y = 4
     
     if componente == 'SPOT+SSAA' and dos_colores and peso_comp:
@@ -845,7 +872,17 @@ def evolucion_mensual(df):
         
         
     graf_ecv_mensual.update_layout(
-        title={'x':0.5,'xanchor':'center'},
+        #title={'x':0.5,'xanchor':'center', 'title_font_size':24},
+        title=dict(
+            #text="Título del gráfico",
+            font=dict(
+                size=20,
+                #family="Arial",
+                #color="black"
+            ),
+            x=0.5,          # centra el título
+            xanchor="center"
+        ),
         xaxis = dict(
             tickmode = 'array',
             #tickvals = orden_meses,
@@ -856,14 +893,20 @@ def evolucion_mensual(df):
             tickmode="linear",            # Escala lineal
             tick0=0,                      # Comenzar en 0
             dtick=tick_y                      # Incrementos de 20
-        ),   
+        ),  
+        #margin=dict(t=80) 
     )
     
-    #graf_ecv_mensual.update_traces(
+    graf_ecv_mensual.update_traces(
+        textfont_size=15,
+        cliponaxis=False
     #    textangle=0,
     #    textposition='inside',  # o 'outside' si prefieres fuera de la barra
     #    insidetextanchor='start'  # o 'middle' o 'end' según alineación horizontal)
-    #)
+    )
+    graf_ecv_mensual.update_yaxes(
+        rangemode="tozero"
+    )
     return graf_ecv_mensual
 
     
@@ -989,7 +1032,16 @@ def horarios(datos):
             dtick=tick_y                     # Incrementos de 20
        
         ),
-        title={'x': 0.5, 'xanchor': 'center'},
+        title=dict(
+            #text="Título del gráfico",
+            font=dict(
+                size=20,
+                #family="Arial",
+                #color="black"
+            ),
+            x=0.5,          # centra el título
+            xanchor="center"
+        ),
         #legend=dict(
         #    orientation="v",  # Leyenda horizontal
         #    x=0.5,
@@ -1148,7 +1200,16 @@ def medias_horarias(datos):
             dtick=tick_y                     # Incrementos de 20
        
         ),
-        title={'x': 0.5, 'xanchor': 'center'},
+        title=dict(
+            #text="Título del gráfico",
+            font=dict(
+                size=20,
+                #family="Arial",
+                #color="black"
+            ),
+            x=0.5,          # centra el título
+            xanchor="center"
+        ),
         #legend=dict(
         #    orientation="v",  # Leyenda horizontal
         #    x=0.5,
