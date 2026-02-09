@@ -506,7 +506,7 @@ def mapa_diferencias(te_pvpc, tp_pvpc):
 
     potencia_contratada = st.session_state.pot_con      # kW
     consumo = st.session_state.consumo_anual               # kWh/año
-    precios_potencia = np.arange(27, 71, 1)     # €/kW·año
+    precios_potencia = np.arange(27, 80, 1)     # €/kW·año
     precios_energia = np.arange(8, 20.5, 0.5)   # c€/kWh
 
     # --- Malla de precios ---

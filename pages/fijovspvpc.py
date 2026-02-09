@@ -413,26 +413,5 @@ with col3:
 
         
 
- 
-#with col32:
-#    st.subheader('Provisional',divider='gray')
-    #st.write(grafico_precio)
-#    st.write(pt_periodos_filtrado)
-#    st.write(pt_periodos_filtrado_porc)
-#    st.write(totales_periodo)
-
-#obtenemos tabla con los tres porcentajes de consumo. usado para obtener el precio fijo de 3P
-#st.session_state['porcentajes_consumo']=pt_periodos_filtrado_porc['consumo']
-#st.write(st.session_state['porcentajes_consumo'])
-
-#st.text(f'El margen aplicado al término de potencia es {margenpot} €/kW año')
-#st.text(f'El precio fijo ofertado es {precioene} c€/kWh')
-#st.text(f'El coste del PVPC término de potencia es {tp_coste_pvpc}€')
-#st.text(f'El coste del PVPC término de energía es {te_coste_pvpc}€')
-#st.text(f'El coste total del PVPC es {coste_pvpc}€')
-#st.text(f'El coste del FIJO término de potencia es {tp_coste_fijo}€')
-#st.text(f'El coste del FIJO término de energía es {te_coste_fijo}€')
-#st.text(f'El coste total del FIJO es {coste_fijo}€')
-
 
 
