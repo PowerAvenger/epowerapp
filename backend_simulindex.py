@@ -30,8 +30,8 @@ def obtener_historicos_meff():
     # obtenemos la fecha del último registro
     ultimo_registro = df_historicos_FTB['Fecha'].max().date()
 
-    #print ('df_historicos_FTB')
-    #print (df_historicos_FTB)
+    print ('df_historicos_FTB')
+    print (df_historicos_FTB)
     
     return df_historicos_FTB, ultimo_registro
 
@@ -67,7 +67,7 @@ def obtener_meff_trimestral(df_FTB):
 
     
 
-    # ESTO ES PARA OBTENER UN LISTADO DE TRIMESTRES DESDEL EL PRIMERO DE HISTÓRICOS HASTA EL ACTUAL, PARA COMPARAR FUTUROS CON MEDIAS OMIP
+    # ESTO ES PARA OBTENER UN LISTADO DE TRIMESTRES DESDE EL PRIMERO DE HISTÓRICOS HASTA EL ACTUAL, PARA COMPARAR FUTUROS CON MEDIAS OMIP
     # construir cadena tipo Q4-25
     trimestre_actual = f"Q{current_trim}-{current_year:02d}"
     # Función para convertir "Q3-25" a número ordenable
@@ -86,17 +86,7 @@ def obtener_meff_trimestral(df_FTB):
         key=trimestre_a_num
     )
     lista_trimestres_hist = [t for t in lista_trimestres_hist if trimestre_a_num(t) <= num_actual]
-
-    
-
-    # Elimina las columnas temporales si lo deseas
-    #df_FTB_trimestral_filtrado = df_FTB_trimestral_filtrado.drop(columns=['Entrega_Año', 'Entrega_Trim', 'Trim_Año'])
-
-    #print('df ftb trimestral simulindex')
-    #print(df_FTB_trimestral_simulindex)
-    #print(df_FTB_trimestral_filtrado.dtypes)
-
-    
+   
 
     #VALOR EXPORTADO
     fecha_ultimo_omip=df_FTB_trimestral_simulindex['Fecha'].max().strftime('%d.%m.%Y')
@@ -107,6 +97,8 @@ def obtener_meff_trimestral(df_FTB):
     
         
     return df_FTB_trimestral, df_FTB_trimestral_simulindex, fecha_ultimo_omip, media_omip_simulindex, lista_trimestres_hist, trimestre_actual
+
+
 
 def obtener_grafico_meff_simulindex(df_FTB_trimestral_filtrado):
     graf_omip_trim=px.line(df_FTB_trimestral_filtrado,
@@ -130,8 +122,12 @@ def obtener_grafico_meff_simulindex(df_FTB_trimestral_filtrado):
                 ]),
                 #visible=True
             )
-        )
+        ),
     )
+        
+    for ann in graf_omip_trim.layout.annotations:
+        ann.font.size = 16
+    
     return graf_omip_trim
 
 def obtener_grafico_cober(df_FTB_trimestral_cobertura, df_mes, trimestre_cobertura):
@@ -235,7 +231,103 @@ def obtener_grafico_cober(df_FTB_trimestral_cobertura, df_mes, trimestre_cobertu
 
 
 
-def obtener_meff_mensual(df_FTB, df_mes):
+
+
+
+def obtener_meff_mensual(df_FTB):
+
+    # =========================
+    # FILTRADO MENSUAL
+    # =========================
+    df_FTB_mensual = (
+        df_FTB[df_FTB['Cod.'].str.startswith('FTBCM')]
+        .iloc[:, [0, 1, 5, 7, 14]]
+        .copy()
+    )
+
+    # Asegurar formato string "ene-24"
+    df_FTB_mensual['Entrega'] = df_FTB_mensual['Entrega'].astype(str).str.strip().str.lower()
+
+    # =========================
+    # Columna auxiliar datetime (para lógica, NO para mostrar)
+    # =========================
+    meses_map = {
+        'ene': 'jan', 'feb': 'feb', 'mar': 'mar', 'abr': 'apr',
+        'may': 'may', 'jun': 'jun', 'jul': 'jul', 'ago': 'aug',
+        'sep': 'sep', 'oct': 'oct', 'nov': 'nov', 'dic': 'dec'
+    }
+
+    entrega_en = df_FTB_mensual['Entrega'].replace(meses_map, regex=True)
+    df_FTB_mensual['Entrega_dt'] = pd.to_datetime(entrega_en, format='%b-%y')
+
+    # Fecha (para gráfico)
+    df_FTB_mensual['Fecha'] = pd.to_datetime(df_FTB_mensual['Fecha'])
+
+    # =========================
+    # FECHA ACTUAL
+    # =========================
+    hoy_dt = pd.Timestamp.today().to_period("M").to_timestamp()
+    mes_actual = hoy_dt.strftime('%b-%y').lower()
+
+    # =========================
+    # FUTUROS REALES (~6) en formato "ene-24"
+    # =========================
+    meses_futuros = (
+        df_FTB_mensual.loc[df_FTB_mensual['Entrega_dt'] > hoy_dt, 'Entrega']
+        .drop_duplicates()
+        .tolist()
+    )
+
+    # OJO: ya vienen en el orden "tal cual" estén en el DF; forzamos orden cronológico:
+    meses_futuros = (
+        df_FTB_mensual[df_FTB_mensual['Entrega'].isin(meses_futuros)]
+        .drop_duplicates(subset=['Entrega'])
+        .sort_values('Entrega_dt')['Entrega']
+        .tolist()
+    )[:6]
+
+    df_FTB_mensual_simulindex = df_FTB_mensual[
+        df_FTB_mensual['Entrega'].isin(meses_futuros)
+    ].copy()
+
+    # =========================
+    # HISTÓRICO HASTA MES ACTUAL (lista "ene-24")
+    # =========================
+    lista_meses_hist = (
+        df_FTB_mensual.loc[df_FTB_mensual['Entrega_dt'] <= hoy_dt]
+        .drop_duplicates(subset=['Entrega'])
+        .sort_values('Entrega_dt')['Entrega']
+        .tolist()
+    )
+
+    # =========================
+    # VALORES EXPORTADOS
+    # =========================
+    fecha_ultimo_omip = (
+        df_FTB_mensual_simulindex['Fecha'].max().strftime('%d.%m.%Y')
+        if not df_FTB_mensual_simulindex.empty else None
+    )
+
+    media_omip_simulindex = (
+        round(df_FTB_mensual_simulindex['Precio'].mean(), 2)
+        if not df_FTB_mensual_simulindex.empty else None
+    )
+    print('df FTB mensual')
+    print(df_FTB_mensual)
+    # Devuelves Entrega como "ene-24" + auxiliar Entrega_dt por si te hace falta
+    return (
+        df_FTB_mensual,
+        df_FTB_mensual_simulindex,
+        fecha_ultimo_omip,
+        media_omip_simulindex,
+        lista_meses_hist,
+        mes_actual
+    )
+
+
+
+
+def obtener_meff_mensual_pruebas(df_FTB, df_mes):
     #filtramos por Periodo 'Mensual'
     df_FTB_mensual = df_FTB[df_FTB['Cod.'].str.startswith('FTBCM')]
     #eliminamos columnas innecesarias

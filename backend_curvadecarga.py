@@ -733,7 +733,7 @@ def graficar_mensual_apilado(df_norm):
 
     fig = px.bar(
         df_plot,
-        x="Mes",
+        x="mes",
         y="consumo_neto_kWh",
         color="periodo",
         color_discrete_map=colores_periodo,

@@ -1,5 +1,5 @@
 import streamlit as st
-from backend_simulindex import obtener_historicos_meff, obtener_meff_trimestral, obtener_grafico_meff_simulindex, obtener_grafico_cober, obtener_meff_mensual, hist_mensual, graf_hist
+from backend_simulindex import obtener_historicos_meff, obtener_meff_trimestral, obtener_grafico_meff_simulindex, obtener_grafico_cober, obtener_meff_mensual, obtener_meff_mensual_pruebas, hist_mensual, graf_hist
 from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, formatear_df_resultados
 import pandas as pd
 from utilidades import generar_menu, init_app, init_app_index
@@ -21,6 +21,7 @@ init_app_index()
 
 df_historicos_FTB, ultimo_registro = obtener_historicos_meff()
 df_FTB_trimestral, df_FTB_trimestral_simulindex, fecha_ultimo_omip, media_omip_simulindex, lista_trimestres_hist, trimestre_actual = obtener_meff_trimestral(df_historicos_FTB)
+df_FTB_mensual, df_FTB_mensual_simulindex, fecha_ultimo_omip, media_omip_simulindex, lista_meses_hist, mes_actual = obtener_meff_mensual(df_historicos_FTB)
 
 if 'omip_slider' not in st.session_state:
     st.session_state.omip_slider = round(media_omip_simulindex)
@@ -29,6 +30,8 @@ def reset_slider():
 
 if 'trimestre_cobertura' not in st.session_state:
     st.session_state.trimestre_cobertura = trimestre_actual
+if 'mes_cobertura' not in st.session_state:
+    st.session_state.mes_cobertura = mes_actual    
 
 # obtenemos históricos de medias mensuales de omie df_mes y un filtrado hist de los últimos 12 meses 
 if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None:
@@ -64,11 +67,12 @@ if 'margen_simulindex' not in st.session_state:
 #    df_resumen_simul_view = formatear_df_resumen(df_resumen_simul)
 
 graf_omip_trim = obtener_grafico_meff_simulindex(df_FTB_trimestral_simulindex)
+graf_omip_mensual = obtener_grafico_meff_simulindex(df_FTB_mensual_simulindex)
 
 df_FTB_trimestral_cobertura = df_FTB_trimestral[df_FTB_trimestral['Entrega'] == st.session_state.trimestre_cobertura]
 graf_omip_cober = obtener_grafico_cober(df_FTB_trimestral_cobertura, df_mes_cober, st.session_state.trimestre_cobertura)
 
-df_FTB_mensual, fig = obtener_meff_mensual(df_historicos_FTB, df_mes)
+df_FTB_mensual_pruebas, fig = obtener_meff_mensual_pruebas(df_historicos_FTB, df_mes)
 
 if "df_ofertas_fijas_simul" not in st.session_state:
     st.session_state.df_ofertas_fijas_simul = pd.DataFrame()
@@ -170,6 +174,16 @@ with tab1:
             st.selectbox('Selecciona el trimestre', options=lista_trimestres_hist, key = 'trimestre_cobertura', index=0)
         with col6:
             st.plotly_chart(graf_omip_cober)
+            #st.write(graf_omip_mensual)
+            #st.plotly_chart(fig)
+    with st.container():
+        col5, col6 = st.columns([0.2, 0.8])
+        with col5:
+            lista_meses_hist = lista_meses_hist[::-1]  # invierte la lista
+            st.selectbox('Selecciona el mes', options=lista_meses_hist, key = 'mes_cobertura', index=0)
+        with col6:
+            #st.plotly_chart(graf_omip_cober)
+            st.write(graf_omip_mensual)
             st.plotly_chart(fig)
             
 
