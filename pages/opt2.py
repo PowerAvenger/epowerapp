@@ -360,6 +360,15 @@ if submit_ver and st.session_state.df_norm is not None:
         with c1:
             st.dataframe(df_coste, hide_index=True, use_container_width=True)
             st.plotly_chart(fig_pie, use_container_width=True)
+            c21,c22,c23 = st.columns(3)
+            with c21:
+                total_potfra = round(df_pot_mes['Total (€)'].sum(),2)
+                st.metric('Potencia facturada €)', f"{total_potfra:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+            with c22:
+                st.metric('Excesos facturados €)', f"{coste_excesos_potcon:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+            with c23:
+                total_tp_fra = round(total_potfra+coste_excesos_potcon,2)
+                st.metric('Total término de potencia €)', f"{total_tp_fra:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
         with c2:
             st.plotly_chart(fig_detalle_demanda2, use_container_width=True)
 
