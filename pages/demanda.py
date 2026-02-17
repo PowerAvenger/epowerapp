@@ -174,7 +174,7 @@ if df_mes_real is not None and not df_mes_real.empty:
 #Datos estimados de generación por autoconsumo anuales en GWh. ---------------------------------------------------------------------------
 #Fuente: APPA.
 #2024 9400 fue una media estimativa a partir de la encuesta realizada en el último trimestre del año. Actualizado el 12/02/2025 s/informe APPA
-#2025 a ojo buen cubero.
+#2025 11000 fue un valor estimativo propio, resultando en 10550 s/informe APPA.
 df_gen_autoconsumo_anual = pd.DataFrame({
     'año': [2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026],
     'autogen': [446, 925, 1656, 3007, 4564, 7262, 9243, 10550, 11500]  
