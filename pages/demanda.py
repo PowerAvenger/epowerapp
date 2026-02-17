@@ -177,7 +177,7 @@ if df_mes_real is not None and not df_mes_real.empty:
 #2025 a ojo buen cubero.
 df_gen_autoconsumo_anual = pd.DataFrame({
     'año': [2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026],
-    'autogen': [446, 925, 1656, 3007, 4564, 7262, 9243, 11000, 12000]  
+    'autogen': [446, 925, 1656, 3007, 4564, 7262, 9243, 10550, 11500]  
 })
 #coeficientes aplicados al autoconsumo anual (obtenidos del pvgis un poco a pelo)
 coeficientes_mensuales = {'Enero': 0.065, 'Febrero': 0.070, 'Marzo': 0.086, 'Abril': 0.090, 
