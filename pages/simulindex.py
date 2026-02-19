@@ -480,30 +480,7 @@ with tab5:
 
         st.write(graf_omip_trimestral_select)
 
-
-        # ----------------------------
-        # 5. FORMATO ESPAÑOL (SOLO VISTA)
-        # ----------------------------
-
-        print('df_uso para usar en resumen')
-        print(df_uso_trimestral)
-        #df_resumen_view = df_resumen.copy()
-        
-        df_resumen = obtener_df_resumen(df_uso_trimestral, simulcurva, 0.0)
-        df_consumos = df_resumen.loc[["Consumo (kWh)"]]
-        df_consumos_view = formatear_df_resumen(df_consumos)
-        # ----------------------------
-        # 6. MOSTRAR TABLA
-        # ----------------------------
-        st.subheader(f'Consumos según curva de carga introducida para peaje :orange[{st.session_state.atr_dfnorm}]')
-        st.dataframe(
-            df_consumos_view,
-            use_container_width=True
-        )
-
-    with c2:
-        st.subheader(f'Parametriza')
-            
+        st.subheader(f'Parametriza margen y escenarios alternativos')
         c11, c12, c13, c14 = st.columns(4)
         with c11:
             st.number_input("Margen (€/MWh)", min_value=0.0, max_value=50.0, value=10.0, step=1.1, key = 'margen_simul_trim')         
@@ -517,6 +494,31 @@ with tab5:
         with c14:
             st.number_input("OMIE simulado C (€/MWh)", value=precio_trim_sel+5,key = 'simul_c_trim')
 
+
+        
+
+    with c2:
+        # ----------------------------
+        # 5. FORMATO ESPAÑOL (SOLO VISTA)
+        # ----------------------------
+
+        print('df_uso para usar en resumen')
+        print(df_uso_trimestral)
+        #df_resumen_view = df_resumen.copy()
+        
+        df_resumen = obtener_df_resumen(df_uso_trimestral, simulcurva, 0.0)
+        df_consumos = df_resumen.loc[["Consumo (kWh)"]]
+        df_consumos_view = formatear_df_resumen(df_consumos)
+        
+        # ----------------------------
+        # 6. MOSTRAR TABLA DE CONSUMOS
+        # ----------------------------
+        st.subheader(f'Consumos según curva de carga introducida para peaje :orange[{st.session_state.atr_dfnorm}]')
+        st.dataframe(
+            df_consumos_view,
+            use_container_width=True
+        )
+            
         lista_simul_trim = [st.session_state.simul_a_trim, st.session_state.simul_b_trim, st.session_state.simul_c_trim]
 
         #escenarios = []
@@ -539,7 +541,7 @@ with tab5:
         margen_simul_trim = st.session_state.margen_simul_trim / 10
         escenarios = construir_escenarios(df_uso_trimestral, lista_simul_trim, margen_simul_trim, df_hist, colores_precios)
 
-        st.subheader('Resultado indexados según escenario')
+        st.subheader('Resultado coberturas de indexados según escenario')
         for esc in escenarios:
             st.markdown(esc["label"])
 
@@ -692,13 +694,13 @@ with tab5:
             st.plotly_chart(fig, use_container_width=True)
 
 
-        with c1:
-            st.subheader("Perfil horario")    
-            graf_medias_horarias = graficar_media_horaria('Total')
-            st.plotly_chart(graf_medias_horarias, use_container_width=True)
-            st.subheader("Consumo por periodos")
-            graf_periodos, df_periodos=graficar_queso_periodos(st.session_state.df_norm_h)
-            st.plotly_chart(graf_periodos, use_container_width=True)
+        #with c1:
+        #    st.subheader("Perfil horario")    
+        #    graf_medias_horarias = graficar_media_horaria('Total')
+        #    st.plotly_chart(graf_medias_horarias, use_container_width=True)
+        #    st.subheader("Consumo por periodos")
+        #    graf_periodos, df_periodos=graficar_queso_periodos(st.session_state.df_norm_h)
+        #    st.plotly_chart(graf_periodos, use_container_width=True)
 
     
 
