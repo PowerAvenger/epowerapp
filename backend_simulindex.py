@@ -35,6 +35,8 @@ def obtener_historicos_meff():
     
     return df_historicos_FTB, ultimo_registro
 
+
+
 def obtener_meff_trimestral(df_FTB):
     #filtramos por Periodo 'Trimestral'
     df_FTB_trimestral = df_FTB[df_FTB['Cod.'].str.startswith('FTBCQ')]
@@ -44,7 +46,6 @@ def obtener_meff_trimestral(df_FTB):
 
     #print('df ftb trimestral inicial')
     #print(df_FTB_trimestral)
-
 
     # ESTO ES PARA EL SIMULINDEX DE SIEMPRE
     # calculamos año y trimestre de la fecha actual
@@ -64,8 +65,6 @@ def obtener_meff_trimestral(df_FTB):
         next_quarters.append(f'Q{next_trim}-{next_year}')
 
     df_FTB_trimestral_simulindex = df_FTB_trimestral[df_FTB_trimestral['Entrega'].isin(next_quarters)]
-
-    
 
     # ESTO ES PARA OBTENER UN LISTADO DE TRIMESTRES DESDE EL PRIMERO DE HISTÓRICOS HASTA EL ACTUAL, PARA COMPARAR FUTUROS CON MEDIAS OMIP
     # construir cadena tipo Q4-25
@@ -87,28 +86,192 @@ def obtener_meff_trimestral(df_FTB):
     )
     lista_trimestres_hist = [t for t in lista_trimestres_hist if trimestre_a_num(t) <= num_actual]
    
-
     #VALOR EXPORTADO
     fecha_ultimo_omip=df_FTB_trimestral_simulindex['Fecha'].max().strftime('%d.%m.%Y')
     #VALOR EXPORTADO
     media_omip_simulindex = round(df_FTB_trimestral_simulindex['Precio'].iloc[-4:].mean(),2)
-
-           
-    
         
     return df_FTB_trimestral, df_FTB_trimestral_simulindex, fecha_ultimo_omip, media_omip_simulindex, lista_trimestres_hist, trimestre_actual
 
 
 
-def obtener_grafico_meff_simulindex(df_FTB_trimestral_filtrado):
-    graf_omip_trim=px.line(df_FTB_trimestral_filtrado,
+
+def obtener_meff_mensual(df_FTB):
+
+    # =========================
+    # FILTRADO MENSUAL
+    # =========================
+    df_FTB_mensual = (
+        df_FTB[df_FTB['Cod.'].str.startswith('FTBCM')]
+        .iloc[:, [0, 1, 5, 7, 14]]
+        .copy()
+    )
+
+    # Asegurar formato string "ene-24"
+    df_FTB_mensual['Entrega'] = df_FTB_mensual['Entrega'].astype(str).str.strip().str.lower()
+
+    # =========================
+    # Columna auxiliar datetime (para lógica, NO para mostrar)
+    # =========================
+    meses_map = {
+        'ene': 'jan', 'feb': 'feb', 'mar': 'mar', 'abr': 'apr',
+        'may': 'may', 'jun': 'jun', 'jul': 'jul', 'ago': 'aug',
+        'sep': 'sep', 'oct': 'oct', 'nov': 'nov', 'dic': 'dec'
+    }
+
+    entrega_en = df_FTB_mensual['Entrega'].replace(meses_map, regex=True)
+    df_FTB_mensual['Entrega_dt'] = pd.to_datetime(entrega_en, format='%b-%y')
+
+    # Fecha (para gráfico)
+    df_FTB_mensual['Fecha'] = pd.to_datetime(df_FTB_mensual['Fecha'])
+
+    # =========================
+    # FECHA ACTUAL
+    # =========================
+    hoy_dt = pd.Timestamp.today().to_period("M").to_timestamp()
+    mes_actual = hoy_dt.strftime('%b-%y').lower()
+
+    # =========================
+    # FUTUROS REALES (~6) en formato "ene-24"
+    # =========================
+    meses_futuros = (
+        df_FTB_mensual.loc[df_FTB_mensual['Entrega_dt'] > hoy_dt, 'Entrega']
+        .drop_duplicates()
+        .tolist()
+    )
+
+    # OJO: ya vienen en el orden "tal cual" estén en el DF; forzamos orden cronológico:
+    meses_futuros = (
+        df_FTB_mensual[df_FTB_mensual['Entrega'].isin(meses_futuros)]
+        .drop_duplicates(subset=['Entrega'])
+        .sort_values('Entrega_dt')['Entrega']
+        .tolist()
+    )[:6]
+
+    df_FTB_mensual_simulindex = df_FTB_mensual[
+        df_FTB_mensual['Entrega'].isin(meses_futuros)
+    ].copy()
+
+    # =========================
+    # HISTÓRICO HASTA MES ACTUAL (lista "ene-24")
+    # =========================
+    lista_meses_hist = (
+        df_FTB_mensual.loc[df_FTB_mensual['Entrega_dt'] <= hoy_dt]
+        .drop_duplicates(subset=['Entrega'])
+        .sort_values('Entrega_dt')['Entrega']
+        .tolist()
+    )
+
+    # =========================
+    # VALORES EXPORTADOS
+    # =========================
+    fecha_ultimo_omip = (
+        df_FTB_mensual_simulindex['Fecha'].max().strftime('%d.%m.%Y')
+        if not df_FTB_mensual_simulindex.empty else None
+    )
+
+    media_omip_simulindex = (
+        round(df_FTB_mensual_simulindex['Precio'].mean(), 2)
+        if not df_FTB_mensual_simulindex.empty else None
+    )
+
+    print('media omip simulindex mensual')
+    print(media_omip_simulindex)
+    print('df FTB mensual')
+    print(df_FTB_mensual)
+    # Devuelves Entrega como "ene-24" + auxiliar Entrega_dt por si te hace falta
+    return df_FTB_mensual, df_FTB_mensual_simulindex, fecha_ultimo_omip, media_omip_simulindex, lista_meses_hist, mes_actual
+
+
+def obtener_hist_mensual(df_in):
+    
+    df_in = df_in.copy()
+    df_in['fecha'] = pd.to_datetime(df_in['fecha'])
+    df_in = df_in.set_index('fecha')
+
+    # columnas base: siempre existen
+    cols_base = ['spot', 'precio_2.0', 'precio_3.0', 'precio_6.1']
+
+    # columnas extra: solo si existen
+    cols_extra = []
+    if 'consumo_neto_kWh' in df_in.columns and 'coste_total' in df_in.columns:
+        cols_extra = ['consumo_neto_kWh', 'coste_total']
+
+    # df_out seguro: solo columnas disponibles
+    df_out = df_in.loc[:, cols_base + cols_extra]
+
+    # resample mensual
+    # precios → mean
+    df_mes_prec = df_out[cols_base].resample('M').mean()
+
+    # si no hay curva → df_mes = df_mes_prec
+    df_mes = df_mes_prec.copy()
+
+    # si hay datos de consumo y coste → calcular precio_curva
+    if len(cols_extra) > 0:
+        df_mes_sums = df_out[cols_extra].resample('M').sum()
+
+        # precio mensual curva: € / kWh
+        df_mes['precio_curva'] = (
+            df_mes_sums['coste_total'] / df_mes_sums['consumo_neto_kWh']
+        )
+
+    # últimos 12 meses
+    df_hist = df_mes.tail(12).copy()
+
+    # conversión de precios existentes
+    df_hist['precio_2.0'] = (df_hist['precio_2.0'] / 10).round(1)
+    df_hist['precio_3.0'] = (df_hist['precio_3.0'] / 10).round(1)
+    df_hist['precio_6.1'] = (df_hist['precio_6.1'] / 10).round(1)
+
+    df_hist['spot'] = df_hist['spot'].round(2)
+
+    # conversión curva si existe
+    if 'precio_curva' in df_hist.columns:
+        df_hist['precio_curva'] = (df_hist['precio_curva'] * 100).round(1)
+    
+    print('df_hist')
+    print(df_hist)
+
+    return df_hist
+
+
+# DF CON LOS VALORES MEDIOS MENSUALES DEL SPOT DE TODO EL HISTÓRICO
+# SE USAN PARA VISUALIZARLOS CON LINEAS HORIZONTALES FRENTE A LA EVOLUCIÓN DE OMIP
+@st.cache_data
+def obtener_spot_mensual():
+    
+    df = st.session_state.df_sheets.copy()
+    df['fecha'] = pd.to_datetime(df['fecha'])
+    df = df.set_index('fecha')
+
+    df_spot_mensual = (
+        df[['spot']]
+        .resample('M')
+        .mean()
+        .sort_index()
+    )
+
+    df_spot_mensual['spot'] = df_spot_mensual['spot'].round(2)
+
+    print('df spot mensual')
+    print(df_spot_mensual)
+
+    return df_spot_mensual
+
+
+
+# GRÁFICO CON FACETS (POR MES O POR TRIMESTRE) PARA VISUALIZAR LA EVOLUCIÓN DE OMIP
+def obtener_grafico_omip(df):
+    #df puede ser df_FTB mensual o trimestral
+    graf=px.line(df,
         x='Fecha',
         y='Precio',
         facet_col='Entrega',
         labels={'Precio':'€/MWh'}
         )
     
-    graf_omip_trim.update_layout(
+    graf.update_layout(
         xaxis=dict(
             rangeslider=dict(
                 visible=True,
@@ -125,11 +288,12 @@ def obtener_grafico_meff_simulindex(df_FTB_trimestral_filtrado):
         ),
     )
         
-    for ann in graf_omip_trim.layout.annotations:
+    for ann in graf.layout.annotations:
         ann.font.size = 16
     
-    return graf_omip_trim
+    return graf
 
+# GRÁFICO COMPARATIVO DE OMIP CON OMIE. NO USADO!!!!!!!!!!
 def obtener_grafico_cober(df_FTB_trimestral_cobertura, df_mes, trimestre_cobertura):
 
     #print(df_FTB_trimestral_cobertura)
@@ -230,99 +394,147 @@ def obtener_grafico_cober(df_FTB_trimestral_cobertura, df_mes, trimestre_cobertu
     return graf_omip_trim_cober
 
 
+def obtener_grafico_omip_omie(df_omip_producto, df_spot_mensual, producto):
+    
+    # Asegurar datetime en índice spot
+    df_spot_mensual = df_spot_mensual.copy()
+    df_spot_mensual.index = pd.to_datetime(df_spot_mensual.index)
 
-
-
-
-def obtener_meff_mensual(df_FTB):
-
-    # =========================
-    # FILTRADO MENSUAL
-    # =========================
-    df_FTB_mensual = (
-        df_FTB[df_FTB['Cod.'].str.startswith('FTBCM')]
-        .iloc[:, [0, 1, 5, 7, 14]]
-        .copy()
+    # Crear gráfico base OMIP
+    fig = px.line(
+        df_omip_producto,
+        x='Fecha',
+        y='Precio',
+        labels={'Precio': '€/MWh'}
     )
 
-    # Asegurar formato string "ene-24"
-    df_FTB_mensual['Entrega'] = df_FTB_mensual['Entrega'].astype(str).str.strip().str.lower()
-
-    # =========================
-    # Columna auxiliar datetime (para lógica, NO para mostrar)
-    # =========================
-    meses_map = {
-        'ene': 'jan', 'feb': 'feb', 'mar': 'mar', 'abr': 'apr',
-        'may': 'may', 'jun': 'jun', 'jul': 'jul', 'ago': 'aug',
-        'sep': 'sep', 'oct': 'oct', 'nov': 'nov', 'dic': 'dec'
-    }
-
-    entrega_en = df_FTB_mensual['Entrega'].replace(meses_map, regex=True)
-    df_FTB_mensual['Entrega_dt'] = pd.to_datetime(entrega_en, format='%b-%y')
-
-    # Fecha (para gráfico)
-    df_FTB_mensual['Fecha'] = pd.to_datetime(df_FTB_mensual['Fecha'])
-
-    # =========================
-    # FECHA ACTUAL
-    # =========================
-    hoy_dt = pd.Timestamp.today().to_period("M").to_timestamp()
-    mes_actual = hoy_dt.strftime('%b-%y').lower()
-
-    # =========================
-    # FUTUROS REALES (~6) en formato "ene-24"
-    # =========================
-    meses_futuros = (
-        df_FTB_mensual.loc[df_FTB_mensual['Entrega_dt'] > hoy_dt, 'Entrega']
-        .drop_duplicates()
-        .tolist()
+    fig.update_layout(
+        title=dict(
+            #text=f"OMIP entrega {producto} vs OMIE",
+            text=f"OMIP entrega <span style='color:#FF8C00'>{producto}</span> vs OMIE",
+            x=0.5,
+            xanchor='center',
+            font=dict(size=22)
+        ),
+        xaxis=dict(
+            rangeslider=dict(
+                visible=True,
+                bgcolor='rgba(173, 216, 230, 0.5)'
+            ),
+            rangeselector=dict(
+                buttons=list([
+                    dict(count=1, label="1m", step="month", stepmode="backward"),
+                    dict(count=3, label="3m", step="month", stepmode="backward"),
+                    dict(step="all")
+                ])
+            )
+        ),
+        xaxis_title="Fecha",
+        yaxis_title="€/MWh",
+        showlegend=False,
+        height=500,
+    )
+    
+    fig.update_xaxes(
+        showgrid=True,
+        gridcolor=fig.layout.yaxis.gridcolor,
+        gridwidth=fig.layout.yaxis.gridwidth
     )
 
-    # OJO: ya vienen en el orden "tal cual" estén en el DF; forzamos orden cronológico:
-    meses_futuros = (
-        df_FTB_mensual[df_FTB_mensual['Entrega'].isin(meses_futuros)]
-        .drop_duplicates(subset=['Entrega'])
-        .sort_values('Entrega_dt')['Entrega']
-        .tolist()
-    )[:6]
 
-    df_FTB_mensual_simulindex = df_FTB_mensual[
-        df_FTB_mensual['Entrega'].isin(meses_futuros)
-    ].copy()
 
-    # =========================
-    # HISTÓRICO HASTA MES ACTUAL (lista "ene-24")
-    # =========================
-    lista_meses_hist = (
-        df_FTB_mensual.loc[df_FTB_mensual['Entrega_dt'] <= hoy_dt]
-        .drop_duplicates(subset=['Entrega'])
-        .sort_values('Entrega_dt')['Entrega']
-        .tolist()
-    )
+    # --------------------------------------------------
+    # DETECTAR TIPO DE PRODUCTO
+    # --------------------------------------------------
+    if producto.startswith("Q"):
+        # -------------------------
+        # TRIMESTRAL
+        # -------------------------
+        mapa_trimestres = {
+            'Q1': [1, 2, 3],
+            'Q2': [4, 5, 6],
+            'Q3': [7, 8, 9],
+            'Q4': [10, 11, 12]
+        }
 
-    # =========================
-    # VALORES EXPORTADOS
-    # =========================
-    fecha_ultimo_omip = (
-        df_FTB_mensual_simulindex['Fecha'].max().strftime('%d.%m.%Y')
-        if not df_FTB_mensual_simulindex.empty else None
-    )
+        meses_esp = {
+            1: 'ene', 2: 'feb', 3: 'mar', 4: 'abr',
+            5: 'may', 6: 'jun', 7: 'jul', 8: 'ago',
+            9: 'sep', 10: 'oct', 11: 'nov', 12: 'dic'
+        }
 
-    media_omip_simulindex = (
-        round(df_FTB_mensual_simulindex['Precio'].mean(), 2)
-        if not df_FTB_mensual_simulindex.empty else None
-    )
-    print('df FTB mensual')
-    print(df_FTB_mensual)
-    # Devuelves Entrega como "ene-24" + auxiliar Entrega_dt por si te hace falta
-    return (
-        df_FTB_mensual,
-        df_FTB_mensual_simulindex,
-        fecha_ultimo_omip,
-        media_omip_simulindex,
-        lista_meses_hist,
-        mes_actual
-    )
+        trimestre, año_corto = producto.split('-')
+        año = 2000 + int(año_corto)
+        meses_trimestre = mapa_trimestres[trimestre]
+
+        colores = ['#FF8C00', '#00E676', '#FFD600']
+
+        for i, mes_num in enumerate(meses_trimestre):
+            filtro = (
+                (df_spot_mensual.index.month == mes_num) &
+                (df_spot_mensual.index.year == año)
+            )
+
+            df_filtrado = df_spot_mensual.loc[filtro, 'spot']
+
+            if df_filtrado.empty:
+                continue
+
+            spot_val = df_filtrado.iloc[0]
+            mes_label = f"{meses_esp[mes_num]}-{str(año)[2:]}"
+            texto = f"{mes_label}: {spot_val:.2f}"
+
+            fig.add_hline(
+                y=spot_val,
+                line_dash="dash",
+                line_color=colores[i],
+                annotation_text=texto,
+                annotation_position="top left",
+                annotation_font_size=18,
+                annotation_font_color=colores[i]
+            )
+
+    else:
+        # -------------------------
+        # MENSUAL
+        # -------------------------
+        meses_map_inv = {
+            'ene': 1, 'feb': 2, 'mar': 3, 'abr': 4,
+            'may': 5, 'jun': 6, 'jul': 7, 'ago': 8,
+            'sep': 9, 'oct': 10, 'nov': 11, 'dic': 12
+        }
+
+        mes_str, año_corto = producto.split('-')
+        mes_num = meses_map_inv[mes_str.lower()]
+        año = 2000 + int(año_corto)
+
+        filtro = (
+            (df_spot_mensual.index.month == mes_num) &
+            (df_spot_mensual.index.year == año)
+        )
+
+        df_filtrado = df_spot_mensual.loc[filtro, 'spot']
+
+        if not df_filtrado.empty:
+            spot_val = df_filtrado.iloc[0]
+            texto = f"{producto}: {spot_val:.2f}"
+
+            fig.add_hline(
+                y=spot_val,
+                line_dash="dash",
+                line_color="#FF8C00",
+                annotation_text=texto,
+                annotation_position="top left",
+                annotation_font_size=18,
+                annotation_font_color="#FF8C00"
+            )
+
+    return fig
+
+
+
+
+
 
 
 
@@ -390,93 +602,10 @@ def obtener_meff_mensual_pruebas(df_FTB, df_mes):
 
     return df_FTB_mensual, fig
 
-# leemos los datos de históricos de la excel telemindex
-@st.cache_data()
-def hist_mensual_ORIGINAL():
-    #df_in=pd.read_excel('data.xlsx')
-    df_in = st.session_state.df_sheets
-    df_in['fecha'] = pd.to_datetime(df_in['fecha'])
-    df_in = df_in.set_index('fecha')
-    # creamos un df de salida
-    #if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
-    #    df_out = df_in.loc[:,['spot','precio_2.0', 'precio_3.0','precio_6.1','consumo_neto_kWh', 'coste_total']]
-    #else:
-    df_out = df_in.loc[:,['spot','precio_2.0', 'precio_3.0','precio_6.1']]
 
-    
-    #print('df_out')
-    #print(df_out)
-
-    # creamos un df con valores medios mensuales
-    df_mes = df_out.resample('M').mean()
-
-    print('df_mes')
-    print(df_mes)
-
-    # tomamos los doce últimos y pasamos los precios index a c€/kWh
-    df_hist = df_mes.tail(12).copy()
-    df_hist['precio_2.0'] = round(df_hist['precio_2.0'] / 10, 1)
-    df_hist['precio_3.0'] = round(df_hist['precio_3.0'] / 10, 1)
-    df_hist['precio_6.1'] = round(df_hist['precio_6.1'] / 10, 1)
-    df_hist['spot'] = round(df_hist['spot'], 2)
-
-    #print('df_hist')
-    #print(df_hist)
-
-    return df_hist, df_mes
 
 #@st.cache_data()
-def hist_mensual(df_in):
-    #df_in = st.session_state.df_sheets
 
-    df_in['fecha'] = pd.to_datetime(df_in['fecha'])
-    df_in = df_in.set_index('fecha')
-
-    # columnas base: siempre existen
-    cols_base = ['spot', 'precio_2.0', 'precio_3.0', 'precio_6.1']
-
-    # columnas extra: solo si existen
-    cols_extra = []
-    if 'consumo_neto_kWh' in df_in.columns and 'coste_total' in df_in.columns:
-        cols_extra = ['consumo_neto_kWh', 'coste_total']
-
-    # df_out seguro: solo columnas disponibles
-    df_out = df_in.loc[:, cols_base + cols_extra]
-
-    # resample mensual
-    # precios → mean
-    df_mes_prec = df_out[cols_base].resample('M').mean()
-
-    # si no hay curva → df_mes = df_mes_prec
-    df_mes = df_mes_prec.copy()
-
-    # si hay datos de consumo y coste → calcular precio_curva
-    if len(cols_extra) > 0:
-        df_mes_sums = df_out[cols_extra].resample('M').sum()
-
-        # precio mensual curva: € / kWh
-        df_mes['precio_curva'] = (
-            df_mes_sums['coste_total'] / df_mes_sums['consumo_neto_kWh']
-        )
-
-    # últimos 12 meses
-    df_hist = df_mes.tail(12).copy()
-
-    # conversión de precios existentes
-    df_hist['precio_2.0'] = (df_hist['precio_2.0'] / 10).round(1)
-    df_hist['precio_3.0'] = (df_hist['precio_3.0'] / 10).round(1)
-    df_hist['precio_6.1'] = (df_hist['precio_6.1'] / 10).round(1)
-
-    df_hist['spot'] = df_hist['spot'].round(2)
-
-    # conversión curva si existe
-    if 'precio_curva' in df_hist.columns:
-        df_hist['precio_curva'] = (df_hist['precio_curva'] * 100).round(1)
-    
-    print('df_hist')
-    print(df_hist)
-
-    return df_hist, df_mes
 
 
 # GRÁFICO PRINCIPAL DE PRECIOS DE INDEXADO A PARTIR DE OMIE++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -664,29 +793,3 @@ def estilo_resumen(df):
     )
 
     return styler 
-
-def estilo_excel(df):
-    styler = estilo_resumen(df)
-
-    # Cabeceras estilo Excel
-    styler = styler.set_table_styles([
-        {"selector": "th.col_heading",
-         "props": "background-color: #CCE5FF; color: black; font-weight: bold; border: 1px solid #999;"},
-        {"selector": "th.row_heading",
-         "props": "background-color: #E8E8E8; color: black; font-weight: bold; border: 1px solid #999;"},
-        {"selector": "td",
-         "props": "border: 1px solid #999; padding: 6px;"},
-    ])
-
-    # Alternancia de filas (tipo Excel) usando applymap_index
-    def color_filas(index):
-        # index es UNA SOLA etiqueta ('consumo_kWh', etc.)
-        pos = list(df.index).index(index)  # posición numérica real de la fila
-        if pos % 2 == 0:
-            return "background-color: #F9F9F9"
-        else:
-            return "background-color: white"
-
-    styler = styler.applymap_index(color_filas, axis=0)
-
-    return styler

@@ -1,5 +1,8 @@
 import streamlit as st
-from backend_simulindex import obtener_historicos_meff, obtener_meff_trimestral, obtener_grafico_meff_simulindex, obtener_grafico_cober, obtener_meff_mensual, obtener_meff_mensual_pruebas, hist_mensual, graf_hist
+from backend_simulindex import (obtener_historicos_meff, obtener_meff_trimestral, obtener_meff_mensual,
+                                obtener_hist_mensual, obtener_spot_mensual,
+                                obtener_grafico_omip, obtener_grafico_omip_omie,
+                                obtener_grafico_cober, obtener_meff_mensual_pruebas, graf_hist)
 from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, formatear_df_resultados
 import pandas as pd
 from utilidades import generar_menu, init_app, init_app_index
@@ -20,13 +23,13 @@ init_app_index()
 
 
 df_historicos_FTB, ultimo_registro = obtener_historicos_meff()
-df_FTB_trimestral, df_FTB_trimestral_simulindex, fecha_ultimo_omip, media_omip_simulindex, lista_trimestres_hist, trimestre_actual = obtener_meff_trimestral(df_historicos_FTB)
-df_FTB_mensual, df_FTB_mensual_simulindex, fecha_ultimo_omip, media_omip_simulindex, lista_meses_hist, mes_actual = obtener_meff_mensual(df_historicos_FTB)
+df_FTB_trimestral, df_FTB_trimestral_simulindex, fecha_ultimo_omip, media_omip_trimestral, lista_trimestres_hist, trimestre_actual = obtener_meff_trimestral(df_historicos_FTB)
+df_FTB_mensual, df_FTB_mensual_simulindex, fecha_ultimo_omip_mensual, media_omip_mensual, lista_meses_hist, mes_actual = obtener_meff_mensual(df_historicos_FTB)
 
-if 'omip_slider' not in st.session_state:
-    st.session_state.omip_slider = round(media_omip_simulindex)
+if 'omie_slider' not in st.session_state:
+    st.session_state.omie_slider = round(media_omip_trimestral)
 def reset_slider():
-    st.session_state.omip_slider = round(media_omip_simulindex)
+    st.session_state.omie_slider = round(media_omip_trimestral)
 
 if 'trimestre_cobertura' not in st.session_state:
     st.session_state.trimestre_cobertura = trimestre_actual
@@ -43,49 +46,61 @@ if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is
         )
     MIN_MESES_OPT = 10
     if n_meses_df(st.session_state.df_curva_sheets) >= MIN_MESES_OPT:
-        df_hist, df_mes = hist_mensual(st.session_state.df_curva_sheets)
+        #df_hist, df_mes = hist_mensual(st.session_state.df_curva_sheets)
+        df_sheets_origen = st.session_state.df_curva_sheets
     else:
-        df_hist, df_mes = hist_mensual(st.session_state.df_sheets)
+        #df_hist, df_mes = hist_mensual(st.session_state.df_sheets)
+        df_sheets_origen = st.session_state.df_sheets
 else:
-    df_hist, df_mes = hist_mensual(st.session_state.df_sheets)
+    #df_hist, df_mes = hist_mensual(st.session_state.df_sheets)
+    df_sheets_origen = st.session_state.df_sheets
 
-df_hist2, df_mes_cober = hist_mensual(st.session_state.df_sheets)
+df_hist = obtener_hist_mensual(df_sheets_origen)
+#df_hist2, df_mes_cober = hist_mensual(st.session_state.df_sheets)
+df_spot_mensual = obtener_spot_mensual()
 
-print('df_mes para cobertura')
-print(df_mes_cober)
+#print('df_mes para cobertura')
+#print(df_mes_cober)
 
 
-grafico, simul20, simul30, simul61, simulcurva = graf_hist(df_hist, st.session_state.omip_slider, colores_precios)
+grafico, simul20, simul30, simul61, simulcurva = graf_hist(df_hist, st.session_state.omie_slider, colores_precios)
 
 # Inicializamos margen a cero
 if 'margen_simulindex' not in st.session_state:
-    st.session_state.margen_simulindex = 0
+    st.session_state.margen_simulindex = 5
     
 #if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None and simulcurva is not None:
     #df_int, df_resumen_simul = resumen_periodos_simulado(df_curva = st.session_state.df_curva_sheets, simul_curva = simulcurva)  
 #    df_resumen_simul = obtener_df_resumen(st.session_state.df_curva_sheets, simulcurva, 0.0)
 #    df_resumen_simul_view = formatear_df_resumen(df_resumen_simul)
 
-graf_omip_trim = obtener_grafico_meff_simulindex(df_FTB_trimestral_simulindex)
-graf_omip_mensual = obtener_grafico_meff_simulindex(df_FTB_mensual_simulindex)
+graf_omip_trimestral = obtener_grafico_omip(df_FTB_trimestral_simulindex)
+graf_omip_mensual = obtener_grafico_omip(df_FTB_mensual_simulindex)
 
 df_FTB_trimestral_cobertura = df_FTB_trimestral[df_FTB_trimestral['Entrega'] == st.session_state.trimestre_cobertura]
-graf_omip_cober = obtener_grafico_cober(df_FTB_trimestral_cobertura, df_mes_cober, st.session_state.trimestre_cobertura)
+df_FTB_mensual_cobertura = df_FTB_mensual[df_FTB_mensual['Entrega'] == st.session_state.mes_cobertura]
 
-df_FTB_mensual_pruebas, fig = obtener_meff_mensual_pruebas(df_historicos_FTB, df_mes)
+print('df FTB trimestral cobertura')
+print(df_FTB_trimestral_cobertura)
+#graf_omip_cober = obtener_grafico_cober(df_FTB_trimestral_cobertura, df_mes_cober, st.session_state.trimestre_cobertura)
+#graf_omip_cober = obtener_grafico_cober(df_FTB_trimestral_cobertura, df_spot_mensual, st.session_state.trimestre_cobertura)
+graf_omip_omie_trimestral = obtener_grafico_omip_omie(df_FTB_trimestral_cobertura, df_spot_mensual, st.session_state.trimestre_cobertura)
+graf_omip_omie_mensual = obtener_grafico_omip_omie(df_FTB_mensual_cobertura, df_spot_mensual, st.session_state.mes_cobertura)
+
+#df_FTB_mensual_pruebas, fig = obtener_meff_mensual_pruebas(df_historicos_FTB, df_mes)
+df_FTB_mensual_pruebas, fig = obtener_meff_mensual_pruebas(df_historicos_FTB, df_spot_mensual)
 
 if "df_ofertas_fijas_simul" not in st.session_state:
     st.session_state.df_ofertas_fijas_simul = pd.DataFrame()
 
 
 #BARRA LATERAL+++++++++++++++++++++++++++++++++++++++++++++++++++++++
-#st.sidebar.header('', divider='rainbow')
+
 zona_mensajes.success('Cargados todos los históricos de indexado. Ya puedes consultar los datos.', icon = '👍')
-#st.sidebar.subheader('¡Personaliza la simulación!')
+
 with st.sidebar.expander('¡Personaliza la simulación!', icon = "ℹ️"):
-    #st.sidebar.info('Usa el deslizador para modificar el valor de :green[OMIE] estimado. No te preocupes, siempre puedes resetear al valor por defecto.', icon = "ℹ️")
     st.write('Usa el deslizador para modificar el valor de :green[OMIE] estimado. No te preocupes, siempre puedes resetear al valor por defecto.')
-st.sidebar.slider(':green[OMIE] en €/MWh', min_value = 30, max_value = 150, step = 1, key = 'omip_slider')
+st.sidebar.slider(':green[OMIE] en €/MWh', min_value = 30, max_value = 150, step = 1, key = 'omie_slider')
 reset_omip = st.sidebar.button('Resetear OMIE', on_click = reset_slider)
  
 with st.sidebar.expander('¿Quieres añadir margen?', icon = "ℹ️"):
@@ -110,7 +125,7 @@ if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is
     
 
 
-tab1, tab2 = st.tabs(['Principal', 'Comparador'])
+tab1, tab2, tab3, tab4 = st.tabs(['Principal', 'Futuros', 'OMIP vs OMIE', 'Comparador'])
 
 with tab1:
     #PRIMERA TANDA DE GRÁFICOS. SIMULACION DE PRECIOS DE INDEXADO------------------------------------------------------------------------------------------------------------------
@@ -122,7 +137,7 @@ with tab1:
             st.subheader(':blue-background[Datos de entrada]', divider = 'rainbow')
             col11, col12 = st.columns(2)
             with col11:
-                st.metric(':green[OMIE] (€/MWh)', value = st.session_state.omip_slider, help = 'Este es el valor OMIE de referencia que has utilizado como entrada')
+                st.metric(':green[OMIE] (€/MWh)', value = st.session_state.omie_slider, help = 'Este es el valor OMIE de referencia que has utilizado como entrada')
             with col12:
                 st.metric(':violet[Margen] (€/MWh)', value = st.session_state.margen_simulindex, help = 'Margen que añades para obtener un precio medio final más ajustado a tus necesidades')
         with st.container(border = True):
@@ -146,12 +161,18 @@ with tab1:
         st.info('**¿Cómo funciona?** Los :orange[puntos] son valores de indexado de los 12 últimos meses. Las :orange[líneas] reflejan una tendencia. Los :orange[círculos] simulan los precios medios de indexado a un año vista en base al valor de OMIE estimado.',icon="ℹ️")
         st.plotly_chart(grafico)
         if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None and simulcurva is not None:
-            st.write(f'Tabla resumen de datos para el suministro :green[{st.session_state.atr_dfnorm}] con OMIE a :green[{st.session_state.omip_slider}]€/MWh')
+            st.write(f'Tabla resumen de datos para el suministro :green[{st.session_state.atr_dfnorm}] con OMIE a :green[{st.session_state.omie_slider}]€/MWh y margen de :green[{st.session_state.margen_simulindex}]€/MWh')
             st.dataframe(df_resumen_simul_view)
         #st.write("df_curva_sheets shape", st.session_state.df_curva_sheets.shape)
         #st.write(st.session_state.df_curva_sheets.head())           
 
-    #SEGUNDA TANDA DE GRÁFICOS. OMIP TRIMESTRAL------------------------------------------------------------------------------------------------------------------
+    
+
+    
+            
+
+with tab2:
+    #PRIMERA TANDA DE GRÁFICOS. OMIP TRIMESTRAL--------------------------------------------------
     col3, col4 = st.columns([0.2, 0.8])
     with col3:
         with st.container(border = True):
@@ -161,19 +182,23 @@ with tab1:
             with col31:
                 st.metric('Fecha', value = fecha_ultimo_omip)
             with col32:
-                st.metric(':blue[OMIP] medio', value = media_omip_simulindex)
+                st.metric(':blue[OMIP] medio', value = media_omip_trimestral)
     with col4:
         st.info('Aquí tienes la evolución de :blue[OMIP] por trimestres', icon = "ℹ️")
-            
-        st.write(graf_omip_trim)
+        st.write(graf_omip_trimestral)
+        st.info('Aquí tienes la evolución de :blue[OMIP] por meses', icon = "ℹ️")
+        st.write(graf_omip_mensual)
+    
 
+with tab3:
     with st.container():
         col5, col6 = st.columns([0.2, 0.8])
         with col5:
             lista_trimestres_hist = lista_trimestres_hist[::-1]  # invierte la lista
             st.selectbox('Selecciona el trimestre', options=lista_trimestres_hist, key = 'trimestre_cobertura', index=0)
         with col6:
-            st.plotly_chart(graf_omip_cober)
+            #st.plotly_chart(graf_omip_cober)
+            st.plotly_chart(graf_omip_omie_trimestral)
             #st.write(graf_omip_mensual)
             #st.plotly_chart(fig)
     with st.container():
@@ -183,12 +208,11 @@ with tab1:
             st.selectbox('Selecciona el mes', options=lista_meses_hist, key = 'mes_cobertura', index=0)
         with col6:
             #st.plotly_chart(graf_omip_cober)
-            st.write(graf_omip_mensual)
-            st.plotly_chart(fig)
-            
+            #st.write(graf_omip_mensual)
+            #st.plotly_chart(fig)
+            st.plotly_chart(graf_omip_omie_mensual)
 
-
-with tab2:
+with tab4:
 
     if 'df_curva_sheets' not in st.session_state or st.session_state.df_curva_sheets is None or simulcurva is None:
         st.warning('Introduce una curva de carga anual')
