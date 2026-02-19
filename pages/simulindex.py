@@ -1,10 +1,11 @@
 import streamlit as st
 from backend_simulindex import (obtener_historicos_meff, obtener_meff_trimestral, obtener_meff_mensual,
                                 obtener_hist_mensual, obtener_spot_mensual,
-                                obtener_grafico_omip, obtener_grafico_omip_omie,
-                                obtener_grafico_cober, obtener_meff_mensual_pruebas, graf_hist)
+                                obtener_graf_hist, obtener_grafico_omip, obtener_grafico_omip_omie,
+                                obtener_trimestres_futuros, construir_escenarios)
 from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, formatear_df_resultados
 import pandas as pd
+import plotly.express as px
 from utilidades import generar_menu, init_app, init_app_index
 from backend_curvadecarga import graficar_media_horaria, graficar_queso_periodos
 
@@ -23,7 +24,7 @@ init_app_index()
 
 
 df_historicos_FTB, ultimo_registro = obtener_historicos_meff()
-df_FTB_trimestral, df_FTB_trimestral_simulindex, fecha_ultimo_omip, media_omip_trimestral, lista_trimestres_hist, trimestre_actual = obtener_meff_trimestral(df_historicos_FTB)
+df_FTB_trimestral, df_FTB_trimestral_futuros, fecha_ultimo_omip, media_omip_trimestral, lista_trimestres_hist, trimestre_actual, df_ultimos_precios_trim = obtener_meff_trimestral(df_historicos_FTB)
 df_FTB_mensual, df_FTB_mensual_simulindex, fecha_ultimo_omip_mensual, media_omip_mensual, lista_meses_hist, mes_actual = obtener_meff_mensual(df_historicos_FTB)
 
 if 'omie_slider' not in st.session_state:
@@ -34,7 +35,12 @@ def reset_slider():
 if 'trimestre_cobertura' not in st.session_state:
     st.session_state.trimestre_cobertura = trimestre_actual
 if 'mes_cobertura' not in st.session_state:
-    st.session_state.mes_cobertura = mes_actual    
+    st.session_state.mes_cobertura = mes_actual 
+
+lista_trimestres_futuros, trimestre_inicial = obtener_trimestres_futuros(df_FTB_trimestral_futuros)   
+
+if 'trimestre_futuro' not in st.session_state:
+    st.session_state.trimestre_futuro = trimestre_inicial
 
 # obtenemos históricos de medias mensuales de omie df_mes y un filtrado hist de los últimos 12 meses 
 if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None:
@@ -63,7 +69,7 @@ df_spot_mensual = obtener_spot_mensual()
 #print(df_mes_cober)
 
 
-grafico, simul20, simul30, simul61, simulcurva = graf_hist(df_hist, st.session_state.omie_slider, colores_precios)
+grafico, simul20, simul30, simul61, simulcurva = obtener_graf_hist(df_hist, st.session_state.omie_slider, colores_precios)
 
 # Inicializamos margen a cero
 if 'margen_simulindex' not in st.session_state:
@@ -74,24 +80,27 @@ if 'margen_simulindex' not in st.session_state:
 #    df_resumen_simul = obtener_df_resumen(st.session_state.df_curva_sheets, simulcurva, 0.0)
 #    df_resumen_simul_view = formatear_df_resumen(df_resumen_simul)
 
-graf_omip_trimestral = obtener_grafico_omip(df_FTB_trimestral_simulindex)
+graf_omip_trimestral = obtener_grafico_omip(df_FTB_trimestral_futuros)
 graf_omip_mensual = obtener_grafico_omip(df_FTB_mensual_simulindex)
 
+df_trim_sel = df_FTB_trimestral[df_FTB_trimestral['Entrega'] == st.session_state.trimestre_futuro].copy()
+graf_omip_trimestral_select = obtener_grafico_omip(df_trim_sel)
+
+
+# dfs para trimestres históricos
 df_FTB_trimestral_cobertura = df_FTB_trimestral[df_FTB_trimestral['Entrega'] == st.session_state.trimestre_cobertura]
 df_FTB_mensual_cobertura = df_FTB_mensual[df_FTB_mensual['Entrega'] == st.session_state.mes_cobertura]
-
 print('df FTB trimestral cobertura')
 print(df_FTB_trimestral_cobertura)
-#graf_omip_cober = obtener_grafico_cober(df_FTB_trimestral_cobertura, df_mes_cober, st.session_state.trimestre_cobertura)
-#graf_omip_cober = obtener_grafico_cober(df_FTB_trimestral_cobertura, df_spot_mensual, st.session_state.trimestre_cobertura)
 graf_omip_omie_trimestral = obtener_grafico_omip_omie(df_FTB_trimestral_cobertura, df_spot_mensual, st.session_state.trimestre_cobertura)
 graf_omip_omie_mensual = obtener_grafico_omip_omie(df_FTB_mensual_cobertura, df_spot_mensual, st.session_state.mes_cobertura)
 
-#df_FTB_mensual_pruebas, fig = obtener_meff_mensual_pruebas(df_historicos_FTB, df_mes)
-df_FTB_mensual_pruebas, fig = obtener_meff_mensual_pruebas(df_historicos_FTB, df_spot_mensual)
+
 
 if "df_ofertas_fijas_simul" not in st.session_state:
     st.session_state.df_ofertas_fijas_simul = pd.DataFrame()
+if "df_ofertas_fijas_simul_trim" not in st.session_state:
+    st.session_state.df_ofertas_fijas_trim = pd.DataFrame()    
 
 
 #BARRA LATERAL+++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -115,21 +124,43 @@ zona_mensajes = st.sidebar.empty()
 simul20_margen = simul20 + st.session_state.margen_simulindex / 10
 simul30_margen = simul30 + st.session_state.margen_simulindex / 10
 simul61_margen = simul61 + st.session_state.margen_simulindex / 10
+
+
+
 if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None and simulcurva is not None:
     # esto es para la tabla original de la página principal que se modifica con el margen del slider
     simulcurva_margen = simulcurva + st.session_state.margen_simulindex / 10
     df_resumen_simul = obtener_df_resumen(st.session_state.df_curva_sheets, simulcurva_margen, 0.0)
     df_resumen_simul_view = formatear_df_resumen(df_resumen_simul)
-    df_uso = st.session_state.df_curva_sheets.copy()
+    df_uso_anual = st.session_state.df_curva_sheets.copy()
+    def filtrar_df_trimestre(df_norm, producto):
+        
+        mapa_trimestres = {
+            'Q1': [1,2,3],
+            'Q2': [4,5,6],
+            'Q3': [7,8,9],
+            'Q4': [10,11,12]
+        }
+        
+        trim, _ = producto.split('-')
+        meses_trim = mapa_trimestres[trim]
+        
+        df_trim = df_norm[
+            df_norm['fecha_hora'].dt.month.isin(meses_trim)
+        ].copy()
+        
+        return df_trim
+    df_uso_trimestral = filtrar_df_trimestre(st.session_state.df_curva_sheets, st.session_state.trimestre_futuro)
 
     
 
 
-tab1, tab2, tab3, tab4 = st.tabs(['Principal', 'Futuros', 'OMIP vs OMIE', 'Comparador'])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(['Principal', 'Futuros', 'OMIP vs OMIE', 'Comparador', 'Cobertura trimestral'])
 
+
+#PANTALLA PRINCIPAL CON LAS RECTAS DE SIMULACIÓN Y DATOS PARA UN SOLO ESCENARIO OMIE------------------------------------------------------------------------------------------------------------------
 with tab1:
-    #PRIMERA TANDA DE GRÁFICOS. SIMULACION DE PRECIOS DE INDEXADO------------------------------------------------------------------------------------------------------------------
-
+ 
     col1, col2 = st.columns([0.2, 0.8])
     with col1:
         st.info('A partir de :green[OMIE] estimado y opcionalmente :violet[margen] añadido, obtendrás unos precios medios de indexado.', icon = "ℹ️")
@@ -163,16 +194,12 @@ with tab1:
         if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None and simulcurva is not None:
             st.write(f'Tabla resumen de datos para el suministro :green[{st.session_state.atr_dfnorm}] con OMIE a :green[{st.session_state.omie_slider}]€/MWh y margen de :green[{st.session_state.margen_simulindex}]€/MWh')
             st.dataframe(df_resumen_simul_view)
-        #st.write("df_curva_sheets shape", st.session_state.df_curva_sheets.shape)
-        #st.write(st.session_state.df_curva_sheets.head())           
+                
 
-    
-
-    
-            
-
+          
+#PANTALLA DE FUTUROS--------------------------------------------------
 with tab2:
-    #PRIMERA TANDA DE GRÁFICOS. OMIP TRIMESTRAL--------------------------------------------------
+    
     col3, col4 = st.columns([0.2, 0.8])
     with col3:
         with st.container(border = True):
@@ -190,6 +217,7 @@ with tab2:
         st.write(graf_omip_mensual)
     
 
+# PANTALLA DE COMPARACIONES OMIP EVOL VS OMIE
 with tab3:
     with st.container():
         col5, col6 = st.columns([0.2, 0.8])
@@ -197,20 +225,16 @@ with tab3:
             lista_trimestres_hist = lista_trimestres_hist[::-1]  # invierte la lista
             st.selectbox('Selecciona el trimestre', options=lista_trimestres_hist, key = 'trimestre_cobertura', index=0)
         with col6:
-            #st.plotly_chart(graf_omip_cober)
             st.plotly_chart(graf_omip_omie_trimestral)
-            #st.write(graf_omip_mensual)
-            #st.plotly_chart(fig)
     with st.container():
         col5, col6 = st.columns([0.2, 0.8])
         with col5:
             lista_meses_hist = lista_meses_hist[::-1]  # invierte la lista
             st.selectbox('Selecciona el mes', options=lista_meses_hist, key = 'mes_cobertura', index=0)
         with col6:
-            #st.plotly_chart(graf_omip_cober)
-            #st.write(graf_omip_mensual)
-            #st.plotly_chart(fig)
             st.plotly_chart(graf_omip_omie_mensual)
+
+
 
 with tab4:
 
@@ -226,10 +250,10 @@ with tab4:
         # ----------------------------
 
         print('df_uso para usar en resumen')
-        print(df_uso)
+        print(df_uso_anual)
         #df_resumen_view = df_resumen.copy()
         
-        df_resumen = obtener_df_resumen(df_uso, simulcurva, 0.0)
+        df_resumen = obtener_df_resumen(df_uso_anual, simulcurva, 0.0)
         df_consumos = df_resumen.loc[["Consumo (kWh)"]]
         df_consumos_view = formatear_df_resumen(df_consumos)
         # ----------------------------
@@ -261,11 +285,11 @@ with tab4:
         print(f'margen_simul: {margen_simul}')
 
         for etiqueta, omie_value in zip(["A", "B", "C"], lista_simul):
-            _, _, _, _, simul_curva = graf_hist(df_hist, omie_value, colores_precios)
+            _, _, _, _, simul_curva = obtener_graf_hist(df_hist, omie_value, colores_precios)
             print(f'simul_curva antes de añadir margen: {simul_curva}')
             simul_curva = simul_curva + margen_simul
             print(f'simul_curva después de añadir margen: {simul_curva}')
-            df_resumen_simul = obtener_df_resumen(df_uso, simul_curva, 0.0)
+            df_resumen_simul = obtener_df_resumen(df_uso_anual, simul_curva, 0.0)
 
             escenarios.append({
                 "label": f"Indexado simulado {etiqueta} ({omie_value:.1f} €/MWh)",
@@ -341,8 +365,8 @@ with tab4:
 
         with c2:
 
-            import pandas as pd
-            import plotly.express as px
+            
+            
 
             periodos = [f"P{i}" for i in range(1, 7)]
 
@@ -438,6 +462,245 @@ with tab4:
             st.plotly_chart(graf_periodos, use_container_width=True)
 
 
+with tab5:
+    
+    if 'df_curva_sheets' not in st.session_state or st.session_state.df_curva_sheets is None or simulcurva is None:
+        st.warning('Introduce una curva de carga anual')
+        st.stop()
+
+       
+    
+    
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.subheader(f'Selecciona el trimestre de la cobertura')
+        st.selectbox('Selecciona trimestre futuro', options=lista_trimestres_futuros, key='trimestre_futuro')
+
+        precio_trim_sel = df_ultimos_precios_trim.loc[df_ultimos_precios_trim['Entrega'] == st.session_state.trimestre_futuro, 'Precio'].iloc[0]
+
+        st.write(graf_omip_trimestral_select)
+
+
+        # ----------------------------
+        # 5. FORMATO ESPAÑOL (SOLO VISTA)
+        # ----------------------------
+
+        print('df_uso para usar en resumen')
+        print(df_uso_trimestral)
+        #df_resumen_view = df_resumen.copy()
+        
+        df_resumen = obtener_df_resumen(df_uso_trimestral, simulcurva, 0.0)
+        df_consumos = df_resumen.loc[["Consumo (kWh)"]]
+        df_consumos_view = formatear_df_resumen(df_consumos)
+        # ----------------------------
+        # 6. MOSTRAR TABLA
+        # ----------------------------
+        st.subheader(f'Consumos según curva de carga introducida para peaje :orange[{st.session_state.atr_dfnorm}]')
+        st.dataframe(
+            df_consumos_view,
+            use_container_width=True
+        )
+
+    with c2:
+        st.subheader(f'Parametriza')
+            
+        c11, c12, c13, c14 = st.columns(4)
+        with c11:
+            st.number_input("Margen (€/MWh)", min_value=0.0, max_value=50.0, value=10.0, step=1.1, key = 'margen_simul_trim')         
+        with c12:
+            #st.number_input("OMIE simulado A (€/MWh)", value=55.0, key = 'simul_a_trim')
+            st.caption('OMIE simulado A (€/MWh)')
+            st.text(precio_trim_sel)
+            st.session_state.simul_a_trim = precio_trim_sel
+        with c13:
+            st.number_input("OMIE simulado B (€/MWh)", value=precio_trim_sel-5, key = 'simul_b_trim')
+        with c14:
+            st.number_input("OMIE simulado C (€/MWh)", value=precio_trim_sel+5,key = 'simul_c_trim')
+
+        lista_simul_trim = [st.session_state.simul_a_trim, st.session_state.simul_b_trim, st.session_state.simul_c_trim]
+
+        #escenarios = []
+        
+        #print(f'margen_simul: {st.session_state.margen_simul_trim}')
+
+        #for etiqueta, omie_value2 in zip(["A", "B", "C"], lista_simul):
+        #    _, _, _, _, simul_curva = obtener_graf_hist(df_hist, omie_value2, colores_precios)
+        #    print(f'simul_curva antes de añadir margen: {simul_curva}')
+        #    simul_curva = simul_curva + st.session_state.margen_simul_trim
+        #    print(f'simul_curva después de añadir margen: {simul_curva}')
+        #    df_resumen_simul_trim = obtener_df_resumen(df_uso_trimestral, simul_curva, 0.0)
+
+        #    escenarios.append({
+        #        "label": f"Indexado simulado {etiqueta} ({omie_value2:.1f} €/MWh)",
+        #        "simul_curva": simul_curva,
+        #        "df_resumen": df_resumen_simul_trim
+        #    })
+
+        margen_simul_trim = st.session_state.margen_simul_trim / 10
+        escenarios = construir_escenarios(df_uso_trimestral, lista_simul_trim, margen_simul_trim, df_hist, colores_precios)
+
+        st.subheader('Resultado indexados según escenario')
+        for esc in escenarios:
+            st.markdown(esc["label"])
+
+            df_vista_trim = esc["df_resumen"].loc[
+                ["Coste (€)", "Precio medio (€/kWh)"]
+            ]
+
+            st.dataframe(
+                formatear_df_resumen(df_vista_trim),
+                use_container_width=True
+            )    
+
+
+        # CARGAR EXCEL CON PRECIOS FIJOS+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        st.subheader("Carga excel con ofertas a precio FIJO")
+        st.file_uploader("Sube el Excel con ofertas de precio fijo", type=["xlsx", "xls"], key= 'uploaded_file_trim')
+
+        if st.session_state.uploaded_file_trim is not None:
+
+            # 🔥 CLAVE: empezar siempre de cero
+            st.session_state.df_ofertas_fijas = None
+
+            df_new = pd.read_excel(st.session_state.uploaded_file_trim)
+            df_new.columns = df_new.columns.str.strip()
+
+            # Primera columna = oferta
+            col_oferta = df_new.columns[0]
+            df_new = df_new.rename(columns={col_oferta: "oferta"})
+
+            periodos = [f"P{i}" for i in range(1, 7)]
+
+            faltan = set(periodos) - set(df_new.columns)
+            if faltan:
+                st.error(f"Faltan columnas de periodos: {faltan}")
+                st.stop()
+
+            for p in periodos:
+                df_new[p] = pd.to_numeric(df_new[p], errors="coerce")
+
+            if df_new[periodos].isna().any().any():
+                st.error("Hay valores no numéricos en los precios")
+                st.stop()
+
+            
+
+            # 🔁 Reemplazar directamente
+            st.session_state.df_ofertas_fijas_simul = df_new.copy()
+            df_ofertas_view = formatear_df_resumen(st.session_state.df_ofertas_fijas_simul)
+
+            st.markdown("Ofertas fijas cargadas")
+
+            if st.session_state.df_ofertas_fijas_simul.empty:
+                st.info("Aún no hay ofertas cargadas")
+            else:
+                st.dataframe(
+                    #st.session_state.df_ofertas_fijas_simul,
+                    df_ofertas_view,
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+
+        with c2:
+
+            
+            
+
+            periodos = [f"P{i}" for i in range(1, 7)]
+
+            # Consumos por periodo
+            consumos = df_resumen.loc["Consumo (kWh)", periodos]
+
+            resultados = []
+
+            # Ofertas fijas
+            for _, row in st.session_state.df_ofertas_fijas_simul.iterrows():
+                coste_total = (consumos * row[periodos]).sum()
+                energia_total = consumos.sum()
+                precio_medio = coste_total / energia_total
+
+                resultados.append({
+                    "Oferta": row["oferta"],
+                    "Tipo": "Fijo",
+                    "Coste anual (€)": coste_total,
+                    "Precio medio (€/kWh)": precio_medio
+                })
+
+            # Indexado
+            for esc in escenarios:
+                df_res = esc["df_resumen"]
+
+                precios_index = df_res.loc["Precio medio (€/kWh)", periodos]
+                coste_index = (consumos * precios_index).sum()
+                precio_medio_index = coste_index / consumos.sum()
+
+                resultados.append({
+                    "Oferta": esc["label"],
+                    "Tipo": "Indexado",
+                    "Coste anual (€)": coste_index,
+                    "Precio medio (€/kWh)": precio_medio_index
+                })
+
+            df_resultados = pd.DataFrame(resultados)
+            # Ordenar por coste anual (de más barato a más caro)
+            df_resultados = df_resultados.sort_values("Coste anual (€)").reset_index(drop=True)
+
+            coste_min = df_resultados["Coste anual (€)"].iloc[0]
+
+            df_resultados["% sobre la más barata"] = (
+                (df_resultados["Coste anual (€)"] - coste_min) / coste_min * 100
+            )
+
+            df_resultados["Δ vs más barata (€)"] = (
+                df_resultados["Coste anual (€)"] - coste_min
+            )
+
+            
+            print('df resultados')
+            print(df_resultados)
+            
+            df_resultados_view = formatear_df_resultados(df_resultados)
+
+            print('df resultados view')
+            print(df_resultados_view)
+
+
+        with c3:
+            st.subheader("📊 Comparativa TOTALPOWER")
+            st.dataframe(df_resultados_view, use_container_width=True, hide_index=True)
+
+            orden_ofertas = df_resultados["Oferta"].tolist()
+
+            fig = px.bar(
+                df_resultados,
+                x="Oferta",
+                y="Coste anual (€)",
+                color="Tipo",
+                title="Coste anual por oferta",
+                text_auto=".2f",
+                category_orders={"Oferta": orden_ofertas}
+            )
+
+            fig.update_layout(
+                yaxis_title="Coste anual (€)",
+                xaxis_title="",
+                legend_title="",
+                bargap=.4
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+
+        with c1:
+            st.subheader("Perfil horario")    
+            graf_medias_horarias = graficar_media_horaria('Total')
+            st.plotly_chart(graf_medias_horarias, use_container_width=True)
+            st.subheader("Consumo por periodos")
+            graf_periodos, df_periodos=graficar_queso_periodos(st.session_state.df_norm_h)
+            st.plotly_chart(graf_periodos, use_container_width=True)
+
+    
 
 
 
