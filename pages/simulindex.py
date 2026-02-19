@@ -487,7 +487,22 @@ with tab5:
         with c12:
             #st.number_input("OMIE simulado A (€/MWh)", value=55.0, key = 'simul_a_trim')
             st.caption('OMIE simulado A (€/MWh)')
-            st.text(precio_trim_sel)
+            #st.text(precio_trim_sel)
+            st.markdown(
+                f"""
+                <div style="
+                    background-color:#FF8C00;
+                    padding:6px 12px;
+                    border-radius:6px;
+                    color:white;
+                    font-weight:bold;
+                    display:inline-block;
+                ">
+                    {precio_trim_sel:.2f} €/MWh
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
             st.session_state.simul_a_trim = precio_trim_sel
         with c13:
             st.number_input("OMIE simulado B (€/MWh)", value=precio_trim_sel-5, key = 'simul_b_trim')
@@ -679,17 +694,42 @@ with tab5:
                 x="Oferta",
                 y="Coste anual (€)",
                 color="Tipo",
-                title="Coste anual por oferta",
-                text_auto=".2f",
+                #title="Coste anual por oferta (€)",
+                text_auto=".0f",
                 category_orders={"Oferta": orden_ofertas}
             )
+
+            # qué barra quieres resaltar
+            target = "simulado A"
+            highlight = "#FF8C00"  # amarillo-anaranjado
+
+            for trace in fig.data:
+                # trace.x son las ofertas que caen en este trace (Tipo)
+                trace.marker.color = [
+                    (highlight if (isinstance(x, str) and target in x) else c)
+                    for x, c in zip(
+                        trace.x,
+                        [trace.marker.color] * len(trace.x)  # color base del trace
+                    )
+                ]
 
             fig.update_layout(
                 yaxis_title="Coste anual (€)",
                 xaxis_title="",
                 legend_title="",
-                bargap=.4
+                bargap=.4,
+                title=dict(
+                    text="Coste anual por oferta (€)",
+                    x=0.5,
+                    xanchor="center"
+                )
             )
+            fig.update_traces(
+                textposition="inside",
+                textfont_size=16  # ← ajusta aquí
+            )
+
+
 
             st.plotly_chart(fig, use_container_width=True)
 
