@@ -360,17 +360,18 @@ with tab2:
             resultados = []
 
             # Ofertas fijas
-            for _, row in st.session_state.df_ofertas_fijas.iterrows():
-                coste_total = (consumos * row[periodos]).sum()
-                energia_total = consumos.sum()
-                precio_medio = coste_total / energia_total
+            if uploaded_file is not None:
+                for _, row in st.session_state.df_ofertas_fijas.iterrows():
+                    coste_total = (consumos * row[periodos]).sum()
+                    energia_total = consumos.sum()
+                    precio_medio = coste_total / energia_total
 
-                resultados.append({
-                    "Oferta": row["oferta"],
-                    "Tipo": "Fijo",
-                    "Coste anual (€)": coste_total,
-                    "Precio medio (€/kWh)": precio_medio
-                })
+                    resultados.append({
+                        "Oferta": row["oferta"],
+                        "Tipo": "Fijo",
+                        "Coste anual (€)": coste_total,
+                        "Precio medio (€/kWh)": precio_medio
+                    })
 
             # Indexado
             precios_index = df_resumen.loc["Precio medio (€/kWh)", periodos]

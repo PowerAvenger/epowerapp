@@ -15,29 +15,28 @@ if not st.session_state.get('usuario_autenticado', False) and not st.session_sta
 generar_menu()
 
 # ===============================
-#  Interfaz Streamlit
+#  Interfaz SIDEBAR
 # ===============================
 
 with st.sidebar:
+
     st.title("⚡:rainbow[PowerLoader]⚡")
     st.caption("Lee CSV/Excel, detecta columnas y normaliza horas al rango 0–23 del mismo día. Añade columnas adicionales.")
+
     if not st.session_state.get('usuario_autenticado', False):
         st.warning("🔒 Este módulo es solo para usuarios premium. Lo que estás viendo es un fichero de ejemplo")
         uploaded = f"curvas/qh anual demo.csv" #es la --> qh 30 con aut anual Carles ES0031--01HS.csv
         atr_dfnorm = '3.0'
         
     else:
-        uploaded = st.file_uploader("📂 Sube un archivo CSV o Excel", type=["csv", "xlsx"])
+        uploaded = st.file_uploader("📂 Sube un archivo CSV o Excel", type=["csv", "xlsx"], accept_multiple_files=True)
+        #uploaded = st.file_uploader("📂 Sube un archivo CSV o Excel", type=["csv", "xlsx"])
         atr_dfnorm = st.sidebar.selectbox(
                     "Selecciona peaje de acceso:",
                     ("2.0", "3.0", "6.1"),
                     index=0
                 )
     normalizar = st.button('Normalizar curva de carga', type='primary', use_container_width=True)
-    
-    
-    
-    
         
     zona_mensajes = st.sidebar.empty()
     zona_mensajes2 = st.sidebar.empty()
@@ -54,10 +53,31 @@ if "df_in" not in st.session_state:
 if 'frec' not in st.session_state:
     st.session_state.frec = 'QH'      
 
+  
+
 if normalizar and uploaded:    
     try:
-        df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, frec = normalize_curve_simple(uploaded, origin=uploaded.name if hasattr(uploaded, "name") else uploaded)
+        #df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, frec = normalize_curve_simple(uploaded, origin=uploaded.name if hasattr(uploaded, "name") else uploaded)
 
+        dfs_norm = []
+        dfs_in = []
+
+        if not isinstance(uploaded, list):
+            uploaded = [uploaded]
+        
+        for file in uploaded:
+            df_in_i, df_norm_i, msg_unidades, flag_periodos_en_origen, df_periodos, frec = normalize_curve_simple(file, origin=file.name if hasattr(file, "name") else file)
+            dfs_norm.append(df_norm_i)
+            dfs_in.append(df_in_i)
+
+        df_norm = pd.concat(dfs_norm)
+        if len(dfs_in) == 1:
+            df_in = dfs_in[0]
+            st.session_state.lista_ficheros = None
+        else:
+            df_in = None
+            st.session_state.lista_ficheros = [file.name for file in uploaded]
+        
         consumo_total=df_norm['consumo_kWh'].sum()
         vertido_total=df_norm['excedentes_kWh'].sum()
         consumo_neto=df_norm['consumo_neto_kWh'].sum()
@@ -118,33 +138,12 @@ if normalizar and uploaded:
 
                     if not numeros.empty and numeros.max() == 3:
                         atr_dfnorm = "2.0"
-                        #st.sidebar.success("✅ Peaje de acceso detectado automáticamente: 2.0TD (3 periodos)")
                         st.sidebar.success("Tres periodos detectados.")
-                    #elif not numeros.empty and numeros.max() == 6:
                     else:
                         st.sidebar.warning("Seis periodos detectados")
-                        #atr_dfnorm = st.sidebar.selectbox(
-                        #    "Selecciona peaje de acceso:",
-                        #    ("3.0", "6.1"),
-                        #    index=0
-                        #)
-                    #else:
-                    #    st.sidebar.warning("⚙️ No se ha podido determinar el peaje de acceso. Selección manual:")
-                    #    atr_dfnorm = st.sidebar.selectbox(
-                    #        "Selecciona peaje de acceso:",
-                    #        ("2.0", "3.0", "6.1"),
-                    #        index=0
-                    #    )
-
+                    
                 else:
-                    #st.sidebar.warning("⚙️ No se ha podido determinar el peaje de acceso. Selección manual:")
                     st.sidebar.warning("ATENCIÓN: NO HAY PERIODOS DETECTADOS")
-                    #atr_dfnorm = st.sidebar.selectbox(
-                    #    "Selecciona el peaje de acceso:",
-                    #    ("2.0", "3.0", "6.1"),
-                    #    index=0
-                    #)
-            
             else:
                 atr_dfnorm = "3.0"
         
@@ -178,7 +177,7 @@ if normalizar and uploaded:
             # Ya está en frecuencia horaria → copiar
             df_norm_h = df_norm[["fecha_hora", "fecha", "hora","consumo_neto_kWh", "vertido_neto_kWh", "periodo", "tipo_dia"]].copy()
 
-        #consumototalhorario= df_norm_h['consumo_neto_kWh'].sum()
+        
         consumototalhorario= df_norm_h['consumo_neto_kWh'].sum()
         print(f'consumo total df_norm_h: {consumototalhorario}')
         
@@ -192,8 +191,6 @@ if normalizar and uploaded:
         st.session_state.consumo_neto=consumo_neto
         st.session_state.vertido_neto=vertido_neto
         # Obtener fechas mínima y máxima del df_norm_h y guardar para telemindex
-        #fecha_ini = df_norm_h["fecha"].min()
-        #fecha_fin = df_norm_h["fecha"].max()
         fecha_ini = df_norm["fecha"].min()
         fecha_fin = df_norm["fecha"].max()
         st.session_state.rango_curvadecarga = (fecha_ini, fecha_fin)
@@ -201,8 +198,6 @@ if normalizar and uploaded:
         print('df norm horaria')
         print(df_norm_h)
 
-        #st.session_state.demo_ejecutado = True
-        
     except Exception as e:
         zona_mensajes.error(f"❌ Error al normalizar: {e}")
         st.stop()
@@ -226,7 +221,16 @@ if st.session_state.get("df_norm") is not None:
         with c1:
             # Visor del df in
             st.subheader("📄 Vista previa del archivo original")
-            st.dataframe(st.session_state.df_in, height=altura_df)
+            if st.session_state.get("df_in") is not None:
+                st.dataframe(st.session_state.df_in, height=altura_df)
+            elif st.session_state.get("lista_ficheros"):
+            #elif st.session_state.get("lista_ficheros") is not None: 
+                with st.container(height=250):   
+                    st.info("Se han cargado múltiples suministros.")
+                
+                    st.write("Archivos cargados:")
+                    for f in st.session_state.lista_ficheros:
+                        st.write(f"• {f}")
         with c2:
             # Visor del df out
             st.subheader("📊 Tabla normalizada de datos")

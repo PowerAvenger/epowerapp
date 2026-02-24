@@ -1,5 +1,6 @@
 import streamlit as st
 from backend_simulindex import (obtener_historicos_meff, obtener_meff_trimestral, obtener_meff_mensual,
+                                pyc_2026,
                                 obtener_hist_mensual, obtener_spot_mensual,
                                 obtener_graf_hist, obtener_grafico_omip, obtener_grafico_omip_omie,
                                 obtener_trimestres_futuros, construir_escenarios)
@@ -52,17 +53,35 @@ if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is
         )
     MIN_MESES_OPT = 10
     if n_meses_df(st.session_state.df_curva_sheets) >= MIN_MESES_OPT:
-        #df_hist, df_mes = hist_mensual(st.session_state.df_curva_sheets)
-        df_sheets_origen = st.session_state.df_curva_sheets
+        #CÓDIGO AÑADIDO PARA USAR PYCS2026 EN LA SIMULACION
+        st.session_state.pyc_2026 = pyc_2026
+        df_simul = st.session_state.df_curva_sheets.copy()
+        cons = df_simul["consumo_neto_kWh"] / 1000 #pasamos a MWh
+        atr_map = {
+            "2.0": "2.0TD",
+            "3.0": "3.0TD",
+            "6.1": "6.1TD"
+        }
+        atr_col = atr_map[st.session_state.atr_dfnorm]
+        pyc_dict = st.session_state.pyc_2026[atr_col]
+        df_simul["pyc_simul"] = df_simul["periodo"].map(pyc_dict)*1000 #pasamos a €/MWh
+        df_simul["coste_pyc_simul"] = df_simul["pyc_simul"] * cons
+        df_simul["coste_total_simul"] = df_simul["coste_base"] + df_simul["coste_pyc_simul"]
+        df_sheets_origen = df_simul
+
     else:
-        #df_hist, df_mes = hist_mensual(st.session_state.df_sheets)
         df_sheets_origen = st.session_state.df_sheets
 else:
     #df_hist, df_mes = hist_mensual(st.session_state.df_sheets)
     df_sheets_origen = st.session_state.df_sheets
 
+
+print('df_sheets_origen')
+print(df_sheets_origen)
+
 df_hist = obtener_hist_mensual(df_sheets_origen)
-#df_hist2, df_mes_cober = hist_mensual(st.session_state.df_sheets)
+
+
 df_spot_mensual = obtener_spot_mensual()
 
 #print('df_mes para cobertura')
@@ -74,6 +93,9 @@ grafico, simul20, simul30, simul61, simulcurva = obtener_graf_hist(df_hist, st.s
 # Inicializamos margen a cero
 if 'margen_simulindex' not in st.session_state:
     st.session_state.margen_simulindex = 5
+
+if 'margen_simul_fijo' not in st.session_state:
+    st.session_state.margen_simul_fijo = 0.0  
     
 #if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None and simulcurva is not None:
     #df_int, df_resumen_simul = resumen_periodos_simulado(df_curva = st.session_state.df_curva_sheets, simul_curva = simulcurva)  
@@ -270,7 +292,7 @@ with tab4:
             
         c11, c12, c13, c14 = st.columns(4)
         with c11:
-            margen_simul = st.number_input("Margen (€/MWh)", min_value=0.0, max_value=50.0, value=10.0, step=1.1) / 10   # → c€/kWh        
+            margen_simul = st.number_input("Margen (€/MWh)", min_value=0.0, max_value=50.0, value=10.0, step=.1) / 10   # → c€/kWh        
         with c12:
             simul_a = st.number_input("OMIE simulado A (€/MWh)", value=55.0)
         with c13:
@@ -346,8 +368,20 @@ with tab4:
 
             
 
-            # 🔁 Reemplazar directamente
+            # 🔁 Añadimos margen si procede
             st.session_state.df_ofertas_fijas_simul = df_new.copy()
+            df_ofertas_calc = df_new.copy()
+            if st.session_state.get("aplicar_margen_fijo", False):
+                
+                periodos = [f"P{i}" for i in range(1, 7)]
+                
+                for p in periodos:
+                    if p in df_ofertas_calc.columns:
+                        #df_ofertas_calc[p] = df_ofertas_calc[p] + margen_simul/100   
+                        df_ofertas_calc[p] = df_ofertas_calc[p] + st.session_state.margen_simul_fijo/1000   
+                
+                st.session_state.df_ofertas_fijas_simul = df_ofertas_calc
+                
             df_ofertas_view = formatear_df_resumen(st.session_state.df_ofertas_fijas_simul)
 
             st.markdown("Ofertas fijas cargadas")
@@ -355,12 +389,17 @@ with tab4:
             if st.session_state.df_ofertas_fijas_simul.empty:
                 st.info("Aún no hay ofertas cargadas")
             else:
+                st.checkbox("Aplicar margen comercial también a ofertas fijas", value=False, key='aplicar_margen_fijo')
+                if st.session_state.get("aplicar_margen_fijo", False):
+                    st.number_input('Introduce el margen para las ofertas FIJO.', min_value=0.0, max_value=30.0, step=.1, key = 'margen_simul_fijo') #€/MWh
                 st.dataframe(
                     #st.session_state.df_ofertas_fijas_simul,
                     df_ofertas_view,
                     use_container_width=True,
                     hide_index=True
                 )
+                
+
 
 
         with c2:
@@ -438,8 +477,8 @@ with tab4:
                 x="Oferta",
                 y="Coste anual (€)",
                 color="Tipo",
-                title="Coste anual por oferta",
-                text_auto=".2f",
+                #title="Coste anual por oferta",
+                text_auto=".0f",
                 category_orders={"Oferta": orden_ofertas}
             )
 
@@ -447,7 +486,16 @@ with tab4:
                 yaxis_title="Coste anual (€)",
                 xaxis_title="",
                 legend_title="",
-                bargap=.4
+                bargap=.4,
+                title=dict(
+                    text=f"Coste anual por oferta (€) para peaje {st.session_state.atr_dfnorm}",
+                    x=0.5,
+                    xanchor="center"
+                )
+            )
+            fig.update_traces(
+                textposition="inside",
+                textfont_size=16  # ← ajusta aquí
             )
 
             st.plotly_chart(fig, use_container_width=True)

@@ -3,10 +3,59 @@ import plotly.express as px
 
 import streamlit as st
 from datetime import datetime
-from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, formatear_df_resultados
+from backend_comun import obtener_df_resumen
 
-
-
+#valores de peajes y cargos usados en la simulación
+pyc_2026 = {
+    "2.0TD": {
+        "P1": 0.097553,
+        "P2": 0.029267,
+        "P3": 0.003292,
+        "P4": None,
+        "P5": None,
+        "P6": None,
+    },
+    "3.0TD": {
+        "P1": 0.063352,
+        "P2": 0.038914,
+        "P3": 0.019279,
+        "P4": 0.009795,
+        "P5": 0.004706,
+        "P6": 0.002898,
+    },
+    "6.1TD": {
+        "P1": 0.046274,
+        "P2": 0.026717,
+        "P3": 0.012928,
+        "P4": 0.006678,
+        "P5": 0.002619,
+        "P6": 0.001588,
+    },
+    "6.2TD": {
+        "P1": 0.02388,
+        "P2": 0.013975,
+        "P3": 0.0062,
+        "P4": 0.003083,
+        "P5": 0.001234,
+        "P6": 0.000752,
+    },
+    "6.3TD": {
+        "P1": 0.018775,
+        "P2": 0.010876,
+        "P3": 0.004992,
+        "P4": 0.002494,
+        "P5": 0.001009,
+        "P6": 0.000614,
+    },
+    "6.4TD": {
+        "P1": 0.011275,
+        "P2": 0.006055,
+        "P3": 0.002597,
+        "P4": 0.001286,
+        "P5": 0.000403,
+        "P6": 0.000232,
+    }
+}
 
 
 
@@ -208,8 +257,8 @@ def obtener_hist_mensual(df_in):
 
     # columnas extra: solo si existen
     cols_extra = []
-    if 'consumo_neto_kWh' in df_in.columns and 'coste_total' in df_in.columns:
-        cols_extra = ['consumo_neto_kWh', 'coste_total']
+    if 'consumo_neto_kWh' in df_in.columns and 'coste_total_simul' in df_in.columns:
+        cols_extra = ['consumo_neto_kWh', 'coste_total_simul']
 
     # df_out seguro: solo columnas disponibles
     df_out = df_in.loc[:, cols_base + cols_extra]
@@ -227,7 +276,8 @@ def obtener_hist_mensual(df_in):
 
         # precio mensual curva: € / kWh
         df_mes['precio_curva'] = (
-            df_mes_sums['coste_total'] / df_mes_sums['consumo_neto_kWh']
+            #df_mes_sums['coste_total'] / df_mes_sums['consumo_neto_kWh']
+            df_mes_sums['coste_total_simul'] / df_mes_sums['consumo_neto_kWh']
         )
 
     # últimos 12 meses
@@ -249,7 +299,96 @@ def obtener_hist_mensual(df_in):
 
     return df_hist
 
+# GRÁFICO PRINCIPAL DE PRECIOS DE INDEXADO A PARTIR DE OMIE++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+def obtener_graf_hist(df_hist, omip, colores_precios):
+    series_y = ['precio_2.0','precio_3.0','precio_6.1']
+    if 'precio_curva' in df_hist.columns:
+        series_y.append('precio_curva')
+    #colores_precios = {'precio_2.0': 'goldenrod', 'precio_3.0': 'darkred', 'precio_6.1': 'cyan'}
+    graf_hist = px.scatter(df_hist, x = 'spot', y = series_y, trendline = 'ols',
+        labels = {'value':'Precio medio de indexado en c€/kWh','variable':'Precios según ATR','spot':'Precio medio mercado mayorista en €/MWh'},
+        height = 600,
+        color_discrete_map = colores_precios,
+        title = 'Simulación de los precios medios de indexado',
+        
+    )
+    graf_hist.update_traces(marker=dict(symbol='square'))
+    
+    trend_results = px.get_trendline_results(graf_hist)
+    #print ('trend_results')
+    #print(trend_results)
 
+    #obtención del precio 2.0 simulado a partir del gráfico de tendencia 2.0
+    params_20 = trend_results[trend_results['Precios según ATR'] == 'precio_2.0'].px_fit_results.iloc[0].params
+    intercept_20, slope_20 = params_20[0], params_20[1]
+    simul_20=round(intercept_20+slope_20*omip,1)
+                
+    #obtención del precio 3.0 simulado a partir del gráfico de tendencia 3.0
+    params_30 = trend_results[trend_results['Precios según ATR']=='precio_3.0'].px_fit_results.iloc[0].params
+    intercept_30, slope_30 = params_30[0], params_30[1]
+    simul_30=round(intercept_30+slope_30*omip,1)
+    
+    #obtención del precio 6.1 simulado a partir del gráfico de tendencia 6.1
+    params_61 = trend_results[trend_results['Precios según ATR']=='precio_6.1'].px_fit_results.iloc[0].params
+    intercept_61, slope_61 = params_61[0], params_61[1]
+    simul_61=round(intercept_61+slope_61*omip,1)
+
+    simul_curva = None
+    n_meses = df_hist.shape[0]
+    if n_meses > 10:
+        if 'precio_curva' in df_hist.columns:
+            params_curve = trend_results[trend_results['Precios según ATR'] == 'precio_curva'].px_fit_results.iloc[0].params
+            intercept_curve, slope_curve = params_curve[0], params_curve[1]
+            simul_curva = round(intercept_curve + slope_curve * omip, 1)
+        
+        if simul_curva is not None:
+            graf_hist.add_scatter(
+                x=[omip], y=[simul_curva], mode='markers',
+                marker=dict(
+                    color='rgba(255,255,255,0)',
+                    size=20,
+                    line=dict(width=5, color=colores_precios['precio_curva'])
+                ),
+                name='Simul Curva',
+                text='Simul Curva'
+            )
+
+            graf_hist.add_shape(
+                type='line',
+                x0=omip,
+                y0=0,
+                x1=omip,
+                y1=simul_curva,
+                line=dict(color=colores_precios['precio_curva'], width=1, dash='dash')
+            )
+
+    graf_hist.add_scatter(x=[omip],y=[simul_20], mode='markers', 
+        marker=dict(color='rgba(255, 255, 255, 0)',size=20, line=dict(width=5, color=colores_precios['precio_2.0'])),
+        name='Simul 2.0',
+        text='Simul 2.0'
+    )
+    graf_hist.add_scatter(x=[omip],y=[simul_30], mode='markers', 
+        marker=dict(color='rgba(255, 255, 255, 0)',size=20, line=dict(width=5, color=colores_precios['precio_3.0'])),
+        name='Simul 3.0',
+        text='Simul 3.0'
+    )
+    graf_hist.add_scatter(x=[omip],y=[simul_61], mode='markers', 
+        marker=dict(color='rgba(255, 255, 255, 0)',size=20, line=dict(width=5, color=colores_precios['precio_6.1'])),
+        name='Simul 6.1',
+        text='Simul 6.1'
+    )
+    graf_hist.add_shape(
+        type='line',
+        x0=omip,
+        y0=0,
+        x1=omip,
+        y1=simul_20,
+        line=dict(color='grey', width=1,dash='dash'),
+    )
+    graf_hist.update_layout(
+            title={'x':0.5,'xanchor':'center'},
+    )
+    return graf_hist, simul_20, simul_30, simul_61, simul_curva
 
 # DF CON LOS VALORES MEDIOS MENSUALES DEL SPOT DE TODO EL HISTÓRICO
 # SE USAN PARA VISUALIZARLOS CON LINEAS HORIZONTALES FRENTE A LA EVOLUCIÓN DE OMIP
@@ -453,96 +592,7 @@ def obtener_grafico_omip_omie(df_omip_producto, df_spot_mensual, producto):
 
 
 
-# GRÁFICO PRINCIPAL DE PRECIOS DE INDEXADO A PARTIR DE OMIE++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-def obtener_graf_hist(df_hist, omip, colores_precios):
-    series_y = ['precio_2.0','precio_3.0','precio_6.1']
-    if 'precio_curva' in df_hist.columns:
-        series_y.append('precio_curva')
-    #colores_precios = {'precio_2.0': 'goldenrod', 'precio_3.0': 'darkred', 'precio_6.1': 'cyan'}
-    graf_hist = px.scatter(df_hist, x = 'spot', y = series_y, trendline = 'ols',
-        labels = {'value':'Precio medio de indexado en c€/kWh','variable':'Precios según ATR','spot':'Precio medio mercado mayorista en €/MWh'},
-        height = 600,
-        color_discrete_map = colores_precios,
-        title = 'Simulación de los precios medios de indexado',
-        
-    )
-    graf_hist.update_traces(marker=dict(symbol='square'))
-    
-    trend_results = px.get_trendline_results(graf_hist)
-    #print ('trend_results')
-    #print(trend_results)
 
-    #obtención del precio 2.0 simulado a partir del gráfico de tendencia 2.0
-    params_20 = trend_results[trend_results['Precios según ATR'] == 'precio_2.0'].px_fit_results.iloc[0].params
-    intercept_20, slope_20 = params_20[0], params_20[1]
-    simul_20=round(intercept_20+slope_20*omip,1)
-                
-    #obtención del precio 3.0 simulado a partir del gráfico de tendencia 3.0
-    params_30 = trend_results[trend_results['Precios según ATR']=='precio_3.0'].px_fit_results.iloc[0].params
-    intercept_30, slope_30 = params_30[0], params_30[1]
-    simul_30=round(intercept_30+slope_30*omip,1)
-    
-    #obtención del precio 6.1 simulado a partir del gráfico de tendencia 6.1
-    params_61 = trend_results[trend_results['Precios según ATR']=='precio_6.1'].px_fit_results.iloc[0].params
-    intercept_61, slope_61 = params_61[0], params_61[1]
-    simul_61=round(intercept_61+slope_61*omip,1)
-
-    simul_curva = None
-    n_meses = df_hist.shape[0]
-    if n_meses > 10:
-        if 'precio_curva' in df_hist.columns:
-            params_curve = trend_results[trend_results['Precios según ATR'] == 'precio_curva'].px_fit_results.iloc[0].params
-            intercept_curve, slope_curve = params_curve[0], params_curve[1]
-            simul_curva = round(intercept_curve + slope_curve * omip, 1)
-        
-        if simul_curva is not None:
-            graf_hist.add_scatter(
-                x=[omip], y=[simul_curva], mode='markers',
-                marker=dict(
-                    color='rgba(255,255,255,0)',
-                    size=20,
-                    line=dict(width=5, color=colores_precios['precio_curva'])
-                ),
-                name='Simul Curva',
-                text='Simul Curva'
-            )
-
-            graf_hist.add_shape(
-                type='line',
-                x0=omip,
-                y0=0,
-                x1=omip,
-                y1=simul_curva,
-                line=dict(color=colores_precios['precio_curva'], width=1, dash='dash')
-            )
-
-    graf_hist.add_scatter(x=[omip],y=[simul_20], mode='markers', 
-        marker=dict(color='rgba(255, 255, 255, 0)',size=20, line=dict(width=5, color=colores_precios['precio_2.0'])),
-        name='Simul 2.0',
-        text='Simul 2.0'
-    )
-    graf_hist.add_scatter(x=[omip],y=[simul_30], mode='markers', 
-        marker=dict(color='rgba(255, 255, 255, 0)',size=20, line=dict(width=5, color=colores_precios['precio_3.0'])),
-        name='Simul 3.0',
-        text='Simul 3.0'
-    )
-    graf_hist.add_scatter(x=[omip],y=[simul_61], mode='markers', 
-        marker=dict(color='rgba(255, 255, 255, 0)',size=20, line=dict(width=5, color=colores_precios['precio_6.1'])),
-        name='Simul 6.1',
-        text='Simul 6.1'
-    )
-    graf_hist.add_shape(
-        type='line',
-        x0=omip,
-        y0=0,
-        x1=omip,
-        y1=simul_20,
-        line=dict(color='grey', width=1,dash='dash'),
-    )
-    graf_hist.update_layout(
-            title={'x':0.5,'xanchor':'center'},
-    )
-    return graf_hist, simul_20, simul_30, simul_61, simul_curva
 
 
 def obtener_trimestres_futuros(df_FTB_trimestral):
@@ -596,102 +646,6 @@ def obtener_trimestres_futuros(df_FTB_trimestral):
     return lista, trimestre_siguiente
 
 
-
-
-#NO USADO!!!!!===========================================
-def resumen_periodos_simulado(df_curva, simul_curva):
-    """
-    Devuelve:
-    - df_interno: tabla completa con todos los datos (no visible)
-    - df_salida: tabla invertida SOLO con:
-        consumo_kWh, precio_sim_c€/kWh, coste_sim_€
-        como filas
-        P1..P6 + total como columnas
-    """
-
-    # Creamos una serie con el consumo por periodos y añadimos el total (kWh)
-    consumo = df_curva.groupby('periodo')['consumo_neto_kWh'].sum()
-    consumo['total'] = consumo.sum()
-
-    print('consumo')
-    print(consumo)
-    
-    # Creamos una serie con con el coste del indexado base y le añadimos margen si procede
-    coste_base = df_curva.groupby('periodo')['coste_total'].sum() #€ sin margen
-    coste_base['total'] = coste_base.sum()
-    coste_margen = consumo * st.session_state.margen_simulindex / 1000 # € margen
-    coste_real = coste_base + coste_margen
-
-    # Creamos una serie con los precios medios reales (€/kWh)
-    precio_real = coste_real / consumo  
-    
-    # Calculamos los ratios precio periodo / precio medio total
-    precio_medio_real = precio_real['total']
-    ratios = precio_real / precio_medio_real
-
-    # Calculamos los precios simulados por periodos a partir de la media 'simul_curva' previamente calculado. Se añade margen si hay
-    precio_sim_total_eurkWh = (simul_curva / 100) + st.session_state.margen_simulindex / 1000
-    precio_sim = ratios * precio_sim_total_eurkWh
-    precio_sim['total'] = precio_sim_total_eurkWh
-
-    # Calculamos los costes simulados
-    coste_sim = consumo * precio_sim
-
-    # ============================================
-    #      TABLA INTERMEDIA COMPLETA (interno)
-    # ============================================
-    df_interno = pd.DataFrame({
-        'Consumo (kWh)': consumo,
-        'Coste real (€)': coste_real,
-        'Precio medio real (c€/kWh)': (precio_real * 100).round(3),
-        'Ratio': ratios.round(6),
-        'Precio medio simulado (c€/kWh)': (precio_sim * 100).round(3),
-        'coste_sim_€': coste_sim.round(2)
-    })
-
-    print('df_interno')
-    print(df_interno)
-    # ============================================
-    #      TABLA FINAL INVERTIDA (la que quieres)
-    # ============================================
-
-    df_salida = pd.DataFrame({
-        'Consumo (kWh)': consumo,
-        'Precios medios (c€/kWh)': (precio_sim * 100).round(2),
-        'Coste simulado (€)': coste_sim.round(2)
-    })
-
-    # invertimos filas ↔ columnas
-    df_salida = df_salida.T   # filas → columnas
-    df_salida.columns = df_salida.columns.astype(str)
-
-    return df_interno, df_salida 
-
-def estilo_resumen(df):
-
-    styler = df.style
-
-    # Fila consumo (entero con punto)
-    styler = styler.format_index(lambda x: x, axis=0)  # no tocar índice
-
-    styler = styler.format(
-        subset=pd.IndexSlice['Consumo (kWh)', :],
-        formatter=lambda x: f"{x:,.0f}".replace(",", ".") if pd.notnull(x) else ""
-    )
-
-    # Fila precio (coma decimal, 2 decimales)
-    styler = styler.format(
-        subset=pd.IndexSlice['Precios medios (c€/kWh)', :],
-        formatter=lambda x: f"{x:,.2f}".replace(".", ",") if pd.notnull(x) else ""
-    )
-
-    # Fila coste (entero con punto)
-    styler = styler.format(
-        subset=pd.IndexSlice['Coste simulado (€)', :],
-        formatter=lambda x: f"{x:,.0f} €".replace(",", ".") if pd.notnull(x) else ""
-    )
-
-    return styler 
 
 
 def construir_escenarios(df_uso, lista_simul, margen, df_hist, colores_precios):
