@@ -1,7 +1,9 @@
 import streamlit as st
 import datetime
+import pandas as pd
 from backend_comun import autenticar_google_sheets, carga_total_sheets
 from backend_escalacv import leer_json
+
 
 def generar_menu():
     with st.sidebar:
@@ -46,6 +48,7 @@ def init_app_index():
         #sheet_id = st.secrets['SHEET_INDEX_ID']
         #carga_rapida_sheets()
         carga_total_sheets()
+        st.session_state.df_sheets['fecha'] = pd.to_datetime(st.session_state.df_sheets['fecha']).dt.date
 
     if 'dias_seleccionados' not in st.session_state:
         #st.session_state.dia_seleccionado = st.session_state.ultima_fecha_sheets

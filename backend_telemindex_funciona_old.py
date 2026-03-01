@@ -1,7 +1,7 @@
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-
+from backend_comun import colores_precios
 
 
 
@@ -20,8 +20,8 @@ def filtrar_datos():
         print('Filtrado por mes')
     else:
         #forzamos de nuevo la columna fecha a date para evitar error en el filtrado, ya que dia seleccionado debe ser un date
-        #st.session_state.df_sheets['fecha'] = pd.to_datetime(st.session_state.df_sheets['fecha']).dt.date
-        
+        st.session_state.df_sheets['fecha'] = pd.to_datetime(st.session_state.df_sheets['fecha']).dt.date
+        #df_filtrado = st.session_state.df_sheets[(st.session_state.df_sheets['fecha'] == st.session_state.dia_seleccionado)]
         inicio, fin = st.session_state.dias_seleccionados
         df_filtrado = st.session_state.df_sheets[
             (st.session_state.df_sheets['fecha'] >= inicio) &

@@ -58,6 +58,19 @@ datos_total = st.session_state.datos_total_escalacv
 fecha_ini = st.session_state.fecha_ini_escalacv
 fecha_fin = st.session_state.fecha_fin_escalacv
 
+# 1️⃣ Conteo total por mes
+control_mes = (
+    datos_total
+    .groupby(['año','mes'])
+    .agg(
+        horas=('value','count'),
+        media=('value','mean')
+    )
+    .reset_index()
+)
+
+st.dataframe(control_mes)
+
 ultimo_registro = datos_total['fecha'].max()
 valor_minimo_horario_total = datos_total['value'].min()
 valor_maximo_horario_total = datos_total['value'].max()
@@ -268,40 +281,6 @@ with st.container():
             color="orange"
         )
         
-        #sim = construir_simulacion_inversa(p_real, 45, 75, n=300, c=43)
-        
-
-
-        
-        
-        
-
-        #graf_scatter_combo, ssaa_simulada, modelo_quad = graficar_simulacion_cuadratica(graf_scatter_combo,st.session_state.df_scatter_mensual, puntos_anuales, st.session_state.omie_input)
-
-        #graf_scatter_combo, ssaa_A, _ = graficar_simulacion_cuadratica(
-        #    graf_scatter_combo,
-        #    st.session_state.df_scatter_mensual,
-        #    {
-        #        2025: p_real[2025],
-        #        2026: {"omie": 54, "ssaa": 23},
-        #    },
-        #    st.session_state.omie_input,
-        #    nombre="Escenario A (54 → 23)",
-        #    color="#2CA02C"
-        #)
-        
-
-        #graf_scatter_combo, ssaa_B, _ = graficar_simulacion_cuadratica(
-        #    graf_scatter_combo,
-        #    st.session_state.df_scatter_mensual,
-        #    {
-        #        2025: p_real[2025],
-        #        2026: {"omie": 58, "ssaa": 19},
-        #    },
-        #    st.session_state.omie_input,
-        #    nombre="Escenario B (58 → 19)",
-        #    color="#D62728"
-        #)
         
         with col5:
             st.subheader('Micropower 2026 combo SPOT+SSAA', divider='rainbow')
