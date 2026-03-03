@@ -68,8 +68,8 @@ def init_app_index():
 
     
 
-    if 'margen' not in st.session_state: 
-        st.session_state.margen = 0
+    #if 'margen_telemindex' not in st.session_state: 
+    #    st.session_state.margen_telemindex = 0
     if 'texto_precios' not in st.session_state:
         if 'ultima_fecha_sheets' not in st.session_state:
             ultima_fecha = datetime.date(2026,1,1)
@@ -134,6 +134,80 @@ def init_app_json_escalacv():
 
  
 
-    
+def persist_widget_old(widget_func, label, key, default=None, **kwargs):
+    """
+    Hace persistente un widget entre páginas usando:
+    - key permanente: key
+    - key temporal de widget: _key
+    """
+
+    temp_key = f"_{key}"
+
+    # 1️⃣ Inicializar valor permanente solo la primera vez
+    if key not in st.session_state:
+        st.session_state[key] = default
+
+    # 2️⃣ Sincronizar widget con valor permanente
+    st.session_state[temp_key] = st.session_state[key]
+
+    # 3️⃣ Crear widget con key temporal
+    widget_func(
+        label,
+        key=temp_key,
+        on_change=lambda: st.session_state.update(
+            {key: st.session_state[temp_key]}
+        ),
+        **kwargs
+    )
+
+def persist_widget(widget_func, label, *args, key=None, default=None, **kwargs):
+    """
+    Hace persistente un widget entre páginas usando:
+    - key permanente: key
+    - key temporal de widget: _key
+    """
+
+    if key is None:
+        raise ValueError("persist_widget requiere argumento 'key'")
+
+    temp_key = f"_{key}"
+
+    # 1️⃣ Inicializar valor permanente solo la primera vez
+    if key not in st.session_state:
+        st.session_state[key] = default
+
+    # 2️⃣ Sincronizar widget con valor permanente
+    st.session_state[temp_key] = st.session_state[key]
+
+    # 3️⃣ Crear widget con key temporal
+    widget_func(
+        label,
+        *args,
+        key=temp_key,
+        on_change=lambda: st.session_state.update(
+            {key: st.session_state[temp_key]}
+        ),
+        **kwargs
+    )
+
+# NO USADO
+def persist_widget_form_init(key, default=None):
+    """
+    Inicializa valor permanente y sincroniza key temporal antes del form.
+    """
+    temp_key = f"_{key}"
+
+    if key not in st.session_state:
+        st.session_state[key] = default
+
+    st.session_state[temp_key] = st.session_state[key]
+
+#NO USADO
+def persist_widget_form_commit(key):
+    """
+    Copia valor temporal a permanente tras submit.
+    """
+    temp_key = f"_{key}"
+    st.session_state[key] = st.session_state[temp_key]
     
     

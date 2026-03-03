@@ -1,12 +1,18 @@
 import streamlit as st
-from backend_telemindex import filtrar_datos, aplicar_margen, graf_principal, pt5_trans, pt1, pt7_trans, costes_indexado, evol_mensual, construir_df_curva_sheets, añadir_costes_curva 
-from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen
-from backend_curvadecarga import graficar_media_horaria, graficar_queso_periodos
 import plotly.graph_objects as go
+import plotly.express as px
 import pandas as pd
 import datetime
 
-from utilidades import generar_menu, init_app, init_app_index
+from backend_telemindex import (filtrar_datos, añadir_srad, añadir_fnee, calcular_precios_atr,
+                                graficar_precios_medios_horarios, graficar_queso_componentes,
+                                tabla_precios, tabla_costes, tabla_pyc,
+                                evol_mensual, 
+                                construir_df_curva_sheets, añadir_costes_curva) 
+from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen
+from backend_curvadecarga import graficar_media_horaria, graficar_queso_periodos
+
+from utilidades import generar_menu, init_app, init_app_index, persist_widget, persist_widget_form_commit, persist_widget_form_init
 
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
@@ -27,13 +33,50 @@ if 'df_sheets' not in st.session_state:
 
 init_app_index()
 
+# Antes del form
+for key, default in {
+    "desvios_apant": 1.0,
+    "cfg_srad": True,
+    "margen_telemindex": 5.0,
+    "cfg_margen_pos": "tm",
+    "cfg_fnee": True,
+    "cfg_fnee_pos": "perdidas",
+    "cf_pct": 0.0
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
+
+
+
+
+
+
+
 if "rango_curvadecarga" in st.session_state:
     if st.session_state.rango_temporal == "Selecciona un rango de fechas":
         st.session_state.dias_seleccionados = st.session_state.rango_curvadecarga
 
-#zona_mensajes = st.sidebar.empty() 
 
-df_filtrado, lista_meses = filtrar_datos()
+df_filtrado_sheets, lista_meses = filtrar_datos()
+
+#SRAD AÑADIDO AL DF
+if st.session_state.get("cfg_srad", False):
+    df_filtrado_sheets = añadir_srad(df_filtrado_sheets)
+else:
+    df_filtrado_sheets["srad"] = 0.0
+
+# FNEE AÑADIDO AL DF
+if st.session_state.get("cfg_fnee", False):
+    df_filtrado_sheets = añadir_fnee(df_filtrado_sheets)
+else:
+    df_filtrado_sheets["fnee"] = 0.0
+
+# FNEE
+#if "fnee" not in df_filtrado_sheets.columns:
+#    df_filtrado_sheets["fnee"] = 0.0
+
+df_filtrado = calcular_precios_atr(df_filtrado_sheets)
+
 try:
     fecha_ultima_filtrado = df_filtrado['fecha'].iloc[-1]
 except:
@@ -57,12 +100,10 @@ if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None an
     #calculamos el coste spot ponderado en €/MWh
     media_spot_curva = round(df_uso['coste_spot'].sum()/(consumo_total_curva/1000),2)
     media_ssaa_curva = round(df_uso['coste_ssaa'].sum()/(consumo_total_curva/1000),2)
-    coste_curva_sin_margen = round(df_uso['coste_total'].sum(),2)
+        
+    coste_total_curva = round(df_uso['coste_total'].sum(), 2)
 
-    #coste_total_curva = round(df_uso['coste_total'].sum()+consumo_total_curva*st.session_state.margen/1000,2)
-    coste_total_curva = round(coste_curva_sin_margen+consumo_total_curva*st.session_state.margen/1000,2)
-
-    #df_uso.to_excel("df_uso.xlsx", index=False)
+    
     
 else:
     st.session_state.df_curva_sheets = None
@@ -71,9 +112,18 @@ else:
 
 
 #ejecutamos la función para obtener la tabla resumen y precios medios
-tabla_precios, media_20, media_30, media_61, media_spot, media_ssaa, media_atr_curva = pt5_trans(df_uso)
+#tabla_precios, media_20, media_30, media_61, media_spot, media_ssaa, media_atr_curva = pt5_trans(df_uso)
+media_20 = df_uso["precio_2.0"].mean()
+media_30 = df_uso["precio_3.0"].mean()
+media_61 = df_uso["precio_6.1"].mean()
+media_spot = df_uso["spot"].mean()
+media_ssaa = df_uso["ssaa"].mean()
 
-print(f'Media precio curva en €/MWh: {media_atr_curva}')
+df_tabla_precios, media_curva_precio = tabla_precios(df_uso)
+media_atr_curva = media_curva_precio #por compatibilidad de media_atr_curva
+df_tabla_costes, media_curva_coste = tabla_costes(df_uso)
+df_tabla_pyc, media_curva_pyc = tabla_pyc(df_uso)
+print(f'Media precio curva en €/MWh: {media_curva_precio}')
 print(f'Media precio 3.0 en €/MWh: {media_30}')
 
 #media_20 = round(media_20 / 10, 1)
@@ -92,7 +142,7 @@ sobrecoste_ssaa = ((media_combo / media_spot) - 1) * 100
 
 if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
 
-    media_atr_curva = media_atr_curva / 10
+    media_atr_curva = media_curva_precio / 10
     apuntamiento_spot = round(media_spot_curva/media_spot,3)
     apuntamiento_ssaa = round(media_ssaa_curva/media_ssaa,3)
 
@@ -109,9 +159,7 @@ if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None an
     print(f'Coste sin ponderar: {coste_sin_ponderar}€')
     print(f'Coste ponderado: {coste_total_curva}€')
 
-#tabla resumen de costes ATR
-tabla_atr = pt7_trans(df_uso)
-tabla_costes = costes_indexado(df_uso)
+
 
 df_precios_mensuales, graf_mensual = evol_mensual(st.session_state.df_sheets, colores_precios)
 
@@ -119,7 +167,7 @@ df_precios_mensuales, graf_mensual = evol_mensual(st.session_state.df_sheets, co
 
 #ELEMENTOS DE LA BARRA LATERAL ---------------------------------------------------------------------------------------
 
-#st.sidebar.header('', divider='rainbow')
+
 
 #zona_mensajes.info(f'Última fecha disponible: {st.session_state.ultima_fecha_sheets}')
 zona_mensajes.info(
@@ -151,9 +199,64 @@ with st.sidebar.container(border=True):
             st.session_state.texto_precios = (f"Rango seleccionado: {inicio.strftime('%d/%m/%Y')} → {fin.strftime('%d/%m/%Y')}")
             st.form_submit_button('Actualizar cálculos')
 
-with st.sidebar.container():
-    st.sidebar.slider("Añadir margen al gusto (en €/MWh)", min_value = 0, max_value = 50, key = 'margen', on_change = aplicar_margen, args=(df_uso,))
-    st.caption(f'Se ha añadido {st.session_state.margen} €/MWh')
+#with st.sidebar.container():
+    #st.sidebar.slider("Añadir margen al gusto (en €/MWh)", min_value = 0, max_value = 50, key = 'margen_telemindex', on_change = aplicar_margen, args=(df_uso,))
+    #st.sidebar.slider("Añadir margen al gusto (en €/MWh)", min_value = 0, max_value = 50, key = 'margen_telemindex')
+    
+
+
+
+
+persist_widget(st.sidebar.toggle,"Activar fórmula personalizada", key="modo_formula_custom", default=True)
+
+
+
+# --- MODO GENÉRICO ---
+if not st.session_state.modo_formula_custom:
+
+    persist_widget(st.sidebar.slider, "Margen (€/MWh)", min_value=0, max_value=50, step=1, key="margen_telemindex", default=5)
+    st.sidebar.caption(f'Se ha añadido {st.session_state.margen_telemindex} €/MWh')
+
+# --- MODO PERSONALIZADO ---
+else:
+   
+    
+
+    #with st.sidebar.form("form_formula_custom"):
+    with st.sidebar.container(border=True):
+        
+        #st.number_input("Desvíos apantallados (€/MWh)", min_value=0.0, max_value=20.0, step=0.1, key="desvios_apant")
+        persist_widget(st.number_input, "Desvíos apantallados (€/MWh)", min_value=0.0, max_value=20.0, step=0.1, key="desvios_apant", default=1)
+
+        persist_widget(st.checkbox, "Incluye SRAD", key="cfg_srad", default=True)
+        #st.checkbox("Añadir SRAD", key="cfg_srad")
+
+        persist_widget(st.number_input, "Margen (€/MWh)", min_value=0.0, max_value=50.0, step=0.1, key="margen_telemindex", default=5)
+        #st.number_input("Margen (€/MWh)", min_value=0.0, max_value=50.0, step=0.1, key="margen_telemindex")
+        
+
+        persist_widget(st.selectbox, "Ubicación margen", ["perdidas", "tm", "neto"], key="cfg_margen_pos", default="tm")
+        #st.selectbox("Ubicación margen", ["perdidas", "tm", "neto"], key="cfg_margen_pos")
+
+        persist_widget(st.checkbox, "Incluye FNEE", key="cfg_fnee", default=True)
+        if st.session_state.get("cfg_fnee", False):
+            persist_widget(st.selectbox, "Ubicación FNEE", ["perdidas", "tm", "neto"], key="cfg_fnee_pos", default= "perdidas")
+        #st.selectbox("Ubicación FNEE", ["perdidas", "tm", "neto"], key="cfg_fnee_pos")
+
+        #st.number_input("Coste financiero (%)", min_value=0.0, max_value=10.0, step=0.01, key="cf_pct")
+        persist_widget(st.number_input,"Coste financiero (%)", min_value=0.0, max_value=10.0, step=0.01, key="cf_pct", default=0.0)
+
+        
+
+        #submitted = st.form_submit_button("Aplicar")
+
+        #if submitted:
+        #    persist_widget_form_commit("desvios_apant")
+        #    persist_widget_form_commit("cfg_srad")
+        #    persist_widget_form_commit("margen_telemindex")
+        #    persist_widget_form_commit("cfg_margen_pos")
+        #    persist_widget_form_commit("cfg_fnee_pos")
+        #    persist_widget_form_commit("cf_pct")
 
 
 
@@ -203,10 +306,11 @@ with tab1:
             st.empty()
             # gráfico principal de barras y lineas precios medios y omie+ssaa
             #st.plotly_chart(graf_principal(df_filtrado, colores_precios))
-            st.plotly_chart(graf_principal(df_uso, colores_precios))
+            st.plotly_chart(graficar_precios_medios_horarios(df_uso, colores_precios))
             st.empty()
             st.subheader("Peso de los componentes por peaje de acceso", divider='rainbow')
-            _, graf20, graf30, graf61 = pt1(df_filtrado)
+            #_, graf20, graf30, graf61 = pt1(df_filtrado)
+            graf20, graf30, graf61 = graficar_queso_componentes(df_filtrado)
             col10,col11,col12=st.columns(3)
             with col10:
                 st.write(graf20)    
@@ -268,22 +372,22 @@ with tab1:
                 
             with st.container():
 
-                tabla_margen = pd.DataFrame(columns = tabla_precios.columns, index = ['margen_2.0', 'margen_3.0', 'margen_6.1'])
-                tabla_margen = tabla_margen.fillna(st.session_state.margen / 10)
+                tabla_margen = pd.DataFrame(columns = df_tabla_precios.columns, index = ['margen_2.0', 'margen_3.0', 'margen_6.1'])
+                tabla_margen = tabla_margen.fillna(st.session_state.margen_telemindex / 10)
                     
                 texto_precios=f'{st.session_state.texto_precios}. Precios en c€/kWh'
                 st.caption(st.session_state.texto_precios)
 
                 st.text ('Precios medios de indexado', help='PRECIO MEDIO (FINAL) DE LA ENERGÍA.Suma de costes (energía y ATR)')
                 #st.dataframe(tabla_precios, use_container_width=True)
-                st.dataframe(tabla_precios, use_container_width=True)
+                st.dataframe(df_tabla_precios, use_container_width=True)
                 
                 st.text ('Costes medios de indexado', help = 'COSTE MEDIO DE LA ENERGÍA, sin incluir ATR.')
-                st.dataframe(tabla_costes, use_container_width=True)
+                st.dataframe(df_tabla_costes, use_container_width=True)
                 
                 st.text ('Costes de ATR')
                 #tabla_atr['Media'] = (tabla_precios['Media'] - tabla_costes['Media']).fillna(0)
-                st.dataframe(tabla_atr, use_container_width=True )
+                st.dataframe(df_tabla_pyc, use_container_width=True )
                 
                 st.text ('Margen')
                 st.dataframe(tabla_margen, use_container_width=True )

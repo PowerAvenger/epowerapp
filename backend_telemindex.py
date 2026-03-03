@@ -3,7 +3,61 @@ import plotly.express as px
 import streamlit as st
 
 
+SRAD = {
+    2022: {
+        1: 0.000, 2: 0.000, 3: 0.000, 4: 0.000,
+        5: 0.000, 6: 0.000, 7: 0.000, 8: 0.000,
+        9: 0.110, 10: 0.110, 11: 0.110, 12: 0.110,
+        13: 0.110, 14: 0.110, 15: 0.110, 16: 0.110,
+        17: 0.110, 18: 0.110, 19: 0.110, 20: 0.110,
+        21: 0.110, 22: 0.110, 23: 0.110, 24: 0.110,
+    },
 
+    2023: {
+        1: 0.000, 2: 0.000, 3: 0.000, 4: 0.000,
+        5: 0.000, 6: 0.000, 7: 0.000, 8: 0.000,
+        9: 0.225, 10: 0.225, 11: 0.225, 12: 0.225,
+        13: 0.225, 14: 0.225, 15: 0.225, 16: 0.225,
+        17: 0.225, 18: 0.225,
+        19: 0.573, 20: 0.573, 21: 0.573, 22: 0.573,
+        23: 0.573, 24: 0.573,
+    },
+
+    2024: {
+        1: 0.968, 2: 0.688, 3: 0.720, 4: 0.000,
+        5: 0.000, 6: 0.000, 7: 0.657, 8: 0.583,
+        9: 0.549, 10: 0.536, 11: 0.537, 12: 0.541,
+        13: 0.542, 14: 0.540, 15: 0.544, 16: 0.553,
+        17: 0.554, 18: 0.547, 19: 0.535, 20: 0.517,
+        21: 0.503, 22: 0.770, 23: 0.829, 24: 0.906,
+    },
+
+    2025: {
+        1: 1.598, 2: 1.698, 3: 1.777, 4: 0.000,
+        5: 0.000, 6: 0.000, 7: 1.599, 8: 1.418,
+        9: 1.330, 10: 1.299, 11: 1.294, 12: 1.299,
+        13: 1.305, 14: 0.000, 15: 0.000, 16: 0.000,
+        17: 0.000, 18: 0.000, 19: 1.284, 20: 1.249,
+        21: 1.227, 22: 1.858, 23: 2.003, 24: 2.181,
+    },
+
+    2026: {
+        1: 0.000, 2: 0.000, 3: 0.000, 4: 0.000,
+        5: 0.000, 6: 0.000, 7: 0.000, 8: 1.984,
+        9: 1.831, 10: 1.786, 11: 1.775, 12: 1.796,
+        13: 1.819, 14: 1.815, 15: 1.819, 16: 1.844,
+        17: 1.860, 18: 1.853, 19: 1.785, 20: 1.732,
+        21: 1.711, 22: 2.689, 23: 2.922, 24: 3.244,
+    }
+}
+
+FNEE_TRAMOS = [
+    ("2023-01-01", 0.264),
+    ("2023-03-31", 0.498),
+    ("2024-03-24", 0.975),
+    ("2025-03-05", 1.429),
+    ("2026-03-01", 2.658),
+]
 
 def filtrar_datos():
    
@@ -42,105 +96,151 @@ def filtrar_datos():
     return df_filtrado, lista_meses
         
 
+def construir_df_srad():
 
-def aplicar_margen(df_filtrado):
-    df_mod = df_filtrado.copy()
-    for col in ['precio_2.0','precio_3.0', 'precio_6.1']:
-        df_mod[col] += st.session_state.margen
+    filas = []
+
+    for year, horas in SRAD.items():
+        for hora, valor in horas.items():
+            filas.append({"año": year, "hora": hora, "srad": valor})
+
+    return pd.DataFrame(filas)
+
+
+def añadir_srad(df):
+
+    df_srad = construir_df_srad()
+
+    return df.merge(df_srad, on=["año", "hora"], how="left").fillna({"srad": 0.0})
+
+
+def añadir_fnee(df):
+
+    df = df.copy()
+    df["fecha"] = pd.to_datetime(df["fecha"])
+
+    # convertir tramos a datetime
+    tramos = [(pd.to_datetime(f), v) for f, v in FNEE_TRAMOS]
+
+    df["fnee"] = 0.0
+
+    for i, (fecha_inicio, valor) in enumerate(tramos):
+
+        if i < len(tramos) - 1:
+            fecha_fin = tramos[i + 1][0]
+            mask = (df["fecha"] >= fecha_inicio) & (df["fecha"] < fecha_fin)
+        else:
+            mask = df["fecha"] >= fecha_inicio
+
+        df.loc[mask, "fnee"] = valor
+
+    return df
+
+
+def calcular_precios_atr(df):
     
-    return df_mod
+  
+    tm_rate = 0.015
+    df = df.copy()
+
+    cols_drop = [c for c in df.columns if c.startswith("coste_") or c.startswith("precio_")]
+    df = df.drop(columns=cols_drop, errors="ignore")
+
+    for atr in ["2.0", "3.0", "6.1"]:
+
+        if not st.session_state.get("modo_formula_custom", False):
+
+            base = (
+                df["spot"]
+                + df["ssaa"]
+                + df[f"ppcc_{atr}"]
+                + df["osom"]
+                + df["otros"]
+            )
+
+        else:
+
+            base = (
+                df["spot"]
+                + df["ssaa"]
+                + df[f"ppcc_{atr}"]
+                + df["osom"]
+            )
+
+            #ajuste manual por diferencia de los SSAA id esios con los C2
+            base += 0.7
+
+            # componentes opcionales a pérdidas
+            base += st.session_state.get("desvios_apant", 0.0)
+            base += df["srad"]
+            
+            if st.session_state.get("cfg_fnee_pos") == "perdidas":
+                base += df["fnee"]
+
+            if st.session_state.get("cfg_margen_pos") == "perdidas":
+                base += st.session_state.get("margen_telemindex", 0.0)
+
+        # base pérdidas
+        base *= (1 + df[f"perd_{atr}"])
+
+        # componentes opcionales a tm
+        if st.session_state.get("cfg_margen_pos") == "tm":
+            base += st.session_state.get("margen_telemindex", 0.0)
+        
+        if st.session_state.get("cfg_fnee_pos") == "tm":
+            base += df["fnee"]
+
+        # base tm
+        base *= (1 + tm_rate)
+
+        # CF
+        if st.session_state.get("modo_formula_custom", False):
+            cf = st.session_state.get("cf_pct", 0.0) / 100
+            base *= (1 + cf)
+
+        # coste de la energía según atr
+        df[f"coste_{atr}"] = base
 
 
-def pt1(df_filtrado):
-    dffm = aplicar_margen(df_filtrado)
-    
-    pt1 = dffm.pivot_table(
-        values = ['spot', 'ssaa', 'precio_2.0', 'precio_3.0', 'precio_6.1'],
-        index = 'hora',
-        aggfunc = 'mean'
+        # componentes opcionales en neto
+
+        if st.session_state.get("cfg_fnee_pos") == "neto":
+            base += df["fnee"]
+        
+        if st.session_state.get("cfg_margen_pos") == "neto":
+            base += st.session_state.get("margen_telemindex", 0.0)
+
+        # precio final con pycs según atr
+        df[f"precio_{atr}"] = base + df[f"pyc_{atr}"]
+        
+        #precio = base + df[f"pyc_{atr}"]
+
+        #if (not st.session_state.get("modo_formula_custom", False) or st.session_state.get("cfg_margen_pos") == "neto"):
+        #    precio += st.session_state.get("margen_telemindex", 0.0)
+
+        # precio final según atr
+        #df[f"precio_{atr}"] = precio
+
+    return df
+
+
+
+
+
+
+# CREAMOS TABLA CON PRECIOS MEDIOS HORARIOS
+def tabla_precios_medios_horarios(df):
+    return df.pivot_table(
+        values=['spot', 'ssaa', 'precio_2.0', 'precio_3.0', 'precio_6.1'],
+        index='hora',
+        aggfunc='mean'
     ).reset_index()
-    #print(pt1)
-    pt20 = dffm.pivot_table(
-        values=['spot', 'ssaa', 'osom', 'otros', 'ppcc_2.0', 'perd_2.0', 'pyc_2.0'],
-        index='año',
-        aggfunc='mean'
-    )
-    pt20['comp_perd'] = pt20['spot'] + pt20['ssaa'] + pt20['osom'] + pt20['otros'] + pt20['ppcc_2.0']
-    pt20['perdidas_2.0'] = pt20['comp_perd'] * (pt20['perd_2.0'])
-    pt20 = pt20.drop(columns = ['perd_2.0','comp_perd'])
-    #print('pt20')
-    #print(pt20)
-    pt20_trans = pt20.transpose().reset_index()
-    pt20_trans = pt20_trans.rename(columns  ={'index':'componente', pt20_trans.columns[1] :'valor'})
-    pt20_trans['componente'] = pt20_trans['componente'].replace({'otros': 'otros'})
-    #print('pt20_trans')
-    #print(pt20_trans)
-    pt20_trans = pt20_trans.sort_values(by='valor', ascending=False)
-    #print('pt20_trans')
-    #print(pt20_trans)
-    #pt20_trans['valor'] = round(pt20_trans['valor'],2)
-    #pt20_trans['valor'] = pt20_trans['valor'].round(2)
-    #print('pt20_trans')
-    #print(pt20_trans)
 
-    graf20 = px.pie(pt20_trans,names='componente',values='valor', hole=.3, color_discrete_sequence=px.colors.sequential.Oranges_r)
-    graf20.update_layout(
-          title={'text':'Peaje de acceso 2.0','x':.5,'xanchor':'center'}
-    )
-
-    pt30=dffm.pivot_table(
-        values=['spot', 'ssaa', 'osom', 'otros', 'ppcc_3.0', 'perd_3.0', 'pyc_3.0'],
-        index='año',
-        aggfunc='mean'
-    )
-    pt30['comp_perd']=pt30['spot']+pt30['ssaa']+pt30['osom']+pt30['otros']+pt30['ppcc_3.0']
-    pt30['perdidas_3.0']=pt30['comp_perd']*(pt30['perd_3.0'])
-    pt30=pt30.drop(columns=['perd_3.0','comp_perd'])
-    pt30_trans=pt30.transpose().reset_index()
-    pt30_trans=pt30_trans.rename(columns={'index':'componente', pt30_trans.columns[1]:'valor'})
-    pt30_trans['componente'] = pt30_trans['componente'].replace({'otros': 'otros'})
-    pt30_trans=pt30_trans.sort_values(by='valor',ascending=False)
-    #pt30_trans['valor']=round(pt30_trans['valor'],2)
-
-    graf30=px.pie(pt30_trans,names='componente',values='valor', hole=.3, color_discrete_sequence=px.colors.sequential.Reds_r)
-    graf30.update_layout(
-          title={'text':'Peaje de acceso 3.0','x':.5,'xanchor':'center'}
-    )
-
-    pt61=dffm.pivot_table(
-        values=['spot', 'ssaa', 'osom', 'otros', 'ppcc_6.1', 'perd_6.1', 'pyc_6.1'],
-        index='año',
-        aggfunc='mean'
-    )
-    pt61['comp_perd']=pt61['spot']+pt61['ssaa']+pt61['osom']+pt61['otros']+pt61['ppcc_6.1']
-    pt61['perdidas_6.1']=pt61['comp_perd']*(pt61['perd_6.1'])
-    pt61=pt61.drop(columns=['perd_6.1','comp_perd'])
-    pt61_trans=pt61.transpose().reset_index()
-    pt61_trans=pt61_trans.rename(columns={'index':'componente', pt61_trans.columns[1]:'valor'})
-    pt61_trans['componente'] = pt61_trans['componente'].replace({'otros': 'otros'})
-    pt61_trans=pt61_trans.sort_values(by='valor',ascending=False)
-    #pt61_trans['valor']=round(pt61_trans['valor'],2)
-
-    graf61=px.pie(pt61_trans,names='componente',values='valor', hole=.3, color_discrete_sequence=px.colors.sequential.Blues_r)
-    graf61.update_layout(
-          title={'text':'Peaje de acceso 6.1','x':.5,'xanchor':'center'}
-    )
-    
-    return pt1, graf20, graf30, graf61
-
-
-def pt1_trans(df_filtrado):
-    pt2=pt1(df_filtrado)[0]
-    pt1_trans=pt2.transpose()
-    pt1_trans=pt1_trans.drop(['hora'])
-    pt1_trans.columns.name='peajes'
-    pt1_trans=pt1_trans.round(2)
-    
-    return pt1_trans
 
 # GRAFICO PRINCIPAL CON LAS BARRAS DE OMIE Y SSAA Y LAS LINEAS DE PRECIO FINAL. HORARIAS
-def graf_principal(df_filtrado, colores_precios):
-    pt2 = pt1(df_filtrado)[0]
+def graficar_precios_medios_horarios(df_filtrado, colores_precios):
+    #pt2 = pt1(df_filtrado)[0]
+    pt2 = tabla_precios_medios_horarios(df_filtrado)
     #print('pt2')
     #print(pt2)
     
@@ -174,14 +274,14 @@ def graf_principal(df_filtrado, colores_precios):
         dfc["consumo_MWh"] = dfc["consumo_neto_kWh"] / 1000
 
         # precio medio ponderado horario real en €/MWh
-        curva_sin_margen = (
+        curva = (
             dfc.groupby("hora")
             .apply(lambda g: g["coste_total"].sum() / g["consumo_MWh"].sum())
             .reset_index(name="precio_medio_horario")
         )
 
-        curva = curva_sin_margen.copy()
-        curva['precio_medio_horario']+=st.session_state.margen
+        #curva = curva_sin_margen.copy()
+        #curva['precio_medio_horario']+=st.session_state.margen_telemindex
 
         # ---- Color dinámico según ATR seleccionado ----
         atr = st.session_state.atr_dfnorm           # "2.0", "3.0" o "6.1"
@@ -199,9 +299,178 @@ def graf_principal(df_filtrado, colores_precios):
     return graf_pt1
 
 
+def construir_pie_atr_generico(df, atr, color_scale, titulo):
 
+    pt = df.pivot_table(
+        values=['spot', 'ssaa', 'osom', 'otros', f'ppcc_{atr}', f'perd_{atr}', f'pyc_{atr}'],
+        index='año',
+        aggfunc='mean'
+    )
+
+    pt['comp_perd'] = (
+        pt['spot'] + pt['ssaa'] + pt['osom'] +
+        pt['otros'] + pt[f'ppcc_{atr}']
+    )
+
+    pt[f'perdidas_{atr}'] = pt['comp_perd'] * pt[f'perd_{atr}']
+
+    pt = pt.drop(columns=[f'perd_{atr}', 'comp_perd'])
+
+    pt_trans = pt.transpose().reset_index()
+    pt_trans = pt_trans.rename(columns={'index': 'componente', pt_trans.columns[1]: 'valor'})
+
+    pt_trans = pt_trans.sort_values(by='valor', ascending=False)
+
+    graf = px.pie(
+        pt_trans,
+        names='componente',
+        values='valor',
+        hole=.3,
+        color_discrete_sequence=color_scale
+    )
+
+    graf.update_layout(
+        title={'text': titulo, 'x': .5, 'xanchor': 'center'}
+    )
+
+    return graf
+
+
+def graficar_queso_componentes(df_filtrado):
+
+    golden_seq_r = [
+            "#8B6508",
+            "#B8860B",
+            "#DAA520",
+            "#F4C430",
+            "#FFD700",
+            "#FFF4B0"
+        ]
+    
+    graf20 = construir_pie_atr_generico(
+        df_filtrado, "2.0",
+        #px.colors.sequential.Oranges_r,
+        golden_seq_r,
+        "Peaje de acceso 2.0"
+    )
+
+    graf30 = construir_pie_atr_generico(
+        df_filtrado, "3.0",
+        px.colors.sequential.Reds_r,
+        "Peaje de acceso 3.0"
+    )
+
+    graf61 = construir_pie_atr_generico(
+        df_filtrado, "6.1",
+        px.colors.sequential.Blues_r,
+        "Peaje de acceso 6.1"
+    )
+
+    return graf20, graf30, graf61
+
+
+def construir_tabla_resumen(
+    df,
+    col_base_prefix,      # "precio", "coste", "pyc"
+    col_curva,            # "coste_total", "coste_base", "coste_pyc"
+    etiqueta,             # "precio", "coste", "pyc"
+    decimals=1
+):
+
+    dffm = df.copy()
+
+    # --- Pivot 3P ---
+    pt3 = dffm.pivot_table(
+        values=[f"{col_base_prefix}_2.0"],
+        aggfunc="mean",
+        index="dh_3p"
+    )
+
+    # --- Pivot 6P ---
+    pt4 = dffm.pivot_table(
+        values=[f"{col_base_prefix}_3.0", f"{col_base_prefix}_6.1"],
+        aggfunc="mean",
+        index="dh_6p"
+    )
+
+    pt = pd.concat([pt3, pt4], axis=1)
+
+    medias = [
+        dffm[f"{col_base_prefix}_2.0"].mean(),
+        dffm[f"{col_base_prefix}_3.0"].mean(),
+        dffm[f"{col_base_prefix}_6.1"].mean()
+    ]
+
+    pt_trans = pt.transpose()
+    pt_trans["Media"] = medias
+
+    media_curva = None
+    # ---- CURVA ----
+    if "df_curva_sheets" in st.session_state and st.session_state.df_curva_sheets is not None:
+
+        dfc = st.session_state.df_curva_sheets.copy()
+
+        media_curva = (
+            dfc[col_curva].sum() /
+            dfc["consumo_neto_kWh"].sum()
+        ) * 1000
+
+        atr = st.session_state.atr_dfnorm
+
+        if atr == "2.0":
+            fila_curva = (
+                dfc.groupby("dh_3p")
+                .apply(lambda g: (g[col_curva].sum() / g["consumo_neto_kWh"].sum()) * 1000)
+            )
+        else:
+            fila_curva = (
+                dfc.groupby("dh_6p")
+                .apply(lambda g: (g[col_curva].sum() / g["consumo_neto_kWh"].sum()) * 1000)
+            )
+
+        periodos = pt_trans.columns[:-1]
+        fila_curva = fila_curva.reindex(periodos)
+
+        pt_trans.loc[f"{etiqueta}_{atr}_curva", periodos] = fila_curva.values
+        pt_trans.loc[f"{etiqueta}_{atr}_curva", "Media"] = media_curva
+
+    pt_trans = pt_trans.div(10)
+    pt_trans = pt_trans.round(decimals)
+    pt_trans = pt_trans.apply(pd.to_numeric, errors="coerce")
+
+    return pt_trans, media_curva
+
+def tabla_precios(df):
+    return construir_tabla_resumen(
+        df,
+        col_base_prefix="precio",
+        col_curva="coste_total",
+        etiqueta="precio",
+        decimals=4
+    )
+
+def tabla_costes(df):
+    return construir_tabla_resumen(
+        df,
+        col_base_prefix="coste",
+        col_curva="coste_base",
+        etiqueta="coste",
+        decimals=1
+    )
+
+def tabla_pyc(df):
+    return construir_tabla_resumen(
+        df,
+        col_base_prefix="pyc",
+        col_curva="coste_pyc",
+        etiqueta="pyc",
+        decimals=1
+    )
+
+#NO USADO
 def pt5_trans(df_filtrado_final):
-        dffm=aplicar_margen(df_filtrado_final)
+        #dffm=aplicar_margen(df_filtrado_final)
+        dffm=df_filtrado_final
         pt3=dffm.pivot_table(
                 values=['precio_2.0'],
                 aggfunc='mean',
@@ -232,7 +501,8 @@ def pt5_trans(df_filtrado_final):
 
             
             # precio ponderado total €/MWh
-            media_atr_curva = ((dfc["coste_total"].sum() / dfc["consumo_neto_kWh"].sum()) * 1000) + st.session_state.margen
+            #media_atr_curva = ((dfc["coste_total"].sum() / dfc["consumo_neto_kWh"].sum()) * 1000) + st.session_state.margen
+            media_atr_curva = ((dfc["coste_total"].sum() / dfc["consumo_neto_kWh"].sum()) * 1000)
             print(f'Media precio curva en €/MWh: {media_atr_curva}')
 
             atr = st.session_state.atr_dfnorm  # "2.0", "3.0", "6.1"
@@ -253,7 +523,8 @@ def pt5_trans(df_filtrado_final):
                     .apply(lambda g: (g["coste_total"].sum() / g["consumo_neto_kWh"].sum())*1000)
                 )
 
-            fila_curva_periodos_con_margen = fila_curva_periodos + st.session_state.margen
+            #fila_curva_periodos_con_margen = fila_curva_periodos + st.session_state.margen_telemindex
+            fila_curva_periodos_con_margen = fila_curva_periodos
 
 
         pt5_trans = pt5.transpose()
@@ -280,9 +551,10 @@ def pt5_trans(df_filtrado_final):
         return pt5_trans, media_20, media_30, media_61, media_spot, media_ssaa, media_atr_curva
 
 
-
+#NO USADO
 def costes_indexado(df_filtrado_final):
-        dffm = aplicar_margen(df_filtrado_final)
+        #dffm = aplicar_margen(df_filtrado_final)
+        dffm = df_filtrado_final
         pt3 = dffm.pivot_table(
                 values=['coste_2.0'],
                 aggfunc='mean',
@@ -355,9 +627,10 @@ def costes_indexado(df_filtrado_final):
 
         return pt5_trans
 
-# TABLA RESUMEN DE PEAJES Y CARGOS
+# TABLA RESUMEN DE PEAJES Y CARGOS. NO USADO
 def pt7_trans(df_filtrado_final):
-        dffm=aplicar_margen(df_filtrado_final)
+        #dffm=aplicar_margen(df_filtrado_final)
+        dffm=df_filtrado_final
         pt3=dffm.pivot_table(
                 values=['pyc_2.0'],
                 aggfunc='mean',
@@ -431,7 +704,8 @@ def pt7_trans(df_filtrado_final):
         
 def evol_mensual (df, colores_precios):
 
-    dffm = aplicar_margen(df)
+    #dffm = aplicar_margen(df)
+    dffm = df
 
     orden_meses = [
         "enero", "febrero", "marzo", "abril", "mayo", "junio",
@@ -521,24 +795,7 @@ def construir_df_curva_sheets(df_filtrado):
     Construye un nuevo df combinando la curva normalizada (df_norm_h)
     con los datos filtrados del Sheets.
     """
-
-    #if st.session_state.frec =='QH':
-        # Agregar cada 4 muestras por hora
-        # Agrupar a nivel horario (suma de los 4 cuartos horarios)
-    #    df_norm_h = (
-    #        st.session_state.df_norm.groupby(["fecha", "hora"], as_index=False)
-    #        .agg({
-    #            "consumo_neto_kWh": "sum",
-    #            "vertido_neto_kWh": "sum",
-    #            "periodo": "first"
-    #        })
-    #    )
-    #else:
-        # Ya está en frecuencia horaria → copiar
-    #    df_norm_h = st.session_state.df_norm[["fecha_hora", "fecha", "hora","consumo_neto_kWh", "vertido_neto_kWh", "periodo"]].copy()
-
-
-
+    
     df_norm = st.session_state.df_norm_h.copy()
     #df_norm = df_norm_h.copy()
 
@@ -558,45 +815,21 @@ def construir_df_curva_sheets(df_filtrado):
 
     return df
 
+
 def añadir_costes_curva(df):
     df = df.copy()
 
-    # 1. consumo en MWh
     cons = df["consumo_neto_kWh"] / 1000
+    atr = st.session_state.atr_dfnorm
+    col_precio = f"precio_{atr}"
 
-    # --- 2. COSTE componentes base en € (curva normalizada) ---
-    df["coste_spot"]  = df["spot"]  * cons
-    df["coste_ssaa"]  = df["ssaa"]  * cons
-    df["coste_osom"]  = df["osom"]  * cons
-    df["coste_otros"] = df["otros"] * cons
-
-    # --- 3. Seleccionar ATR asignado para esta curva ---
-    atr = st.session_state.atr_dfnorm      # "2.0", "3.0" o "6.1"
-
-    # columnas base dinámicas
-    col_ppcc = f"ppcc_{atr}"
-    col_perd = f"perd_{atr}"
-    col_pyc  = f"pyc_{atr}"
-
-    # --- 4. COSTE Componentes regulados según ATR en €---
-    df["coste_ppcc"] = df[col_ppcc] * cons
-    df["perdidas"] = df[col_perd]
-    df["coste_pyc"] = df[col_pyc] * cons
-
-    # --- 3. COSTE BASE (con pérdidas y 1.015, pero SIN PYC) ---
-    df["coste_base"] = (
-        (
-            df["coste_spot"]
-            + df["coste_ssaa"]
-            + df["coste_osom"]
-            + df["coste_otros"]
-            + df["coste_ppcc"]
-        )
-        * (1 + df["perdidas"])
-        * 1.015
-    )
-
-    # --- 4. COSTE TOTAL (coste_base + coste_pyc) ---
-    df["coste_total"] = df["coste_base"] + df["coste_pyc"]
+    # Costes ponderados
+    df["coste_spot"] = df["spot"] * cons #usado para apuntamiento
+    df["coste_ssaa"] = df["ssaa"] * cons #usado para apuntamiento
+    df["coste_pyc"] = df[f"pyc_{atr}"] * cons #usadopara tablas
+    df["coste_base"] = df[f"coste_{atr}"] * cons #sin pycs ni margen
+    df["coste_total"] = df[col_precio] * cons
 
     return df
+
+
