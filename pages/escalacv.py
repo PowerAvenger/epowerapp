@@ -69,7 +69,7 @@ control_mes = (
     .reset_index()
 )
 
-st.dataframe(control_mes)
+#st.dataframe(control_mes)
 
 ultimo_registro = datos_total['fecha'].max()
 valor_minimo_horario_total = datos_total['value'].min()
