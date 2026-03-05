@@ -67,12 +67,12 @@ if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is
         df_simul["pyc_simul"] = df_simul["periodo"].map(pyc_dict)*1000 #pasamos a €/MWh
         df_simul["coste_pyc_simul"] = df_simul["pyc_simul"] * cons
         df_simul["coste_total_simul"] = df_simul["coste_base"] + df_simul["coste_pyc_simul"]
+        df_simul["coste_total_simul"] += 3.0 * cons #+1 SSAA + 1,2 FNEE + 0,4 SRAD
         df_sheets_origen = df_simul
 
     else:
         df_sheets_origen = st.session_state.df_sheets
 else:
-    #df_hist, df_mes = hist_mensual(st.session_state.df_sheets)
     df_sheets_origen = st.session_state.df_sheets
 
 
@@ -92,15 +92,11 @@ grafico, simul20, simul30, simul61, simulcurva = obtener_graf_hist(df_hist, st.s
 
 # Inicializamos margen a cero
 if 'margen_simulindex' not in st.session_state:
-    st.session_state.margen_simulindex = 5
+    st.session_state.margen_simulindex = 0
 
 if 'margen_simul_fijo' not in st.session_state:
     st.session_state.margen_simul_fijo = 0.0  
     
-#if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None and simulcurva is not None:
-    #df_int, df_resumen_simul = resumen_periodos_simulado(df_curva = st.session_state.df_curva_sheets, simul_curva = simulcurva)  
-#    df_resumen_simul = obtener_df_resumen(st.session_state.df_curva_sheets, simulcurva, 0.0)
-#    df_resumen_simul_view = formatear_df_resumen(df_resumen_simul)
 
 graf_omip_trimestral = obtener_grafico_omip(df_FTB_trimestral_futuros)
 graf_omip_mensual = obtener_grafico_omip(df_FTB_mensual_simulindex)
@@ -138,7 +134,11 @@ with st.sidebar.expander('¿Quieres añadir margen?', icon = "ℹ️"):
     st.write('Añade :violet[margen] al gusto y obtén un precio medio de indexado más ajustado con tus necesidades.')
     #añadir_margen = st.sidebar.toggle('Quieres añadir :violet[margen]?')
     #if añadir_margen:
-st.sidebar.slider('Añade margen al precio base de indexado en €/MWh', min_value = 0, max_value = 50, step = 1, key = 'margen_simulindex')
+
+if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None and simulcurva is not None:
+    st.sidebar.slider('Añade margen al precio base de indexado en €/MWh', min_value = 0, max_value = 50, step = 1, key = 'margen_simulindex', disabled=True)
+else:
+    st.sidebar.slider('Añade margen al precio base de indexado en €/MWh', min_value = 0, max_value = 50, step = 1, key = 'margen_simulindex', disabled=False)
 
 zona_mensajes = st.sidebar.empty()
 
@@ -151,8 +151,8 @@ simul61_margen = simul61 + st.session_state.margen_simulindex / 10
 
 if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None and simulcurva is not None:
     # esto es para la tabla original de la página principal que se modifica con el margen del slider
-    simulcurva_margen = simulcurva + st.session_state.margen_simulindex / 10
-    df_resumen_simul = obtener_df_resumen(st.session_state.df_curva_sheets, simulcurva_margen, 0.0)
+    #simulcurva_margen = simulcurva + st.session_state.margen_simulindex / 10
+    df_resumen_simul = obtener_df_resumen(st.session_state.df_curva_sheets, simulcurva, 0.0)
     df_resumen_simul_view = formatear_df_resumen(df_resumen_simul)
     df_uso_anual = st.session_state.df_curva_sheets.copy()
     def filtrar_df_trimestre(df_norm, producto):
@@ -208,8 +208,8 @@ with tab1:
                 st.metric(':orange[Precio 2.0] c€/kWh', value = round(simul20_margen, 2), help = 'Este el precio 2.0 con el margen añadido')
                 st.metric(':red[Precio 3.0] c€/kWh', value = round(simul30_margen, 2), help = 'Este el precio 3.0 con el margen añadido')
                 st.metric(':blue[Precio 6.1] c€/kWh', value = round(simul61_margen, 2), help = 'Este el precio 6.1 con el margen añadido')
-                if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None and simulcurva is not None:
-                    st.metric(f':green[Precio CURVA {st.session_state.atr_dfnorm}]  c€/kWh', value = simulcurva_margen, help='Este el precio medio ponderado con el margen añadido')
+                #if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None and simulcurva is not None:
+                #    st.metric(f':green[Precio CURVA {st.session_state.atr_dfnorm}]  c€/kWh', value = simulcurva_margen, help='Este el precio medio ponderado con el margen añadido')
     with col2:
         st.info('**¿Cómo funciona?** Los :orange[puntos] son valores de indexado de los 12 últimos meses. Las :orange[líneas] reflejan una tendencia. Los :orange[círculos] simulan los precios medios de indexado a un año vista en base al valor de OMIE estimado.',icon="ℹ️")
         st.plotly_chart(grafico)
@@ -291,8 +291,8 @@ with tab4:
         st.subheader(f'Parametriza')
             
         c11, c12, c13, c14 = st.columns(4)
-        with c11:
-            margen_simul = st.number_input("Margen (€/MWh)", min_value=0.0, max_value=50.0, value=10.0, step=.1) / 10   # → c€/kWh        
+        #with c11:
+            #margen_simul = st.number_input("Margen (€/MWh)", min_value=0.0, max_value=50.0, value=10.0, step=.1) / 10   # → c€/kWh        
         with c12:
             simul_a = st.number_input("OMIE simulado A (€/MWh)", value=55.0)
         with c13:
@@ -304,12 +304,12 @@ with tab4:
 
         escenarios = []
         
-        print(f'margen_simul: {margen_simul}')
+        #print(f'margen_simul: {margen_simul}')
 
         for etiqueta, omie_value in zip(["A", "B", "C"], lista_simul):
             _, _, _, _, simul_curva = obtener_graf_hist(df_hist, omie_value, colores_precios)
             print(f'simul_curva antes de añadir margen: {simul_curva}')
-            simul_curva = simul_curva + margen_simul
+            simul_curva = simul_curva #+ margen_simul
             print(f'simul_curva después de añadir margen: {simul_curva}')
             df_resumen_simul = obtener_df_resumen(df_uso_anual, simul_curva, 0.0)
 
@@ -528,25 +528,40 @@ with tab5:
 
         st.write(graf_omip_trimestral_select)
 
-        st.subheader(f'Parametriza margen y escenarios alternativos')
+        st.subheader(f'Parametriza escenarios alternativos')
         c11, c12, c13, c14 = st.columns(4)
-        with c11:
-            st.number_input("Margen (€/MWh)", min_value=0.0, max_value=50.0, value=10.0, step=1.1, key = 'margen_simul_trim')         
+        #with c11:
+            #st.number_input("Margen (€/MWh)", min_value=0.0, max_value=50.0, value=10.0, step=1.1, key = 'margen_simul_trim')         
         with c12:
             #st.number_input("OMIE simulado A (€/MWh)", value=55.0, key = 'simul_a_trim')
-            st.caption('OMIE simulado A (€/MWh)')
+            #st.markdown('OMIE simulado A (€/MWh)')
+
+            st.markdown(
+                """
+                <div style="
+                    color:white;
+                    font-size:0.9rem;
+                    font-weight:600;
+                    margin-bottom:5px;
+                ">
+                OMIE simulado A (€/MWh)
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
             #st.text(precio_trim_sel)
             st.markdown(
                 f"""
                 <div style="
                     background-color:#FF8C00;
-                    padding:6px 12px;
+                    padding:6px;
                     border-radius:6px;
                     color:white;
                     font-weight:bold;
                     display:inline-block;
+                    width:100%
                 ">
-                    {precio_trim_sel:.2f} €/MWh
+                    {f"{precio_trim_sel:.2f}".replace(".", ",")}
                 </div>
                 """,
                 unsafe_allow_html=True
@@ -601,8 +616,8 @@ with tab5:
         #        "df_resumen": df_resumen_simul_trim
         #    })
 
-        margen_simul_trim = st.session_state.margen_simul_trim / 10
-        escenarios = construir_escenarios(df_uso_trimestral, lista_simul_trim, margen_simul_trim, df_hist, colores_precios)
+        #margen_simul_trim = st.session_state.margen_simul_trim / 10
+        escenarios = construir_escenarios(df_uso_trimestral, lista_simul_trim, df_hist, colores_precios)
 
         st.subheader('Resultado coberturas de indexados según escenario')
         for esc in escenarios:

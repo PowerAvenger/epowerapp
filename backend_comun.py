@@ -133,7 +133,7 @@ def carga_mibgas(): #sheet_name=None
 
 def obtener_df_resumen(df_curva, simul_curva=None, margen_eur_kWh=0.0):
     """
-    Construye el df_resumen canónico para Telemindex y Simulindex.
+    Construye el df_resumen canónico para Telemindex y Simulindex con consumos, costes y precios medios
 
     - simul_curva = None  → Telemindex (datos reales)
     - simul_curva != None → Simulindex (datos simulados)

@@ -279,6 +279,8 @@ def obtener_hist_mensual(df_in):
             #df_mes_sums['coste_total'] / df_mes_sums['consumo_neto_kWh']
             df_mes_sums['coste_total_simul'] / df_mes_sums['consumo_neto_kWh']
         )
+        # guardar consumo mensual
+        df_mes['consumo_mes'] = df_mes_sums['consumo_neto_kWh']
 
     # últimos 12 meses
     df_hist = df_mes.tail(12).copy()
@@ -300,7 +302,7 @@ def obtener_hist_mensual(df_in):
     return df_hist
 
 # GRÁFICO PRINCIPAL DE PRECIOS DE INDEXADO A PARTIR DE OMIE++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-def obtener_graf_hist(df_hist, omip, colores_precios):
+def obtener_graf_hist_old(df_hist, omip, colores_precios):
     series_y = ['precio_2.0','precio_3.0','precio_6.1']
     if 'precio_curva' in df_hist.columns:
         series_y.append('precio_curva')
@@ -389,6 +391,172 @@ def obtener_graf_hist(df_hist, omip, colores_precios):
             title={'x':0.5,'xanchor':'center'},
     )
     return graf_hist, simul_20, simul_30, simul_61, simul_curva
+
+
+
+import statsmodels.api as sm
+import numpy as np
+
+# GRÁFICO PRINCIPAL DE PRECIOS DE INDEXADO A PARTIR DE OMIE
+def obtener_graf_hist(df_hist, omip, colores_precios):
+
+    series_y = ['precio_2.0','precio_3.0','precio_6.1']
+    if 'precio_curva' in df_hist.columns:
+        series_y.append('precio_curva')
+
+    graf_hist = px.scatter(
+        df_hist,
+        x='spot',
+        y=series_y,
+        labels={
+            'value':'Precio medio de indexado en c€/kWh',
+            'variable':'Precios según ATR',
+            'spot':'Precio medio mercado mayorista en €/MWh'
+        },
+        height=800,
+        color_discrete_map=colores_precios,
+        title='Simulación de los precios medios de indexado'
+    )
+
+    graf_hist.update_traces(marker=dict(symbol='square'))
+
+    # -----------------------------
+    # REGRESIONES
+    # -----------------------------
+
+    resultados = {}
+
+    for serie in series_y:
+
+        X = sm.add_constant(df_hist['spot'])
+        y = df_hist[serie]
+
+        # curva → regresión ponderada
+        if serie == 'precio_curva' and 'consumo_mes' in df_hist.columns:
+            weights = df_hist['consumo_mes']
+            model = sm.WLS(y, X, weights=weights).fit()
+        else:
+            model = sm.OLS(y, X).fit()
+
+        intercept = model.params['const']
+        slope = model.params['spot']
+
+        resultados[serie] = (intercept, slope)
+
+        # dibujar recta
+        x_vals = np.linspace(df_hist['spot'].min(), df_hist['spot'].max(), 100)
+        y_vals = intercept + slope * x_vals
+
+        
+
+        if serie == 'precio_curva':
+
+            graf_hist.add_scatter(
+                x=x_vals,
+                y=y_vals,
+                mode='lines',
+                line=dict(
+                    color=colores_precios['precio_curva'],
+                    width=4,          # grosor mayor
+                    dash='dot'        # línea de puntos
+                ),
+                name='Tendencia curva',
+                showlegend=True
+            )
+
+        else:
+
+            graf_hist.add_scatter(
+                x=x_vals,
+                y=y_vals,
+                mode='lines',
+                line=dict(
+                    color=colores_precios.get(serie,'grey'),
+                    width=2
+                ),
+                showlegend=False
+            )
+
+    # -----------------------------
+    # SIMULACIONES
+    # -----------------------------
+
+    intercept_20, slope_20 = resultados['precio_2.0']
+    simul_20 = round(intercept_20 + slope_20 * omip, 1)
+
+    intercept_30, slope_30 = resultados['precio_3.0']
+    simul_30 = round(intercept_30 + slope_30 * omip, 1)
+
+    intercept_61, slope_61 = resultados['precio_6.1']
+    simul_61 = round(intercept_61 + slope_61 * omip, 1)
+
+    simul_curva = None
+
+    if 'precio_curva' in resultados and df_hist.shape[0] > 10:
+
+        intercept_curve, slope_curve = resultados['precio_curva']
+        simul_curva = round(intercept_curve + slope_curve * omip, 1)
+
+        graf_hist.add_scatter(
+            x=[omip],
+            y=[simul_curva],
+            mode='markers',
+            marker=dict(
+                color='rgba(255,255,255,0)',
+                size=20,
+                line=dict(width=5, color=colores_precios['precio_curva'])
+            ),
+            name='Simul Curva'
+        )
+
+        # línea vertical omie in - cruce recta regresión CURVA
+        graf_hist.add_shape(
+            type='line',
+            x0=omip,
+            y0=0,
+            x1=omip,
+            y1=simul_curva,
+            line=dict(color=colores_precios['precio_curva'], width=1, dash='dash')
+        )
+
+    # ATR
+    graf_hist.add_scatter(
+        x=[omip], y=[simul_20], mode='markers',
+        marker=dict(color='rgba(255,255,255,0)', size=20,
+        line=dict(width=5, color=colores_precios['precio_2.0'])),
+        name='Simul 2.0'
+    )
+
+    graf_hist.add_scatter(
+        x=[omip], y=[simul_30], mode='markers',
+        marker=dict(color='rgba(255,255,255,0)', size=20,
+        line=dict(width=5, color=colores_precios['precio_3.0'])),
+        name='Simul 3.0'
+    )
+
+    graf_hist.add_scatter(
+        x=[omip], y=[simul_61], mode='markers',
+        marker=dict(color='rgba(255,255,255,0)', size=20,
+        line=dict(width=5, color=colores_precios['precio_6.1'])),
+        name='Simul 6.1'
+    )
+
+    # línea vertical omie in - cruce recta regresión 2.0
+    graf_hist.add_shape(
+        type='line',
+        x0=omip,
+        y0=0,
+        x1=omip,
+        y1=simul_20,
+        line=dict(color='grey', width=1, dash='dash')
+    )
+
+    graf_hist.update_layout(
+        title={'x':0.5,'xanchor':'center'}
+    )
+
+    return graf_hist, simul_20, simul_30, simul_61, simul_curva
+
 
 # DF CON LOS VALORES MEDIOS MENSUALES DEL SPOT DE TODO EL HISTÓRICO
 # SE USAN PARA VISUALIZARLOS CON LINEAS HORIZONTALES FRENTE A LA EVOLUCIÓN DE OMIP
@@ -648,7 +816,7 @@ def obtener_trimestres_futuros(df_FTB_trimestral):
 
 
 
-def construir_escenarios(df_uso, lista_simul, margen, df_hist, colores_precios):
+def construir_escenarios(df_uso, lista_simul, df_hist, colores_precios):
 
     escenarios = []
 
@@ -660,7 +828,7 @@ def construir_escenarios(df_uso, lista_simul, margen, df_hist, colores_precios):
             colores_precios
         )
 
-        simul_curva = simul_curva + margen
+        #simul_curva = simul_curva + margen
 
         df_resumen = obtener_df_resumen(
             df_uso,

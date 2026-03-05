@@ -12,7 +12,7 @@ from backend_telemindex import (filtrar_datos, añadir_srad, añadir_fnee, calcu
 from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen
 from backend_curvadecarga import graficar_media_horaria, graficar_queso_periodos
 
-from utilidades import generar_menu, init_app, init_app_index, persist_widget, persist_widget_form_commit, persist_widget_form_init
+from utilidades import generar_menu, init_app, init_app_index, persist_widget
 
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
@@ -33,7 +33,7 @@ if 'df_sheets' not in st.session_state:
 
 init_app_index()
 
-# Antes del form
+# Inicialización de estados st.session
 for key, default in {
     "desvios_apant": 1.0,
     "cfg_srad": True,
@@ -45,11 +45,6 @@ for key, default in {
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
-
-
-
-
-
 
 
 if "rango_curvadecarga" in st.session_state:
@@ -71,9 +66,6 @@ if st.session_state.get("cfg_fnee", False):
 else:
     df_filtrado_sheets["fnee"] = 0.0
 
-# FNEE
-#if "fnee" not in df_filtrado_sheets.columns:
-#    df_filtrado_sheets["fnee"] = 0.0
 
 df_filtrado = calcular_precios_atr(df_filtrado_sheets)
 
@@ -92,6 +84,7 @@ if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None an
     df_uso = df_curva_sheets.copy()
     df_uso = df_uso.drop_duplicates(subset=["fecha", "hora", "spot"])
     st.session_state.df_curva_sheets = df_uso
+    print('st.session_state.df_curva_sheets = df_uso')
     print(df_uso)
 
     #consumo total curva
@@ -112,7 +105,6 @@ else:
 
 
 #ejecutamos la función para obtener la tabla resumen y precios medios
-#tabla_precios, media_20, media_30, media_61, media_spot, media_ssaa, media_atr_curva = pt5_trans(df_uso)
 media_20 = df_uso["precio_2.0"].mean()
 media_30 = df_uso["precio_3.0"].mean()
 media_61 = df_uso["precio_6.1"].mean()
