@@ -341,7 +341,7 @@ def graf_simul_spot(df, df_validacion, mibgas):
     )
 
     # curva hinge
-    x0=30.0
+    x0=31.0
 
     x_val = df_validacion["precio_gas"].to_numpy(float)
     y_val = df_validacion["omie"].to_numpy(float)
@@ -362,7 +362,7 @@ def graf_simul_spot(df, df_validacion, mibgas):
     def hinge(x):
         x = np.asarray(x, dtype=float)
         #y = np.full_like(x, c_hinge, dtype=float)
-        m_left = +0.30  # pendiente suave hacia abajo
+        m_left = +1.0  # pendiente suave hacia abajo
         y = c_hinge + m_left*(x - x0)
         idx = x > x0
         y[idx] = c_hinge + a_h*(x[idx]-x0)**2 + b_h*(x[idx]-x0)

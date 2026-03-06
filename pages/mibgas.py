@@ -1,5 +1,7 @@
 import streamlit as st
 import pandas as pd
+#import pygwalker as pyg
+#from pygwalker.api.streamlit import StreamlitRenderer
 
 import plotly.express as px
 from datetime import datetime
@@ -14,17 +16,22 @@ from backend_mibgas import (filtrar_por_producto, graficar_qs, graficar_da_corri
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
 
-if 'df_sheets' not in st.session_state:
-    st.warning('Cargando históricos de indexado. Espera a que estén disponibles...', icon = '⚠️')
+generar_menu()
+init_app()
 
-if 'mibgas_simul' not in st.session_state:
-    st.session_state.mibgas_simul = 30
+st.sidebar.header('⚡ Gas & Furious ⚡')
+zona_mensajes = st.sidebar.empty()
+if 'df_sheets' not in st.session_state:
+    zona_mensajes.warning('Cargando históricos. Espera a que estén disponibles...', icon = '⚠️')
+
 
 #inicializamos variables de sesión
 
-generar_menu()
-init_app()
+
 init_app_index()
+
+if 'mibgas_simul' not in st.session_state:
+    st.session_state.mibgas_simul = 30
 
 
 df_mibgas_base = carga_mibgas()
@@ -109,7 +116,7 @@ graf_co2_gas = graficar_gas_co2(df_total_data_gas_co2)
 
 #LAYOUT++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-
+zona_mensajes = st.sidebar.empty()
 
 tab1, tab2, tab3, tab4 = st.tabs(['Históricos', 'Futuros', 'CO2', 'Simulador'])
 
@@ -156,3 +163,6 @@ with tab4:
             st.metric('Valor de OMIE 2026 esperado', simul_spot)
     with col2:        
         st.write(graf_hist)
+
+        #renderer = StreamlitRenderer(df_mensual)
+        #renderer.explorer()
