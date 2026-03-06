@@ -22,6 +22,10 @@ if "df_ofertas_fijas" not in st.session_state:
     st.session_state.df_ofertas_fijas = pd.DataFrame()
 
 
+if "margen_fijo" not in st.session_state:
+    st.session_state.margen_fijo = 0.0
+
+
 #inicializamos variables de sesión
 generar_menu()
 init_app()
@@ -397,14 +401,14 @@ with tab2:
         print(df_uso)
         df_resumen = obtener_df_resumen(df_uso, None, 0.0)
         df_resumen_view = formatear_df_resumen(df_resumen)
-        st.subheader(f'Tabla resumen para el suministro con peaje de acceso :orange[{st.session_state.atr_dfnorm}]')
+        st.subheader(f'Tabla resumen de INDEXADO para el suministro con peaje de acceso :orange[{st.session_state.atr_dfnorm}]')
         st.dataframe(
             df_resumen_view,
             use_container_width=True
         )
 
         # CARGAR EXCEL CON PRECIOS FIJOS
-
+        st.subheader(f'Tabla de precios FIJOS para comparar')
         uploaded_file = st.file_uploader(
             "Sube el Excel con ofertas de precio fijo",
             type=["xlsx", "xls"]
@@ -436,21 +440,50 @@ with tab2:
                 st.error("Hay valores no numéricos en los precios")
                 st.stop()
 
-            
-
-            # 🔁 Reemplazar directamente
+            # 🔁 Añadimos margen si procede
             st.session_state.df_ofertas_fijas = df_new.copy()
+            df_ofertas_calc = df_new.copy()
+            if st.session_state.get("aplicar_margen_fijo", False):
+                
+                periodos = [f"P{i}" for i in range(1, 7)]
+                
+                for p in periodos:
+                    if p in df_ofertas_calc.columns:
+                        #df_ofertas_calc[p] = df_ofertas_calc[p] + margen_simul/100   
+                        df_ofertas_calc[p] = df_ofertas_calc[p] + st.session_state.margen_fijo/1000   
+                
+                st.session_state.df_ofertas_fijas = df_ofertas_calc
+                
+            df_ofertas_view = formatear_df_resumen(st.session_state.df_ofertas_fijas)
 
-            st.subheader("Ofertas fijas cargadas")
+            st.markdown("Ofertas fijas cargadas")
 
             if st.session_state.df_ofertas_fijas.empty:
                 st.info("Aún no hay ofertas cargadas")
             else:
+                st.checkbox("Aplicar margen comercial también a ofertas fijas", value=False, key='aplicar_margen_fijo')
+                if st.session_state.get("aplicar_margen_fijo", False):
+                    st.number_input('Introduce el margen para las ofertas FIJO.', min_value=0.0, max_value=30.0, step=.1, key = 'margen_fijo') #€/MWh
                 st.dataframe(
-                    st.session_state.df_ofertas_fijas,
+                    #st.session_state.df_ofertas_fijas_simul,
+                    df_ofertas_view,
                     use_container_width=True,
                     hide_index=True
                 )
+
+            # 🔁 Reemplazar directamente
+            #st.session_state.df_ofertas_fijas = df_new.copy()
+
+            #st.subheader("Ofertas fijas cargadas")
+
+            #if st.session_state.df_ofertas_fijas.empty:
+            #    st.info("Aún no hay ofertas cargadas")
+            #else:
+            #    st.dataframe(
+            #        st.session_state.df_ofertas_fijas,
+            #        use_container_width=True,
+            #        hide_index=True
+            #    )
 
 
         with c2:
@@ -535,7 +568,7 @@ with tab2:
                 x="Oferta",
                 y="Coste anual (€)",
                 color="Tipo",
-                title="Coste anual por oferta",
+                title=f"Coste por tipo de contrato para el  {st.session_state.texto_precios}",
                 text_auto=".2f",
                 category_orders={"Oferta": orden_ofertas}
             )
@@ -544,6 +577,11 @@ with tab2:
                 yaxis_title="Coste anual (€)",
                 xaxis_title="",
                 legend_title="",
+                title_font=dict(size=24),
+            )
+            fig.update_traces(
+                textfont_size=20,
+                width=0.4
             )
 
             st.plotly_chart(fig, use_container_width=True)
