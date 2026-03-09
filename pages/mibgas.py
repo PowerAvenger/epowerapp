@@ -107,7 +107,7 @@ df_validacion = pd.DataFrame({
 })
 
 colores_precios = {'precio_gas': 'goldenrod', '': 'darkred', 'precio_6.1': '#1C83E1'}
-graf_hist, simul_spot = graf_simul_spot(df_mensual, df_validacion, st.session_state.mibgas_simul)
+graf_hist, simul_spot, simul_gas = graf_simul_spot(df_mensual, df_validacion, st.session_state.mibgas_simul)
 
 
 
@@ -159,8 +159,13 @@ with tab4:
         col11, col12 = st.columns(2)
         with col11:
             st.number_input('Introduce el valor previsto MIBGAS 2026', min_value=26, max_value=70, key='mibgas_simul')
+            if st.session_state.get("precio_omie_previsto", None):
+                st.metric('Valor OMIE previsto s/OMIP', st.session_state.precio_omie_previsto)
         with col12:
             st.metric('Valor de OMIE 2026 esperado', simul_spot)
+            if simul_gas is not None:
+                st.metric('Valor de gas 2026 esperado', simul_gas)
+
     with col2:        
         st.write(graf_hist)
 

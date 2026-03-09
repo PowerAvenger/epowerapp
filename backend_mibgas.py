@@ -72,16 +72,13 @@ def graficar_qs(df_mg_q):
         hovermode="x unified",
         title_font_size=28, 
         title={'x':0.5, 'xanchor':'center'},
+        hoverlabel=dict(font_size=18)
         )
 
     # 2) Formato de la fecha en el encabezado del tooltip
     fig.update_xaxes(
         hoverformat="%Y-%m-%d",
-        #dtick="M1",   # intervalo de 1 mes
-        #tickformat="%b\n%Y",  # etiquetas: abreviatura del mes y año
-        #showgrid=True,
-        #gridcolor="lightgrey",
-        #gridwidth=.1
+        
     )
 
     # 3) Contenido de cada fila del tooltip (nombre del Q y su valor)
@@ -362,7 +359,7 @@ def graf_simul_spot(df, df_validacion, mibgas):
     def hinge(x):
         x = np.asarray(x, dtype=float)
         #y = np.full_like(x, c_hinge, dtype=float)
-        m_left = +1.0  # pendiente suave hacia abajo
+        m_left = +.6  # pendiente suave hacia abajo
         y = c_hinge + m_left*(x - x0)
         idx = x > x0
         y[idx] = c_hinge + a_h*(x[idx]-x0)**2 + b_h*(x[idx]-x0)
@@ -408,7 +405,7 @@ def graf_simul_spot(df, df_validacion, mibgas):
     fig.add_trace(go.Scatter(
         x=[mibgas], y=[omie_hinge],
         mode="markers",
-        name="Simulación",
+        name="Simulación OMIE",
         marker=dict(
             color="rgba(255,255,255,0)",
             size=20,
@@ -431,6 +428,44 @@ def graf_simul_spot(df, df_validacion, mibgas):
     )
 
     
+    omie_obj = st.session_state.get("precio_omie_previsto", None)
+    mibgas_obj = None
+    if omie_obj:
+
+        # resolver inversa numéricamente
+        x_search = np.linspace(0, 120, 2000)
+        y_search = hinge(x_search)
+
+        idx = np.argmin(np.abs(y_search - omie_obj))
+        mibgas_obj = float(x_search[idx])
+        fig.add_trace(go.Scatter(
+            x=[mibgas_obj],
+            y=[omie_obj],
+            mode="markers",
+            name="Simulación GAS",
+            marker=dict(
+                color="rgba(255,255,255,0)",
+                size=22,
+                line=dict(width=5, color="magenta")
+            ),
+            hovertemplate=(
+                "<b>Simulación GAS</b><br>"
+                "OMIE = %{y:.1f} €/MWh<br>"
+                "MIBGAS = %{x:.1f} €/MWh<br>"
+                
+                "<extra></extra>"
+            )
+        ))
+        xmin = min(df["precio_gas"].min(), df_validacion["precio_gas"].min())
+        fig.add_shape(
+            type="line",
+            x0=xmin,
+            y0=omie_obj,
+            x1=mibgas_obj,
+            y1=omie_obj,
+            line=dict(color="magenta", width=1, dash="dash"),
+        )
+
     fig.update_layout(
         title_font_size = 28,
         title={"x": 0.5, "xanchor": "center"},
@@ -447,10 +482,15 @@ def graf_simul_spot(df, df_validacion, mibgas):
         legend=dict(
             font=dict(size=18)
         ),
-
+        hoverlabel=dict(font_size=18)
     )
 
-    return fig, round(omie_hinge, 1)
+    if mibgas_obj is not None:
+        mibgas_obj = round(mibgas_obj, 2)
+
+    
+
+    return fig, round(omie_hinge, 2), mibgas_obj
     
 
 

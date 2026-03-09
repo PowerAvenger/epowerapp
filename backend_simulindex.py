@@ -158,7 +158,7 @@ def obtener_meff_trimestral(df_FTB):
 
 
 
-
+# 
 def obtener_meff_mensual(df_FTB):
 
     # =========================
@@ -240,8 +240,7 @@ def obtener_meff_mensual(df_FTB):
 
     print('media omip simulindex mensual')
     print(media_omip_simulindex)
-    print('df FTB mensual')
-    print(df_FTB_mensual)
+    
     # Devuelves Entrega como "ene-24" + auxiliar Entrega_dt por si te hace falta
     return df_FTB_mensual, df_FTB_mensual_simulindex, fecha_ultimo_omip, media_omip_simulindex, lista_meses_hist, mes_actual
 
@@ -301,7 +300,9 @@ def obtener_hist_mensual(df_in):
 
     return df_hist
 
-# GRÁFICO PRINCIPAL DE PRECIOS DE INDEXADO A PARTIR DE OMIE++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+# NO USADO!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+# GRÁFICO PRINCIPAL DE PRECIOS DE INDEXADO A PARTIR DE OMIE++++++++++++++++++++++++++++
 def obtener_graf_hist_old(df_hist, omip, colores_precios):
     series_y = ['precio_2.0','precio_3.0','precio_6.1']
     if 'precio_curva' in df_hist.columns:
@@ -843,3 +844,223 @@ def construir_escenarios(df_uso, lista_simul, df_hist, colores_precios):
         })
 
     return escenarios
+
+
+
+
+from datetime import datetime
+import pandas as pd
+
+def construir_curva_2026(df_spot_mensual, df_ftb_m, df_ftb_q):
+
+    año = 2026
+    mes_actual = datetime.now().month
+    mes_fin_mensual = min(mes_actual + 6, 12)
+
+    # nos quedamos con la última cotización disponible
+    fecha_ref_m = df_ftb_m["Fecha"].max()
+    fecha_ref_q = df_ftb_q["Fecha"].max()
+
+    df_ftb_m = df_ftb_m[df_ftb_m["Fecha"] == fecha_ref_m]
+    df_ftb_q = df_ftb_q[df_ftb_q["Fecha"] == fecha_ref_q]
+
+    df_ftb_m["Entrega_dt"] = pd.to_datetime(df_ftb_m["Entrega_dt"])
+    df_ftb_q["Inicio Entrega"] = pd.to_datetime(df_ftb_q["Inicio Entrega"], dayfirst=True)
+
+    filas = []
+
+    for mes in range(1, 13):
+
+        fecha = pd.Timestamp(año, mes, 1)
+
+        # OMIE
+        if mes <= mes_actual:
+
+            filtro = (
+                (df_spot_mensual.index.year == año) &
+                (df_spot_mensual.index.month == mes)
+            )
+
+            precio = df_spot_mensual.loc[filtro, "spot"].iloc[0]
+            tipo = "OMIE"
+
+        # FTB mensual
+        elif mes <= mes_fin_mensual:
+
+            filtro = (
+                (df_ftb_m["Entrega_dt"].dt.year == año) &
+                (df_ftb_m["Entrega_dt"].dt.month == mes)
+            )
+
+            precio = df_ftb_m.loc[filtro, "Precio"].iloc[0]
+            tipo = "FTB mensual"
+
+        # FTB trimestral
+        else:
+
+            trimestre = (mes - 1) // 3 + 1
+            mes_inicio_trim = (trimestre - 1) * 3 + 1
+
+            filtro = (
+                (df_ftb_q["Inicio Entrega"].dt.year == año) &
+                (df_ftb_q["Inicio Entrega"].dt.month == mes_inicio_trim)
+            )
+
+            precio = df_ftb_q.loc[filtro, "Precio"].iloc[0]
+            tipo = "FTB trimestral"
+
+        filas.append({
+            "mes": mes,
+            "fecha": fecha,
+            "precio": precio,
+            "tipo": tipo
+        })
+
+    df_curva = pd.DataFrame(filas)
+
+    print('df curva 2026')
+    print(df_curva)
+
+    return df_curva
+
+def graficar_2026_old(df_2026, precio_medio_2026):
+
+    import plotly.graph_objects as go
+
+    df_hist = df_2026[df_2026["tipo"] == "OMIE"]
+    df_fut = df_2026[df_2026["tipo"] != "OMIE"]
+
+    fig = go.Figure()
+
+    # HISTÓRICO
+    fig.add_scatter(
+        x=df_hist["fecha"],
+        y=df_hist["precio"],
+        mode="lines+markers",
+        name="OMIE",
+        line=dict(color="seagreen", width=4),
+        marker=dict(size=9)
+    )
+
+    # FUTURO
+    fig.add_scatter(
+        x=df_fut["fecha"],
+        y=df_fut["precio"],
+        mode="lines+markers",
+        name="FTB",
+        line=dict(color="darkorange", width=4, dash="dash"),
+        marker=dict(size=9)
+    )
+
+    fig.add_hline(
+        y=precio_medio_2026,
+        line_dash="dot",
+        line_color="grey",
+        annotation_text=f"Media ≈ {precio_medio_2026:.1f} €/MWh"
+    )
+
+    fig.update_layout(
+        title="Curva híbrida OMIE-FTB 2026",
+        yaxis_title="€/MWh",
+        template="plotly_white",
+        hovermode="x unified"
+    )
+
+    return fig
+
+
+def graficar_2026(df_2026, precio_medio_2026):
+
+    import plotly.graph_objects as go
+
+    df_hist = df_2026[df_2026["tipo"] == "OMIE"]
+    df_fut = df_2026[df_2026["tipo"] != "OMIE"]
+
+    # unir último OMIE con primer futuro
+    df_union = df_hist.tail(1)
+    df_fut_plot = pd.concat([df_union, df_fut])
+
+    fig = go.Figure()
+
+    # HISTÓRICO
+    fig.add_scatter(
+        x=df_hist["fecha"],
+        y=df_hist["precio"],
+        mode="lines+markers+text",
+        name="OMIE",
+        line=dict(color="seagreen", width=4),
+        marker=dict(size=14, symbol="square"),
+        text=[f"{v:.1f}" for v in df_hist["precio"]],
+        textposition="top center",
+        textfont=dict(size=18,color="white"),
+        customdata=[["OMIE"]] * len(df_hist),
+        hovertemplate=
+            "<b>%{customdata}</b><br>"
+            "%{y:.1f} €/MWh"
+            "<extra></extra>"
+            
+    )
+
+    # FUTURO
+    fig.add_scatter(
+        x=df_fut_plot["fecha"],
+        y=df_fut_plot["precio"],
+        mode="lines+markers+text",
+        name="OMIP",
+        line=dict(color="darkorange", width=4, dash="dash"),
+        marker=dict(size=14, symbol="square"),
+        text=[f"{v:.1f}" for v in df_fut_plot["precio"]],
+        textposition="top center",
+        textfont=dict(size=18,color="white"),
+            customdata=[["OMIP"]] * len(df_fut),
+        hovertemplate=
+            "<b>%{customdata}</b><br>"
+            "%{y:.1f} €/MWh"
+            "<extra></extra>"
+    )
+    fig.data[-1].marker.color = ["rgba(0,0,0,0)"] + ["darkorange"]*(len(df_fut))
+    # MEDIA ANUAL
+    fig.add_hline(
+        y=precio_medio_2026,
+        line_dash="dot",
+        line_color="white",
+        annotation_text=f"Media ≈ {precio_medio_2026:.1f} €/MWh",
+        annotation_position="top right",
+        annotation_font_size=20
+    )
+
+    fig.update_layout(
+
+        title=dict(
+            text="Curva híbrida OMIE-OMIP 2026",
+            x=0.5,
+            xanchor="center",
+            font=dict(size=28)
+        ),
+
+        legend=dict(
+            font=dict(size=18)
+        ),
+
+        yaxis=dict(
+            title="€/MWh",
+            range=[0, None],
+            title_font=dict(size=18),
+            tickfont=dict(size=16)
+        ),
+
+        xaxis=dict(
+            tickformat="%b %Y",
+            tickfont=dict(size=16)
+        ),
+
+        hoverlabel=dict(
+            font_size=18
+        ),
+
+        template="plotly_dark",
+        hovermode="x unified",
+        height=650
+    )
+
+    return fig

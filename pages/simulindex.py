@@ -3,7 +3,8 @@ from backend_simulindex import (obtener_historicos_meff, obtener_meff_trimestral
                                 pyc_2026,
                                 obtener_hist_mensual, obtener_spot_mensual,
                                 obtener_graf_hist, obtener_grafico_omip, obtener_grafico_omip_omie,
-                                obtener_trimestres_futuros, construir_escenarios)
+                                obtener_trimestres_futuros, construir_escenarios,
+                                construir_curva_2026, graficar_2026)
 from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, formatear_df_resultados
 import pandas as pd
 import plotly.express as px
@@ -27,6 +28,12 @@ init_app_index()
 df_historicos_FTB, ultimo_registro = obtener_historicos_meff()
 df_FTB_trimestral, df_FTB_trimestral_futuros, fecha_ultimo_omip, media_omip_trimestral, lista_trimestres_hist, trimestre_actual, df_ultimos_precios_trim = obtener_meff_trimestral(df_historicos_FTB)
 df_FTB_mensual, df_FTB_mensual_simulindex, fecha_ultimo_omip_mensual, media_omip_mensual, lista_meses_hist, mes_actual = obtener_meff_mensual(df_historicos_FTB)
+
+print('df FTB mensual')
+print(df_FTB_mensual)
+
+print('df FTB trimestral')
+print(df_FTB_trimestral)
 
 if 'omie_slider' not in st.session_state:
     st.session_state.omie_slider = round(media_omip_trimestral)
@@ -176,6 +183,10 @@ if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is
 
     
 
+df_2026 = construir_curva_2026(df_spot_mensual, df_FTB_mensual, df_FTB_trimestral)
+precio_medio_2026 = round(df_2026["precio"].mean(),2)
+graf_2026 = graficar_2026(df_2026, precio_medio_2026)
+st.session_state.precio_omie_previsto = precio_medio_2026
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs(['Principal', 'Futuros', 'OMIP vs OMIE', 'Comparador', 'Cobertura trimestral'])
 
@@ -237,6 +248,7 @@ with tab2:
         st.write(graf_omip_trimestral)
         st.info('Aquí tienes la evolución de :blue[OMIP] por meses', icon = "ℹ️")
         st.write(graf_omip_mensual)
+        st.write(graf_2026)
     
 
 # PANTALLA DE COMPARACIONES OMIP EVOL VS OMIE
