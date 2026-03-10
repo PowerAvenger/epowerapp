@@ -156,6 +156,27 @@ if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None an
     print(f'Coste ponderado: {coste_total_curva}€')
 
 
+    df_filtrado_cober = df_filtrado_sheets.copy()
+    
+    #precio_cober_omip = 40
+    precio_cober_omip = st.session_state.get('precio_cobertura', 50.0)
+
+    df_filtrado_cober["spot"] = precio_cober_omip * apuntamiento_spot
+    df_filtrado_cober = calcular_precios_atr(df_filtrado_cober)
+
+    df_curva_cober_omip = construir_df_curva_sheets(df_filtrado_cober)
+    df_curva_cober_omip = añadir_costes_curva(df_curva_cober_omip)
+
+    
+    df_curva_cober_omip = df_curva_cober_omip.drop_duplicates(subset=["fecha", "hora", "spot"])
+    
+       
+    
+    
+    
+
+    
+
 
 df_precios_mensuales, graf_mensual = evol_mensual(st.session_state.df_sheets, colores_precios)
 
@@ -390,7 +411,7 @@ with tab1:
 
 with tab2:
     if 'df_curva_sheets' not in st.session_state or st.session_state.df_curva_sheets is None:
-        st.warning('Introduce una curva de carga anual')
+        st.warning('Introduce una curva de carga')
         st.stop()
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -401,11 +422,15 @@ with tab2:
         print(df_uso)
         df_resumen = obtener_df_resumen(df_uso, None, 0.0)
         df_resumen_view = formatear_df_resumen(df_resumen)
-        st.subheader(f'Tabla resumen de INDEXADO para el suministro con peaje de acceso :orange[{st.session_state.atr_dfnorm}]')
-        st.dataframe(
-            df_resumen_view,
-            use_container_width=True
-        )
+        st.subheader(f'Resumen de INDEXADO para el suministro con peaje de acceso :orange[{st.session_state.atr_dfnorm}]')
+        st.dataframe(df_resumen_view, use_container_width=True)
+
+        df_resumen_cober = obtener_df_resumen(df_curva_cober_omip, None, 0.0)
+        df_resumen_cober_view = formatear_df_resumen(df_resumen_cober)
+        st.subheader(f'Resumen de COBERTURA para el suministro con peaje de acceso :orange[{st.session_state.atr_dfnorm}]')
+        st.number_input('Introduce el valor de la cobertura realizada', min_value=20.0, max_value=120.0, step=.1, key = 'precio_cobertura' )
+        st.dataframe(df_resumen_cober_view, use_container_width=True)
+
 
         # CARGAR EXCEL CON PRECIOS FIJOS
         st.subheader(f'Tabla de precios FIJOS para comparar')
@@ -523,6 +548,20 @@ with tab2:
                 "Coste anual (€)": coste_index,
                 "Precio medio (€/kWh)": precio_medio_index
             })
+
+            # Cobertura OMIP
+            precios_cober = df_resumen_cober.loc["Precio medio (€/kWh)", periodos]
+            coste_cober = (consumos * precios_cober).sum()
+            precio_medio_cober = coste_cober / consumos.sum()
+
+            resultados.append({
+                "Oferta": "Cobertura",
+                "Tipo": "Indexado",
+                "Coste anual (€)": coste_cober,
+                "Precio medio (€/kWh)": precio_medio_cober
+            })
+
+
 
             df_resultados = pd.DataFrame(resultados)
             # Ordenar por coste anual (de más barato a más caro)
