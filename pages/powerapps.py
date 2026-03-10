@@ -54,7 +54,7 @@ with col24:
     st.image('images/redata.jpg')
 with col25:
     st.subheader('Balkoning Solar FV',divider='rainbow')
-    st.page_link("pages/balkoning_solar.py", label="Pasado, presente y futuro del gas", icon="🏊‍♂️", use_container_width=True)
+    st.page_link("pages/balkoning_solar.py", label="¿El autoconsumo pisero es para todos?", icon="🏊‍♂️", use_container_width=True)
     st.image('images/balkoning.jpg')
 
 col31,col32,col33,col34,col35=st.columns(5)
