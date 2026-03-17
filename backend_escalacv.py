@@ -10,6 +10,8 @@ from googleapiclient.http import MediaIoBaseDownload
 import json
 import numpy as np
 
+from backend_comun import aplicar_estilo
+
 
 
 meses_español = {1: "ene", 2: "feb", 3: "mar", 4: "abr", 5: "may", 6: "jun",
@@ -228,16 +230,16 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
 
     
     graf_ecv_diario.update_layout(
-        title=dict(
+        #title=dict(
             #text="Título del gráfico",
-            font=dict(
-                size=20,
+        #    font=dict(
+        #        size=20,
                 #family="Arial",
                 #color="black"
-            ),
-            x=0.5,          # centra el título
-            xanchor="center"
-        ),
+        #    ),
+        #    x=0.5,          # centra el título
+        #    xanchor="center"
+        #),
         xaxis=dict(
             range = [fecha_ini, fecha_fin],
             rangeslider=dict(
@@ -285,8 +287,11 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
                 
             )
         ]
-
     )
+    
+    graf_ecv_diario = aplicar_estilo(graf_ecv_diario)
+
+    
     
     print('datos dia')
     print(datos_dia)
@@ -494,16 +499,7 @@ def diarios(datos, fecha_ini, fecha_fin, datos_comparar):
     ymax = datos_dia['value'].max()
 
     graf_ecv_diario.update_layout(
-        title=dict(
-            #text="Título del gráfico",
-            font=dict(
-                size=20,
-                #family="Arial",
-                #color="black"
-            ),
-            x=0.5,          # centra el título
-            xanchor="center"
-        ),
+        
         xaxis=dict(
             range = [fecha_ini, fecha_fin],
             rangeslider=dict(
@@ -524,9 +520,12 @@ def diarios(datos, fecha_ini, fecha_fin, datos_comparar):
             tick0=0,                      # Comenzar en 0
             dtick=tick_y                      # Incrementos de 20
         ),
-        height = 500
+        #height = 500
+
     )
     
+    graf_ecv_diario = aplicar_estilo(graf_ecv_diario)
+
     return datos_dia, graf_ecv_diario
 
 
@@ -702,18 +701,12 @@ def mensuales(datos_dia):
                 name='media'
             )
         )
-        
+    graf_ecv_mensual.update_traces(
+        textfont_size=15,
+        cliponaxis=False
+    )    
     graf_ecv_mensual.update_layout(
-        title=dict(
-            #text="Título del gráfico",
-            font=dict(
-                size=20,
-                #family="Arial",
-                #color="black"
-            ),
-            x=0.5,          # centra el título
-            xanchor="center"
-        ),
+        
         xaxis = dict(
             tickmode = 'array',
             tickvals = orden_meses,
@@ -727,11 +720,8 @@ def mensuales(datos_dia):
         ),   
     )
     
-    #graf_ecv_mensual.update_traces(
-    #    textangle=0,
-    #    textposition='inside',  # o 'outside' si prefieres fuera de la barra
-    #    insidetextanchor='start'  # o 'middle' o 'end' según alineación horizontal)
-    #)
+    graf_ecv_mensual = aplicar_estilo(graf_ecv_mensual)
+
     return graf_ecv_mensual
 
 
@@ -872,17 +862,7 @@ def evolucion_mensual(df):
         
         
     graf_ecv_mensual.update_layout(
-        #title={'x':0.5,'xanchor':'center', 'title_font_size':24},
-        title=dict(
-            #text="Título del gráfico",
-            font=dict(
-                size=20,
-                #family="Arial",
-                #color="black"
-            ),
-            x=0.5,          # centra el título
-            xanchor="center"
-        ),
+        
         xaxis = dict(
             tickmode = 'array',
             #tickvals = orden_meses,
@@ -900,13 +880,11 @@ def evolucion_mensual(df):
     graf_ecv_mensual.update_traces(
         textfont_size=15,
         cliponaxis=False
-    #    textangle=0,
-    #    textposition='inside',  # o 'outside' si prefieres fuera de la barra
-    #    insidetextanchor='start'  # o 'middle' o 'end' según alineación horizontal)
     )
     graf_ecv_mensual.update_yaxes(
         rangemode="tozero"
     )
+    graf_ecv_mensual = aplicar_estilo(graf_ecv_mensual)
     return graf_ecv_mensual
 
     
@@ -1489,50 +1467,7 @@ def recalibrar_intercepto_con_punto(pendiente, omie_ref, ssaa_ref):
     intercepto_nuevo = ssaa_ref - pendiente * omie_ref
     return float(intercepto_nuevo)
 
-#NO USADO
-def graficar_regresion_ajustada(fig, omie_2025, ssaa_2025):
 
-    # 2. Ajuste regresión
-    pendiente, intercepto, r2 = ajustar_regresion_omie_ssaa(st.session_state.df_scatter_mensual)
-    ssaa_estimado = estimar_ssaa_desde_omie(st.session_state.omie_input, pendiente, intercepto)
-
-    # 2) Punto real anual 2025
-    omie_2025, ssaa_2025 = obtener_punto_anual_real(st.session_state.df_sheets, año=2025)
-    # 3) Recalibración del intercepto manteniendo pendiente
-    intercepto_cal = recalibrar_intercepto_con_punto(pendiente, omie_2025, ssaa_2025)
-    # 4) Estimación ya calibrada
-    ssaa_estimado_cal = estimar_ssaa_desde_omie(st.session_state.omie_input, pendiente, intercepto_cal)
-
-        
-        
-        
-    fig.add_scatter(
-            x=[omie_2025], y=[ssaa_2025],        
-            mode="markers",
-            name="2025 real (anual)",
-            marker=dict(size=15, symbol="circle", line=dict(width=2, color="white"))
-        )
-
-        #rango X para la línea
-    x_vals = np.linspace(
-        st.session_state.df_scatter_mensual["omie_med"].min() * 0.9,
-        st.session_state.df_scatter_mensual["omie_med"].max() * 1.05,
-        200
-    )
-
-    y_vals_cal = pendiente * x_vals + intercepto_cal
-
-    graf_scatter_combo.add_scatter(
-        x=x_vals,
-        y=y_vals_cal,
-        mode="lines",
-        name="Regresión calibrada (2025)",
-        line=dict(
-            color="#81C784",
-            width=2,
-            dash="dot"
-        )
-    )
 
 
 

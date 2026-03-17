@@ -9,7 +9,7 @@ from backend_telemindex import (filtrar_datos, añadir_srad, añadir_fnee, calcu
                                 tabla_precios, tabla_costes, tabla_pyc,
                                 evol_mensual, 
                                 construir_df_curva_sheets, añadir_costes_curva) 
-from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen
+from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, aplicar_estilo
 from backend_curvadecarga import graficar_media_horaria, graficar_queso_periodos
 
 from utilidades import generar_menu, init_app, init_app_index, persist_widget
@@ -41,11 +41,11 @@ init_app_index()
 for key, default in {
     "desvios_apant": 1.0,
     "cfg_srad": True,
-    "margen_telemindex": 5.0,
+    "margen_telemindex": 1.0,
     "cfg_margen_pos": "tm",
     "cfg_fnee": True,
     "cfg_fnee_pos": "perdidas",
-    "cf_pct": 0.0
+    "cf_pct": 0.8
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -171,11 +171,89 @@ if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None an
     df_curva_cober_omip = df_curva_cober_omip.drop_duplicates(subset=["fecha", "hora", "spot"])
     
        
-    
-    
-    
+    df_heat = st.session_state.df_curva_sheets[["fecha","hora"]].copy()
 
+    df_heat["coste_index"] = df_curva_sheets["coste_total"]
+    df_heat["coste_cober"] = df_curva_cober_omip["coste_total"]
+
+    df_heat["dif_coste"] = df_heat["coste_cober"] - df_heat["coste_index"]  
     
+    heatmap_data = df_heat.pivot_table(
+        index="fecha",
+        columns="hora",
+        values="dif_coste"
+    )
+    heatmap_data = heatmap_data.reindex(sorted(heatmap_data.columns), axis=1)
+
+    zmax = abs(heatmap_data.values).max()
+
+    fig_heat = px.imshow(
+        heatmap_data,
+        color_continuous_scale="RdYlGn_r",
+        zmin=-zmax,
+        zmax=zmax,
+        color_continuous_midpoint=0,
+        aspect="auto",
+        labels=dict(
+            x="Hora",
+            y="Día",
+            color="Δ Coste (€)"
+        )
+    )
+
+    fig_heat.update_layout(
+
+        title=dict(
+            text="Cobertura OMIP vs Indexado – Diferencia de coste horario",
+            x=0.5,              # centra el título
+            xanchor="center",
+            font=dict(size=22)
+        ),
+
+        xaxis=dict(
+            title=dict(text="Hora del día", font=dict(size=16)),
+            tickmode="array",
+            tickvals=list(range(0,24)),   # fuerza las 24 horas
+            tickfont=dict(size=12)
+        ),
+
+        yaxis=dict(
+            title=dict(text="Fecha", font=dict(size=16)),
+            tickfont=dict(size=12),
+            automargin=True
+        ),
+
+        coloraxis_colorbar=dict(
+            title=dict(text="Δ Coste (€)", font=dict(size=14)),
+            tickfont=dict(size=12)
+        ),
+
+        margin=dict(l=40, r=40, t=60, b=40),
+
+        height=700
+    )
+
+    fig_heat.update_traces(
+        zmin=-zmax,
+        zmax=zmax
+    )
+
+    fig_heat.update_traces(
+        hovertemplate=
+        "<b>Día:</b> %{y}<br>"
+        "<b>Hora:</b> %{x}<br>"
+        "<b>Diferencia coste:</b> %{z:.2f} €<extra></extra>"
+    )
+
+    fig_heat.update_xaxes(showgrid=False)
+    fig_heat.update_yaxes(showgrid=False)
+
+    fig_heat.update_traces(
+        xgap=1,
+        ygap=1
+    )
+
+    #fig_heat = aplicar_estilo(fig_heat)
 
 
 df_precios_mensuales, graf_mensual = evol_mensual(st.session_state.df_sheets, colores_precios)
@@ -624,6 +702,51 @@ with tab2:
             )
 
             st.plotly_chart(fig, use_container_width=True)
+
+        with c3:
+            st.plotly_chart(fig_heat, use_container_width=True)
+
+            graf_medias_horarias=graficar_media_horaria('Total')
+            graf_medias_horarias.add_trace(
+                go.Scatter(
+                    x=df_coste_h["hora"],
+                    y=df_coste_h["coste_total"],
+                    mode="lines",
+                    name="Coste medio",
+                    line=dict(
+                        color="#E91E63",
+                        width=5
+                    ),
+                    yaxis="y2"
+                )
+            )
+            graf_medias_horarias.update_layout(
+                yaxis2=dict(
+                    title="Coste medio (€)",
+                    overlaying="y",
+                    side="right",
+                    showgrid=False
+                )
+            )
+            df_coste_cober =  df_curva_cober_omip.copy()
+            df_coste_cober_h = (
+                df_coste_cober
+                .groupby("hora", as_index=False)["coste_total"]
+                .mean()
+            )
+            graf_medias_horarias.add_trace(
+                go.Scatter(
+                    x=df_coste_cober_h["hora"],
+                    y=df_coste_cober_h["coste_total"],
+                    mode="lines",
+                    name="Coste cobertura",
+                    line=dict(color="#00E676", width=5),
+                    yaxis="y2"
+                )
+            )
+
+            st.plotly_chart(graf_medias_horarias)
+            
 
 
 

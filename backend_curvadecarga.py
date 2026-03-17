@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import io, re
 from unidecode import unidecode
+from backend_comun import aplicar_estilo
 
 
 TZ = "Europe/Madrid"
@@ -607,6 +608,8 @@ def graficar_curva_horaria(df, frec):
         ),
     )
 
+    fig = aplicar_estilo(fig)
+
     return fig
 
 def graficar_queso_periodos(df_norm):
@@ -656,6 +659,8 @@ def graficar_queso_periodos(df_norm):
         font=dict(size=18)
     )
 
+    fig = aplicar_estilo(fig)
+
     return fig, df_periodos
 
 def graficar_diario_apilado(df_norm):
@@ -703,6 +708,9 @@ def graficar_diario_apilado(df_norm):
         )
     )
     fig.update_yaxes(tickformat=",.0f")
+
+    fig = aplicar_estilo(fig)
+
     return fig
 
 
@@ -757,6 +765,7 @@ def graficar_mensual_apilado(df_norm):
         )
     )
 
+    fig = aplicar_estilo(fig)
     
     return fig
 

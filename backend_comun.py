@@ -26,6 +26,58 @@ def rango_componentes():
                 'valor_asignado': ['muy bajo', 'bajo', 'medio', 'alto', 'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2'],
         }
     
+ESTILO_GRAF = dict(
+    title_size = 22,
+    axis_title_size = 16,
+    tick_size = 12,
+    hover_size = 16,
+    legend_size = 13,
+    height = 500
+)
+
+ESTILO_GRAF_COMPACTO = dict(
+    title_size = 20,
+    axis_title_size = 14,
+    tick_size = 11,
+    hover_size = 15,
+    legend_size = 12,
+    height = 420
+)
+
+def aplicar_estilo(fig):
+
+    fig.update_layout(
+
+        title=dict(
+            x=0.5,
+            xanchor="center",
+            font=dict(size=ESTILO_GRAF["title_size"])
+        ),
+
+        xaxis=dict(
+            title_font=dict(size=ESTILO_GRAF["axis_title_size"]),
+            tickfont=dict(size=ESTILO_GRAF["tick_size"])
+        ),
+
+        yaxis=dict(
+            title_font=dict(size=ESTILO_GRAF["axis_title_size"]),
+            tickfont=dict(size=ESTILO_GRAF["tick_size"])
+        ),
+
+        hoverlabel=dict(
+            font_size=ESTILO_GRAF["hover_size"]
+        ),
+
+        legend=dict(
+            font=dict(size=ESTILO_GRAF["legend_size"])
+        ),
+
+        height=ESTILO_GRAF["height"]
+
+    )
+
+    return fig
+    
 
 @st.cache_resource
 def autenticar_google_sheets():

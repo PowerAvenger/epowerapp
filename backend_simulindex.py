@@ -695,7 +695,7 @@ def obtener_grafico_omip_omie(df_omip_producto, df_spot_mensual, producto):
         meses_trimestre = mapa_trimestres[trimestre]
 
         colores = ['#FF8C00', '#00E676', '#FFD600']
-
+        posiciones_x = [0.05, 0.1, 0.15]
         for i, mes_num in enumerate(meses_trimestre):
             filtro = (
                 (df_spot_mensual.index.month == mes_num) &
@@ -716,7 +716,8 @@ def obtener_grafico_omip_omie(df_omip_producto, df_spot_mensual, producto):
                 line_dash="dash",
                 line_color=colores[i],
                 annotation_text=texto,
-                annotation_position="top left",
+                #annotation_position="top left",
+                annotation_x=posiciones_x[i],
                 annotation_font_size=18,
                 annotation_font_color=colores[i]
             )
@@ -755,6 +756,12 @@ def obtener_grafico_omip_omie(df_omip_producto, df_spot_mensual, producto):
                 annotation_font_size=18,
                 annotation_font_color="#FF8C00"
             )
+    fig.update_layout(
+        hoverlabel=dict(
+            font_size=16,
+            font_family="Arial"
+        )
+    )
 
     return fig
 
