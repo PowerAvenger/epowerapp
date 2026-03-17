@@ -153,7 +153,7 @@ with tab3:
 
 with tab4:
 
-    col1, col2 = st.columns([.2,.8])
+    col1, col2 = st.columns([.25,.75])
     with col1:
         st.success('Bienvenido a la simulación baratera del precio medio OMIE anual a partir de MIBGAS')
         col11, col12 = st.columns(2)
