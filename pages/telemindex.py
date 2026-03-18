@@ -30,7 +30,7 @@ if "margen_fijo" not in st.session_state:
 
 #inicializamos variables de sesión
 generar_menu()
-if st.session_state.atr_dfnorm in ['6.2', '6.3', '6.4']:
+if st.session_state.get('atr_dfnorm') in ['6.2', '6.3', '6.4']:
     st.warning(f'No se disponen datos de indexado para {st.session_state.atr_dfnorm}TD')
     st.stop()  
 init_app()
