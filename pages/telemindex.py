@@ -18,6 +18,8 @@ from utilidades import generar_menu, init_app, init_app_index, persist_widget
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
 
+  
+
 if "df_ofertas_fijas" not in st.session_state:
     st.session_state.df_ofertas_fijas = pd.DataFrame()
 
@@ -28,6 +30,9 @@ if "margen_fijo" not in st.session_state:
 
 #inicializamos variables de sesión
 generar_menu()
+if st.session_state.atr_dfnorm in ['6.2', '6.3', '6.4']:
+    st.warning(f'No se disponen datos de indexado para {st.session_state.atr_dfnorm}TD')
+    st.stop()  
 init_app()
 
 st.sidebar.header('⚡ Histórico de indexados ⚡')

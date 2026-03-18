@@ -33,7 +33,7 @@ with st.sidebar:
         #uploaded = st.file_uploader("📂 Sube un archivo CSV o Excel", type=["csv", "xlsx"])
         atr_dfnorm = st.sidebar.selectbox(
                     "Selecciona peaje de acceso:",
-                    ("2.0", "3.0", "6.1", "6.2"),
+                    ("2.0", "3.0", "6.1", "6.2", "6.3", "6.4"),
                     index=0
                 )
     normalizar = st.button('Normalizar curva de carga', type='primary', use_container_width=True)
