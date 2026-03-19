@@ -313,9 +313,9 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
                     hora_raw.loc[mask_24] = "00:00"
                     d.loc[mask_24] = d.loc[mask_24] + pd.Timedelta(days=1)
                     print('Datos de la columna fecha con retoque 24:00 (tipo DATADIS)')
-                    print(d.head(24))
+                    print(d.head(96))
                     print('Columna hora modificada (origen 24:00)')
-                    print(hora_raw.head(24))
+                    print(hora_raw.head(96))
 
                 # Detectar casos con formato HH:MM o HH:MM:SS
                 if hora_raw.str.contains(":").any():
@@ -345,8 +345,27 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
                     else:
                         # Cuartohoraria (00:15, 00:30…)
                         print("Registros cuarto horarios")
-                        h = pd.to_timedelta(hora_raw, errors="coerce")
+                        hora_norm = hora_raw.copy()
+
+                        # HH:MM → añadir segundos
+                        mask_horario = hora_norm.str.count(":") == 1
+                        hora_norm.loc[mask_horario] = hora_norm.loc[mask_horario] + ":00"
+                        #h = pd.to_timedelta(hora_raw, errors="coerce")
+                        h = pd.to_timedelta(hora_norm, errors="coerce")
+                        if h.isna().any():
+                            print("🚨 HORAS PROBLEMÁTICAS:")
+                            print(hora_norm[h.isna()].unique())
+                        #print(repr(hora_raw.iloc[0]))
+                        #print(type(hora_raw))
+                        #print(hora_raw.dtype)
+                        #print(type(hora_raw.iloc[0]))
+                        #print(pd)
+                        #print(pd.to_timedelta("0:15"))                # debería funcionar
+                        #print(pd.to_timedelta(["0:15", "1:30"]))     # prueba lista
                         dt0 = d + h
+
+                        print("DEBUG --- dt0 primeras filas:")
+                        print(dt0.head(96))
 
                 else:
                     # Horas numéricas (1–24)
@@ -354,7 +373,7 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
                     dt0 = d + pd.to_timedelta(h, unit="h")
 
                     #print("DEBUG --- dt0 primeras filas:")
-                    #print(dt0.head(10))
+                    #print(dt0.head(96))
                     #print("DEBUG --- diferencias en minutos:")
                     #print(dt0.diff().dt.total_seconds().head(10))
     
