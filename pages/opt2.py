@@ -104,7 +104,7 @@ if 'frec' not in st.session_state:
     st.session_state.frec = 'None'
 
 
-#tab1, tab2 =st.tabs(['Optimizar', 'Verificar'])
+
 habilitar_opt = False
 habilitar_ver = False
 
@@ -113,16 +113,8 @@ if 'df_norm' not in st.session_state or st.session_state.df_norm is None:
     st.sidebar.warning('Por favor introduce una curva de carga')
     habilitar_opt = False
     habilitar_ver = False
-#    with tab1:
-    #submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=True)
-#    with tab2:
-    #submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=True)
 else:
     tarifa = st.session_state.atr_dfnorm
-    #submit_opt = False
-    #submit_ver = False
-    #if st.session_state.freq =='QH' or st.session_state.freq =='H':
-
     if tarifa != '2.0':
         df_in = leer_curva_normalizada(pot_con)
         st.sidebar.write(f'El peaje del suministro es **:orange[{st.session_state.atr_dfnorm}]**')
@@ -133,7 +125,7 @@ else:
 
         const_verif = 31
         const_optim_inf = 320
-        const_optim_sup = 380
+        const_optim_sup = 366
 
         if st.session_state.frec =='H':
             coef_excesos = 2
@@ -146,28 +138,56 @@ else:
             st.sidebar.info('Es posible verificar.')
             habilitar_opt = False
             habilitar_ver = True
-            #submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=True)
-            #submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=False)
             pyc_tp_ver = pyc_tp[año_ver][tarifa]
             tepp_ver = {
                 k: v * coef_excesos
                 for k, v in tepp[año_ver][tarifa].items()
             }
-            #tepp_ver = tepp[año_ver][tarifa]
-        # menos de 365 días o más de 366: no se puede hacer nada
-        elif (const_verif < dias_rango < const_optim_inf) or (dias_rango > const_optim_sup):
+            
+        # no hay días suficientes para optimizar
+        elif (const_verif < dias_rango < const_optim_inf): #or (dias_rango > const_optim_sup):
             st.sidebar.warning('No es posible ejecutar ninguna acción.', icon='⚠️')
             habilitar_opt = False
             habilitar_ver = False
-            #submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=True)
-            #submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=True)
+
+        # sobran días: se recorta a los últimos 365    
+        elif dias_rango > const_optim_sup:
+            st.sidebar.warning('Curva demasiado larga → se recortan los últimos 365 días', icon='⚠️')
+
+            # 🔹 fecha de corte (365 días naturales)
+            fecha_ini = fecha_fin - pd.Timedelta(days=364)
+
+            # 🔹 filtrar por fechas completas (date vs date)
+            df_in = df_in[
+                (df_in["fecha"] >= fecha_ini) &
+                (df_in["fecha"] <= fecha_fin)
+            ]
+            print('curva recortada')
+            print(df_in)
+            # 🔹 recalcular rango real
+            fecha_ini = df_in["fecha"].min()
+            fecha_fin = df_in["fecha"].max()
+            dias_rango = (fecha_fin - fecha_ini).days + 1
+
+            st.sidebar.info(f'Nuevo rango: {fecha_ini} → {fecha_fin}')
+            st.sidebar.write("Días finales:", dias_rango)
+
+            habilitar_opt = True
+            habilitar_ver = False
+
+            año_opt = 2026
+            pyc_tp_opt = pyc_tp[año_opt][tarifa]
+        
+            tepp_opt = {
+                k: v * coef_excesos
+                for k, v in tepp[año_opt][tarifa].items()
+            }
         else:
             # 365 días: se puede optimizar    
             st.sidebar.info('Es posible optimizar.')
             habilitar_opt = True
             habilitar_ver = False
-            #submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=False)
-            #submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=True)
+            
             año_opt = 2026
             pyc_tp_opt = pyc_tp[año_opt][tarifa]
         
@@ -177,12 +197,10 @@ else:
             }
         
     else:
-        #st.sidebar.warning('Curva de carga **:red[HORARIA]**. No es posible ejecutar ninguna acción', icon='⚠️')
         st.sidebar.error('No es posible ejecutar ninguna acción. El peaje de acceso es 2.0TD', icon='⚠️')
         habilitar_opt = False
         habilitar_ver = False
-        #submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=True)
-        #submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=True)
+        
 
 submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=not habilitar_opt)
 submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=not habilitar_ver)
@@ -222,7 +240,9 @@ if submit_opt and st.session_state.df_norm is not None:
         
         c11, c12, c13= st.columns([.25, .05, .7])
         with c11:
-            st.subheader('Tabla de potencias')        
+            st.subheader('Tabla de potencias')
+            
+                  
             st.dataframe(df_potencias, hide_index=True, use_container_width=True)
             st.write(fig_ahorro)
         with c13:
@@ -331,8 +351,7 @@ if submit_ver and st.session_state.df_norm is not None:
                 row=i,
                 col=1
             )
-        import plotly.graph_objects as go
-
+        
         for i, periodo in enumerate(orden_periodos_presentes, start=1):
             df_p = df_in[df_in['periodo'] == periodo]
 

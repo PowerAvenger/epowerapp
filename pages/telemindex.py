@@ -8,7 +8,8 @@ from backend_telemindex import (filtrar_datos, añadir_srad, añadir_fnee, calcu
                                 graficar_precios_medios_horarios, graficar_queso_componentes,
                                 tabla_precios, tabla_costes, tabla_pyc,
                                 evol_mensual, 
-                                construir_df_curva_sheets, añadir_costes_curva) 
+                                construir_df_curva_sheets, añadir_costes_curva,
+                                check_medias) 
 from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, aplicar_estilo
 from backend_curvadecarga import graficar_media_horaria, graficar_queso_periodos
 
@@ -30,22 +31,25 @@ if "margen_fijo" not in st.session_state:
 
 #inicializamos variables de sesión
 generar_menu()
-if st.session_state.get('atr_dfnorm') in ['6.2', '6.3', '6.4']:
+
+if st.session_state.get('atr_dfnorm') in ['6.3', '6.4']:
     st.warning(f'No se disponen datos de indexado para {st.session_state.atr_dfnorm}TD')
     st.stop()  
+
 init_app()
 
 st.sidebar.header('⚡ Histórico de indexados ⚡')
 zona_mensajes = st.sidebar.empty()
-if 'df_sheets' not in st.session_state:
+#if 'df_sheets' not in st.session_state:
+if 'df_sheets_old' not in st.session_state:    
     zona_mensajes.warning('Cargando históricos de indexado. Espera a que estén disponibles...', icon = '⚠️')
 
 init_app_index()
 
-# Inicialización de estados st.session
+# Inicialización de estados st.session componentes fórmula
 for key, default in {
     "desvios_apant": 1.0,
-    "cfg_srad": True,
+    #"cfg_srad": True,
     "margen_telemindex": 1.0,
     "cfg_margen_pos": "tm",
     "cfg_fnee": True,
@@ -63,11 +67,34 @@ if "rango_curvadecarga" in st.session_state:
 
 df_filtrado_sheets, lista_meses = filtrar_datos()
 
+check_medias(df_filtrado_sheets, "3.0")
+
+def check_componentes_ssaa_simple(df):
+    
+    componentes = [
+        "balx", "bs3", "cfp", "ct2", "ct3",
+        "dsv", "exd", "in7", "rad3", "rt3", "rt6"
+    ]
+
+    print("---- MEDIAS COMPONENTES ----\n")
+
+    suma = 0
+
+    for c in componentes:
+        val = df[c].mean()
+        suma += val
+        print(f"{c.upper():5}: {val:.4f}")
+
+    print("\nTOTAL SSAA (reconstruido):", round(suma, 4))
+    print("SSAA en df:", round(df["ssaa"].mean(), 4))
+
+check_componentes_ssaa_simple(df_filtrado_sheets)
+
 #SRAD AÑADIDO AL DF
-if st.session_state.get("cfg_srad", False):
-    df_filtrado_sheets = añadir_srad(df_filtrado_sheets)
-else:
-    df_filtrado_sheets["srad"] = 0.0
+#if st.session_state.get("cfg_srad", False):
+#    df_filtrado_sheets = añadir_srad(df_filtrado_sheets)
+#else:
+#    df_filtrado_sheets["srad"] = 0.0
 
 # FNEE AÑADIDO AL DF
 if st.session_state.get("cfg_fnee", False):
@@ -273,6 +300,9 @@ df_precios_mensuales, graf_mensual = evol_mensual(st.session_state.df_sheets, co
 zona_mensajes.info(
     f"Última fecha disponible: {st.session_state.ultima_fecha_sheets.strftime('%d.%m.%Y')}"
 )
+st.sidebar.info(
+    f"Última fecha C2 liquicomun: {st.session_state.ultima_fecha_csv.strftime('%d.%m.%Y')}"
+)
 
 st.sidebar.subheader('Opciones')
 with st.sidebar.container(border=True):
@@ -307,44 +337,44 @@ with st.sidebar.container(border=True):
 
 
 
-persist_widget(st.sidebar.toggle,"Activar fórmula personalizada", key="modo_formula_custom", default=True)
+#persist_widget(st.sidebar.toggle,"Activar fórmula personalizada", key="modo_formula_custom", default=True)
 
 
 
 # --- MODO GENÉRICO ---
-if not st.session_state.modo_formula_custom:
+#if not st.session_state.modo_formula_custom:
 
-    persist_widget(st.sidebar.slider, "Margen (€/MWh)", min_value=0, max_value=50, step=1, key="margen_telemindex", default=5)
-    st.sidebar.caption(f'Se ha añadido {st.session_state.margen_telemindex} €/MWh')
+#    persist_widget(st.sidebar.slider, "Margen (€/MWh)", min_value=0, max_value=50, step=1, key="margen_telemindex", default=5)
+#    st.sidebar.caption(f'Se ha añadido {st.session_state.margen_telemindex} €/MWh')
 
 # --- MODO PERSONALIZADO ---
-else:
+#else:
    
     
+st.sidebar.subheader('Parámetros de fórmula')
+    
+with st.sidebar.container(border=True):
+    
+    #st.number_input("Desvíos apantallados (€/MWh)", min_value=0.0, max_value=20.0, step=0.1, key="desvios_apant")
+    persist_widget(st.number_input, "Desvíos apantallados (€/MWh)", min_value=0.0, max_value=20.0, step=0.1, key="desvios_apant", default=1)
 
-    #with st.sidebar.form("form_formula_custom"):
-    with st.sidebar.container(border=True):
-        
-        #st.number_input("Desvíos apantallados (€/MWh)", min_value=0.0, max_value=20.0, step=0.1, key="desvios_apant")
-        persist_widget(st.number_input, "Desvíos apantallados (€/MWh)", min_value=0.0, max_value=20.0, step=0.1, key="desvios_apant", default=1)
+    #persist_widget(st.checkbox, "Incluye SRAD", key="cfg_srad", default=True)
+    #st.checkbox("Añadir SRAD", key="cfg_srad")
 
-        persist_widget(st.checkbox, "Incluye SRAD", key="cfg_srad", default=True)
-        #st.checkbox("Añadir SRAD", key="cfg_srad")
+    persist_widget(st.number_input, "Margen (€/MWh)", min_value=0.0, max_value=50.0, step=0.1, key="margen_telemindex", default=5)
+    #st.number_input("Margen (€/MWh)", min_value=0.0, max_value=50.0, step=0.1, key="margen_telemindex")
+    
 
-        persist_widget(st.number_input, "Margen (€/MWh)", min_value=0.0, max_value=50.0, step=0.1, key="margen_telemindex", default=5)
-        #st.number_input("Margen (€/MWh)", min_value=0.0, max_value=50.0, step=0.1, key="margen_telemindex")
-        
+    persist_widget(st.selectbox, "Ubicación margen", ["perdidas", "tm", "neto"], key="cfg_margen_pos", default="tm")
+    #st.selectbox("Ubicación margen", ["perdidas", "tm", "neto"], key="cfg_margen_pos")
 
-        persist_widget(st.selectbox, "Ubicación margen", ["perdidas", "tm", "neto"], key="cfg_margen_pos", default="tm")
-        #st.selectbox("Ubicación margen", ["perdidas", "tm", "neto"], key="cfg_margen_pos")
+    persist_widget(st.checkbox, "Incluye FNEE", key="cfg_fnee", default=True)
+    if st.session_state.get("cfg_fnee", False):
+        persist_widget(st.selectbox, "Ubicación FNEE", ["perdidas", "tm", "neto"], key="cfg_fnee_pos", default= "perdidas")
+    #st.selectbox("Ubicación FNEE", ["perdidas", "tm", "neto"], key="cfg_fnee_pos")
 
-        persist_widget(st.checkbox, "Incluye FNEE", key="cfg_fnee", default=True)
-        if st.session_state.get("cfg_fnee", False):
-            persist_widget(st.selectbox, "Ubicación FNEE", ["perdidas", "tm", "neto"], key="cfg_fnee_pos", default= "perdidas")
-        #st.selectbox("Ubicación FNEE", ["perdidas", "tm", "neto"], key="cfg_fnee_pos")
-
-        #st.number_input("Coste financiero (%)", min_value=0.0, max_value=10.0, step=0.01, key="cf_pct")
-        persist_widget(st.number_input,"Coste financiero (%)", min_value=0.0, max_value=10.0, step=0.01, key="cf_pct", default=0.0)
+    #st.number_input("Coste financiero (%)", min_value=0.0, max_value=10.0, step=0.01, key="cf_pct")
+    persist_widget(st.number_input,"Coste financiero (%)", min_value=0.0, max_value=10.0, step=0.01, key="cf_pct", default=0.0)
 
         
 

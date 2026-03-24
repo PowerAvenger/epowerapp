@@ -4,7 +4,8 @@ from backend_simulindex import (obtener_historicos_meff, obtener_meff_trimestral
                                 obtener_hist_mensual, obtener_spot_mensual,
                                 obtener_graf_hist, obtener_grafico_omip, obtener_grafico_omip_omie,
                                 obtener_trimestres_futuros, construir_escenarios,
-                                construir_curva_2026, graficar_2026)
+                                construir_curva_2026, graficar_2026,
+                                construir_curva_omip_forward, graficar_curva_omip)
 from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, formatear_df_resultados
 import pandas as pd
 import plotly.express as px
@@ -26,12 +27,13 @@ init_app_index()
 
 
 df_historicos_FTB, ultimo_registro = obtener_historicos_meff()
-df_FTB_trimestral, df_FTB_trimestral_futuros, fecha_ultimo_omip, media_omip_trimestral, lista_trimestres_hist, trimestre_actual, df_ultimos_precios_trim = obtener_meff_trimestral(df_historicos_FTB)
+df_FTB_trimestral, df_FTB_trimestral_futuros, fecha_ultimo_omip_trimestral, media_omip_trimestral, lista_trimestres_hist, trimestre_actual, df_ultimos_precios_trim = obtener_meff_trimestral(df_historicos_FTB)
 df_FTB_mensual, df_FTB_mensual_simulindex, fecha_ultimo_omip_mensual, media_omip_mensual, lista_meses_hist, mes_actual = obtener_meff_mensual(df_historicos_FTB)
 
+print(f'fecha ultimo omip mensual: {fecha_ultimo_omip_mensual}')
 print('df FTB mensual')
 print(df_FTB_mensual)
-
+print(f'fecha ultimo omip trimestral: {fecha_ultimo_omip_trimestral}')
 print('df FTB trimestral')
 print(df_FTB_trimestral)
 
@@ -80,7 +82,40 @@ if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is
     else:
         df_sheets_origen = st.session_state.df_sheets
 else:
-    df_sheets_origen = st.session_state.df_sheets
+    #df_sheets_origen = st.session_state.df_sheets
+    df = st.session_state.df_sheets.copy()
+    print('st session state df sheets')
+    print(st.session_state.df_sheets)
+    st.session_state.pyc_2026 = pyc_2026
+    map_atr_periodo = {
+        "2.0": "dh_3p",
+        "3.0": "dh_6p",
+        "6.1": "dh_6p"
+    }
+
+    map_atr_col = {
+        "2.0": "2.0TD",
+        "3.0": "3.0TD",
+        "6.1": "6.1TD"
+    }
+
+    for atr_short in ["2.0", "3.0", "6.1"]:
+
+        col_periodo = map_atr_periodo[atr_short]
+        atr_col = map_atr_col[atr_short]
+
+        pyc_dict = st.session_state.pyc_2026[atr_col]
+
+        # guardar histórico (opcional)
+        df[f"pyc_{atr_short}_hist"] = df[f"pyc_{atr_short}"]
+
+        # 🔹 sustituir pyc usando el periodo correcto
+        df[f"pyc_{atr_short}"] = df[col_periodo].map(pyc_dict) *1000
+
+        # 🔹 recalcular precio
+        df[f"precio_{atr_short}"] = df[f"coste_{atr_short}"] + df[f"pyc_{atr_short}"] + 3.0
+    
+    df_sheets_origen = df.copy()
 
 
 print('df_sheets_origen')
@@ -183,12 +218,18 @@ if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is
 
     
 
-df_2026 = construir_curva_2026(df_spot_mensual, df_FTB_mensual, df_FTB_trimestral)
+df_2026 = construir_curva_2026(df_spot_mensual, df_FTB_mensual, df_FTB_trimestral, fecha_ultimo_omip_trimestral)
 precio_medio_2026 = round(df_2026["precio"].mean(),2)
 graf_2026 = graficar_2026(df_2026, precio_medio_2026)
 st.session_state.precio_omie_previsto = precio_medio_2026
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(['Principal', 'Futuros', 'OMIP vs OMIE', 'Comparador', 'Cobertura trimestral'])
+df_año_movil = construir_curva_omip_forward(df_FTB_mensual, df_FTB_trimestral, fecha_ultimo_omip_trimestral)
+precio_medio_omip = round(df_año_movil["precio"].mean(),2)
+graf_año_movil = graficar_curva_omip(df_año_movil, precio_medio_omip)
+st.session_state.precio_omip_previsto = precio_medio_omip
+
+
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(['Principal', 'Futuros', 'Previsión anual', 'OMIP vs OMIE', 'Comparador', 'Cobertura trimestral'])
 
 
 #PANTALLA PRINCIPAL CON LAS RECTAS DE SIMULACIÓN Y DATOS PARA UN SOLO ESCENARIO OMIE------------------------------------------------------------------------------------------------------------------
@@ -240,7 +281,7 @@ with tab2:
             st.subheader('Datos de OMIP', divider = 'rainbow')
             col31, col32 = st.columns(2)
             with col31:
-                st.metric('Fecha', value = fecha_ultimo_omip)
+                st.metric('Fecha', value = fecha_ultimo_omip_trimestral)
             with col32:
                 st.metric(':blue[OMIP] medio', value = media_omip_trimestral)
     with col4:
@@ -248,11 +289,17 @@ with tab2:
         st.write(graf_omip_trimestral)
         st.info('Aquí tienes la evolución de :blue[OMIP] por meses', icon = "ℹ️")
         st.write(graf_omip_mensual)
-        st.write(graf_2026)
+
     
+with tab3:
+    c1, c2 = st.columns(2)
+    with c1:
+        st.write(graf_2026)
+    with c2:
+        st.write(graf_año_movil)
 
 # PANTALLA DE COMPARACIONES OMIP EVOL VS OMIE
-with tab3:
+with tab4:
     with st.container():
         col5, col6 = st.columns([0.2, 0.8])
         with col5:
@@ -270,7 +317,7 @@ with tab3:
 
 
 
-with tab4:
+with tab5:
 
     if 'df_curva_sheets' not in st.session_state or st.session_state.df_curva_sheets is None or simulcurva is None:
         st.warning('Introduce una curva de carga anual')
@@ -522,7 +569,7 @@ with tab4:
             st.plotly_chart(graf_periodos, use_container_width=True)
 
 
-with tab5:
+with tab6:
     
     if 'df_curva_sheets' not in st.session_state or st.session_state.df_curva_sheets is None or simulcurva is None:
         st.warning('Introduce una curva de carga anual')

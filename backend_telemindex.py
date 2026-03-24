@@ -3,7 +3,44 @@ import plotly.express as px
 import streamlit as st
 
 
-SRAD = {
+COMPONENTES_SSAA_TOTAL = [
+    "balx",
+    "bs3",
+    "cfp",
+    "ct2",
+    "ct3",
+    "dsv",
+    "erad",
+    "eradx",
+    "exd",
+    "in3",
+    "in7",
+    "mi",
+    "pc3",
+    "rad1",
+    "rad1x",
+    "rad3",
+    "rt3",
+    "rt6",
+    "secx"
+]
+
+COMPONENTES_SSAA_FORMULA = [
+    "balx",
+    "bs3",
+    "cfp",
+    "ct2",
+    "ct3",
+    "dsv",
+    "exd",
+    "in7",
+    "rad3",
+    "rt3",
+    "rt6"
+]
+
+
+SRAD_OLD = {
     2022: {
         1: 0.000, 2: 0.000, 3: 0.000, 4: 0.000,
         5: 0.000, 6: 0.000, 7: 0.000, 8: 0.000,
@@ -50,6 +87,16 @@ SRAD = {
         21: 1.711, 22: 2.689, 23: 2.922, 24: 3.244,
     }
 }
+SRAD = {
+    2026: {
+        1: 0.000, 2: 0.000, 3: 0.000, 4: 0.000,
+        5: 0.000, 6: 0.000, 7: 0.000, 8: 1.984,
+        9: 1.831, 10: 1.786, 11: 1.775, 12: 1.796,
+        13: 1.819, 14: 1.815, 15: 1.819, 16: 1.844,
+        17: 1.860, 18: 1.853, 19: 1.785, 20: 1.732,
+        21: 1.711, 22: 2.689, 23: 2.922, 24: 3.244,
+    }
+}
 
 FNEE_TRAMOS = [
     ("2023-01-01", 0.264),
@@ -84,18 +131,55 @@ def filtrar_datos():
         lista_meses = None
         print('Filtrado por dia')
 
-    print('dias seleccionados')
-    print(st.session_state.dias_seleccionados)
-    print("DEBUG tipo dia_seleccionado:", type(st.session_state.get("dias_seleccionados")))
-    print('st session df sheets')
-    print(st.session_state.df_sheets)
+    #print('dias seleccionados')
+    #print(st.session_state.dias_seleccionados)
+    #print("DEBUG tipo dia_seleccionado:", type(st.session_state.get("dias_seleccionados")))
+    #print('st session df sheets')
+    #print(st.session_state.df_sheets)
 
-    print ('df_filtrado')
-    print (df_filtrado)
+    #print ('df_filtrado')
+    #print (df_filtrado)
              
     return df_filtrado, lista_meses
-        
 
+
+# de momento no usado, pero lo dejamos para más adelante
+def calcular_ssaa_formula(df):
+
+    df = df.copy()
+    df["ssaa"] = df[COMPONENTES_SSAA_FORMULA].sum(axis=1)
+
+    return df
+
+
+# MONTAMOS UN DF CON SPOT Y SSAA PARA ESCALA CV
+def construir_df_spot_ssaa():
+
+    # 🔹 CSV (modelo)
+    df_csv = st.session_state.csv_componentes.copy()
+    df_csv["ssaa"] = df_csv[COMPONENTES_SSAA_FORMULA].sum(axis=1)
+
+    df_csv = df_csv[["fecha", "año", "mes", "spot", "ssaa"]]
+
+    # 🔹 Sheets (real)
+    df_sheets = st.session_state.df_sheets.copy()
+    df_sheets = df_sheets[["fecha", "año", "mes", "spot", "ssaa"]]
+
+    # 🔹 última fecha CSV
+    fecha_corte = df_csv["fecha"].max()
+
+    # 🔹 cogemos SOLO lo posterior en sheets
+    df_sheets = df_sheets[df_sheets["fecha"] > fecha_corte]
+
+    # 🔹 unión limpia
+    df_total = pd.concat([df_csv, df_sheets], ignore_index=True)
+
+    print('df spot ssaa total')
+    print(df_total)
+
+    return df_total
+
+# NO USADO para sheets original esos id
 def construir_df_srad():
 
     filas = []
@@ -106,13 +190,27 @@ def construir_df_srad():
 
     return pd.DataFrame(filas)
 
-
+# NO USADO para sheets original esos id
 def añadir_srad(df):
 
     df_srad = construir_df_srad()
 
     return df.merge(df_srad, on=["año", "hora"], how="left").fillna({"srad": 0.0})
 
+# USADO para añadir RAD3 a los valores provisionales post C2 (en la misma columna). Ver utilidades.py
+def construir_df_rad3_manual():
+
+    filas = []
+
+    for year, horas in SRAD.items():
+        for hora, valor in horas.items():
+            filas.append({
+                "año": year,
+                "hora": hora,
+                "rad3": valor
+            })
+
+    return pd.DataFrame(filas)
 
 def añadir_fnee(df):
 
@@ -139,46 +237,45 @@ def añadir_fnee(df):
 
 def calcular_precios_atr(df):
     
-  
     tm_rate = 0.015
     df = df.copy()
-
-    cols_drop = [c for c in df.columns if c.startswith("coste_") or c.startswith("precio_")]
-    df = df.drop(columns=cols_drop, errors="ignore")
+    
+    #cols_drop = [c for c in df.columns if c.startswith("coste_") or c.startswith("precio_")]
+    #df = df.drop(columns=cols_drop, errors="ignore")
 
     for atr in ["2.0", "3.0", "6.1"]:
 
-        if not st.session_state.get("modo_formula_custom", False):
+        #if not st.session_state.get("modo_formula_custom", False):
 
-            base = (
-                df["spot"]
-                + df["ssaa"]
-                + df[f"ppcc_{atr}"]
-                + df["osom"]
-                + df["otros"]
-            )
+        #    base = (
+        #        df["spot"]
+        #        + df["ssaa"]
+        #        + df[f"ppcc_{atr}"]
+        #        + df["osom"]
+        #        + df["otros"]
+        #    )
 
-        else:
+        #else:
 
-            base = (
-                df["spot"]
-                + df["ssaa"]
-                + df[f"ppcc_{atr}"]
-                + df["osom"]
-            )
+        base = (
+            df["spot"]
+            + df["ssaa"]
+            + df[f"ppcc_{atr}"]
+            + df["osom"]
+        )
 
-            #ajuste manual por diferencia de los SSAA id esios con los C2
-            base += 0.7
+        #ajuste manual por diferencia de los SSAA id esios con los C2
+        base += 0.0
 
-            # componentes opcionales a pérdidas
-            base += st.session_state.get("desvios_apant", 0.0)
-            base += df["srad"]
-            
-            if st.session_state.get("cfg_fnee_pos") == "perdidas":
-                base += df["fnee"]
+        # componentes opcionales a pérdidas
+        base += st.session_state.get("desvios_apant", 0.0)
+        #base += df["srad"]
+        
+        if st.session_state.get("cfg_fnee_pos") == "perdidas":
+            base += df["fnee"]
 
-            if st.session_state.get("cfg_margen_pos") == "perdidas":
-                base += st.session_state.get("margen_telemindex", 0.0)
+        if st.session_state.get("cfg_margen_pos") == "perdidas":
+            base += st.session_state.get("margen_telemindex", 0.0)
 
         # base pérdidas
         base *= (1 + df[f"perd_{atr}"])
@@ -194,9 +291,8 @@ def calcular_precios_atr(df):
         base *= (1 + tm_rate)
 
         # CF
-        if st.session_state.get("modo_formula_custom", False):
-            cf = st.session_state.get("cf_pct", 0.0) / 100
-            base *= (1 + cf)
+        cf = st.session_state.get("cf_pct", 0.0) / 100
+        base *= (1 + cf)
 
         # coste de la energía según atr
         df[f"coste_{atr}"] = base
@@ -220,6 +316,9 @@ def calcular_precios_atr(df):
 
         # precio final según atr
         #df[f"precio_{atr}"] = precio
+
+        print('df sheets con costes y precios')
+        print(df)
 
     return df
 
@@ -302,14 +401,15 @@ def graficar_precios_medios_horarios(df_filtrado, colores_precios):
 def construir_pie_atr_generico(df, atr, color_scale, titulo):
 
     pt = df.pivot_table(
-        values=['spot', 'ssaa', 'osom', 'otros', f'ppcc_{atr}', f'perd_{atr}', f'pyc_{atr}'],
+        values=['spot', 'ssaa', 'osom', f'ppcc_{atr}', f'perd_{atr}', f'pyc_{atr}'],
         index='año',
         aggfunc='mean'
     )
 
     pt['comp_perd'] = (
-        pt['spot'] + pt['ssaa'] + pt['osom'] +
-        pt['otros'] + pt[f'ppcc_{atr}']
+        pt['spot'] + pt['ssaa'] + pt['osom'] + pt[f'ppcc_{atr}']
+        #pt['spot'] + pt['ssaa'] + pt['osom'] + pt['otros'] + pt[f'ppcc_{atr}']
+        #pt['otros'] + pt[f'ppcc_{atr}']
     )
 
     pt[f'perdidas_{atr}'] = pt['comp_perd'] * pt[f'perd_{atr}']
@@ -595,10 +695,23 @@ def añadir_costes_curva(df):
     # Costes ponderados
     df["coste_spot"] = df["spot"] * cons #usado para apuntamiento
     df["coste_ssaa"] = df["ssaa"] * cons #usado para apuntamiento
-    df["coste_pyc"] = df[f"pyc_{atr}"] * cons #usadopara tablas
+    df["coste_pyc"] = df[f"pyc_{atr}"] * cons #usado para tablas
     df["coste_base"] = df[f"coste_{atr}"] * cons #sin pycs ni margen
     df["coste_total"] = df[col_precio] * cons
 
     return df
+
+
+def check_medias(df, atr="2.0"):
+    
+    print("---- MEDIAS COMPONENTES ----")
+    
+    print("SPOT:", df["spot"].mean())
+    print("SSAA:", df["ssaa"].mean())
+    print("RAD3:", df["rad3"].mean())
+    print("CT2:", df["ct2"].mean())
+    print("OSOM:", df["osom"].mean())
+    print(f"PPCC_{atr}:", df[f"ppcc_{atr}"].mean())
+    print(f"PYC_{atr}:", df[f"pyc_{atr}"].mean())
 
 

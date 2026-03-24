@@ -4,12 +4,8 @@ from utilidades import (generar_menu, init_app_json_escalacv,
 )
 
 from backend_escalacv import (diarios_totales, diarios, mensuales, horarios, medias_horarias, evolucion_mensual, meses_español, 
-                              obtener_df_scatter_mensual, 
-                              graficar_estimacion_inicial,
-                              obtener_punto_anual_real, recalibrar_intercepto_con_punto, graficar_scatter_combo, obtener_puntos_anuales, 
-                              graficar_simulacion_cuadratica,
-                              construir_simulacion_inversa, graficar_simulacion,
-                              construir_simulacion_log
+                              obtener_df_scatter_mensual, graficar_scatter_combo, obtener_puntos_anuales, graficar_simulacion_cuadratica, graficar_bandas_ssaa
+                              
 )
 import datetime
 from datetime import datetime
@@ -182,126 +178,144 @@ if 'dos_colores' in st.session_state and st.session_state.dos_colores:
 
     
 # VISUALIZACIÓN ÁREA PRINCIPAL---------------------------------------------------------------------------------------------------------
-# Gráfijo fijo de medias diarias y anuales
-with st.container():
-    col1,col2=st.columns([0.8,0.2])
-    with col1:
-        st.plotly_chart(graf_ecv_total)
-        #st.plotly_chart(graf_ecv_diario)
-    with col2:
-        st.subheader('Datos en €/MWh',divider='rainbow')
-        #st.metric(f'Precio medio diario {st.session_state.año_seleccionado}', value=valor_medio_diario)
-        st.metric(f'Precio mínimo diario ( {fecha_min_diario_total})', value=valor_minimo_diario_total)
-        st.metric(f'Precio máximo diario ({fecha_max_diario_total})', value=valor_maximo_diario_total)
 
-# Gráfico interactivo de medias diarias según el año seleccionado
-with st.container():
-    col1,col2=st.columns([0.8,0.2])
-    with col1:
-        #st.plotly_chart(graf_ecv_total)
-        st.plotly_chart(graf_ecv_diario)
-    with col2:
-        st.subheader('Datos en €/MWh',divider='rainbow')
-        st.metric(f'Precio medio diario {st.session_state.año_seleccionado_esc}', value=valor_medio_diario)
-        st.metric(f'Precio mínimo diario ( {fecha_min_diario})', value=valor_minimo_diario)
-        st.metric(f'Precio máximo diario ({fecha_max_diario})', value=valor_maximo_diario)
+tab1, tab2 = st.tabs(['General', 'Simulador'])
 
-with st.container():
-    col5,col6,col7=st.columns([.4,.4,.2])
-    with col5:
-        st.plotly_chart(graf_ecv_mensual)
-    with col6:
-        st.plotly_chart(graf_medias_horarias)
-    with col7:
-        st.subheader('Datos en €/MWh',divider='rainbow')
-        sub1, sub2 = st.columns([.7,.3])
-        with sub1:
-            st.metric(f'Precio mínimo horario ({fecha_min_horario})', value=valor_minimo_horario)
-            st.metric(f'Precio máximo horario ({fecha_max_horario})', value=valor_maximo_horario)
-        with sub2:
-            def mod_min():
-                st.session_state.dia_seleccionado_esc = fecha_min_horario
-            def mod_max():
-                st.session_state.dia_seleccionado_esc = fecha_max_horario
+with tab1:
+    # Gráfijo fijo de medias diarias y anuales
+    with st.container():
+        col1,col2=st.columns([0.8,0.2])
+        with col1:
+            st.plotly_chart(graf_ecv_total)
+            #st.plotly_chart(graf_ecv_diario)
+        with col2:
+            st.subheader('Datos en €/MWh',divider='rainbow')
+            #st.metric(f'Precio medio diario {st.session_state.año_seleccionado}', value=valor_medio_diario)
+            st.metric(f'Precio mínimo diario ( {fecha_min_diario_total})', value=valor_minimo_diario_total)
+            st.metric(f'Precio máximo diario ({fecha_max_diario_total})', value=valor_maximo_diario_total)
 
-            st.button('Seleccionar día', on_click=mod_min, key='mod_min')
-            st.button('Seleccionar día', on_click=mod_max)
+    # Gráfico interactivo de medias diarias según el año seleccionado
+    with st.container():
+        col1,col2=st.columns([0.8,0.2])
+        with col1:
+            #st.plotly_chart(graf_ecv_total)
+            st.plotly_chart(graf_ecv_diario)
+        with col2:
+            st.subheader('Datos en €/MWh',divider='rainbow')
+            st.metric(f'Precio medio diario {st.session_state.año_seleccionado_esc}', value=valor_medio_diario)
+            st.metric(f'Precio mínimo diario ( {fecha_min_diario})', value=valor_minimo_diario)
+            st.metric(f'Precio máximo diario ({fecha_max_diario})', value=valor_maximo_diario)
 
-with st.container():
-    col5,col6,col7=st.columns([.4,.4,.2])
-    with col5:
-        st.write(graf_ecv_evol_mes_años)
-    with col6:
-        st.write(graf_horario_dia)
-    with col7:
-        st.subheader('Datos en €/MWh',divider='rainbow')
-        st.metric(f'Precio medio diario', value=valor_medio_diario_select)
-        st.metric(f'Precio mínimo horario (hora: {hora_min_select})', value=valor_minimo_horario_select)
-        st.metric(f'Precio máximo horario (hora: {hora_max_select})', value=valor_maximo_horario_select)
-
-        #st.metric(f'Precio medio diario ( {fecha_min_horario})', value=valor_minimo_horario)
-
-
-
-                
-with st.container():
-    col5,col6,col7=st.columns([.4,.4,.2])
-    with col5:
-        mostrar_combo = st.button('Mostrar simulación SSAA a partir de SPOT', use_container_width=True)
-
-    if mostrar_combo:
-        if "df_sheets" not in st.session_state:
-            init_app()
-            init_app_index()
-
-        # 2. Construimos DF mensual SOLO una vez
-        if "df_scatter_mensual" not in st.session_state:
-            obtener_df_scatter_mensual()
-
-    
-    if 'df_scatter_mensual' in st.session_state:
-        print('df_scatter_mensual')
-        print(st.session_state.df_scatter_mensual)
-        #grafico base con los scatter omie ssaa mensuales
-        graf_scatter_combo = graficar_scatter_combo()
-              
-        if 'omie_input' not in st.session_state:
-            st.session_state.omie_input = 58
-        #añadimos 
-        p_real = obtener_puntos_anuales()
-        graf_scatter_combo, ssaa_simulada, _ = graficar_simulacion_cuadratica(
-            graf_scatter_combo,
-            st.session_state.df_scatter_mensual,
-            {
-                2025: p_real[2025],
-                2026: p_real[2026],
-            },
-            st.session_state.omie_input,
-            nombre="Curva central",
-            color="orange"
-        )
-        
-        
+    with st.container():
+        col5,col6,col7=st.columns([.4,.4,.2])
         with col5:
-            st.subheader('Micropower 2026 combo SPOT+SSAA', divider='rainbow')
-            # 3. Input OMIE anual
-            st.number_input("OMIE medio anual esperado (€/MWh)", min_value=0.0, max_value=200.0, step=1.0, key='omie_input')
-            c55, c56, c57 =st.columns(3)
-            with c55:
-                st.metric('SPOT MEDIO', f'{st.session_state.omie_input:,.2f}') 
-            with c56:
-                st.metric('SSAA MEDIO', f'{ssaa_simulada:,.2f}') 
-                
-            with c57:
-                combo_estimado = st.session_state.omie_input+ssaa_simulada
-                st.metric('COMBO SPOT+SSAA',f'{combo_estimado:,.2f}')
+            st.plotly_chart(graf_ecv_mensual)
+        with col6:
+            st.plotly_chart(graf_medias_horarias)
+        with col7:
+            st.subheader('Datos en €/MWh',divider='rainbow')
+            sub1, sub2 = st.columns([.7,.3])
+            with sub1:
+                st.metric(f'Precio mínimo horario ({fecha_min_horario})', value=valor_minimo_horario)
+                st.metric(f'Precio máximo horario ({fecha_max_horario})', value=valor_maximo_horario)
+            with sub2:
+                def mod_min():
+                    st.session_state.dia_seleccionado_esc = fecha_min_horario
+                def mod_max():
+                    st.session_state.dia_seleccionado_esc = fecha_max_horario
 
-                    
-            st.plotly_chart(graf_scatter_combo, use_container_width=True)
+                st.button('Seleccionar día', on_click=mod_min, key='mod_min')
+                st.button('Seleccionar día', on_click=mod_max)
+
+    with st.container():
+        col5,col6,col7=st.columns([.4,.4,.2])
+        with col5:
+            st.write(graf_ecv_evol_mes_años)
+        with col6:
+            st.write(graf_horario_dia)
+        with col7:
+            st.subheader('Datos en €/MWh',divider='rainbow')
+            st.metric(f'Precio medio diario', value=valor_medio_diario_select)
+            st.metric(f'Precio mínimo horario (hora: {hora_min_select})', value=valor_minimo_horario_select)
+            st.metric(f'Precio máximo horario (hora: {hora_max_select})', value=valor_maximo_horario_select)
+
+            #st.metric(f'Precio medio diario ( {fecha_min_horario})', value=valor_minimo_horario)
+
+
+
+with tab2:  
+    col1, col2 = st.columns(2) 
+
+    with col1:
+
+        with st.container():
+            col5,col6,col7=st.columns([.4,.4,.2])
+            #with col5:
+            mostrar_combo = st.button('Mostrar simulación SSAA a partir de SPOT', use_container_width=True)
+
+            if mostrar_combo:
+                #if "df_sheets" not in st.session_state:
+                if "csv_componentes" not in st.session_state:    
+                    init_app()
+                    init_app_index()
+
+                # 2. Construimos DF mensual SOLO una vez
+                if "df_scatter_mensual" not in st.session_state:
+                    obtener_df_scatter_mensual()
 
             
-
+                if 'df_scatter_mensual' in st.session_state:
+                    print('df_scatter_mensual')
+                    print(st.session_state.df_scatter_mensual)
+                    #grafico base con los scatter omie ssaa mensuales
+                    graf_scatter_combo = graficar_scatter_combo()
+                        
+                    if 'omie_input' not in st.session_state:
+                        st.session_state.omie_input = 58
+                    #añadimos 
+                    p_real = obtener_puntos_anuales()
+                    graf_scatter_combo, ssaa_simulada, _ = graficar_simulacion_cuadratica(
+                        graf_scatter_combo,
+                        st.session_state.df_scatter_mensual,
+                        {
+                            2025: p_real[2025],
+                            2026: p_real[2026],
+                        },
+                        st.session_state.omie_input,
+                        nombre="Curva central",
+                        color="orange"
+                    )
+                    
                 
+                
+     
+       
+    
+                    st.subheader('Micropower 2026 combo SPOT+SSAA', divider='rainbow')
+                    # 3. Input OMIE anual
+                    #st.number_input("OMIE medio anual esperado (€/MWh)", min_value=0.0, max_value=200.0, step=1.0, key='omie_input')
+                    c55, c56, c57, c58, c59 =st.columns(5)
+                    with c55:
+                        #st.metric('SPOT MEDIO', f'{st.session_state.omie_input:,.2f}') 
+                        st.number_input("OMIE medio anual esperado (€/MWh)", min_value=40.0, max_value=150.0, step=1.0, key='omie_input')
+                    with c57:
+                        st.metric('SSAA MEDIO', f'{ssaa_simulada:,.2f}') 
+                        
+                    with c58:
+                        combo_estimado = st.session_state.omie_input+ssaa_simulada
+                        st.metric('COMBO SPOT+SSAA',f'{combo_estimado:,.2f}')
+
+                            
+                    st.plotly_chart(graf_scatter_combo, use_container_width=True)
+
+            
+    with col2:
+        if "csv_componentes" not in st.session_state:    
+            init_app()
+            init_app_index()
+             
+        graf_bandas_combo = graficar_bandas_ssaa()
+        st.write(graf_bandas_combo)         
         
 
         

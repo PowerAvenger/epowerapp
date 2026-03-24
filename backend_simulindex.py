@@ -1,11 +1,12 @@
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 
 import streamlit as st
 from datetime import datetime
 from backend_comun import obtener_df_resumen
 
-#valores de peajes y cargos usados en la simulación
+#valores de peajes y cargos usados en la simulación en €/kWh
 pyc_2026 = {
     "2.0TD": {
         "P1": 0.097553,
@@ -858,15 +859,19 @@ def construir_escenarios(df_uso, lista_simul, df_hist, colores_precios):
 from datetime import datetime
 import pandas as pd
 
-def construir_curva_2026(df_spot_mensual, df_ftb_m, df_ftb_q):
-
+def construir_curva_2026(df_spot_mensual, df_ftb_m, df_ftb_q, fecha_ultimo_omip):
+    
     año = 2026
     mes_actual = datetime.now().month
     mes_fin_mensual = min(mes_actual + 6, 12)
 
     # nos quedamos con la última cotización disponible
-    fecha_ref_m = df_ftb_m["Fecha"].max()
-    fecha_ref_q = df_ftb_q["Fecha"].max()
+    #fecha_ref_m = df_ftb_m["Fecha"].max()
+    #fecha_ref_q = df_ftb_q["Fecha"].max()
+    fecha_ref_m = fecha_ultimo_omip
+    fecha_ref_q = fecha_ultimo_omip
+
+    print(fecha_ref_m)
 
     df_ftb_m = df_ftb_m[df_ftb_m["Fecha"] == fecha_ref_m]
     df_ftb_q = df_ftb_q[df_ftb_q["Fecha"] == fecha_ref_q]
@@ -930,56 +935,12 @@ def construir_curva_2026(df_spot_mensual, df_ftb_m, df_ftb_q):
 
     return df_curva
 
-def graficar_2026_old(df_2026, precio_medio_2026):
 
-    import plotly.graph_objects as go
-
-    df_hist = df_2026[df_2026["tipo"] == "OMIE"]
-    df_fut = df_2026[df_2026["tipo"] != "OMIE"]
-
-    fig = go.Figure()
-
-    # HISTÓRICO
-    fig.add_scatter(
-        x=df_hist["fecha"],
-        y=df_hist["precio"],
-        mode="lines+markers",
-        name="OMIE",
-        line=dict(color="seagreen", width=4),
-        marker=dict(size=9)
-    )
-
-    # FUTURO
-    fig.add_scatter(
-        x=df_fut["fecha"],
-        y=df_fut["precio"],
-        mode="lines+markers",
-        name="FTB",
-        line=dict(color="darkorange", width=4, dash="dash"),
-        marker=dict(size=9)
-    )
-
-    fig.add_hline(
-        y=precio_medio_2026,
-        line_dash="dot",
-        line_color="grey",
-        annotation_text=f"Media ≈ {precio_medio_2026:.1f} €/MWh"
-    )
-
-    fig.update_layout(
-        title="Curva híbrida OMIE-FTB 2026",
-        yaxis_title="€/MWh",
-        template="plotly_white",
-        hovermode="x unified"
-    )
-
-    return fig
 
 
 def graficar_2026(df_2026, precio_medio_2026):
 
-    import plotly.graph_objects as go
-
+    
     df_hist = df_2026[df_2026["tipo"] == "OMIE"]
     df_fut = df_2026[df_2026["tipo"] != "OMIE"]
 
@@ -1040,6 +1001,147 @@ def graficar_2026(df_2026, precio_medio_2026):
 
         title=dict(
             text="Curva híbrida OMIE-OMIP 2026",
+            x=0.5,
+            xanchor="center",
+            font=dict(size=28)
+        ),
+
+        legend=dict(
+            font=dict(size=18)
+        ),
+
+        yaxis=dict(
+            title="€/MWh",
+            range=[0, None],
+            title_font=dict(size=18),
+            tickfont=dict(size=16)
+        ),
+
+        xaxis=dict(
+            tickformat="%b %Y",
+            tickfont=dict(size=16)
+        ),
+
+        hoverlabel=dict(
+            font_size=18
+        ),
+
+        template="plotly_dark",
+        hovermode="x unified",
+        height=650
+    )
+
+    return fig
+
+
+def construir_curva_omip_forward(df_ftb_m, df_ftb_q, fecha_ref):
+
+    from datetime import datetime
+    import pandas as pd
+
+    año = 2026
+    mes_actual = datetime.now().month
+
+    df_ftb_m = df_ftb_m[df_ftb_m["Fecha"] == fecha_ref].copy()
+    df_ftb_q = df_ftb_q[df_ftb_q["Fecha"] == fecha_ref].copy()
+
+    df_ftb_m["Entrega_dt"] = pd.to_datetime(df_ftb_m["Entrega_dt"])
+    df_ftb_q["Inicio Entrega"] = pd.to_datetime(df_ftb_q["Inicio Entrega"], dayfirst=True)
+
+    filas = []
+
+    # 🔥 12 meses forward
+    for i in range(1, 13):
+
+        mes = mes_actual + i
+        año_mes = año
+
+        if mes > 12:
+            mes -= 12
+            año_mes += 1
+
+        fecha = pd.Timestamp(año_mes, mes, 1)
+
+        # 1️⃣ intentar mensual
+        filtro_m = (
+            (df_ftb_m["Entrega_dt"].dt.year == año_mes) &
+            (df_ftb_m["Entrega_dt"].dt.month == mes)
+        )
+
+        df_m = df_ftb_m.loc[filtro_m, "Precio"]
+
+        if not df_m.empty:
+            precio = df_m.iloc[0]
+            tipo = "FTB mensual"
+
+        else:
+            # 2️⃣ fallback trimestral
+            trimestre = (mes - 1) // 3 + 1
+            mes_inicio = (trimestre - 1) * 3 + 1
+
+            filtro_q = (
+                (df_ftb_q["Inicio Entrega"].dt.year == año_mes) &
+                (df_ftb_q["Inicio Entrega"].dt.month == mes_inicio)
+            )
+
+            df_q = df_ftb_q.loc[filtro_q, "Precio"]
+
+            if df_q.empty:
+                raise ValueError(f"No hay dato para {año_mes}-{mes}")
+
+            precio = df_q.iloc[0]
+            tipo = "FTB trimestral"
+
+        filas.append({
+            "fecha": fecha,
+            "precio": precio,
+            "tipo": tipo
+        })
+
+    df_curva = pd.DataFrame(filas)
+    print(df_curva)
+
+    return df_curva
+
+def graficar_curva_omip(df_omip, precio_medio=None):
+
+    
+
+    fig = go.Figure()
+
+    fig.add_scatter(
+        x=df_omip["fecha"],
+        y=df_omip["precio"],
+        mode="lines+markers+text",
+        name="OMIP",
+        line=dict(color="darkorange", width=4, dash='dash'),
+        marker=dict(size=14, symbol="square"),
+        text=[f"{v:.1f}" for v in df_omip["precio"]],
+        textposition="top center",
+        textfont=dict(size=18, color="white"),
+        customdata=df_omip["tipo"],
+        hovertemplate=
+            "<b>%{customdata}</b><br>" +
+            "%{x|%b %Y}<br>" +
+            "%{y:.1f} €/MWh" +
+            "<extra></extra>"
+    )
+
+    # 👉 opcional: media
+    if precio_medio is not None:
+        fig.add_hline(
+            y=precio_medio,
+            line_dash="dot",
+            line_color="white",
+            annotation_text=f"Media ≈ {precio_medio:.1f} €/MWh",
+            annotation_position="top right",
+            annotation_font_size=20
+        )
+
+    fig.update_layout(
+
+        title=dict(
+            text="Curva OMIP año móvil",
             x=0.5,
             xanchor="center",
             font=dict(size=28)

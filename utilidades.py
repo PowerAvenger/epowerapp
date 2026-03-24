@@ -1,8 +1,9 @@
 import streamlit as st
 import datetime
 import pandas as pd
-from backend_comun import autenticar_google_sheets, carga_total_sheets
+from backend_comun import autenticar_google_sheets, carga_total_sheets, cargar_componentes_csv
 from backend_escalacv import leer_json
+from backend_telemindex import COMPONENTES_SSAA_FORMULA, construir_df_rad3_manual,calcular_precios_atr
 
 
 def generar_menu():
@@ -48,7 +49,60 @@ def init_app_index():
         #sheet_id = st.secrets['SHEET_INDEX_ID']
         #carga_rapida_sheets()
         carga_total_sheets()
-        st.session_state.df_sheets['fecha'] = pd.to_datetime(st.session_state.df_sheets['fecha']).dt.date
+        st.session_state.df_sheets_old['fecha'] = pd.to_datetime(st.session_state.df_sheets_old['fecha']).dt.date
+    if 'csv_componentes' not in st.session_state:
+        import time
+        t0 = time.perf_counter()
+        st.session_state.csv_componentes = cargar_componentes_csv()
+        t1 = time.perf_counter()
+        print(f"Tiempo carga csv_componentes: {t1 - t0:.3f} s")
+
+        df_csv = st.session_state.csv_componentes.copy()
+        # ¡¡¡ ATENCIÓN: EL COMPONENTE DSV VIENE COMO PROMEDIO QH, Y NO COMO SUMA!!!
+        df_csv["dsv"] = df_csv["dsv"] * 4
+        df_csv["ssaa"] = df_csv[COMPONENTES_SSAA_FORMULA].sum(axis=1)
+        fecha_corte = df_csv["fecha"].max()
+        # guardar para usar en la app
+        st.session_state.ultima_fecha_csv = fecha_corte
+        df_old = st.session_state.df_sheets_old.copy()
+        df_old = df_old[df_old["fecha"] > fecha_corte]
+        df_sheets_nuevo = pd.concat([df_csv, df_old], ignore_index=True)
+
+        # --- 6. RELLENO MANUAL RAD3 POST C2 ---
+        # máscara: solo fechas posteriores al CSV
+        mask = df_sheets_nuevo["fecha"] > fecha_corte
+        # construir df manual desde diccionario
+        df_manual = construir_df_rad3_manual()
+        # merge
+        df_sheets_nuevo = df_sheets_nuevo.merge(
+            df_manual,
+            on=["año", "hora"],
+            how="left",
+            suffixes=("", "_manual")
+        )
+        # rellenar RAD3 SOLO post C2
+        df_sheets_nuevo.loc[mask, "rad3"] = df_sheets_nuevo.loc[mask, "rad3_manual"]
+        df_sheets_nuevo = df_sheets_nuevo.drop(columns=["rad3_manual"])
+
+        # eliminar columnas sobrantes
+        cols_drop = [c for c in df_sheets_nuevo.columns 
+             if c.startswith("coste_") or c.startswith("precio_")]
+        cols_drop += ["otros"]
+        df_sheets_nuevo = df_sheets_nuevo.drop(columns=cols_drop, errors="ignore")
+
+        # guardar en sesión
+        st.session_state.df_sheets = df_sheets_nuevo
+
+        # esto lo hacemos para que el sheets inicial tenga las columnas coste_ y precio_ para evol mensual por defecto
+        if 'precios_calculados' not in st.session_state:
+
+            st.session_state.df_sheets = calcular_precios_atr(
+                st.session_state.df_sheets
+            )
+            st.session_state.precios_calculados = True
+
+        print('df sheets NUEVO COMBO CSV Y SHEETS OLD')
+        print(df_sheets_nuevo.columns)
 
     if 'dias_seleccionados' not in st.session_state:
         #st.session_state.dia_seleccionado = st.session_state.ultima_fecha_sheets
@@ -60,16 +114,7 @@ def init_app_index():
             ultima_fecha = ultima_fecha.date()
         inicio_rango = ultima_fecha
         st.session_state.dias_seleccionados = (inicio_rango, ultima_fecha)
-    #else:
-    #    if not isinstance(st.session_state.dias_seleccionados, tuple) or len(st.session_state.dias_seleccionados) != 2:
-    #        ultima_fecha = st.session_state.ultima_fecha_sheets
-    #        inicio_rango = ultima_fecha - datetime.timedelta(days=5)
-    #        st.session_state.dias_seleccionados = (inicio_rango, ultima_fecha)
-
     
-
-    #if 'margen_telemindex' not in st.session_state: 
-    #    st.session_state.margen_telemindex = 0
     if 'texto_precios' not in st.session_state:
         if 'ultima_fecha_sheets' not in st.session_state:
             ultima_fecha = datetime.date(2026,1,1)

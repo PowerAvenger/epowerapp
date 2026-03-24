@@ -143,14 +143,71 @@ def carga_total_sheets(): #sheet_name=None
     ultima_fecha_str = fechas_col[-1]
     st.session_state.ultima_fecha_sheets = pd.to_datetime(ultima_fecha_str, errors='coerce').date()
     
-    st.session_state.df_sheets = df
-    columnas_numericas = st.session_state.df_sheets.columns.difference(['fecha', 'mes_nombre', 'dh_3p', 'dh_6p'])  # Excluir columnas de texto si las hay
+    st.session_state.df_sheets_old = df
+    columnas_numericas = st.session_state.df_sheets_old.columns.difference(['fecha', 'mes_nombre', 'dh_3p', 'dh_6p'])  # Excluir columnas de texto si las hay
     # 🔹 Convertir todas las columnas a numérico (int o float según corresponda)
-    st.session_state.df_sheets[columnas_numericas] = st.session_state.df_sheets[columnas_numericas].apply(pd.to_numeric, errors='coerce')
+    st.session_state.df_sheets_old[columnas_numericas] = st.session_state.df_sheets_old[columnas_numericas].apply(pd.to_numeric, errors='coerce')
     
     st.session_state.worksheet = worksheet
     return 
     #return st.session_state.df_sheets
+
+# para el csv componentes
+def enriquecer_datetime(df):
+
+    df = df.copy()
+
+    df["datetime"] = pd.to_datetime(df["datetime"])
+
+    df["fecha"] = df["datetime"].dt.date
+    df["año"] = df["datetime"].dt.year
+    df["mes"] = df["datetime"].dt.month
+    df["dia"] = df["datetime"].dt.day
+    df["hora"] = df["datetime"].dt.hour
+
+    map_mes = {
+        1: "enero", 2: "febrero", 3: "marzo",
+        4: "abril", 5: "mayo", 6: "junio",
+        7: "julio", 8: "agosto", 9: "septiembre",
+        10: "octubre", 11: "noviembre", 12: "diciembre"
+    }
+
+    df["mes_nombre"] = df["mes"].map(map_mes)
+
+    return df
+
+# CARGAMOS CSV COMPONENTES
+def cargar_componentes_csv():
+    
+    file_id = st.secrets['CSV_COMPONENTES']
+    url = f"https://drive.google.com/uc?export=download&id={file_id}"
+
+    import requests
+    r = requests.get(url)
+    print(r.text[:500])
+    df = pd.read_csv(
+        url,
+        sep=",",                # 👈 confirmado por tu CSV
+        engine="python",        # 👈 clave
+        quoting=3,              # 👈 IGNORA comillas problemáticas
+        on_bad_lines="skip",    # 👈 salta líneas corruptas
+        encoding="utf-8"
+    )
+
+    # 🔹 limpieza básica nombres columnas
+    df.columns = (
+        df.columns
+        .str.strip()
+        .str.lower()
+        .str.replace(" ", "_")
+    )
+    print('carga csv componentes')
+    print(df)
+    df = enriquecer_datetime(df)
+    print('carga csv componentes enriquecido')
+    print(df)
+
+    return df
 
 #CARGAMOS MIBGAS DESDE SHEET DE DRIVE
 @st.cache_data
