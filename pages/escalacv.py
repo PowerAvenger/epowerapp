@@ -252,7 +252,7 @@ with tab2:
             col5,col6,col7=st.columns([.4,.4,.2])
             #with col5:
             mostrar_combo = st.button('Mostrar simulación SSAA a partir de SPOT', use_container_width=True)
-
+            st.number_input("OMIE medio anual esperado (€/MWh)", min_value=40.0, max_value=150.0, step=1.0, key='omie_input')
             if mostrar_combo:
                 #if "df_sheets" not in st.session_state:
                 if "csv_componentes" not in st.session_state:    
@@ -291,22 +291,22 @@ with tab2:
      
        
     
-                    st.subheader('Micropower 2026 combo SPOT+SSAA', divider='rainbow')
-                    # 3. Input OMIE anual
-                    #st.number_input("OMIE medio anual esperado (€/MWh)", min_value=0.0, max_value=200.0, step=1.0, key='omie_input')
-                    c55, c56, c57, c58, c59 =st.columns(5)
-                    with c55:
-                        #st.metric('SPOT MEDIO', f'{st.session_state.omie_input:,.2f}') 
-                        st.number_input("OMIE medio anual esperado (€/MWh)", min_value=40.0, max_value=150.0, step=1.0, key='omie_input')
-                    with c57:
-                        st.metric('SSAA MEDIO', f'{ssaa_simulada:,.2f}') 
-                        
-                    with c58:
-                        combo_estimado = st.session_state.omie_input+ssaa_simulada
-                        st.metric('COMBO SPOT+SSAA',f'{combo_estimado:,.2f}')
+                st.subheader('Micropower 2026 combo SPOT+SSAA', divider='rainbow')
+                # 3. Input OMIE anual
+                #st.number_input("OMIE medio anual esperado (€/MWh)", min_value=0.0, max_value=200.0, step=1.0, key='omie_input')
+                c55, c56, c57, c58, c59 =st.columns(5)
+                with c55:
+                    st.metric('SPOT MEDIO', f'{st.session_state.omie_input:,.2f}') 
+                    #st.number_input("OMIE medio anual esperado (€/MWh)", min_value=40.0, max_value=150.0, step=1.0, key='omie_input')
+                with c57:
+                    st.metric('SSAA MEDIO', f'{ssaa_simulada:,.2f}') 
+                    
+                with c58:
+                    combo_estimado = st.session_state.omie_input+ssaa_simulada
+                    st.metric('COMBO SPOT+SSAA',f'{combo_estimado:,.2f}')
 
-                            
-                    st.plotly_chart(graf_scatter_combo, use_container_width=True)
+                        
+                st.plotly_chart(graf_scatter_combo, use_container_width=True)
 
             
     with col2:
