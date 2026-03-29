@@ -560,6 +560,10 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
         .apply(lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
     )
 
+
+    #======================================================================
+    # DIAGRAMA DE AREAS APILADAS CON FACET COLS
+    #======================================================================
     pot_rangos = {}
     for periodo in pot_con.keys():
         min_pot = min(pot_con[periodo], pot_opt[periodo])
@@ -607,7 +611,7 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
     df_plot = pd.DataFrame(data)
 
     # Gráfico de área apilado
-    fig1 = px.area(
+    fig_periodos = px.area(
         df_plot,
         x="Potencia",
         y=["Coste Potencia", "Coste Excesos"],
@@ -618,10 +622,14 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
             "value": "Coste (€)",
             "variable": "Tipo de Coste"
         },
+        color_discrete_map={
+            "Coste Potencia": "#636efa",   # azul
+            "Coste Excesos":  "#19d3f3",   # verde
+        },
         title="Costes de Potencia y Excesos por Periodo"
     )
 
-    fig1.update_layout(
+    fig_periodos.update_layout(
         legend_title_text="Tipo de Coste",
         yaxis_title="Coste (€)",
         xaxis_title="Potencia (kW)",
@@ -630,35 +638,41 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
         height = 600
     )
 
-    data_graf_resumen_opt = {
-        'coste del tp': ['contratado', 'optimizado'],
-        'coste en €' : [coste_tp_potcon, coste_tp_potopt]
-    }
-    df_resumen_costes_tp = pd.DataFrame(data_graf_resumen_opt)
-    df_resumen_costes_tp['coste en €'] = df_resumen_costes_tp['coste en €'].round(0)
+
+
+    #data_graf_resumen_opt = {
+    #    'coste del tp': ['contratado', 'optimizado'],
+    #    'coste en €' : [coste_tp_potcon, coste_tp_potopt]
+    #}
+    #df_resumen_costes_tp = pd.DataFrame(data_graf_resumen_opt)
+    #df_resumen_costes_tp['coste en €'] = df_resumen_costes_tp['coste en €'].round(0)
     
 
     
-    colores = {
-        'contratado': 'blue',
-        'optimizado': 'green'
-    }
+    #colores = {
+    #    'contratado': 'blue',
+    #    'optimizado': 'green'
+    #}
 
     
-    graf_resumen_costes_tp = px.bar(
-        df_resumen_costes_tp,
-        x = 'coste del tp',
-        y = 'coste en €',
-        color = 'coste del tp',
-        color_discrete_map = colores,
-        text = 'coste en €',
+    #graf_resumen_costes_tp = px.bar(
+    #    df_resumen_costes_tp,
+    #    x = 'coste del tp',
+    #    y = 'coste en €',
+    #    color = 'coste del tp',
+    #    color_discrete_map = colores,
+    #    text = 'coste en €',
         #width=500
-        )
+    #    )
     
-    fig2 = go.Figure()
+
+    #======================================================================
+    # DIAGRAMA DE BARRAS RESUMEN COMPARATIVO CONTRATADO VS OPTIMIZADO
+    #======================================================================
+    fig_resumen = go.Figure()
 
     # 🔵 CONTRATADO – Potencia
-    fig2.add_trace(
+    fig_resumen.add_trace(
         go.Bar(
             x=["Contratado"],
             y=[coste_potfra_potcon],
@@ -668,7 +682,7 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
     )
 
     # 🔵 CONTRATADO – Excesos
-    fig2.add_trace(
+    fig_resumen.add_trace(
         go.Bar(
             x=["Contratado"],
             y=[coste_excesos_potcon],
@@ -678,7 +692,7 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
     )
 
     # 🟢 OPTIMIZADO – Potencia
-    fig2.add_trace(
+    fig_resumen.add_trace(
         go.Bar(
             x=["Optimizado"],
             y=[coste_potfra_potopt],
@@ -688,7 +702,7 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
     )
 
     # 🟢 OPTIMIZADO – Excesos
-    fig2.add_trace(
+    fig_resumen.add_trace(
         go.Bar(
             x=["Optimizado"],
             y=[coste_excesos_potopt],
@@ -697,7 +711,7 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
         )
     )
 
-    fig2.update_layout(
+    fig_resumen.update_layout(
         barmode="stack",
         title="Resumen de costes: Contratado vs Optimizado",
         yaxis_title="Coste (€)",
@@ -706,22 +720,14 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
         #height=600,
         margin=dict(t=60, b=40, l=40, r=40)
     )
-    #coste_potfra_potcon, coste_excesos_potcon, coste_potfra_potopt, coste_excesos_potopt
-
     
+
+    #======================================================================
+    # DIAGRAMA GAUGE DE AHORRO EN %. TIPO VELOCIMETRO
+    #======================================================================
     ahorro_opt = coste_tp_potcon - coste_tp_potopt
     ahorro_opt_porc = ahorro_opt * 100 / coste_tp_potcon
-    
-
-    
-    colors = [
-        "rgba(255, 0, 0, 0.6)",  # Red for low
-        "rgba(255, 165, 0, 0.6)",  # Orange for medium
-        "rgba(255, 255, 0, 0.6)",  # Yellow for average
-        "rgba(144, 238, 144, 0.6)",  # Light green for good
-        "rgba(154, 205, 50, 0.6)"  # Green for excellent
-    ]
-
+        
     colors = [
         "rgba(204, 255, 204, 0.6)",  # Very light green
         "rgba(144, 238, 144, 0.6)",  # Light green
@@ -729,7 +735,6 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
         "rgba(0, 128, 0, 0.6)",      # Dark green
         "rgba(0, 100, 0, 0.6)"       # Very dark green
     ]
-
     
     fig_ahorro = go.Figure(go.Indicator(
         mode = "gauge+number",  # Agregar número y delta
@@ -747,19 +752,19 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
                 {'range': [30, 40], 'color': colors[3]},
                 {'range': [40, 50], 'color': colors[4]},
             ],
-            #'threshold': {
-            #    'line': {'color': "red", 'width': 4},  # Línea roja para indicar el valor
-            #    'thickness': 0.75,
-            #    'value': value  # El valor que se indica en el gráfico
-            #}
+            
         }
     ))
 
     fig_ahorro.update_traces(number_suffix='%', selector=dict(type='indicator'))
 
-    fig = go.Figure()
+
+    #======================================================================
+    # DIAGRAMA DE QUESO CIRCULAR CON DOBLE ANILLO. ES UN GRÁFICO SECUNDARIO
+    #======================================================================
+    fig_anillo = go.Figure()
     # 🔵 Anillo interior: situación actual
-    fig.add_trace(
+    fig_anillo.add_trace(
         go.Pie(
             labels=["Potencia", "Excesos"],
             values=[
@@ -777,7 +782,7 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
     )
 
     # 🟢 Anillo exterior: optimizado
-    fig.add_trace(
+    fig_anillo.add_trace(
         go.Pie(
             labels=["Potencia", "Excesos"],
             values=[
@@ -792,7 +797,7 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
             textposition="outside"
         )
     )
-    fig.update_layout(
+    fig_anillo.update_layout(
         title="Distribución de costes: Actual vs Optimizado",
         annotations=[
             dict(
@@ -811,9 +816,7 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
     del data
     gc.collect()
 
-    return graf_costes_potcon, fig2, coste_tp_potcon, coste_tp_potopt, ahorro_opt, ahorro_opt_porc, df_potencias, fig_ahorro, fig1, fig
-
-
+    return graf_costes_potcon, fig_resumen, coste_tp_potcon, coste_tp_potopt, ahorro_opt, ahorro_opt_porc, df_potencias, fig_ahorro, fig_periodos, fig_anillo
 
 
 

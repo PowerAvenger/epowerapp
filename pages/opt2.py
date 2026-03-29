@@ -3,8 +3,9 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 from utilidades import generar_menu
-from backend_opt2 import leer_curva_normalizada, calcular_costes, calcular_optimizacion, pyc_tp, tepp, meses
+from backend_opt2 import (leer_curva_normalizada, calcular_costes, calcular_optimizacion, pyc_tp, tepp, meses)
 from backend_curvadecarga import colores_periodo
+from utils_docx import generar_docx_bytes, insertar_tabla
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
@@ -206,47 +207,217 @@ submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', us
 submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=not habilitar_ver)
     
     
-    
+resultados = None    
 
 # OPTIMIZACIÓN DE POTENCIA. USADO EN MODO PREMIUM Y MODO DEMO.  
 if submit_opt and st.session_state.df_norm is not None:
         
-        
-
         if p6 < 50 or st.session_state.atr_dfnorm == '2.0':
             st.warning('Suministro no válido para optimización por excesos', icon='⚠️')
             st.stop()
 
-        graf_costes_potcon, fig2, coste_tp_potcon, coste_tp_potopt, ahorro_opt, ahorro_opt_porc, df_potencias, fig_ahorro, fig1, fig = calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp_opt, tepp_opt)
+        #graf_costes_potcon, graf_resumen, coste_tp_potcon, coste_tp_potopt, ahorro_opt, ahorro_opt_porc, df_potencias, graf_ahorro, graf_costes_pot_periodos, graf_pie_peso = calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp_opt, tepp_opt)
+        
+        resultados = calcular_optimizacion(
+            df_in, fijar_P6, tarifa, pot_con, pyc_tp_opt, tepp_opt
+        )
 
+        st.session_state.resultados_potencia = resultados
         
 
+# 🔹 si no recalcula → recupero
+elif "resultados_potencia" in st.session_state:
+
+    resultados = st.session_state.resultados_potencia
+
+
+# 🔹 si hay resultados → muestro
+if resultados is not None:
+
+    (
+        graf_costes_potcon,
+        graf_resumen,
+        coste_tp_potcon,
+        coste_tp_potopt,
+        ahorro_opt,
+        ahorro_opt_porc,
+        df_potencias,
+        graf_ahorro,
+        graf_costes_pot_periodos,
+        graf_pie_peso
+    ) = resultados
         
-        # INTERFAZ STREAMLIT++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-        st.header('Resultados de la optimización del Término de Potencia para tipos 1, 2 y 3 (>50kW)', divider = 'rainbow')
-        c1, c2, c3, c4 = st.columns([.5, .2, .1, .2])
-        with c1:
-            st.write(graf_costes_potcon)
-        with c2:
-            #st.write(graf_resumen_costes_tp)
-            st.write(fig2)
-        with c3:
-            #st.plotly_chart(fig)
-            st.metric('Coste ACTUAL (€)', f'{coste_tp_potcon:,.2f}'.replace(',','X').replace('.',',').replace('X','.'))
-            st.metric('Coste OPTIMIZADO (€)', f'{coste_tp_potopt:,.2f}'.replace(',','X').replace('.',',').replace('X','.'))
-            st.metric('AHORRO (€)', f'{ahorro_opt:,.2f}'.replace(',','X').replace('.',',').replace('X','.'), delta=f'{ahorro_opt_porc:,.1f}%')
-        with c4:
-            st.plotly_chart(fig)
+    # INTERFAZ STREAMLIT++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    st.header('Resultados de la optimización del Término de Potencia para tipos 1, 2 y 3 (>50kW)', divider = 'rainbow')
+    c1, c2, c3, c4 = st.columns([.5, .2, .1, .2])
+    with c1:
+        st.write(graf_costes_potcon)
+    with c2:
+        #st.write(graf_resumen_costes_tp)
+        st.write(graf_resumen)
+    with c3:
+        #st.plotly_chart(fig)
+        st.metric('Coste ACTUAL (€)', f'{coste_tp_potcon:,.2f}'.replace(',','X').replace('.',',').replace('X','.'))
+        st.metric('Coste OPTIMIZADO (€)', f'{coste_tp_potopt:,.2f}'.replace(',','X').replace('.',',').replace('X','.'))
+        st.metric('AHORRO (€)', f'{ahorro_opt:,.2f}'.replace(',','X').replace('.',',').replace('X','.'), delta=f'{ahorro_opt_porc:,.1f}%')
+    with c4:
+        st.plotly_chart(graf_pie_peso)
+    
+    c11, c12, c13= st.columns([.25, .05, .7])
+    with c11:
+        st.subheader('Tabla de potencias')
+        st.dataframe(df_potencias, hide_index=True, use_container_width=True)
+        st.write(graf_ahorro)
         
-        c11, c12, c13= st.columns([.25, .05, .7])
-        with c11:
-            st.subheader('Tabla de potencias')
-            
-                  
-            st.dataframe(df_potencias, hide_index=True, use_container_width=True)
-            st.write(fig_ahorro)
-        with c13:
-            st.write(fig1)
+        data = {
+            "cliente": "Empresa X",
+            "cups": "ESXXXX",
+            "coste_actual": f"{coste_tp_potcon:,.2f}",
+            "coste_opt": f"{coste_tp_potopt:,.2f}",
+            "ahorro": f"{ahorro_opt:,.2f}",
+            "ahorro_pct": f"{ahorro_opt_porc:.1f}"
+        }
+
+        tablas = {
+            "tabla_potencias": df_potencias
+        }
+
+        graficos = {
+            "grafico_costes": graf_costes_potcon,
+            "grafico_resumen": graf_resumen,
+            "grafico_pie": graf_pie_peso,
+            "grafico_ahorro": graf_ahorro
+        }
+
+        if st.button("📄 Generar informe editable", use_container_width=True):
+
+            import os
+
+            BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+
+            template_path = os.path.join(BASE_DIR, "potencia.docx")
+            st.write("Ruta:", template_path)
+            st.write("Existe:", os.path.exists(template_path))
+
+            docx_buffer = generar_docx_bytes(
+                template_path,
+                data,
+                graficos,
+                tablas
+            )
+
+            st.download_button(
+                "Descargar DOCX",
+                data=docx_buffer,
+                file_name="informe_potencia.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
+        
+    
+
+    import streamlit as st
+    from report_generator import generar_informe
+
+    # ── Aquí ya tienes tus variables (las que genera tu app) ──────────────────
+    #
+    #   graf_costes_potcon      → Figure matplotlib/plotly
+    #   graf_resumen            → Figure matplotlib/plotly
+    #   coste_tp_potcon         → float  (€)
+    #   coste_tp_potopt         → float  (€)
+    #   ahorro_opt              → float  (€)
+    #   ahorro_opt_porc         → float  (%)
+    #   df_potencias            → pd.DataFrame
+    #   graf_ahorro             → Figure matplotlib/plotly
+    #   graf_costes_pot_periodos → Figure matplotlib/plotly
+    #
+    # ─────────────────────────────────────────────────────────────────────────
+
+    st.divider()
+    st.subheader("📄 Generar informe")
+
+    # Opciones que el usuario puede personalizar
+    col_titulo, col_logo = st.columns([3, 1])
+    with col_titulo:
+        titulo    = st.text_input("Título del informe",    "Informe de Optimización de Potencias")
+        subtitulo = st.text_input("Subtítulo (opcional)",  "Prueba de subtítulo")
+        realizado_por = st.text_input("Realizado por", "")
+        cliente       = st.text_input("Cliente", "")
+        cups          = st.text_input("CUPS", "")
+    with col_logo:
+        logo_file = st.file_uploader("Logo (PNG/JPG)", type=["png", "jpg", "jpeg"])
+
+    # Guarda el logo en un fichero temporal si el usuario lo sube
+    logo_path = None
+    if logo_file is not None:
+        import tempfile, pathlib
+        suffix = pathlib.Path(logo_file.name).suffix
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(logo_file.read())
+            logo_path = tmp.name
+
+    # Botón de generación
+    if st.button("🚀 Generar informe", type="primary"):
+        with st.spinner("Generando informe..."):
+            try:
+                resultado = generar_informe(
+                    graf_costes_potcon       = graf_costes_potcon,
+                    graf_resumen             = graf_resumen,
+                    coste_tp_potcon          = coste_tp_potcon,
+                    coste_tp_potopt          = coste_tp_potopt,
+                    ahorro_opt               = ahorro_opt,
+                    ahorro_opt_porc          = ahorro_opt_porc,
+                    df_potencias             = df_potencias,
+                    graf_ahorro              = graf_ahorro,
+                    graf_costes_pot_periodos = graf_costes_pot_periodos,
+                    logo_path                = logo_path,
+                    titulo                   = titulo,
+                    subtitulo                = subtitulo,
+                    cliente                = cliente,   
+                    cups = cups,
+                    realizado_por = realizado_por,
+                    template_path            = "templates/informe.html",  # ajusta si es necesario
+                )
+
+                st.success("✅ Informe generado correctamente")
+
+                # ── Botones de descarga ───────────────────────────────────
+                col1, col2, col3 = st.columns(3)
+
+                with col1:
+                    st.download_button(
+                        label        = "⬇️ Descargar PDF",
+                        data         = resultado["pdf"],
+                        file_name    = "informe_potencias.pdf",
+                        mime         = "application/pdf",
+                        use_container_width=True,
+                    )
+                with col2:
+                    st.download_button(
+                        label        = "⬇️ Descargar Word",
+                        data         = resultado["docx"],
+                        file_name    = "informe_potencias.docx",
+                        mime         = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True,
+                    )
+                with col3:
+                    st.download_button(
+                        label        = "⬇️ Descargar HTML",
+                        data         = resultado["html"].encode("utf-8"),
+                        file_name    = "informe_potencias.html",
+                        mime         = "text/html",
+                        use_container_width=True,
+                    )
+
+                # Vista previa en Streamlit (opcional)
+                with st.expander("👁️ Vista previa HTML"):
+                    st.components.v1.html(resultado["html"], height=700, scrolling=True)
+
+            except Exception as e:
+                st.error(f"Error al generar el informe: {e}")
+                raise  # elimina esta línea en producción
+
+    with c13:
+        st.write(graf_costes_pot_periodos)
 
 # VERIFICACIÓN DE EXCESOS. NO SE USA EN MODO DEMO
 if submit_ver and st.session_state.df_norm is not None:

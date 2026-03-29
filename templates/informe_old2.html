@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 10pt; color: #1e293b; background: #ffffff; padding: 28px 36px;
+  }
+  .header-table { width: 100%; border-bottom: 3px solid #1a56db; padding-bottom: 14px; margin-bottom: 20px; }
+  .header-table td { vertical-align: middle; }
+  .header-logo { width: 170px; }
+  .header-logo img { max-height: 52px; max-width: 160px; }
+  .header-title h1 { font-size: 17pt; font-weight: 700; color: #1a56db; line-height: 1.15; }
+  .header-title h2 { font-size: 10pt; font-weight: 400; color: #64748b; margin-top: 3px; }
+  .header-date { text-align: right; font-size: 9pt; color: #94a3b8; }
+  .section { margin-bottom: 22px; }
+  .section-title { font-size: 11pt; font-weight: 700; color: #1a56db; border-left: 4px solid #1a56db; padding-left: 8px; margin-bottom: 12px; }
+  .kpi-grid { width: 100%; border-collapse: separate; border-spacing: 8px 0; }
+  .kpi-card { background: #f0f6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 10px 12px; text-align: center; width: 25%; }
+  .kpi-card.ahorro { background: #f0fdf4; border-color: #86efac; }
+  .kpi-label { font-size: 8.5pt; color: #64748b; margin-bottom: 4px; }
+  .kpi-value { font-size: 13pt; font-weight: 700; color: #1e293b; }
+  .kpi-card.ahorro .kpi-value { color: #15803d; }
+  .tabla-datos { width: 100%; border-collapse: collapse; font-size: 9pt; }
+  .tabla-datos thead tr { background: #1a56db; color: #ffffff; }
+  .tabla-datos thead th { padding: 7px 10px; text-align: left; font-weight: 600; }
+  .tabla-datos tbody tr:nth-child(even) { background: #f8fafc; }
+  .tabla-datos tbody td { padding: 6px 10px; border-bottom: 1px solid #e2e8f0; }
+  .graficos-grid { width: 100%; border-collapse: separate; border-spacing: 10px; }
+  .grafico-card { border: 1px solid #e2e8f0; border-radius: 8px; width: 50%; vertical-align: top; }
+  .grafico-titulo { font-size: 9pt; font-weight: 600; color: #475569; background: #f8fafc; padding: 6px 10px; border-bottom: 1px solid #e2e8f0; }
+  .grafico-card img { width: 100%; display: block; }
+  .footer { margin-top: 24px; padding-top: 10px; border-top: 1px solid #e2e8f0; font-size: 8pt; color: #94a3b8; text-align: center; }
+  @page { size: A4; margin: 20mm 18mm; }
+</style>
+</head>
+<body>
+
+<table class="header-table" cellpadding="0" cellspacing="0">
+  <tr>
+    {% if logo %}
+    <td class="header-logo"><img src="{{ logo }}" alt="Logo"/></td>
+    {% endif %}
+    <td class="header-title">
+      <h1>{{ titulo }}</h1>
+      {% if subtitulo %}<h2>{{ subtitulo }}</h2>{% endif %}
+    </td>
+    <td class="header-date">Fecha: {{ fecha }}</td>
+  </tr>
+</table>
+
+<div class="section">
+  <div class="section-title">Resumen económico</div>
+  <table class="kpi-grid" cellpadding="0" cellspacing="0">
+    <tr>
+      <td class="kpi-card">
+        <div class="kpi-label">Coste tarifa contratada</div>
+        <div class="kpi-value">{{ coste_tp_potcon }}</div>
+      </td>
+      <td class="kpi-card">
+        <div class="kpi-label">Coste tarifa óptima</div>
+        <div class="kpi-value">{{ coste_tp_potopt }}</div>
+      </td>
+      <td class="kpi-card ahorro">
+        <div class="kpi-label">Ahorro estimado</div>
+        <div class="kpi-value">{{ ahorro_opt }}</div>
+      </td>
+      <td class="kpi-card ahorro">
+        <div class="kpi-label">Ahorro (%)</div>
+        <div class="kpi-value">{{ ahorro_opt_porc }}</div>
+      </td>
+    </tr>
+  </table>
+</div>
+
+<div class="section">
+  <div class="section-title">Detalle de potencias</div>
+  {{ tabla_potencias }}
+</div>
+
+<div class="section">
+  <div class="section-title">Análisis gráfico</div>
+  <table class="graficos-grid" cellpadding="0" cellspacing="0">
+    <tr>
+      <td class="grafico-card">
+        <div class="grafico-titulo">Resumen</div>
+        <img src="data:image/png;base64,{{ graf_resumen }}" alt="Resumen"/>
+      </td>
+      <td class="grafico-card">
+        <div class="grafico-titulo">Costes — potencia contratada</div>
+        <img src="data:image/png;base64,{{ graf_costes_potcon }}" alt="Costes potencia contratada"/>
+      </td>
+    </tr>
+    <tr>
+      <td class="grafico-card">
+        <div class="grafico-titulo">Ahorro estimado</div>
+        <img src="data:image/png;base64,{{ graf_ahorro }}" alt="Ahorro"/>
+      </td>
+      <td class="grafico-card">
+        <div class="grafico-titulo">Costes por periodos</div>
+        <img src="data:image/png;base64,{{ graf_costes_pot_periodos }}" alt="Costes por periodos"/>
+      </td>
+    </tr>
+  </table>
+</div>
+
+<div class="footer">Informe generado automáticamente · {{ fecha }}</div>
+
+</body>
+</html>
