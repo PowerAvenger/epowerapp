@@ -17,7 +17,7 @@ altair<5
 streamlit==1.36.0
 statsmodels
 jinja2
-xhtml2pdf==0.2.11
+#xhtml2pdf==0.2.11
 python-docx
 kaleido
 rich>=10.14.0,<14

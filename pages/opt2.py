@@ -383,14 +383,14 @@ if resultados is not None:
                 # ── Botones de descarga ───────────────────────────────────
                 col1, col2, col3 = st.columns(3)
 
-                with col1:
-                    st.download_button(
-                        label        = "⬇️ Descargar PDF",
-                        data         = resultado["pdf"],
-                        file_name    = "informe_potencias.pdf",
-                        mime         = "application/pdf",
-                        use_container_width=True,
-                    )
+                #with col1:
+                #    st.download_button(
+                #        label        = "⬇️ Descargar PDF",
+                #        data         = resultado["pdf"],
+                #        file_name    = "informe_potencias.pdf",
+                #        mime         = "application/pdf",
+                #        use_container_width=True,
+                #    )
                 with col2:
                     st.download_button(
                         label        = "⬇️ Descargar Word",

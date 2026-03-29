@@ -167,7 +167,7 @@ def generate_pdf(html_string: str) -> bytes:
     if pisa_status.err:
         raise RuntimeError(f"Error al generar PDF: {pisa_status.err}")
     buf.seek(0)
-    return buf.read()
+    return b"" #buf.read()
 
 
 # ---------------------------------------------------------------------------
