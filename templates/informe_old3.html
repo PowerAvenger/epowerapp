@@ -8,43 +8,74 @@
     font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
     font-size: 10pt; color: #1e293b; background: #ffffff; padding: 28px 36px;
   }
+
+  /* ── Cabecera ─────────────────────────────────────────────────────── */
   .header-table { width: 100%; border-bottom: 3px solid #1a56db; padding-bottom: 14px; margin-bottom: 28px; }
   .header-table td { vertical-align: middle; }
-  .header-logo { width: 130px; }
-  .header-logo img { max-height: 40px; max-width: 120px; }
+  .header-logo { width: 170px; }
+  .header-logo img { max-height: 52px; max-width: 160px; }
   .header-title h1 { font-size: 17pt; font-weight: 700; color: #1a56db; line-height: 1.15; }
   .header-title h2 { font-size: 10pt; font-weight: 400; color: #64748b; margin-top: 3px; }
+
+  /* ── Secciones ────────────────────────────────────────────────────── */
   .section { margin-top: 28px; margin-bottom: 10px; }
-  .section-title { font-size: 11pt; font-weight: 700; color: #1a56db; border-left: 4px solid #1a56db; padding-left: 8px; margin-bottom: 12px; }
+  .section-title {
+    font-size: 11pt; font-weight: 700; color: #1a56db;
+    border-left: 4px solid #1a56db; padding-left: 8px; margin-bottom: 12px;
+  }
+
+  /* ── Datos del informe ────────────────────────────────────────────── */
   .ficha-table { width: 100%; border-collapse: collapse; font-size: 9.5pt; }
-  .ficha-table td { padding: 3px 12px 3px 0; vertical-align: top; }
+  .ficha-table td { padding: 5px 12px 5px 0; vertical-align: top; }
   .ficha-label { color: #64748b; width: 160px; white-space: nowrap; }
   .ficha-value { font-weight: 600; color: #1e293b; }
   .ficha-sep   { width: 40px; }
+
+  /* ── KPIs ─────────────────────────────────────────────────────────── */
   .kpi-grid { width: 100%; border-collapse: separate; border-spacing: 8px 0; }
-  .kpi-card { background: #f0f6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 10px 12px; text-align: center; width: 25%; }
+  .kpi-card {
+    background: #f0f6ff; border: 1px solid #bfdbfe;
+    border-radius: 8px; padding: 10px 12px; text-align: center; width: 25%;
+  }
   .kpi-card.ahorro { background: #f0fdf4; border-color: #86efac; }
   .kpi-label { font-size: 8.5pt; color: #64748b; margin-bottom: 4px; }
   .kpi-value { font-size: 13pt; font-weight: 700; color: #1e293b; }
   .kpi-card.ahorro .kpi-value { color: #15803d; }
+
+  /* ── Tabla de datos ───────────────────────────────────────────────── */
   .tabla-datos { width: 100%; border-collapse: collapse; font-size: 9pt; }
   .tabla-datos thead tr { background: #5a7080; color: #ffffff; }
-  .tabla-datos thead th { padding: 7px 10px; text-align: center; font-weight: 600; vertical-align: middle; }
+  .tabla-datos thead th {
+    padding: 7px 10px; text-align: center;
+    font-weight: 600; vertical-align: middle;
+  }
   .tabla-datos tbody tr:nth-child(even) { background: #f8fafc; }
   .tabla-datos tbody td { padding: 6px 10px; border-bottom: 1px solid #e2e8f0; text-align: center; }
   .tabla-datos tbody td:first-child { text-align: left; }
+
+  /* ── Gráficos ─────────────────────────────────────────────────────── */
   .graficos-grid { width: 100%; border-collapse: separate; border-spacing: 10px; }
-  .grafico-card { border: 1px solid #e2e8f0; border-radius: 8px; vertical-align: top; }
-  .grafico-card-half { width: 50%; }
-  .grafico-card-full { width: 100%; }
-  .grafico-titulo { font-size: 9pt; font-weight: 600; color: #475569; background: #f8fafc; padding: 6px 10px; border-bottom: 1px solid #e2e8f0; }
-  .grafico-card svg { width: 100%; display: block; }
-  .footer { margin-top: 28px; padding-top: 10px; border-top: 1px solid #e2e8f0; font-size: 8pt; color: #94a3b8; text-align: center; }
+  .grafico-card  { border: 1px solid #e2e8f0; border-radius: 8px; vertical-align: top; }
+  .grafico-card-half  { width: 50%; }
+  .grafico-card-full  { width: 100%; }
+  .grafico-titulo {
+    font-size: 9pt; font-weight: 600; color: #475569;
+    background: #f8fafc; padding: 6px 10px; border-bottom: 1px solid #e2e8f0;
+  }
+  .grafico-card img { width: 100%; display: block; }
+
+  /* ── Pie ──────────────────────────────────────────────────────────── */
+  .footer {
+    margin-top: 28px; padding-top: 10px;
+    border-top: 1px solid #e2e8f0; font-size: 8pt; color: #94a3b8; text-align: center;
+  }
+
   @page { size: A4; margin: 20mm 18mm; }
 </style>
 </head>
 <body>
 
+<!-- ═══ CABECERA (sin fecha) ═══════════════════════════════════════════ -->
 <table class="header-table" cellpadding="0" cellspacing="0">
   <tr>
     {% if logo %}
@@ -57,26 +88,28 @@
   </tr>
 </table>
 
+<!-- ═══ DATOS DEL INFORME ══════════════════════════════════════════════ -->
 <div class="section">
   <div class="section-title">Datos del informe</div>
   <table class="ficha-table" cellpadding="0" cellspacing="0">
     <tr>
-      <td class="ficha-label">Realizado por:</td>
+      <td class="ficha-label">Realizado por</td>
       <td class="ficha-value">{{ realizado_por }}</td>
       <td class="ficha-sep"></td>
-      <td class="ficha-label">Cliente:</td>
+      <td class="ficha-label">Cliente</td>
       <td class="ficha-value">{{ cliente }}</td>
     </tr>
     <tr>
-      <td class="ficha-label">Fecha de realización:</td>
+      <td class="ficha-label">Fecha de realización</td>
       <td class="ficha-value">{{ fecha }}</td>
       <td class="ficha-sep"></td>
-      <td class="ficha-label">CUPS:</td>
+      <td class="ficha-label">CUPS</td>
       <td class="ficha-value">{{ cups }}</td>
     </tr>
   </table>
 </div>
 
+<!-- ═══ RESUMEN ECONÓMICO ══════════════════════════════════════════════ -->
 <div class="section">
   <div class="section-title">Resumen económico</div>
   <table class="kpi-grid" cellpadding="0" cellspacing="0">
@@ -101,39 +134,49 @@
   </table>
 </div>
 
+<!-- ═══ DETALLE DE POTENCIAS ══════════════════════════════════════════ -->
 <div class="section">
   <div class="section-title">Detalle de potencias</div>
   {{ tabla_potencias }}
 </div>
 
+<!-- ═══ ANÁLISIS GRÁFICO ══════════════════════════════════════════════ -->
 <div class="section">
   <div class="section-title">Análisis gráfico</div>
   <table class="graficos-grid" cellpadding="0" cellspacing="0">
+
+    <!-- Fila 1: dos gráficos al 50% -->
     <tr>
       <td class="grafico-card grafico-card-half">
         <div class="grafico-titulo">Resumen</div>
-        {{ graf_resumen | safe }}
+        <img src="data:image/png;base64,{{ graf_resumen }}" alt="Resumen"/>
       </td>
       <td class="grafico-card grafico-card-half">
         <div class="grafico-titulo">Ahorro estimado</div>
-        {{ graf_ahorro | safe }}
+        <img src="data:image/png;base64,{{ graf_ahorro }}" alt="Ahorro estimado"/>
       </td>
     </tr>
+
+    <!-- Fila 2: costes potencia contratada a ancho completo -->
     <tr>
       <td class="grafico-card grafico-card-full" colspan="2">
         <div class="grafico-titulo">Costes — potencia contratada</div>
-        {{ graf_costes_potcon | safe }}
+        <img src="data:image/png;base64,{{ graf_costes_potcon }}" alt="Costes potencia contratada"/>
       </td>
     </tr>
+
+    <!-- Fila 3: costes por periodos a ancho completo -->
     <tr>
       <td class="grafico-card grafico-card-full" colspan="2">
         <div class="grafico-titulo">Costes por periodos</div>
-        {{ graf_costes_pot_periodos | safe }}
+        <img src="data:image/png;base64,{{ graf_costes_pot_periodos }}" alt="Costes por periodos"/>
       </td>
     </tr>
+
   </table>
 </div>
 
+<!-- ═══ PIE ════════════════════════════════════════════════════════════ -->
 <div class="footer">Informe generado automáticamente · {{ fecha }}</div>
 
 </body>

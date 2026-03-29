@@ -289,7 +289,7 @@ if resultados is not None:
             "grafico_ahorro": graf_ahorro
         }
 
-        if st.button("📄 Generar informe editable", use_container_width=True):
+        if st.button("📄 Generar informe editable", use_container_width=True, disabled=True):
 
             import os
 

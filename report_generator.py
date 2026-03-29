@@ -17,7 +17,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from jinja2 import Environment, FileSystemLoader
-#from xhtml2pdf import pisa
+# xhtml2pdf eliminado — incompatible con Streamlit Cloud
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -28,37 +28,27 @@ from docx.enum.table import WD_TABLE_ALIGNMENT
 # Utilidades
 # ---------------------------------------------------------------------------
 
-def fig_to_base64(fig) -> str:
-    """Convierte un objeto Figure de matplotlib/plotly a string base64 PNG."""
-    buf = io.BytesIO()
-
+def fig_to_svg(fig) -> str:
+    """
+    Convierte una figura matplotlib o plotly a SVG como string.
+    No necesita kaleido ni Chrome — funciona en Streamlit Cloud.
+    """
     if hasattr(fig, "savefig"):
         # matplotlib
-        fig.savefig(buf, format="png", bbox_inches="tight", dpi=120)
-
-    elif hasattr(fig, "write_image"):
-        # Plotly: necesita kaleido. Forzamos engine="kaleido" y escala 2x
-        # para que los colores y la resolución sean correctos.
-        try:
-            fig.write_image(
-                buf,
-                format="png",
-                engine="kaleido",
-                scale=2,          # resolución 2x → colores más fieles
-                width=900,
-                height=500,
-            )
-        except Exception as e:
-            raise RuntimeError(
-                f"Error exportando figura Plotly. "
-                f"¿Está kaleido instalado? (pip install kaleido)\n"
-                f"Detalle: {e}"
-            )
+        buf = io.BytesIO()
+        fig.savefig(buf, format="svg", bbox_inches="tight")
+        buf.seek(0)
+        return buf.read().decode("utf-8")
+    elif hasattr(fig, "to_image"):
+        # Plotly → SVG sin kaleido
+        return fig.to_image(format="svg").decode("utf-8")
     else:
         raise TypeError(f"Tipo de figura no soportado: {type(fig)}")
 
-    buf.seek(0)
-    return base64.b64encode(buf.read()).decode("utf-8")
+
+def fig_to_base64(fig) -> str:
+    """Alias mantenido por compatibilidad — ahora devuelve SVG como string."""
+    return fig_to_svg(fig)
 
 
 def logo_to_base64(logo_path: str | None) -> str | None:
@@ -130,10 +120,10 @@ def build_context(
             float_format=lambda x: f"{x:,.2f}",
         ),
         # Gráficos como base64
-        "graf_resumen":            fig_to_base64(graf_resumen),
-        "graf_costes_potcon":      fig_to_base64(graf_costes_potcon),
-        "graf_ahorro":             fig_to_base64(graf_ahorro),
-        "graf_costes_pot_periodos": fig_to_base64(graf_costes_pot_periodos),
+        "graf_resumen":            fig_to_svg(graf_resumen),
+        "graf_costes_potcon":      fig_to_svg(graf_costes_potcon),
+        "graf_ahorro":             fig_to_svg(graf_ahorro),
+        "graf_costes_pot_periodos": fig_to_svg(graf_costes_pot_periodos),
     }
 
 
@@ -159,15 +149,10 @@ def generate_html(context: dict, template_path: str = "templates/informe.html") 
 
 def generate_pdf(html_string: str) -> bytes:
     """
-    Convierte el HTML a PDF con xhtml2pdf y devuelve los bytes del PDF.
-    No requiere instalaciones externas en Windows.
+    PDF desactivado temporalmente — xhtml2pdf incompatible con Streamlit Cloud.
+    Devuelve bytes vacíos para no romper la app.
     """
-    buf = io.BytesIO()
-    pisa_status = pisa.CreatePDF(html_string, dest=buf)
-    if pisa_status.err:
-        raise RuntimeError(f"Error al generar PDF: {pisa_status.err}")
-    buf.seek(0)
-    return b"" #buf.read()
+    return b""
 
 
 # ---------------------------------------------------------------------------
@@ -257,11 +242,18 @@ def generate_docx(context: dict, df_potencias) -> bytes:
         ("Ahorro estimado",            context["graf_ahorro"]),
         ("Costes por periodos",        context["graf_costes_pot_periodos"]),
     ]
-    for nombre, b64 in graficos:
+    for nombre, svg_str in graficos:
         doc.add_paragraph(nombre).runs[0].bold = True
-        img_data = base64.b64decode(b64)
-        img_buf = io.BytesIO(img_data)
-        doc.add_picture(img_buf, width=Inches(5.5))
+        try:
+            # Convertir SVG a PNG en memoria con cairosvg si está disponible
+            import cairosvg
+            png_buf = io.BytesIO()
+            cairosvg.svg2png(bytestring=svg_str.encode("utf-8"), write_to=png_buf)
+            png_buf.seek(0)
+            doc.add_picture(png_buf, width=Inches(5.5))
+        except ImportError:
+            # Si no hay cairosvg, añadir nota en lugar del gráfico
+            doc.add_paragraph(f"[Gráfico '{nombre}' — instalar cairosvg para incluirlo]")
         doc.add_paragraph()
 
     # ---- Bytes de salida ----
