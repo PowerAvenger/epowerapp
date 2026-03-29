@@ -338,6 +338,11 @@ if st.session_state.get("df_norm") is not None:
             #fecha máxima a comparar (es la final de la curva menos un año)
             fecha_max_comparable = fecha_fin_global - relativedelta(years=1)
 
+            # 🔴 VALIDACIÓN CLAVE
+            if fecha_max_comparable <= fecha_ini_global:
+                st.warning("No hay datos suficientes para realizar una comparativa anual (+1 año).")
+                st.stop()
+
             #inicialización del rango de fechas
             if "rango_fechas_comparativa" not in st.session_state:
                 fecha_fin_dt = pd.to_datetime(fecha_max_comparable)
