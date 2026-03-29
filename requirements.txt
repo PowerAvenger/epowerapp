@@ -20,4 +20,5 @@ jinja2
 xhtml2pdf==0.2.11
 python-docx
 kaleido
+rich<14
 
