@@ -16,4 +16,8 @@ streamlit_folium
 altair<5
 streamlit==1.36.0
 statsmodels
+jinja2
+xhtml2pdf
+python-docx
+
 
