@@ -159,7 +159,7 @@ def generate_pdf(html_string: str) -> bytes:
 # Generador DOCX
 # ---------------------------------------------------------------------------
 
-def generate_docx(context: dict, df_potencias) -> bytes:
+def generate_docx(context: dict, df_potencias, figs: dict | None = None) -> bytes:
     """
     Genera un archivo Word (.docx) directamente desde los datos (no desde HTML).
     Devuelve los bytes del archivo.
@@ -236,24 +236,32 @@ def generate_docx(context: dict, df_potencias) -> bytes:
 
     # ---- Gráficos ----
     doc.add_heading("Análisis gráfico", level=2)
-    graficos = [
-        ("Resumen",                   context["graf_resumen"]),
-        ("Costes potencia contratada", context["graf_costes_potcon"]),
-        ("Ahorro estimado",            context["graf_ahorro"]),
-        ("Costes por periodos",        context["graf_costes_pot_periodos"]),
+    graficos_nombres = [
+        ("Resumen",                    "graf_resumen"),
+        ("Costes potencia contratada", "graf_costes_potcon"),
+        ("Ahorro estimado",            "graf_ahorro"),
+        ("Costes por periodos",        "graf_costes_pot_periodos"),
     ]
-    for nombre, svg_str in graficos:
+    for nombre, key in graficos_nombres:
         doc.add_paragraph(nombre).runs[0].bold = True
-        try:
-            # Convertir SVG a PNG en memoria con cairosvg si está disponible
-            import cairosvg
-            png_buf = io.BytesIO()
-            cairosvg.svg2png(bytestring=svg_str.encode("utf-8"), write_to=png_buf)
-            png_buf.seek(0)
-            doc.add_picture(png_buf, width=Inches(5.5))
-        except ImportError:
-            # Si no hay cairosvg, añadir nota en lugar del gráfico
-            doc.add_paragraph(f"[Gráfico '{nombre}' — instalar cairosvg para incluirlo]")
+        fig = (figs or {}).get(key)
+        if fig is not None:
+            try:
+                if hasattr(fig, "to_image"):
+                    png_bytes = fig.to_image(format="png", width=900, height=450, scale=1.5)
+                elif hasattr(fig, "savefig"):
+                    buf = io.BytesIO()
+                    fig.savefig(buf, format="png", bbox_inches="tight", dpi=120)
+                    buf.seek(0)
+                    png_bytes = buf.read()
+                else:
+                    png_bytes = None
+                if png_bytes:
+                    doc.add_picture(io.BytesIO(png_bytes), width=Inches(5.5))
+            except Exception:
+                doc.add_paragraph(f"[Gráfico '{nombre}' no disponible en este entorno]")
+        else:
+            doc.add_paragraph(f"[Gráfico '{nombre}' no disponible]")
         doc.add_paragraph()
 
     # ---- Bytes de salida ----
@@ -317,6 +325,12 @@ def generar_informe(
 
     html_str  = generate_html(context, template_path)
     pdf_bytes = generate_pdf(html_str)
-    docx_bytes = generate_docx(context, df_potencias)
+    figs = {
+        "graf_resumen":             graf_resumen,
+        "graf_costes_potcon":       graf_costes_potcon,
+        "graf_ahorro":              graf_ahorro,
+        "graf_costes_pot_periodos": graf_costes_pot_periodos,
+    }
+    docx_bytes = generate_docx(context, df_potencias, figs=figs)
 
     return {"html": html_str, "pdf": pdf_bytes, "docx": docx_bytes}
