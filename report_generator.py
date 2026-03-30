@@ -147,13 +147,20 @@ def generate_html(context: dict, template_path: str = "templates/informe.html") 
 # Generador PDF
 # ---------------------------------------------------------------------------
 
-def generate_pdf(html_string: str) -> bytes:
+def generate_pdf_old(html_string: str) -> bytes:
     """
     PDF desactivado temporalmente — xhtml2pdf incompatible con Streamlit Cloud.
     Devuelve bytes vacíos para no romper la app.
     """
     return b""
 
+def generate_pdf(html_string: str) -> bytes:
+    """
+    Genera un PDF a partir del HTML renderizado con Jinja2.
+    Usa WeasyPrint — compatible con Streamlit Community Cloud.
+    """
+    from weasyprint import HTML
+    return HTML(string=html_string).write_pdf()
 
 # ---------------------------------------------------------------------------
 # Generador DOCX
