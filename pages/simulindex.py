@@ -47,6 +47,8 @@ if 'trimestre_cobertura' not in st.session_state:
 if 'mes_cobertura' not in st.session_state:
     st.session_state.mes_cobertura = mes_actual 
 
+print("mes_cobertura:", repr(st.session_state.mes_cobertura))    
+
 lista_trimestres_futuros, trimestre_inicial = obtener_trimestres_futuros(df_FTB_trimestral_futuros)   
 
 if 'trimestre_futuro' not in st.session_state:

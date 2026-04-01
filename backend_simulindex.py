@@ -194,6 +194,9 @@ def obtener_meff_mensual(df_FTB):
     # =========================
     hoy_dt = pd.Timestamp.today().to_period("M").to_timestamp()
     mes_actual = hoy_dt.strftime('%b-%y').lower()
+    mes_actual = {v: k for k, v in meses_map.items()}[mes_actual[:3]] + mes_actual[3:]
+
+    print(f'mes actual: {mes_actual}')
 
     # =========================
     # FUTUROS REALES (~6) en formato "ene-24"
@@ -647,6 +650,7 @@ def obtener_grafico_omip_omie(df_omip_producto, df_spot_mensual, producto):
         }
 
         mes_str, año_corto = producto.split('-')
+        
         mes_num = meses_map_inv[mes_str.lower()]
         año = 2000 + int(año_corto)
 
@@ -816,9 +820,23 @@ def construir_curva_2026(df_spot_mensual, df_ftb_m, df_ftb_q, fecha_ultimo_omip)
                 (df_ftb_m["Entrega_dt"].dt.year == año) &
                 (df_ftb_m["Entrega_dt"].dt.month == mes)
             )
+            
+            #precio = df_ftb_m.loc[filtro, "Precio"].iloc[0]
+            if df_ftb_m.loc[filtro].shape[0] > 0:
+                precio = df_ftb_m.loc[filtro, "Precio"].iloc[0]
+                tipo = "FTB mensual"
+            else:
+                trimestre = (mes - 1) // 3 + 1
+                mes_inicio_trim = (trimestre - 1) * 3 + 1
 
-            precio = df_ftb_m.loc[filtro, "Precio"].iloc[0]
-            tipo = "FTB mensual"
+                filtro = (
+                    (df_ftb_q["Inicio Entrega"].dt.year == año) &
+                    (df_ftb_q["Inicio Entrega"].dt.month == mes_inicio_trim)
+                )
+
+                precio = df_ftb_q.loc[filtro, "Precio"].iloc[0]
+                tipo = "FTB trimestral"
+            
 
         # FTB trimestral
         else:
