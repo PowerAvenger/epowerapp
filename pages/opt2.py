@@ -265,14 +265,14 @@ if resultados is not None:
         st.subheader("📄 Generar informe")
 
         # Opciones que el usuario puede personalizar
-        col_titulo, col_logo = st.columns([3, 1])
+        col_titulo, col_logo = st.columns([2, 2])
         with col_titulo:
             titulo    = st.text_input("Título del informe",    "Informe de Optimización de Potencias")
             subtitulo = st.text_input("Subtítulo (opcional)",  "Prueba de subtítulo")
             realizado_por = st.text_input("Realizado por", "")
             cliente       = st.text_input("Cliente", "")
             cups          = st.text_input("CUPS", "")
-        with col_logo:
+        #with col_logo:
             logo_file = st.file_uploader("Logo (PNG/JPG)", type=["png", "jpg", "jpeg"])
 
         # Guarda el logo en un fichero temporal si el usuario lo sube
