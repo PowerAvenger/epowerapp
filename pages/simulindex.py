@@ -130,7 +130,7 @@ df_spot_mensual = obtener_spot_mensual()
 #print(df_mes_cober)
 
 
-grafico, simul20, simul30, simul61, simulcurva = obtener_graf_hist(df_hist, st.session_state.omie_slider, colores_precios)
+grafico, simul20, simul30, simul61, simulcurva, resultados = obtener_graf_hist(df_hist, st.session_state.omie_slider, colores_precios)
 
 # Inicializamos margen a cero
 if 'margen_simulindex' not in st.session_state:
@@ -227,6 +227,12 @@ df_año_movil = construir_curva_omip_forward(df_FTB_mensual, df_FTB_trimestral, 
 precio_medio_omip = round(df_año_movil["precio"].mean(),2)
 graf_año_movil = graficar_curva_omip(df_año_movil, precio_medio_omip)
 st.session_state.precio_omip_previsto = precio_medio_omip
+
+
+intercept_20, slope_20, r2_20 = resultados['precio_2.0']
+print(f"2.0 → slope: {slope_20:.4f} | R²: {r2_20:.3f} | intercept: {intercept_20:.2f}")
+elasticidad_20 = (slope_20 * df_hist['spot'].mean()) / df_hist['precio_2.0'].mean()
+print(f"Elasticidad 2.0: {elasticidad_20:.3f}")
 
 
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(['Principal', 'Futuros', 'Previsión anual', 'OMIP vs OMIE', 'Comparador', 'Cobertura trimestral'])

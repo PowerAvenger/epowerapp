@@ -259,7 +259,7 @@ if resultados is not None:
             st.dataframe(df_potencias, hide_index=True, use_container_width=True)
             st.write(graf_ahorro)
         with c13:
-            st.write(graf_costes_pot_periodos)
+            st.plotly_chart(graf_costes_pot_periodos, use_container_width=True)
 
     with tab2:    
         st.subheader("📄 Generar informe")

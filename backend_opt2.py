@@ -635,35 +635,10 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
         xaxis_title="Potencia (kW)",
         margin=dict(l=40, r=20, t=40, b=40),
         #width = 1600
-        height = 600
+        height = 600,
+        autosize = True
     )
 
-
-
-    #data_graf_resumen_opt = {
-    #    'coste del tp': ['contratado', 'optimizado'],
-    #    'coste en €' : [coste_tp_potcon, coste_tp_potopt]
-    #}
-    #df_resumen_costes_tp = pd.DataFrame(data_graf_resumen_opt)
-    #df_resumen_costes_tp['coste en €'] = df_resumen_costes_tp['coste en €'].round(0)
-    
-
-    
-    #colores = {
-    #    'contratado': 'blue',
-    #    'optimizado': 'green'
-    #}
-
-    
-    #graf_resumen_costes_tp = px.bar(
-    #    df_resumen_costes_tp,
-    #    x = 'coste del tp',
-    #    y = 'coste en €',
-    #    color = 'coste del tp',
-    #    color_discrete_map = colores,
-    #    text = 'coste en €',
-        #width=500
-    #    )
     
 
     #======================================================================

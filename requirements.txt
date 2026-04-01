@@ -23,3 +23,4 @@ python-docx
 weasyprint
 rich>=10.14.0,<14
 
+

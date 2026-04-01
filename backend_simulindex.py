@@ -302,97 +302,7 @@ def obtener_hist_mensual(df_in):
     return df_hist
 
 
-# NO USADO!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-# GRÁFICO PRINCIPAL DE PRECIOS DE INDEXADO A PARTIR DE OMIE++++++++++++++++++++++++++++
-def obtener_graf_hist_old(df_hist, omip, colores_precios):
-    series_y = ['precio_2.0','precio_3.0','precio_6.1']
-    if 'precio_curva' in df_hist.columns:
-        series_y.append('precio_curva')
-    #colores_precios = {'precio_2.0': 'goldenrod', 'precio_3.0': 'darkred', 'precio_6.1': 'cyan'}
-    graf_hist = px.scatter(df_hist, x = 'spot', y = series_y, trendline = 'ols',
-        labels = {'value':'Precio medio de indexado en c€/kWh','variable':'Precios según ATR','spot':'Precio medio mercado mayorista en €/MWh'},
-        height = 600,
-        color_discrete_map = colores_precios,
-        title = 'Simulación de los precios medios de indexado',
-        
-    )
-    graf_hist.update_traces(marker=dict(symbol='square'))
-    
-    trend_results = px.get_trendline_results(graf_hist)
-    #print ('trend_results')
-    #print(trend_results)
 
-    #obtención del precio 2.0 simulado a partir del gráfico de tendencia 2.0
-    params_20 = trend_results[trend_results['Precios según ATR'] == 'precio_2.0'].px_fit_results.iloc[0].params
-    intercept_20, slope_20 = params_20[0], params_20[1]
-    simul_20=round(intercept_20+slope_20*omip,1)
-                
-    #obtención del precio 3.0 simulado a partir del gráfico de tendencia 3.0
-    params_30 = trend_results[trend_results['Precios según ATR']=='precio_3.0'].px_fit_results.iloc[0].params
-    intercept_30, slope_30 = params_30[0], params_30[1]
-    simul_30=round(intercept_30+slope_30*omip,1)
-    
-    #obtención del precio 6.1 simulado a partir del gráfico de tendencia 6.1
-    params_61 = trend_results[trend_results['Precios según ATR']=='precio_6.1'].px_fit_results.iloc[0].params
-    intercept_61, slope_61 = params_61[0], params_61[1]
-    simul_61=round(intercept_61+slope_61*omip,1)
-
-    simul_curva = None
-    n_meses = df_hist.shape[0]
-    if n_meses > 10:
-        if 'precio_curva' in df_hist.columns:
-            params_curve = trend_results[trend_results['Precios según ATR'] == 'precio_curva'].px_fit_results.iloc[0].params
-            intercept_curve, slope_curve = params_curve[0], params_curve[1]
-            simul_curva = round(intercept_curve + slope_curve * omip, 1)
-        
-        if simul_curva is not None:
-            graf_hist.add_scatter(
-                x=[omip], y=[simul_curva], mode='markers',
-                marker=dict(
-                    color='rgba(255,255,255,0)',
-                    size=20,
-                    line=dict(width=5, color=colores_precios['precio_curva'])
-                ),
-                name='Simul Curva',
-                text='Simul Curva'
-            )
-
-            graf_hist.add_shape(
-                type='line',
-                x0=omip,
-                y0=0,
-                x1=omip,
-                y1=simul_curva,
-                line=dict(color=colores_precios['precio_curva'], width=1, dash='dash')
-            )
-
-    graf_hist.add_scatter(x=[omip],y=[simul_20], mode='markers', 
-        marker=dict(color='rgba(255, 255, 255, 0)',size=20, line=dict(width=5, color=colores_precios['precio_2.0'])),
-        name='Simul 2.0',
-        text='Simul 2.0'
-    )
-    graf_hist.add_scatter(x=[omip],y=[simul_30], mode='markers', 
-        marker=dict(color='rgba(255, 255, 255, 0)',size=20, line=dict(width=5, color=colores_precios['precio_3.0'])),
-        name='Simul 3.0',
-        text='Simul 3.0'
-    )
-    graf_hist.add_scatter(x=[omip],y=[simul_61], mode='markers', 
-        marker=dict(color='rgba(255, 255, 255, 0)',size=20, line=dict(width=5, color=colores_precios['precio_6.1'])),
-        name='Simul 6.1',
-        text='Simul 6.1'
-    )
-    graf_hist.add_shape(
-        type='line',
-        x0=omip,
-        y0=0,
-        x1=omip,
-        y1=simul_20,
-        line=dict(color='grey', width=1,dash='dash'),
-    )
-    graf_hist.update_layout(
-            title={'x':0.5,'xanchor':'center'},
-    )
-    return graf_hist, simul_20, simul_30, simul_61, simul_curva
 
 
 
@@ -441,9 +351,10 @@ def obtener_graf_hist(df_hist, omip, colores_precios):
             model = sm.OLS(y, X).fit()
 
         intercept = model.params['const']
-        slope = model.params['spot']
-
-        resultados[serie] = (intercept, slope)
+        slope = model.params['spot'] #pendiente
+        r2 = model.rsquared
+        #resultados[serie] = (intercept, slope)
+        resultados[serie] = (intercept, slope, r2)
 
         # dibujar recta
         x_vals = np.linspace(df_hist['spot'].min(), df_hist['spot'].max(), 100)
@@ -483,13 +394,13 @@ def obtener_graf_hist(df_hist, omip, colores_precios):
     # SIMULACIONES
     # -----------------------------
 
-    intercept_20, slope_20 = resultados['precio_2.0']
+    intercept_20, slope_20, r2_20 = resultados['precio_2.0']
     simul_20 = round(intercept_20 + slope_20 * omip, 1)
 
-    intercept_30, slope_30 = resultados['precio_3.0']
+    intercept_30, slope_30, r2_30 = resultados['precio_3.0']
     simul_30 = round(intercept_30 + slope_30 * omip, 1)
 
-    intercept_61, slope_61 = resultados['precio_6.1']
+    intercept_61, slope_61, r2_61 = resultados['precio_6.1']
     simul_61 = round(intercept_61 + slope_61 * omip, 1)
 
     simul_curva = None
@@ -557,7 +468,9 @@ def obtener_graf_hist(df_hist, omip, colores_precios):
         title={'x':0.5,'xanchor':'center'}
     )
 
-    return graf_hist, simul_20, simul_30, simul_61, simul_curva
+
+
+    return graf_hist, simul_20, simul_30, simul_61, simul_curva, resultados
 
 
 # DF CON LOS VALORES MEDIOS MENSUALES DEL SPOT DE TODO EL HISTÓRICO

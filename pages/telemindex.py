@@ -9,7 +9,8 @@ from backend_telemindex import (filtrar_datos, añadir_srad, añadir_fnee, calcu
                                 tabla_precios, tabla_costes, tabla_pyc,
                                 evol_mensual, 
                                 construir_df_curva_sheets, añadir_costes_curva,
-                                check_medias) 
+                                check_medias,
+                                analizar_dependencia_omie, visualizar_impacto_omie, grafico_elasticidad_lineal) 
 from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, aplicar_estilo
 from backend_curvadecarga import graficar_media_horaria, graficar_queso_periodos
 
@@ -309,12 +310,12 @@ with st.sidebar.container(border=True):
     st.sidebar.radio("Seleccionar rango temporal", ['Por años', 'Por meses', 'Selecciona un rango de fechas'], key = "rango_temporal")
 
     if st.session_state.rango_temporal == 'Por años':
-        st.sidebar.selectbox('Seleccione el año', options = [2026, 2025, 2024, 2023], key = 'año_seleccionado') 
+        st.sidebar.selectbox('Seleccione el año', options = [2026, 2025, 2024], key = 'año_seleccionado') 
         st.session_state.texto_precios = f'Año {st.session_state.año_seleccionado}, hasta el día {fecha_ultima_filtrado}'
     elif st.session_state.rango_temporal =='Por meses' : 
         col_sb1, col_sb2 = st.sidebar.container().columns(2)      
         with col_sb1:
-            st.sidebar.selectbox('Seleccione el año', options = [2026, 2025, 2024, 2023], key = 'año_seleccionado') 
+            st.sidebar.selectbox('Seleccione el año', options = [2026, 2025, 2024], key = 'año_seleccionado') 
         with col_sb2:
             st.sidebar.selectbox('Seleccionar mes', lista_meses, key = 'mes_seleccionado')
             st.session_state.texto_precios = f'Seleccionado: {st.session_state.mes_seleccionado} de {st.session_state.año_seleccionado}'
@@ -452,6 +453,28 @@ with tab1:
             # gráfico de evolución de los precios medios mensuales
             st.subheader("Evolución de los precios medios de indexado", divider='rainbow')
             st.plotly_chart(graf_mensual)
+
+            df_res, fig = analizar_dependencia_omie(st.session_state.df_sheets)
+
+            st.dataframe(df_res)
+            st.plotly_chart(fig, use_container_width=True)
+
+            fig = grafico_elasticidad_lineal(df_res)
+            st.plotly_chart(fig)
+
+            #df_res, fig = visualizar_impacto_omie(st.session_state.df_sheets, atr="2.0")
+
+            #st.dataframe(df_res)
+
+            #for _, row in df_res.iterrows():
+            #    st.markdown(f"""
+            #**{int(row['año'])}**
+
+            #- OMIE: {row['omie_ini']:.1f} → {row['omie_fin']:.1f} ({row['var_omie']:.0f}%)
+            #3- Precio: {row['precio_ini']:.1f} → {row['precio_fin']:.1f} ({row['var_precio']:.0f}%)
+            #""")
+
+            #st.plotly_chart(fig, use_container_width=True)
 
         with col2:
             if media_atr_curva is not None:

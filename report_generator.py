@@ -28,27 +28,31 @@ from docx.enum.table import WD_TABLE_ALIGNMENT
 # Utilidades
 # ---------------------------------------------------------------------------
 
-def fig_to_svg(fig) -> str:
+def fig_to_png_base64(fig, width: int = 900, height: int = 400) -> str:
     """
-    Convierte una figura matplotlib o plotly a SVG como string.
-    No necesita kaleido ni Chrome — funciona en Streamlit Cloud.
+    Convierte una figura matplotlib o plotly a PNG embebido como base64.
+    Devuelve una etiqueta <img> lista para incrustar en HTML.
+    Funciona en Streamlit Cloud con chromium + kaleido.
     """
-    if hasattr(fig, "savefig"):
+    if hasattr(fig, "to_image"):
+        # Plotly
+        png_bytes = fig.to_image(format="png", width=width, height=height, scale=2)
+    elif hasattr(fig, "savefig"):
         # matplotlib
         buf = io.BytesIO()
-        fig.savefig(buf, format="svg", bbox_inches="tight")
+        fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
         buf.seek(0)
-        return buf.read().decode("utf-8")
-    elif hasattr(fig, "to_image"):
-        # Plotly → SVG sin kaleido
-        return fig.to_image(format="svg").decode("utf-8")
+        png_bytes = buf.read()
     else:
         raise TypeError(f"Tipo de figura no soportado: {type(fig)}")
 
+    b64 = base64.b64encode(png_bytes).decode("utf-8")
+    return f'<img src="data:image/png;base64,{b64}" style="width:100%;display:block;"/>'
+
 
 def fig_to_base64(fig) -> str:
-    """Alias mantenido por compatibilidad — ahora devuelve SVG como string."""
-    return fig_to_svg(fig)
+    """Alias mantenido por compatibilidad."""
+    return fig_to_png_base64(fig)
 
 
 def logo_to_base64(logo_path: str | None) -> str | None:
@@ -120,10 +124,10 @@ def build_context(
             float_format=lambda x: f"{x:,.2f}",
         ),
         # Gráficos como base64
-        "graf_resumen":            fig_to_svg(graf_resumen),
-        "graf_costes_potcon":      fig_to_svg(graf_costes_potcon),
-        "graf_ahorro":             fig_to_svg(graf_ahorro),
-        "graf_costes_pot_periodos": fig_to_svg(graf_costes_pot_periodos),
+        "graf_resumen":            fig_to_png_base64(graf_resumen),
+        "graf_costes_potcon":      fig_to_png_base64(graf_costes_potcon),
+        "graf_ahorro":             fig_to_png_base64(graf_ahorro),
+        "graf_costes_pot_periodos": fig_to_png_base64(graf_costes_pot_periodos, height=500),
     }
 
 

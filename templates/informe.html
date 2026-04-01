@@ -33,12 +33,12 @@
   .tabla-datos tbody tr:nth-child(even) { background: #f8fafc; }
   .tabla-datos tbody td { padding: 6px 10px; border-bottom: 1px solid #e2e8f0; text-align: center; }
   .tabla-datos tbody td:first-child { text-align: left; }
-  .graficos-grid { width: 100%; border-collapse: separate; border-spacing: 10px; }
-  .grafico-card { border: 1px solid #e2e8f0; border-radius: 8px; vertical-align: top; }
-  .grafico-card-half { width: 50%; }
+  .graficos-fila { display: flex; gap: 10px; margin-bottom: 10px; }
+  .grafico-card { border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; page-break-inside: avoid; break-inside: avoid; margin-bottom: 10px; }
+  .grafico-card-half { flex: 1; }
   .grafico-card-full { width: 100%; }
   .grafico-titulo { font-size: 9pt; font-weight: 600; color: #475569; background: #f8fafc; padding: 6px 10px; border-bottom: 1px solid #e2e8f0; }
-  .grafico-card svg { width: 100%; display: block; }
+  .grafico-card img { width: 100%; display: block; }
   .footer { margin-top: 28px; padding-top: 10px; border-top: 1px solid #e2e8f0; font-size: 8pt; color: #94a3b8; text-align: center; }
   @page { size: A4; margin: 20mm 18mm; }
 </style>
@@ -108,30 +108,28 @@
 
 <div class="section">
   <div class="section-title">Análisis gráfico</div>
-  <table class="graficos-grid" cellpadding="0" cellspacing="0">
-    <tr>
-      <td class="grafico-card grafico-card-half">
-        <div class="grafico-titulo">Resumen</div>
-        {{ graf_resumen | safe }}
-      </td>
-      <td class="grafico-card grafico-card-half">
-        <div class="grafico-titulo">Ahorro estimado</div>
-        {{ graf_ahorro | safe }}
-      </td>
-    </tr>
-    <tr>
-      <td class="grafico-card grafico-card-full" colspan="2">
-        <div class="grafico-titulo">Costes — potencia contratada</div>
-        {{ graf_costes_potcon | safe }}
-      </td>
-    </tr>
-    <tr>
-      <td class="grafico-card grafico-card-full" colspan="2">
-        <div class="grafico-titulo">Costes por periodos</div>
-        {{ graf_costes_pot_periodos | safe }}
-      </td>
-    </tr>
-  </table>
+
+  <div class="graficos-fila">
+    <div class="grafico-card grafico-card-half">
+      <div class="grafico-titulo">Resumen</div>
+      {{ graf_resumen | safe }}
+    </div>
+    <div class="grafico-card grafico-card-half">
+      <div class="grafico-titulo">Ahorro estimado</div>
+      {{ graf_ahorro | safe }}
+    </div>
+  </div>
+
+  <div class="grafico-card grafico-card-full">
+    <div class="grafico-titulo">Costes mensuales</div>
+    {{ graf_costes_potcon | safe }}
+  </div>
+
+  <div class="grafico-card grafico-card-full">
+    <div class="grafico-titulo">Costes por periodos</div>
+    {{ graf_costes_pot_periodos | safe }}
+  </div>
+
 </div>
 
 <div class="footer">Informe generado automáticamente · {{ fecha }}</div>

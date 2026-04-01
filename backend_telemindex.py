@@ -1,6 +1,7 @@
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from backend_comun import aplicar_estilo
 
 
 COMPONENTES_SSAA_TOTAL = [
@@ -414,7 +415,26 @@ def construir_pie_atr_generico(df, atr, color_scale, titulo):
 
     pt[f'perdidas_{atr}'] = pt['comp_perd'] * pt[f'perd_{atr}']
 
-    pt = pt.drop(columns=[f'perd_{atr}', 'comp_perd'])
+    pt['precio_total'] = df.pivot_table(
+        values=f'precio_{atr}',
+        index='año',
+        aggfunc='mean'
+    )
+
+    pt['otros'] = (
+        pt['precio_total']
+        - (
+            pt['spot'] +
+            pt['ssaa'] +
+            pt['osom'] +
+            pt[f'ppcc_{atr}'] +
+            pt[f'perdidas_{atr}'] +
+            pt[f'pyc_{atr}']
+        )
+    )
+
+    #pt = pt.drop(columns=[f'perd_{atr}', 'comp_perd'])
+    pt = pt.drop(columns=[f'perd_{atr}', 'comp_perd', 'precio_total'])
 
     pt_trans = pt.transpose().reset_index()
     pt_trans = pt_trans.rename(columns={'index': 'componente', pt_trans.columns[1]: 'valor'})
@@ -715,3 +735,209 @@ def check_medias(df, atr="2.0"):
     print(f"PYC_{atr}:", df[f"pyc_{atr}"].mean())
 
 
+import pandas as pd
+import statsmodels.api as sm
+import plotly.express as px
+
+def analizar_dependencia_omie(df_sheets):
+
+    df = df_sheets.copy()
+
+    # -----------------------------
+    # PREPARACIÓN
+    # -----------------------------
+    df["fecha"] = pd.to_datetime(df["fecha"])
+    df["año"] = df["fecha"].dt.year
+    df["mes"] = df["fecha"].dt.month
+
+    # agregación mensual
+    df_mensual = (
+        df.groupby(["año", "mes"], as_index=False)
+        .agg({
+            "spot": "mean",
+            "precio_2.0": "mean"
+        })
+    )
+
+    resultados = []
+
+    # -----------------------------
+    # CÁLCULO POR AÑO
+    # -----------------------------
+    for año in sorted(df_mensual["año"].unique()):
+
+        df_year = df_mensual[df_mensual["año"] == año]
+
+        # evitar años con pocos datos
+        if len(df_year) < 2:
+            continue
+
+        X = sm.add_constant(df_year["spot"])
+        y = df_year["precio_2.0"]
+
+        model = sm.OLS(y, X).fit()
+
+        slope = model.params["spot"]
+
+        elasticidad = (slope * df_year["spot"].mean()) / df_year["precio_2.0"].mean()
+
+        #peso_spot = (df_year["spot"] * slope).mean() / df_year["precio_2.0"].mean()
+        peso_spot = df_year["spot"].mean() / df_year["precio_2.0"].mean()
+
+        resultados.append({
+            "año": año,
+            "elasticidad": elasticidad,
+            "peso_spot": peso_spot,
+            "slope": slope
+        })
+
+    df_res = pd.DataFrame(resultados)
+
+    # -----------------------------
+    # GRÁFICO
+    # -----------------------------
+    fig = px.line(
+        df_res,
+        x="año",
+        y=["elasticidad", "peso_spot"],
+        markers=True,
+        title="Evolución de la dependencia del OMIE"
+    )
+
+    fig.update_layout(
+        title={"x": 0.5, "xanchor": "center"},
+        yaxis_title="Ratio",
+        xaxis_title="Año"
+    )
+
+    return df_res, fig
+
+
+import pandas as pd
+import statsmodels.api as sm
+import plotly.express as px
+
+def visualizar_impacto_omie(df_sheets, atr="2.0"):
+
+    df = df_sheets.copy()
+
+    # -----------------------------
+    # PREPARACIÓN
+    # -----------------------------
+    df["fecha"] = pd.to_datetime(df["fecha"])
+    df["año"] = df["fecha"].dt.year
+    df["mes"] = df["fecha"].dt.month
+
+    df_mensual = (
+        df.groupby(["año", "mes"], as_index=False)
+        .agg({
+            "spot": "mean",
+            f"precio_{atr}": "mean"
+        })
+    )
+
+    resultados = []
+
+    # -----------------------------
+    # CÁLCULO POR AÑO
+    # -----------------------------
+    for año in sorted(df_mensual["año"].unique()):
+
+        df_year = df_mensual[df_mensual["año"] == año]
+
+        if len(df_year) < 2:
+            continue
+
+        X = sm.add_constant(df_year["spot"])
+        y = df_year[f"precio_{atr}"]
+
+        model = sm.OLS(y, X).fit()
+
+        intercept = model.params["const"]
+        slope = model.params["spot"]
+
+        # -----------------------------
+        # EJEMPLO AUTOMÁTICO
+        # -----------------------------
+        omie_ini = df_year["spot"].max()
+        omie_fin = df_year["spot"].min()
+
+        precio_ini = intercept + slope * omie_ini
+        precio_fin = intercept + slope * omie_fin
+
+        var_omie = (omie_fin - omie_ini) / omie_ini * 100
+        var_precio = (precio_fin - precio_ini) / precio_ini * 100
+
+        resultados.append({
+            "año": año,
+            "omie_ini": omie_ini,
+            "omie_fin": omie_fin,
+            "precio_ini": precio_ini,
+            "precio_fin": precio_fin,
+            "var_omie": var_omie,
+            "var_precio": var_precio
+        })
+
+    df_res = pd.DataFrame(resultados)
+
+    # -----------------------------
+    # GRÁFICO
+    # -----------------------------
+    fig = px.bar(
+        df_res,
+        x="año",
+        y=["var_omie", "var_precio"],
+        barmode="group",
+        title="Impacto del OMIE en el precio final"
+    )
+
+    fig.update_layout(
+        title={'x':0.5, 'xanchor':'center'},
+        yaxis_title="Variación (%)",
+        xaxis_title="Año"
+    )
+
+    return df_res, fig
+
+import plotly.graph_objects as go
+
+def grafico_elasticidad_lineal(df_res):
+
+    fig = go.Figure()
+
+    # rango en eje X (variación OMIE)
+    x_vals = [0, 1]  # 1 = 100% cambio relativo
+
+    for _, row in df_res.iterrows():
+
+        año = int(row["año"])
+        elasticidad = row["elasticidad"]
+
+        y_vals = [0, elasticidad]
+
+        fig.add_trace(go.Scatter(
+            x=x_vals,
+            y=y_vals,
+            mode='lines+markers+text',
+            name=str(año),
+            text=[None, f"{año}"],
+            textposition="top right",
+            textfont=dict(size=20)  #
+        ))
+
+    fig.update_layout(
+        title="Relación OMIE → Precio final (elasticidad)",
+        xaxis_title="Variación relativa OMIE",
+        yaxis_title="Variación relativa Precio",
+        title_x=0.5,
+        showlegend=False,
+        width=700,
+        height=500
+    )
+    fig = aplicar_estilo(fig)
+
+    fig.update_layout(margin=dict(r=80))
+    fig.update_xaxes(range=[0, 1.2])
+    fig.update_yaxes(range=[0, 0.7])
+
+    return fig
