@@ -263,15 +263,28 @@ def obtener_hist_mensual(df_in):
     if 'consumo_neto_kWh' in df_in.columns and 'coste_total_simul' in df_in.columns:
         cols_extra = ['consumo_neto_kWh', 'coste_total_simul']
 
+    # columnas adicionales de componentes que debemos evaluar su incremento en la simulación
+    cols_componentes = []
+    for col in ['ssaa', 'rad3', 'fnee']:
+        if col in df_in.columns:
+            cols_componentes.append(col)
+
     # df_out seguro: solo columnas disponibles
-    df_out = df_in.loc[:, cols_base + cols_extra]
+    #df_out = df_in.loc[:, cols_base + cols_extra]
+    df_out = df_in.loc[:, cols_base + cols_extra + cols_componentes]
 
     # resample mensual
     # precios → mean
-    df_mes_prec = df_out[cols_base].resample('M').mean()
+    #df_mes_prec = df_out[cols_base].resample('M').mean()
+    df_mes = df_out[cols_base + cols_componentes].resample('M').mean()
 
     # si no hay curva → df_mes = df_mes_prec
-    df_mes = df_mes_prec.copy()
+    #df_mes = df_mes_prec.copy()
+
+    # componentes → mean mensual
+    #if len(cols_componentes) > 0:
+    #    df_mes_comp = df_out[cols_componentes].resample('M').mean()
+    #    df_mes = df_mes.join(df_mes_comp)
 
     # si hay datos de consumo y coste → calcular precio_curva
     if len(cols_extra) > 0:
@@ -285,8 +298,9 @@ def obtener_hist_mensual(df_in):
         # guardar consumo mensual
         df_mes['consumo_mes'] = df_mes_sums['consumo_neto_kWh']
 
-    # últimos 12 meses
-    df_hist = df_mes.tail(12).copy()
+    # últimos 12 meses completos
+    #df_hist = df_mes.tail(12).copy()
+    df_hist = df_mes.tail(13).head(12)
 
     # conversión de precios existentes
     df_hist['precio_2.0'] = (df_hist['precio_2.0'] / 10).round(1)
@@ -787,11 +801,22 @@ def construir_curva_2026(df_spot_mensual, df_ftb_m, df_ftb_q, fecha_ultimo_omip)
     #fecha_ref_q = df_ftb_q["Fecha"].max()
     fecha_ref_m = fecha_ultimo_omip
     fecha_ref_q = fecha_ultimo_omip
+    fecha_ref_m = pd.to_datetime(fecha_ultimo_omip, dayfirst=True)
+    fecha_ref_q = pd.to_datetime(fecha_ultimo_omip, dayfirst=True)
 
     print(fecha_ref_m)
 
+    print(df_ftb_q["Inicio Entrega"].unique())
+    print(df_ftb_q[df_ftb_q["Fecha"] == fecha_ref_q]["Inicio Entrega"].unique())
+
     df_ftb_m = df_ftb_m[df_ftb_m["Fecha"] == fecha_ref_m]
+    #print(df_FTB_mensual["Entrega_dt"].unique())
     df_ftb_q = df_ftb_q[df_ftb_q["Fecha"] == fecha_ref_q]
+    #df_ftb_q = df_ftb_q[df_ftb_q["Fecha"] <= fecha_ref_q]
+
+    #df_ftb_q = df_ftb_q.sort_values("Fecha").drop_duplicates(
+    #    subset=["Inicio Entrega"], keep="last"
+    #)
 
     df_ftb_m["Entrega_dt"] = pd.to_datetime(df_ftb_m["Entrega_dt"])
     df_ftb_q["Inicio Entrega"] = pd.to_datetime(df_ftb_q["Inicio Entrega"], dayfirst=True)
@@ -824,7 +849,7 @@ def construir_curva_2026(df_spot_mensual, df_ftb_m, df_ftb_q, fecha_ultimo_omip)
             #precio = df_ftb_m.loc[filtro, "Precio"].iloc[0]
             if df_ftb_m.loc[filtro].shape[0] > 0:
                 precio = df_ftb_m.loc[filtro, "Precio"].iloc[0]
-                tipo = "FTB mensual"
+                tipo = "FTB mensual" 
             else:
                 trimestre = (mes - 1) // 3 + 1
                 mes_inicio_trim = (trimestre - 1) * 3 + 1
@@ -973,11 +998,21 @@ def construir_curva_omip_forward(df_ftb_m, df_ftb_q, fecha_ref):
     año = 2026
     mes_actual = datetime.now().month
 
-    df_ftb_m = df_ftb_m[df_ftb_m["Fecha"] == fecha_ref].copy()
-    df_ftb_q = df_ftb_q[df_ftb_q["Fecha"] == fecha_ref].copy()
+    #df_ftb_m = df_ftb_m[df_ftb_m["Fecha"] == fecha_ref].copy()
+    #df_ftb_q = df_ftb_q[df_ftb_q["Fecha"] == fecha_ref].copy()
+    df_ftb_m = df_ftb_m[df_ftb_m["Fecha"] <= fecha_ref].copy()
+    df_ftb_q = df_ftb_q[df_ftb_q["Fecha"] <= fecha_ref].copy()
 
     df_ftb_m["Entrega_dt"] = pd.to_datetime(df_ftb_m["Entrega_dt"])
     df_ftb_q["Inicio Entrega"] = pd.to_datetime(df_ftb_q["Inicio Entrega"], dayfirst=True)
+
+    df_ftb_m = df_ftb_m.sort_values("Fecha").drop_duplicates(
+        subset=["Entrega_dt"], keep="last"
+    )
+
+    df_ftb_q = df_ftb_q.sort_values("Fecha").drop_duplicates(
+        subset=["Inicio Entrega"], keep="last"
+    )
 
     filas = []
 

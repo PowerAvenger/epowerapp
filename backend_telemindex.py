@@ -927,8 +927,8 @@ def grafico_elasticidad_lineal(df_res):
 
     fig.update_layout(
         title="Relación OMIE → Precio final (elasticidad)",
-        xaxis_title="Variación relativa OMIE",
-        yaxis_title="Variación relativa Precio",
+        xaxis_title="Variación relativa OMIE (%)",
+        yaxis_title="Variación relativa Precio (%)",
         title_x=0.5,
         showlegend=False,
         width=700,
