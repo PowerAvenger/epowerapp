@@ -141,10 +141,10 @@ def _guess_cols(df: pd.DataFrame):
                     return c
         return None
 
-    c_dt = find([r"^fecha.?y.?hora$", r"fecha.?hora", r"^dia.?y.?hora$", r"datetime", r"timestamp", r"instante", r"^fecha.*"])
+    c_dt = find([r"^fecha.?y.?hora$", r"fecha.?hora", r"^dia.?y.?hora$", r"datetime", r"timestamp", r"instante", r"^fecha.*", r"date"])
     #c_dt = find([r"^fecha.?y.?hora$", r"fecha.?hora", r"^dia.?y.?hora$", r"datetime", r"timestamp", r"instante"])
     c_date = find([r"fecha", r"^fecha$", r"dia", r"date", r"data"])
-    c_time = find([r"hora", r"hr", r"time", r"^h$"])
+    c_time = find([r"hora", r"hour",r"hr", r"time", r"^h$"])
     c_quarter = find([r"cuarto", r"q$", r"qh", r"15"])
     c_kwh = find([r"consumo", r"energia", r"kwh", r"ae", r"active.?energy", r"importada", r"activa"])
     c_per = find([r"periodo", r"^p$", r"^p[1-6]$"])
