@@ -139,11 +139,22 @@ else:
         if dias_rango <= const_verif:
             st.sidebar.info('Es posible verificar.')
             habilitar_opt = False
+            
             habilitar_ver = True
             pyc_tp_ver = pyc_tp[año_ver][tarifa]
             tepp_ver = {
                 k: v * coef_excesos
                 for k, v in tepp[año_ver][tarifa].items()
+            }
+
+            #añadido para pruebas con menos de 12 meses
+            habilitar_opt = True
+            año_opt = 2026
+            pyc_tp_opt = pyc_tp[año_opt][tarifa]
+        
+            tepp_opt = {
+                k: v * coef_excesos
+                for k, v in tepp[año_opt][tarifa].items()
             }
             
         # no hay días suficientes para optimizar

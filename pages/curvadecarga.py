@@ -214,6 +214,16 @@ else:
 if st.session_state.get("df_norm") is not None:
     st.sidebar.markdown(f'Peaje actualmente seleccionado: **:orange[{st.session_state.atr_dfnorm}]**')
     st.sidebar.markdown(f'Resolución temporal de la curva: **:orange[{st.session_state.frec}]**')
+    # --- Descarga ---
+    csv_bytes = st.session_state.df_norm.reset_index().to_csv(index=False, sep=";").encode("utf-8")
+    if not st.session_state.get('usuario_autenticado', False):
+        habilitar_descarga = False
+        #st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=True)
+    else:
+        habilitar_descarga = True
+        #st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=False)
+    st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=not habilitar_descarga, use_container_width=True)
+
     
     tab1, tab2, tab3, tab4 = st.tabs(['Resumen', 'Perfiles Horarios', 'Autoconsumo', 'Comparaciones'])
 
@@ -585,12 +595,3 @@ if st.session_state.get("df_norm") is not None:
             st.plotly_chart(fig_total, use_container_width=True)
 
 
-    # --- Descarga ---
-    csv_bytes = st.session_state.df_norm.reset_index().to_csv(index=False, sep=";").encode("utf-8")
-    if not st.session_state.get('usuario_autenticado', False):
-        habilitar_descarga = False
-        #st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=True)
-    else:
-        habilitar_descarga = True
-        #st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=False)
-    st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=not habilitar_descarga, use_container_width=True)

@@ -150,7 +150,8 @@ def _guess_cols(df: pd.DataFrame):
     c_per = find([r"periodo", r"^p$", r"^p[1-6]$"])
     c_ind = find(["reactiva", "kvarh", "inductiva"])
     c_cap = find(["capac"])
-    c_ver = find([r"gener", r"vertid", r"exportad", r"as", r"prod"])
+    #c_ver = find([r"gener", r"vertid", r"exportad", r"as", r"prod"])
+    c_ver = find([r"generaci[oó]n", r"vertid", r"exportad", r"as", r"prod"])
 
     print("\n--- Columnas originales ---")
     print(cols)
