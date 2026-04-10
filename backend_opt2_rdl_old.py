@@ -282,9 +282,6 @@ def calcular_optimizacion_rdl(
     detalle_final = []
     filas_coste = []
 
-    #añadido nuevo para usar las potencias de referencia del mes anterior
-    pot_ref = pot_con.copy()
-
     for mes in meses_eval:
         df_mes = df_in[df_in["mes_nom"] == mes].copy()
         if df_mes.empty:
@@ -307,17 +304,13 @@ def calcular_optimizacion_rdl(
 
         pot_final, delta_max, bajada_aplicada = aplicar_fase2_rdl(
             pot_fase1=pot_fase1,
-            #pot_con=pot_con,
-            pot_con=pot_ref,
+            pot_con=pot_con,
             grupos=grupos
         )
 
         coste_pot_opt, coste_exc_opt, coste_opt, _, _ = _coste_mes(
             df_mes, tarifa, pyc_tp, tepp, mes, pot_final
         )
-
-        # 🔥 ACTUALIZACIÓN DINÁMICA
-        pot_ref = pot_final.copy()
 
         detalle_fase1.append({
             "mes": mes,

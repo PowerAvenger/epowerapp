@@ -348,17 +348,51 @@ if st.session_state.get("df_norm") is not None:
             #fecha máxima a comparar (es la final de la curva menos un año)
             fecha_max_comparable = fecha_fin_global - relativedelta(years=1)
 
-            # 🔴 VALIDACIÓN CLAVE
-            if fecha_max_comparable <= fecha_ini_global:
+            # 🔴 VALIDACIÓN CLAVE: debe haber al menos un día de más aparte del año
+            #if fecha_max_comparable <= fecha_ini_global:
+            if fecha_max_comparable < fecha_ini_global:    
                 st.warning("No hay datos suficientes para realizar una comparativa anual (+1 año).")
                 st.stop()
 
+            # propuesta de rango inicial:
+            # si hay 1 año disponible, proponemos 1 año;
+            # si no, proponemos todo el tramo comparable disponible
+            fecha_delta = (pd.to_datetime(fecha_max_comparable) - relativedelta(years=1) + timedelta(days=1)).date()
+            if fecha_delta < fecha_ini_global:
+                fecha_delta = fecha_ini_global
+
+            rango_valido = (fecha_delta, fecha_max_comparable)
+
+
             #inicialización del rango de fechas
-            if "rango_fechas_comparativa" not in st.session_state:
-                fecha_fin_dt = pd.to_datetime(fecha_max_comparable)
-                fecha_delta = (fecha_fin_dt - relativedelta(years=1) + timedelta(days=1)).date()
+            #if "rango_fechas_comparativa" not in st.session_state:
+            #    fecha_fin_dt = pd.to_datetime(fecha_max_comparable)
+            #    fecha_delta = (fecha_fin_dt - relativedelta(years=1) + timedelta(days=1)).date()
                 #st.session_state.rango_fechas_comparativa = (fecha_delta, fecha_fin_global)
-                st.session_state.rango_fechas_comparativa = (fecha_delta, fecha_max_comparable)
+            #    st.session_state.rango_fechas_comparativa = (fecha_delta, fecha_max_comparable)
+            
+            # inicialización / saneado del valor guardado en sesión
+            if "rango_fechas_comparativa" not in st.session_state:
+                st.session_state.rango_fechas_comparativa = rango_valido
+            else:
+                rango_actual = st.session_state.rango_fechas_comparativa
+
+                if not isinstance(rango_actual, (list, tuple)) or len(rango_actual) != 2:
+                    st.session_state.rango_fechas_comparativa = rango_valido
+                else:
+                    f_ini, f_fin = rango_actual
+                    f_ini = pd.to_datetime(f_ini).date()
+                    f_fin = pd.to_datetime(f_fin).date()
+
+                    # recortar a límites válidos
+                    f_ini = max(f_ini, fecha_ini_global)
+                    f_fin = min(f_fin, fecha_max_comparable)
+
+                    # si tras recortar queda inválido, reset
+                    if f_ini > f_fin:
+                        st.session_state.rango_fechas_comparativa = rango_valido
+                    else:
+                        st.session_state.rango_fechas_comparativa = (f_ini, f_fin)
 
             st.date_input("Selecciona periodo base", min_value=fecha_ini_global, max_value=fecha_max_comparable, key="rango_fechas_comparativa", format="DD.MM.YYYY")
 

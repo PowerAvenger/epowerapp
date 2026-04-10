@@ -1,8 +1,10 @@
 import streamlit as st
 import pandas as pd
+
 from utilidades import generar_menu
 from backend_opt2 import leer_curva_normalizada, pyc_tp, tepp, meses
 from backend_opt2_rdl import calcular_optimizacion_rdl
+
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
@@ -109,44 +111,19 @@ else:
         fecha_ini, fecha_fin = st.session_state.rango_curvadecarga
         dias_rango = (fecha_fin - fecha_ini).days + 1
 
-        const_optim_inf = 320
-        const_optim_sup = 366
-
         if st.session_state.frec == 'H':
             coef_excesos = 2
             st.sidebar.warning('Cálculo de excesos con curva HORARIA', icon='⚠️')
         else:
             coef_excesos = 1
 
-        if const_optim_inf <= dias_rango <= const_optim_sup:
-            st.sidebar.info('Es posible optimizar en modo RDL.')
-            habilitar_opt = True
-            año_opt = 2026
-            pyc_tp_opt = pyc_tp[año_opt][tarifa]
-            tepp_opt = {k: v * coef_excesos for k, v in tepp[año_opt][tarifa].items()}
-
-        elif dias_rango > const_optim_sup:
-            st.sidebar.warning('Curva demasiado larga → se recortan los últimos 365 días', icon='⚠️')
-
-            fecha_ini = fecha_fin - pd.Timedelta(days=364)
-            df_in = df_in[
-                (df_in["fecha_hora"].dt.date >= fecha_ini) &
-                (df_in["fecha_hora"].dt.date <= fecha_fin)
-            ].copy()
-
-            fecha_ini_real = df_in["fecha_hora"].min().date()
-            fecha_fin_real = df_in["fecha_hora"].max().date()
-            dias_rango_real = (fecha_fin_real - fecha_ini_real).days + 1
-
-            st.sidebar.info(f'Nuevo rango: {fecha_ini_real} → {fecha_fin_real}')
-            st.sidebar.write("Días finales:", dias_rango_real)
-
+        if dias_rango >= 1:
             habilitar_opt = True
             año_opt = 2026
             pyc_tp_opt = pyc_tp[año_opt][tarifa]
             tepp_opt = {k: v * coef_excesos for k, v in tepp[año_opt][tarifa].items()}
         else:
-            st.sidebar.warning('No es posible optimizar: se necesita aprox. un año de curva.', icon='⚠️')
+            st.sidebar.warning('No es posible optimizar con el rango actual.', icon='⚠️')
     else:
         st.sidebar.error('No es posible ejecutar ninguna acción. El peaje de acceso es 2.0TD', icon='⚠️')
 
@@ -179,38 +156,38 @@ if submit_opt and st.session_state.df_norm is not None:
 elif "resultados_potencia_rdl" in st.session_state:
     resultados = st.session_state.resultados_potencia_rdl
 
-if resultados is not None:
-    (
-        graf_costes_potcon,
-        graf_resumen,
-        coste_tp_potcon,
-        coste_tp_potopt,
-        ahorro_opt,
-        ahorro_opt_porc,
-        df_detalle_mostrar,
-        graf_ahorro,
-        graf_potencias,
-        graf_ahorro_mensual,
-        df_coste_tp_mes
-    ) = resultados
 
+
+if resultados is not None:
+
+    orden_meses = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']
+
+    df_final = resultados["df_final"].copy()
+    df_final["mes"] = pd.Categorical(df_final["mes"], categories=orden_meses, ordered=True)
+    df_final = df_final.sort_values("mes").reset_index(drop=True)
+
+    
     st.header('Resultados de la optimización RDL del Término de Potencia', divider='rainbow')
 
     c1, c2, c3 = st.columns([.5, .25, .25])
     with c1:
-        st.plotly_chart(graf_costes_potcon, use_container_width=True)
+        st.plotly_chart(resultados["graf_costes_potcon"], use_container_width=True)
     with c2:
-        st.plotly_chart(graf_resumen, use_container_width=True)
+        st.plotly_chart(resultados["graf_resumen"], use_container_width=True)
     with c3:
-        st.metric('Coste ACTUAL (€)', f'{coste_tp_potcon:,.2f}'.replace(',','X').replace('.',',').replace('X','.'))
-        st.metric('Coste OPTIMIZADO (€)', f'{coste_tp_potopt:,.2f}'.replace(',','X').replace('.',',').replace('X','.'))
-        st.metric('AHORRO (€)', f'{ahorro_opt:,.2f}'.replace(',','X').replace('.',',').replace('X','.'), delta=f'{ahorro_opt_porc:,.1f}%')
+        st.metric('Coste ACTUAL (€)', f'{resultados["coste_tp_potcon"]:,.2f}'.replace(',','X').replace('.',',').replace('X','.'))
+        st.metric('Coste OPTIMIZADO (€)', f'{resultados["coste_tp_potopt"]:,.2f}'.replace(',','X').replace('.',',').replace('X','.'))
+        st.metric('AHORRO (€)', f'{resultados["ahorro_opt"]:,.2f}'.replace(',','X').replace('.',',').replace('X','.'), delta=f'{resultados["ahorro_opt_porc"]:,.1f}%')
+
+    with st.expander("Fase 1 · Optimización total mes a mes", expanded=False):
+        st.dataframe(resultados["df_fase1"], hide_index=True, use_container_width=True)
 
     c11, c12 = st.columns([.45, .55])
     with c11:
-        st.subheader('Tabla comparativa mensual')
-        st.dataframe(df_detalle_mostrar, hide_index=True, use_container_width=True)
-        st.plotly_chart(graf_ahorro, use_container_width=True)
+        st.subheader('Tabla comparativa mensual final (fase 2)')
+        #st.dataframe(resultados["df_final"], hide_index=True, use_container_width=True)
+        st.dataframe(df_final, hide_index=True, use_container_width=True)
+        st.plotly_chart(resultados["graf_ahorro"], use_container_width=True)
     with c12:
-        st.plotly_chart(graf_potencias, use_container_width=True)
-        st.plotly_chart(graf_ahorro_mensual, use_container_width=True)
+        st.plotly_chart(resultados["graf_potencias"], use_container_width=True)
+        st.plotly_chart(resultados["graf_ahorro_mensual"], use_container_width=True)
