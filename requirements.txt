@@ -19,7 +19,7 @@ statsmodels
 jinja2
 #xhtml2pdf==0.2.11
 python-docx
-#kaleido
+kaleido
 weasyprint
 rich>=10.14.0,<14
 
