@@ -40,7 +40,7 @@ COMPONENTES_SSAA_FORMULA = [
     "rt6"
 ]
 
-
+# NO USADO
 SRAD_OLD = {
     2022: {
         1: 0.000, 2: 0.000, 3: 0.000, 4: 0.000,

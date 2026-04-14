@@ -60,7 +60,7 @@ def init_app_index():
 
         df_csv = st.session_state.csv_componentes.copy()
         # ¡¡¡ ATENCIÓN: EL COMPONENTE DSV VIENE COMO PROMEDIO QH, Y NO COMO SUMA!!!
-        df_csv["dsv"] = df_csv["dsv"] * 4
+        #df_csv["dsv"] = df_csv["dsv"] * 4
         df_csv["ssaa"] = df_csv[COMPONENTES_SSAA_FORMULA].sum(axis=1)
         fecha_corte = df_csv["fecha"].max()
         # guardar para usar en la app
