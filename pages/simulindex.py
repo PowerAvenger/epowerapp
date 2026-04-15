@@ -374,7 +374,7 @@ with tab5:
         #print(f'margen_simul: {margen_simul}')
 
         for etiqueta, omie_value in zip(["A", "B", "C"], lista_simul):
-            _, _, _, _, simul_curva = obtener_graf_hist(df_hist, omie_value, colores_precios)
+            _, _, _, _, simul_curva,_ = obtener_graf_hist(df_hist, omie_value, colores_precios)
             print(f'simul_curva antes de añadir margen: {simul_curva}')
             simul_curva = simul_curva #+ margen_simul
             print(f'simul_curva después de añadir margen: {simul_curva}')

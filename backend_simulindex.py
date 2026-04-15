@@ -424,7 +424,7 @@ def obtener_graf_hist(df_hist, omip, colores_precios):
 
     if 'precio_curva' in resultados and df_hist.shape[0] > 10:
 
-        intercept_curve, slope_curve = resultados['precio_curva']
+        intercept_curve, slope_curve, r2_curve = resultados['precio_curva']
         simul_curva = round(intercept_curve + slope_curve * omip, 1)
 
         graf_hist.add_scatter(
@@ -762,7 +762,7 @@ def construir_escenarios(df_uso, lista_simul, df_hist, colores_precios):
 
     for etiqueta, omie_value in zip(["A", "B", "C"], lista_simul):
 
-        _, _, _, _, simul_curva = obtener_graf_hist(
+        _, _, _, _, simul_curva,_ = obtener_graf_hist(
             df_hist,
             omie_value,
             colores_precios
