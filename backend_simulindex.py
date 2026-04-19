@@ -327,7 +327,7 @@ import statsmodels.api as sm
 import numpy as np
 
 # GRÁFICO PRINCIPAL DE PRECIOS DE INDEXADO A PARTIR DE OMIE
-def obtener_graf_hist(df_hist, omip, colores_precios):
+def obtener_graf_hist(df_hist, omip, colores_precios, añadir_hist):
 
     series_y = ['precio_2.0','precio_3.0','precio_6.1']
     if 'precio_curva' in df_hist.columns:
@@ -412,20 +412,20 @@ def obtener_graf_hist(df_hist, omip, colores_precios):
     # -----------------------------
 
     intercept_20, slope_20, r2_20 = resultados['precio_2.0']
-    simul_20 = round(intercept_20 + slope_20 * omip, 1)
+    simul_20 = round(intercept_20 + slope_20 * omip + añadir_hist, 1)
 
     intercept_30, slope_30, r2_30 = resultados['precio_3.0']
-    simul_30 = round(intercept_30 + slope_30 * omip, 1)
+    simul_30 = round(intercept_30 + slope_30 * omip + añadir_hist, 1)
 
     intercept_61, slope_61, r2_61 = resultados['precio_6.1']
-    simul_61 = round(intercept_61 + slope_61 * omip, 1)
+    simul_61 = round(intercept_61 + slope_61 * omip + añadir_hist, 1)
 
     simul_curva = None
 
     if 'precio_curva' in resultados and df_hist.shape[0] > 10:
 
         intercept_curve, slope_curve, r2_curve = resultados['precio_curva']
-        simul_curva = round(intercept_curve + slope_curve * omip, 1)
+        simul_curva = round(intercept_curve + slope_curve * omip + añadir_hist, 1)
 
         graf_hist.add_scatter(
             x=[omip],
@@ -756,17 +756,13 @@ def obtener_trimestres_futuros(df_FTB_trimestral):
 
 
 
-def construir_escenarios(df_uso, lista_simul, df_hist, colores_precios):
+def construir_escenarios(df_uso, lista_simul, df_hist, colores_precios, añadir_hist):
 
     escenarios = []
 
     for etiqueta, omie_value in zip(["A", "B", "C"], lista_simul):
 
-        _, _, _, _, simul_curva,_ = obtener_graf_hist(
-            df_hist,
-            omie_value,
-            colores_precios
-        )
+        _, _, _, _, simul_curva,_ = obtener_graf_hist(df_hist, omie_value, colores_precios, añadir_hist)
 
         #simul_curva = simul_curva + margen
 

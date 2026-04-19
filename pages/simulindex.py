@@ -54,41 +54,11 @@ lista_trimestres_futuros, trimestre_inicial = obtener_trimestres_futuros(df_FTB_
 if 'trimestre_futuro' not in st.session_state:
     st.session_state.trimestre_futuro = trimestre_inicial
 
-# obtenemos históricos de medias mensuales de omie df_mes y un filtrado hist de los últimos 12 meses 
-if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None:
-    def n_meses_df(df, col_fecha="fecha"):
-        return (
-            pd.to_datetime(df[col_fecha])
-            .dt.to_period("M")
-            .nunique()
-        )
-    MIN_MESES_OPT = 10
-    if n_meses_df(st.session_state.df_curva_sheets) >= MIN_MESES_OPT:
-        #CÓDIGO AÑADIDO PARA USAR PYCS2026 EN LA SIMULACION
-        st.session_state.pyc_2026 = pyc_2026
-        df_simul = st.session_state.df_curva_sheets.copy()
-        cons = df_simul["consumo_neto_kWh"] / 1000 #pasamos a MWh
-        atr_map = {
-            "2.0": "2.0TD",
-            "3.0": "3.0TD",
-            "6.1": "6.1TD"
-        }
-        atr_col = atr_map[st.session_state.atr_dfnorm]
-        pyc_dict = st.session_state.pyc_2026[atr_col]
-        df_simul["pyc_simul"] = df_simul["periodo"].map(pyc_dict)*1000 #pasamos a €/MWh
-        df_simul["coste_pyc_simul"] = df_simul["pyc_simul"] * cons
-        df_simul["coste_total_simul"] = df_simul["coste_base"] + df_simul["coste_pyc_simul"]
-        df_simul["coste_total_simul"] += 3.0 * cons #+1 SSAA + 1,2 FNEE + 0,4 SRAD
-        df_sheets_origen = df_simul
 
-    else:
-        df_sheets_origen = st.session_state.df_sheets
-else:
-    #df_sheets_origen = st.session_state.df_sheets
-    df = st.session_state.df_sheets.copy()
-    print('st session state df sheets')
-    print(st.session_state.df_sheets)
-    st.session_state.pyc_2026 = pyc_2026
+
+def aplicar_pyc_2026_atr(df, pyc_2026):
+    df = df.copy()
+
     map_atr_periodo = {
         "2.0": "dh_3p",
         "3.0": "dh_6p",
@@ -102,22 +72,57 @@ else:
     }
 
     for atr_short in ["2.0", "3.0", "6.1"]:
-
         col_periodo = map_atr_periodo[atr_short]
         atr_col = map_atr_col[atr_short]
+        pyc_dict = pyc_2026[atr_col]
 
-        pyc_dict = st.session_state.pyc_2026[atr_col]
-
-        # guardar histórico (opcional)
         df[f"pyc_{atr_short}_hist"] = df[f"pyc_{atr_short}"]
+        df[f"pyc_{atr_short}"] = df[col_periodo].map(pyc_dict) * 1000
 
-        # 🔹 sustituir pyc usando el periodo correcto
-        df[f"pyc_{atr_short}"] = df[col_periodo].map(pyc_dict) *1000
+        df[f"precio_{atr_short}"] = (
+            df[f"coste_{atr_short}"]
+            + df[f"pyc_{atr_short}"]
+            + df[f"margen_{atr_short}"]
+        )
 
-        # 🔹 recalcular precio
-        df[f"precio_{atr_short}"] = df[f"coste_{atr_short}"] + df[f"pyc_{atr_short}"] + 3.0
-    
-    df_sheets_origen = df.copy()
+    return df
+
+st.session_state.pyc_2026 = pyc_2026
+
+df_base = st.session_state.df_sheets.copy()
+df_base = aplicar_pyc_2026_atr(df_base, st.session_state.pyc_2026)
+df_sheets_origen = df_base.copy()
+
+# obtenemos históricos de medias mensuales de omie df_mes y un filtrado hist de los últimos 12 meses 
+if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None:
+    def n_meses_df(df, col_fecha="fecha"):
+        return (
+            pd.to_datetime(df[col_fecha])
+            .dt.to_period("M")
+            .nunique()
+        )
+    MIN_MESES_OPT = 10
+    if n_meses_df(st.session_state.df_curva_sheets) >= MIN_MESES_OPT:
+        #CÓDIGO AÑADIDO PARA USAR PYCS2026 EN LA SIMULACION
+        #st.session_state.pyc_2026 = pyc_2026
+        df_simul = st.session_state.df_curva_sheets.copy()
+        cons = df_simul["consumo_neto_kWh"] / 1000 #pasamos a MWh
+        atr_map = {
+            "2.0": "2.0TD",
+            "3.0": "3.0TD",
+            "6.1": "6.1TD"
+        }
+        atr_col = atr_map[st.session_state.atr_dfnorm]
+        pyc_dict = st.session_state.pyc_2026[atr_col]
+        df_simul["pyc_simul"] = df_simul["periodo"].map(pyc_dict)*1000 #pasamos a €/MWh
+        df_simul["coste_pyc_simul"] = df_simul["pyc_simul"] * cons
+        df_simul["coste_total_simul"] = df_simul["coste_base"] + df_simul["coste_pyc_simul"] + df_simul["coste_margen"]
+        #df_simul["coste_total_simul"] += 3.0 * cons #+1 SSAA + 1,2 FNEE + 0,4 SRAD
+        df_sheets_origen = df_simul
+
+        margen_simul = round(df_simul[f"margen_{st.session_state.atr_dfnorm}"].iloc[0],3)
+
+
 
 
 print('df_sheets_origen')
@@ -125,14 +130,31 @@ print(df_sheets_origen)
 
 df_hist = obtener_hist_mensual(df_sheets_origen)
 
+if 'media_ssaa_prev' not in st.session_state:
+    st.session_state.media_ssaa_prev = 23.0
+if 'media_fnee_prev' not in st.session_state:
+    st.session_state.media_fnee_prev = 2.68
+if 'media_rad3_prev' not in st.session_state:
+    st.session_state.media_rad3_prev = 1.7
+
+media_ssaa_hist = round(df_hist['ssaa'].mean(),2)
+media_rad3_hist =round(df_hist['rad3'].mean(),2)
+media_ssaa_hist = round(media_ssaa_hist - media_rad3_hist,2)
+media_fnee_hist = round(df_hist['fnee'].mean(),2)
+
+añadir_ssaa = round(st.session_state.media_ssaa_prev - media_ssaa_hist,2)
+añadir_fnee = round(st.session_state.media_fnee_prev - media_fnee_hist,2)
+añadir_rad3 = round(st.session_state.media_rad3_prev - media_rad3_hist,2)
+añadir_hist = añadir_fnee+añadir_rad3+añadir_ssaa
+añadir_hist = añadir_hist*(1+0.1)*(1.015)/10
+print(f'añadir_dfhit: {añadir_hist}')
+
+
+
+grafico, simul20, simul30, simul61, simulcurva, resultados = obtener_graf_hist(df_hist, st.session_state.omie_slider, colores_precios, añadir_hist)
 
 df_spot_mensual = obtener_spot_mensual()
 
-#print('df_mes para cobertura')
-#print(df_mes_cober)
-
-
-grafico, simul20, simul30, simul61, simulcurva, resultados = obtener_graf_hist(df_hist, st.session_state.omie_slider, colores_precios)
 
 # Inicializamos margen a cero
 if 'margen_simulindex' not in st.session_state:
@@ -252,7 +274,31 @@ with tab1:
             with col11:
                 st.metric(':green[OMIE] (€/MWh)', value = st.session_state.omie_slider, help = 'Este es el valor OMIE de referencia que has utilizado como entrada')
             with col12:
-                st.metric(':violet[Margen] (€/MWh)', value = st.session_state.margen_simulindex, help = 'Margen que añades para obtener un precio medio final más ajustado a tus necesidades')
+                if simulcurva is None:
+                    st.metric(':violet[Margen] (€/MWh)', value = st.session_state.margen_simulindex, help = 'Margen que añades para obtener un precio medio final más ajustado a tus necesidades')
+                else:
+                    st.metric(':violet[Margen] (€/MWh)', value = margen_simul, help = 'Margen añadido en Telemidex para obtener un precio medio final más ajustado a tus necesidades')
+        with st.container(border = True):
+            st.subheader(':red-background[Ajustes SSAA y OTROS]', divider = 'rainbow')
+            col11, col12 = st.columns(2)
+            with col11:
+                st.metric('SSAA media (€/MWh)', value = media_ssaa_hist, help = 'Este es el valor medio de los SSAA')
+ 
+                st.number_input('SSAA previsto (€/MWh)', min_value=0.0, max_value=40.0, step=1.0, key = 'media_ssaa_prev')
+                
+                st.metric('Añadir SSAA (€/MWh)', value=añadir_ssaa)
+                st.metric('FNEE media (€/MWh)', value = media_fnee_hist, help = 'Este es el valor medio del FNEE')
+                
+                st.number_input('FNEE previsto (€/MWh)', min_value=0.0, max_value=4.0, step=.1, key = 'media_fnee_prev')
+                
+                st.metric('Añadir FNEE (€/MWh)', value=añadir_fnee)
+            with col12:
+                st.metric('SRAD media (€/MWh)', value = media_rad3_hist, help = 'Este es el valor medio del SRAD')
+                
+                st.number_input('SRAD previsto (€/MWh)', min_value=0.0, max_value=3.0, step=0.1, key = 'media_rad3_prev')
+                
+                st.metric('Añadir SRAD (€/MWh)', value=añadir_rad3)
+
         with st.container(border = True):
             st.subheader(':green-background[Datos de salida]', divider = 'rainbow')
             col13, col14 = st.columns(2)
@@ -374,7 +420,7 @@ with tab5:
         #print(f'margen_simul: {margen_simul}')
 
         for etiqueta, omie_value in zip(["A", "B", "C"], lista_simul):
-            _, _, _, _, simul_curva,_ = obtener_graf_hist(df_hist, omie_value, colores_precios)
+            _, _, _, _, simul_curva,_ = obtener_graf_hist(df_hist, omie_value, colores_precios, añadir_hist)
             print(f'simul_curva antes de añadir margen: {simul_curva}')
             simul_curva = simul_curva #+ margen_simul
             print(f'simul_curva después de añadir margen: {simul_curva}')
@@ -684,7 +730,7 @@ with tab6:
         #    })
 
         #margen_simul_trim = st.session_state.margen_simul_trim / 10
-        escenarios = construir_escenarios(df_uso_trimestral, lista_simul_trim, df_hist, colores_precios)
+        escenarios = construir_escenarios(df_uso_trimestral, lista_simul_trim, df_hist, colores_precios, añadir_hist)
 
         st.subheader('Resultado coberturas de indexados según escenario')
         for esc in escenarios:

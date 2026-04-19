@@ -180,23 +180,7 @@ def construir_df_spot_ssaa():
 
     return df_total
 
-# NO USADO para sheets original esos id
-def construir_df_srad():
 
-    filas = []
-
-    for year, horas in SRAD.items():
-        for hora, valor in horas.items():
-            filas.append({"año": year, "hora": hora, "srad": valor})
-
-    return pd.DataFrame(filas)
-
-# NO USADO para sheets original esos id
-def añadir_srad(df):
-
-    df_srad = construir_df_srad()
-
-    return df.merge(df_srad, on=["año", "hora"], how="left").fillna({"srad": 0.0})
 
 # USADO para añadir RAD3 a los valores provisionales post C2 (en la misma columna). Ver utilidades.py
 def construir_df_rad3_manual():
@@ -216,10 +200,10 @@ def construir_df_rad3_manual():
 def añadir_fnee(df):
 
     df = df.copy()
-    df["fecha"] = pd.to_datetime(df["fecha"])
+    df["fecha"] = pd.to_datetime(df["fecha"]).dt.date
 
-    # convertir tramos a datetime
-    tramos = [(pd.to_datetime(f), v) for f, v in FNEE_TRAMOS]
+    # convertir tramos a date
+    tramos = [(pd.to_datetime(f).date(), v) for f, v in FNEE_TRAMOS]
 
     df["fnee"] = 0.0
 
@@ -236,27 +220,15 @@ def añadir_fnee(df):
     return df
 
 
+
 def calcular_precios_atr(df):
     
     tm_rate = 0.015
+    cf = st.session_state.get("cf_pct", 0.0) / 100
+    margen = st.session_state.get("margen_telemindex", 0.0)
     df = df.copy()
-    
-    #cols_drop = [c for c in df.columns if c.startswith("coste_") or c.startswith("precio_")]
-    #df = df.drop(columns=cols_drop, errors="ignore")
 
     for atr in ["2.0", "3.0", "6.1"]:
-
-        #if not st.session_state.get("modo_formula_custom", False):
-
-        #    base = (
-        #        df["spot"]
-        #        + df["ssaa"]
-        #        + df[f"ppcc_{atr}"]
-        #        + df["osom"]
-        #        + df["otros"]
-        #    )
-
-        #else:
 
         base = (
             df["spot"]
@@ -265,66 +237,64 @@ def calcular_precios_atr(df):
             + df["osom"]
         )
 
-        #ajuste manual por diferencia de los SSAA id esios con los C2
+        # ajuste manual por diferencia de los SSAA id esios con los C2
         base += 0.0
 
-        # componentes opcionales a pérdidas
+        # componente fijo antes de pérdidas
         base += st.session_state.get("desvios_apant", 0.0)
-        #base += df["srad"]
-        
-        if st.session_state.get("cfg_fnee_pos") == "perdidas":
+
+        # FNEE en pérdidas
+        if st.session_state.get("cfg_fnee", False) and st.session_state.get("cfg_fnee_pos") == "perdidas":
             base += df["fnee"]
 
+        # duplicamos base: una para coste y otra para precio
+        base_coste = base.copy()
+        base_precio = base.copy()
+
+        # margen en pérdidas: solo entra en precio
         if st.session_state.get("cfg_margen_pos") == "perdidas":
-            base += st.session_state.get("margen_telemindex", 0.0)
+            df[f"margen_{atr}"] = margen * (1 + df[f"perd_{atr}"]) * (1 + tm_rate) * (1 + cf)
+            base_precio += margen
 
-        # base pérdidas
-        base *= (1 + df[f"perd_{atr}"])
+        # pérdidas
+        base_coste *= (1 + df[f"perd_{atr}"])
+        base_precio *= (1 + df[f"perd_{atr}"])
 
-        # componentes opcionales a tm
+        # margen en tm: solo entra en precio
         if st.session_state.get("cfg_margen_pos") == "tm":
-            base += st.session_state.get("margen_telemindex", 0.0)
-        
-        if st.session_state.get("cfg_fnee_pos") == "tm":
-            base += df["fnee"]
+            df[f"margen_{atr}"] = margen * (1 + tm_rate) * (1 + cf)
+            base_precio += margen
 
-        # base tm
-        base *= (1 + tm_rate)
+        # FNEE en tm
+        if st.session_state.get("cfg_fnee", False) and st.session_state.get("cfg_fnee_pos") == "tm":
+            base_coste += df["fnee"]
+            base_precio += df["fnee"]
 
-        # CF
-        cf = st.session_state.get("cf_pct", 0.0) / 100
-        base *= (1 + cf)
+        # tm
+        base_coste *= (1 + tm_rate)
+        base_precio *= (1 + tm_rate)
 
-        # coste de la energía según atr
-        df[f"coste_{atr}"] = base
+        # cf
+        base_coste *= (1 + cf)
+        base_precio *= (1 + cf)
 
+        # FNEE en neto
+        if st.session_state.get("cfg_fnee", False) and st.session_state.get("cfg_fnee_pos") == "neto":
+            base_coste += df["fnee"]
+            base_precio += df["fnee"]
 
-        # componentes opcionales en neto
-
-        if st.session_state.get("cfg_fnee_pos") == "neto":
-            base += df["fnee"]
-        
+        # margen en neto: solo entra en precio
         if st.session_state.get("cfg_margen_pos") == "neto":
-            base += st.session_state.get("margen_telemindex", 0.0)
+            df[f"margen_{atr}"] = margen
+            base_precio += margen
 
-        # precio final con pycs según atr
-        df[f"precio_{atr}"] = base + df[f"pyc_{atr}"]
-        
-        #precio = base + df[f"pyc_{atr}"]
+        # coste sin margen
+        df[f"coste_{atr}"] = base_coste
 
-        #if (not st.session_state.get("modo_formula_custom", False) or st.session_state.get("cfg_margen_pos") == "neto"):
-        #    precio += st.session_state.get("margen_telemindex", 0.0)
-
-        # precio final según atr
-        #df[f"precio_{atr}"] = precio
-
-        print('df sheets con costes y precios')
-        print(df)
+        # precio final con margen y pyc
+        df[f"precio_{atr}"] = base_precio + df[f"pyc_{atr}"]
 
     return df
-
-
-
 
 
 
@@ -491,10 +461,10 @@ def graficar_queso_componentes(df_filtrado):
 
 def construir_tabla_resumen(
     df,
-    col_base_prefix,      # "precio", "coste", "pyc"
-    col_curva,            # "coste_total", "coste_base", "coste_pyc"
-    etiqueta,             # "precio", "coste", "pyc"
-    decimals=1
+    col_base_prefix,      # "precio", "coste", "pyc", "margen"
+    col_curva,            # "coste_total", "coste_base", "coste_pyc", "coste_margen"
+    etiqueta,             # "precio", "coste", "pyc", "margen"
+    decimals=4
 ):
 
     dffm = df.copy()
@@ -576,7 +546,7 @@ def tabla_costes(df):
         col_base_prefix="coste",
         col_curva="coste_base",
         etiqueta="coste",
-        decimals=1
+        decimals=4
     )
 
 def tabla_pyc(df):
@@ -585,10 +555,17 @@ def tabla_pyc(df):
         col_base_prefix="pyc",
         col_curva="coste_pyc",
         etiqueta="pyc",
-        decimals=1
+        decimals=4
     )
 
-
+def tabla_margen(df):
+    return construir_tabla_resumen(
+        df,
+        col_base_prefix="margen",
+        col_curva="coste_margen",
+        etiqueta="margen",
+        decimals=4
+    )
 
         
 def evol_mensual (df, colores_precios):
@@ -717,6 +694,7 @@ def añadir_costes_curva(df):
     df["coste_ssaa"] = df["ssaa"] * cons #usado para apuntamiento
     df["coste_pyc"] = df[f"pyc_{atr}"] * cons #usado para tablas
     df["coste_base"] = df[f"coste_{atr}"] * cons #sin pycs ni margen
+    df["coste_margen"] = df[f"margen_{atr}"] * cons
     df["coste_total"] = df[col_precio] * cons
 
     return df
