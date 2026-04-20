@@ -48,21 +48,10 @@ if 'df_sheets_old' not in st.session_state:
 init_app_index()
 
 # FNEE AÑADIDO AL DF
-st.session_state.df_sheets = añadir_fnee(st.session_state.df_sheets)
+#st.session_state.df_sheets = añadir_fnee(st.session_state.df_sheets)
 
 
-# Inicialización de estados st.session componentes fórmula
-for key, default in {
-    "desvios_apant": 1.0,
-    #"cfg_srad": True,
-    "margen_telemindex": 1.0,
-    "cfg_margen_pos": "tm",
-    "cfg_fnee": True,
-    "cfg_fnee_pos": "perdidas",
-    "cf_pct": 0.8
-}.items():
-    if key not in st.session_state:
-        st.session_state[key] = default
+
 
 
 st.session_state.df_sheets = calcular_precios_atr(st.session_state.df_sheets)

@@ -3,7 +3,7 @@ import datetime
 import pandas as pd
 from backend_comun import autenticar_google_sheets, carga_total_sheets, cargar_componentes_csv
 from backend_escalacv import leer_json
-from backend_telemindex import COMPONENTES_SSAA_FORMULA, construir_df_rad3_manual,calcular_precios_atr
+from backend_telemindex import COMPONENTES_SSAA_FORMULA, construir_df_rad3_manual, calcular_precios_atr, añadir_fnee
 
 
 def generar_menu():
@@ -93,6 +93,20 @@ def init_app_index():
 
         # guardar en sesión
         st.session_state.df_sheets = df_sheets_nuevo
+        st.session_state.df_sheets = añadir_fnee(st.session_state.df_sheets)
+
+        # Inicialización de estados st.session componentes fórmula
+        for key, default in {
+            "desvios_apant": 1.0,
+            #"cfg_srad": True,
+            "margen_telemindex": 1.0,
+            "cfg_margen_pos": "tm",
+            "cfg_fnee": True,
+            "cfg_fnee_pos": "perdidas",
+            "cf_pct": 0.8
+        }.items():
+            if key not in st.session_state:
+                st.session_state[key] = default
 
         # esto lo hacemos para que el sheets inicial tenga las columnas coste_ y precio_ para evol mensual por defecto
         if 'precios_calculados' not in st.session_state:
