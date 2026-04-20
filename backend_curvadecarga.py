@@ -134,19 +134,54 @@ def _guess_cols(df: pd.DataFrame):
     cols = list(df.columns)
     cleaned = {c: _clean(c) for c in cols}
 
-    def find(patterns):
+    #def find(patterns):
+    #    for c, cc in cleaned.items():
+    #        for p in patterns:
+    #            if re.search(p, cc, re.IGNORECASE):
+    #                return c
+    #    return None
+
+    def find(patterns, prefer_qh_consumo=False):
+        matches = []
+
         for c, cc in cleaned.items():
             for p in patterns:
                 if re.search(p, cc, re.IGNORECASE):
-                    return c
-        return None
+                    matches.append(c)
+                    break
 
+        if not matches:
+            return None
+
+        if prefer_qh_consumo:
+            col_h = None
+            col_qh = None
+
+            for c in matches:
+                cc = cleaned[c]
+
+                if re.search(r"energia\s+activa\s+horaria\s*\(?kwh\)?", cc, re.IGNORECASE):
+                    col_h = c
+
+                if re.search(r"cuarto\s+horaria\s+activa", cc, re.IGNORECASE):
+                    col_qh = c
+
+            if col_h is not None and col_qh is not None:
+                return col_qh
+
+        return matches[0]
+    
     c_dt = find([r"^fecha.?y.?hora$", r"fecha.?hora", r"^dia.?y.?hora$", r"datetime", r"timestamp", r"instante", r"^fecha.*", r"date"])
-    #c_dt = find([r"^fecha.?y.?hora$", r"fecha.?hora", r"^dia.?y.?hora$", r"datetime", r"timestamp", r"instante"])
     c_date = find([r"fecha", r"^fecha$", r"dia", r"date", r"data"])
     c_time = find([r"hora", r"hour",r"hr", r"time", r"^h$"])
-    c_quarter = find([r"cuarto", r"q$", r"qh", r"15"])
-    c_kwh = find([r"consumo", r"energia", r"kwh", r"ae", r"active.?energy", r"importada", r"activa"])
+    #c_quarter = find([r"cuarto", r"q$", r"qh", r"15"])
+    c_quarter = find([r"^cuarto$", r"q$", r"qh"])
+    
+    #c_kwh = find([r"consumo", r"energia", r"kwh", r"ae", r"active.?energy", r"importada", r"activa"])
+    c_kwh = find(
+        [r"consumo", r"energia", r"kwh", r"ae", r"active.?energy", r"importada", r"activa"],
+        prefer_qh_consumo=True
+    )
     c_per = find([r"periodo", r"^p$", r"^p[1-6]$"])
     c_ind = find(["reactiva", "kvarh", "inductiva"])
     c_cap = find(["capac"])
