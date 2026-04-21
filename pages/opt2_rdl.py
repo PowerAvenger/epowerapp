@@ -161,9 +161,11 @@ elif "resultados_potencia_rdl" in st.session_state:
 if resultados is not None:
 
     orden_meses = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']
+    orden_meses_tabla = ["inicial"] + orden_meses
 
     df_final = resultados["df_final"].copy()
-    df_final["mes"] = pd.Categorical(df_final["mes"], categories=orden_meses, ordered=True)
+    #df_final["mes"] = pd.Categorical(df_final["mes"], categories=orden_meses, ordered=True)
+    df_final["mes"] = pd.Categorical(df_final["mes"], categories=orden_meses_tabla, ordered=True)
     df_final = df_final.sort_values("mes").reset_index(drop=True)
 
     
@@ -179,8 +181,8 @@ if resultados is not None:
         st.metric('Coste OPTIMIZADO (€)', f'{resultados["coste_tp_potopt"]:,.2f}'.replace(',','X').replace('.',',').replace('X','.'))
         st.metric('AHORRO (€)', f'{resultados["ahorro_opt"]:,.2f}'.replace(',','X').replace('.',',').replace('X','.'), delta=f'{resultados["ahorro_opt_porc"]:,.1f}%')
 
-    with st.expander("Fase 1 · Optimización total mes a mes", expanded=False):
-        st.dataframe(resultados["df_fase1"], hide_index=True, use_container_width=True)
+    #with st.expander("Fase 1 · Optimización total mes a mes", expanded=False):
+    #    st.dataframe(resultados["df_fase1"], hide_index=True, use_container_width=True)
 
     c11, c12 = st.columns([.45, .55])
     with c11:

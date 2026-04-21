@@ -92,6 +92,7 @@ def optimizar_mes_fase1(
 ):
     mes = df_mes["mes_nom"].iloc[0]
     pot_inicial = list(pot_con.values())
+    p6_max = pot_con["P6"]
 
     def funcion_objetivo_mes(pot_opt_vector):
         potencias = dict(zip(pot_con.keys(), pot_opt_vector))
@@ -108,12 +109,17 @@ def optimizar_mes_fase1(
     if fijar_P6:
         constraints.append({
             'type': 'eq',
-            'fun': lambda x: x[-1] - pot_con['P6']
+            #'fun': lambda x: x[-1] - pot_con['P6']
+            'fun': lambda x: x[-1] - p6_max
         })
 
-    bounds = [(0.0, None)] * len(pot_inicial)
-    if not fijar_P6:
-        bounds[-1] = (0.0, pot_con['P6'])
+    #bounds = [(0.0, None)] * len(pot_inicial)
+    # Si P6 no puede superar su valor inicial y las potencias deben ser crecientes,
+    # entonces ninguna potencia puede superar tampoco ese valor.
+    bounds = [(0.0, p6_max)] * len(pot_inicial)
+
+    #if not fijar_P6:
+    #    bounds[-1] = (0.0, pot_con['P6'])
 
     resultado = minimize(
         funcion_objetivo_mes,
@@ -130,6 +136,11 @@ def optimizar_mes_fase1(
         fijar_P6=fijar_P6,
         pot_con=pot_con
     )
+    
+    # Blindaje final por si ajustar_potencias toca algo indebido
+    if not fijar_P6:
+        for p in pot_fase1:
+            pot_fase1[p] = min(pot_fase1[p], p6_max)
 
     return pot_opt_ini, pot_fase1, resultado
 
@@ -284,6 +295,18 @@ def calcular_optimizacion_rdl(
 
     #añadido nuevo para usar las potencias de referencia del mes anterior
     pot_ref = pot_con.copy()
+
+    detalle_final.append({
+        "mes": "inicial",
+        **{p: float(pot_con[p]) for p in PERIODOS},
+        "delta_max": None,
+        "bajada_aplicada": None,
+        "coste_actual": None,
+        "coste_opt": None,
+        "ahorro": None,
+        "optim_success": None,
+        "optim_message": "Potencias iniciales de partida",
+    })
 
     for mes in meses_eval:
         df_mes = df_in[df_in["mes_nom"] == mes].copy()
