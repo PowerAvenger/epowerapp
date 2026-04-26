@@ -1173,3 +1173,129 @@ def graficar_boxplot_horario(tipo_dia):
 
     return fig
 
+
+def graficar_heatmap_dia_hora(tipo_dia='Todos', zmax=None):
+    df = st.session_state.df_norm_h.copy()
+
+    if tipo_dia != 'Todos':
+        df = df[df['tipo_dia'] == tipo_dia]
+
+    df["fecha"] = pd.to_datetime(df["fecha"])
+    df["hora"] = df["hora"].astype(int)
+
+    tabla = df.pivot_table(
+        index="fecha",
+        columns="hora",
+        values="consumo_neto_kWh",
+        aggfunc="mean"
+    )
+    tabla = tabla.sort_index()
+    tabla = tabla.reindex(columns=range(24))
+
+    df["fecha"] = pd.to_datetime(df["fecha"])
+    df["fecha_hover"] = df["fecha"].dt.strftime("%d.%m.%Y")
+
+    mapa_dias = {
+        0: "Lunes",
+        1: "Martes",
+        2: "Miércoles",
+        3: "Jueves",
+        4: "Viernes",
+        5: "Sábado",
+        6: "Domingo"
+    }
+
+    df["dia_semana_hover"] = df["fecha"].dt.dayofweek.map(mapa_dias)
+    df["hover_info"] = df["fecha_hover"] + " · " + df["dia_semana_hover"]
+
+    tabla_fecha_hover = df.pivot_table(
+        index="fecha",
+        columns="hora",
+        #values="fecha_hover",
+        values="hover_info",
+        aggfunc="first"
+    )
+    tabla_fecha_hover = tabla_fecha_hover.reindex(index=tabla.index, columns=tabla.columns)
+
+    fig = px.imshow(
+        tabla,
+        aspect="auto",
+        color_continuous_scale="YlOrRd",
+        zmin=0,
+        zmax=zmax,
+        labels=dict(
+            x="Hora",
+            y="Fecha",
+            color="kWh"
+        ),
+        
+    )
+
+    
+    fig.update_traces(
+        customdata=tabla_fecha_hover.values,
+        hovertemplate=(
+            "<b>%{customdata}</b><br>"
+            "Hora: %{x}:00<br>"
+            "Consumo: %{z:.2f} kWh"
+            "<extra></extra>"
+        )
+    )
+
+
+
+    titulo_map = {
+        "Todos": "TOTAL",
+        "L-V": "LUNES A VIERNES",
+        "FS": "FIN DE SEMANA"
+    }
+
+    titulo = f"Distribución horaria del consumo: <span style='color:#ffc107'>{titulo_map.get(tipo_dia, tipo_dia)}</span>"
+
+    fig.update_layout(
+        title=dict(
+            text=titulo,
+            x=0.5,
+            xanchor="center",
+            font=dict(size=16, color="white")
+        ),
+        template="plotly_dark",
+        height=800,
+        margin=dict(l=10, r=10, t=80, b=20),
+        coloraxis_colorbar=dict(
+            title=dict(text="Consumo (kWh)", side="top"),
+            orientation="h",
+            x=0.5,
+            xanchor="center",
+            y=1.04,
+            yanchor="bottom",
+            len=0.65,
+            thickness=12
+        ),
+        
+    )
+
+    fig.update_xaxes(
+        title="Hora del día",
+        tickmode="linear",
+        dtick=2
+    )
+
+
+    df_ticks = (
+        pd.DataFrame({"fecha": tabla.index})
+        .assign(mes=lambda x: x["fecha"].dt.to_period("M"))
+        .groupby("mes")["fecha"]
+        .min()
+        .reset_index()
+    )
+
+    fig.update_yaxes(
+        title="Fecha",
+        tickmode="array",
+        tickvals=df_ticks["fecha"],
+        ticktext=[f.strftime("%b %Y") for f in df_ticks["fecha"]]
+    )
+
+    return fig
+

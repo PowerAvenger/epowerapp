@@ -25,7 +25,7 @@ meses_completos = pd.DataFrame({
 
 from backend_comun import rango_componentes
 
-def get_limites_componentes():
+def get_limites_componentes_old():
     datos_limites = rango_componentes()
     df_limites = pd.DataFrame(datos_limites)
     etiquetas = df_limites['valor_asignado'][:-1]
@@ -34,19 +34,36 @@ def get_limites_componentes():
     }
     return df_limites, etiquetas, valor_asignado_a_rango
 
+def get_limites_componentes():
+    datos_limites = rango_componentes()
+
+    rangos = datos_limites['rango']
+    etiquetas = datos_limites['valor_asignado']
+
+    df_limites = pd.DataFrame({
+        'rango': rangos
+    })
+
+    valor_asignado_a_rango = {
+        etiqueta: i for i, etiqueta in enumerate(etiquetas)
+    }
+
+    return df_limites, etiquetas, valor_asignado_a_rango
+
 
 colores = {
-        'muy bajo': '#90EE90',  # Verde claro (fácil y suave a la vista)
-        'bajo': '#2E8B57',  # Verde oscuro (tono natural)
-        'medio': '#4682B4',  # Azul acero (transición a tonos fríos)
-        'alto': '#1E3A5F',  # Azul profundo (sólido pero no agresivo)
-        'muy alto': '#804674',  # Morado rosado (punto de transición)
-        'chungo': '#B04E5A',  # Naranja oscuro (advertencia sin ser agresivo)
-        'xtrem': '#A31E1E',  # Rojo anaranjado (peligro intermedio)
-        'defcon3': 'darkred',  # Rojo fuerte (nivel crítico)
-        'defcon2': '#800000',  # Rojo oscuro intenso (máximo riesgo)
-    #    'Desconocido': 'gray'  # Neutralidad
-    }
+    '≤0': 'white',
+    'muy bajo': '#90EE90',  # Verde claro (fácil y suave a la vista)
+    'bajo': '#2E8B57',  # Verde oscuro (tono natural)
+    'medio': '#4682B4',  # Azul acero (transición a tonos fríos)
+    'alto': '#1E3A5F',  # Azul profundo (sólido pero no agresivo)
+    'muy alto': '#804674',  # Morado rosado (punto de transición)
+    'chungo': '#B04E5A',  # Naranja oscuro (advertencia sin ser agresivo)
+    'xtrem': '#A31E1E',  # Rojo anaranjado (peligro intermedio)
+    'defcon3': 'darkred',  # Rojo fuerte (nivel crítico)
+    'defcon2': '#800000',  # Rojo oscuro intenso (máximo riesgo)
+#    'Desconocido': 'gray'  # Neutralidad
+}
 
 
 
@@ -903,7 +920,8 @@ def horarios(datos):
     
 
     
-    escala_horaria=['muy bajo', 'bajo', 'medio', 'alto', 'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2']
+    #escala_horaria=['muy bajo', 'bajo', 'medio', 'alto', 'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2']
+    escala_horaria = ['≤0', 'muy bajo', 'bajo', 'medio', 'alto', 'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2']
     escala_ordenada_hora = sorted(escala_horaria, key=lambda x: valor_asignado_a_rango[x], reverse=True)
     datos_horarios['escala']=pd.Categorical(datos_horarios['escala'],categories=escala_ordenada_hora, ordered=True)
 
@@ -928,26 +946,6 @@ def horarios(datos):
         datos_horarios_filtrado = datos_horarios_filtrado.melt(id_vars='hora', value_vars=['value_spot', 'value_ssaa'], var_name='componente', value_name='value_bis')
         datos_horarios_filtrado = datos_horarios_filtrado.rename(columns={'value_bis': 'value'})
 
-    #    pt_curva_horaria = datos.pivot_table(
-    #        values = ['value_spot','value_ssaa'],
-    #        index = 'hora'
-    #    )
-    #    pt_curva_horaria = pt_curva_horaria.melt(id_vars='hora', var_name='componente', value_name='value')
-    #    pt_curva_horaria = pt_curva_horaria.reset_index()
-        
-    #else:    
-    #    pt_curva_horaria = datos.pivot_table(
-    #        values = 'value',
-    #        index = 'hora'
-    #    ).reset_index()
-
-
-    #pt_curva_horaria = pt_curva_horaria['value'].round(2)
-    #print('datos horarios filtrado')
-    #print(datos_horarios_filtrado)
-
-    #print('curva horaria')
-    #print(pt_curva_horaria)
 
     # GRAFICO DE VALORES HORARIOS POR DIA FILTRADO----------------------------------------------
     componente = st.session_state.get('componente', 'SPOT')
@@ -985,49 +983,25 @@ def horarios(datos):
             category_orders = {'escala':escala_ordenada_hora},
         )
 
-    #graf_horaria_linea = go.Scatter(
-    #    x=pt_curva_horaria['hora'],
-    #    y=pt_curva_horaria['value'],
-    #    name='Media Anual',
-    #    mode='lines',
-    #    line=dict(color='yellow', width=3),  # opcional: dar estilo a la línea
-    #)
-
-    #graf_horaria_dia.add_trace(graf_horaria_linea)
 
     min_horarios = datos_horarios['value'].min()
     max_horarios = datos_horarios['value'].max()
-    #min_media = pt_curva_horaria['value'].min()
-    #max_media = pt_curva_horaria['value'].max()
-    #min_y = min(min_horarios,min_media)
-    #max_y = max(max_horarios, max_media)
+    
     
     graf_horaria_dia.update_layout(
         yaxis=dict(
-            #range=[min_y,max_y],
             autorange = True,
             tickmode="linear",            # Escala lineal
-            #tick0=0,                      # Comenzar en 0
             dtick=tick_y                     # Incrementos de 20
        
         ),
         title=dict(
-            #text="Título del gráfico",
             font=dict(
                 size=20,
-                #family="Arial",
-                #color="black"
             ),
             x=0.5,          # centra el título
             xanchor="center"
         ),
-        #legend=dict(
-        #    orientation="v",  # Leyenda horizontal
-        #    x=0.5,
-        #    xanchor="center",
-        #    y=1,
-        #    yanchor="top",
-        #),
         bargap = .5
     )        
 
@@ -1096,26 +1070,6 @@ def medias_horarias(datos):
         datos_horarios_filtrado = datos_horarios_filtrado.melt(id_vars='hora', value_vars=['value_spot', 'value_ssaa'], var_name='componente', value_name='value_bis')
         datos_horarios_filtrado = datos_horarios_filtrado.rename(columns={'value_bis': 'value'})
 
-    #    pt_curva_horaria = datos.pivot_table(
-    #        values = ['value_spot','value_ssaa'],
-    #        index = 'hora'
-    #    )
-    #    pt_curva_horaria = pt_curva_horaria.melt(id_vars='hora', var_name='componente', value_name='value')
-    #    pt_curva_horaria = pt_curva_horaria.reset_index()
-        
-    #else:    
-    #    pt_curva_horaria = datos.pivot_table(
-    #        values = 'value',
-    #        index = 'hora'
-    #    ).reset_index()
-
-
-    #pt_curva_horaria = pt_curva_horaria['value'].round(2)
-    #print('datos horarios filtrado')
-    #print(datos_horarios_filtrado)
-
-    #print('curva horaria')
-    #print(pt_curva_horaria)
 
     # GRAFICO DE VALORES HORARIOS POR DIA FILTRADO----------------------------------------------
     componente = st.session_state.get('componente', 'SPOT')
@@ -1153,22 +1107,11 @@ def medias_horarias(datos):
             category_orders = {'escala':escala_ordenada_hora},
         )
 
-    #graf_horaria_linea = go.Scatter(
-    #    x=pt_curva_horaria['hora'],
-    #    y=pt_curva_horaria['value'],
-    #    name='Media Anual',
-    #    mode='lines',
-    #    line=dict(color='yellow', width=3),  # opcional: dar estilo a la línea
-    #)
-
-    #graf_horaria_dia.add_trace(graf_horaria_linea)
+    
 
     min_horarios = datos_horarios['value'].min()
     max_horarios = datos_horarios['value'].max()
-    #min_media = pt_curva_horaria['value'].min()
-    #max_media = pt_curva_horaria['value'].max()
-    #min_y = min(min_horarios,min_media)
-    #max_y = max(max_horarios, max_media)
+    
     
     graf_horaria_dia.update_layout(
         yaxis=dict(
@@ -1189,13 +1132,7 @@ def medias_horarias(datos):
             x=0.5,          # centra el título
             xanchor="center"
         ),
-        #legend=dict(
-        #    orientation="v",  # Leyenda horizontal
-        #    x=0.5,
-        #    xanchor="center",
-        #    y=1,
-        #    yanchor="top",
-        #),
+        
         bargap = .5
     )        
 
@@ -1629,3 +1566,351 @@ def graficar_bandas_ssaa():
 
     return fig
 
+
+def mapa_calor_mes(datos):
+    datos_heat = datos.copy()
+
+    componente = st.session_state.get('componente', 'SPOT')
+    año = st.session_state.get('año_seleccionado_esc', 2025)
+    mes_nombre = st.session_state.get('mes_seleccionado_esc', 'todos')
+
+    mapa_meses = {
+        'ene': 1, 'feb': 2, 'mar': 3, 'abr': 4,
+        'may': 5, 'jun': 6, 'jul': 7, 'ago': 8,
+        'sep': 9, 'oct': 10, 'nov': 11, 'dic': 12
+    }
+
+    datos_heat['fecha'] = pd.to_datetime(datos_heat['fecha'])
+    datos_heat['hora'] = pd.to_numeric(datos_heat['hora'], errors='coerce')
+    datos_heat['dia'] = datos_heat['fecha'].dt.day
+    datos_heat['dia_año'] = datos_heat['fecha'].dt.dayofyear
+    datos_heat['mes_num'] = datos_heat['fecha'].dt.month
+    datos_heat['año'] = datos_heat['fecha'].dt.year
+
+    if componente == 'SPOT':
+        col_valor = 'value_spot' if 'value_spot' in datos_heat.columns else 'value'
+        titulo_comp = 'SPOT'
+
+    elif componente == 'SSAA':
+        col_valor = 'value_ssaa' if 'value_ssaa' in datos_heat.columns else 'value'
+        titulo_comp = 'SSAA'
+
+    elif componente == 'SPOT+SSAA':
+        col_valor = 'value'
+        titulo_comp = 'SPOT+SSAA'
+
+    else:
+        col_valor = 'value'
+        titulo_comp = componente
+
+    if mes_nombre != 'todos':
+        mes_num = mapa_meses[mes_nombre]
+
+        datos_heat = datos_heat[
+            (datos_heat['año'] == año) &
+            (datos_heat['mes_num'] == mes_num)
+        ].copy()
+
+        grupo_y = 'dia'
+        eje_y = 'Día del mes'
+        titulo_periodo = f'{mes_nombre.upper()} {año}'
+
+    else:
+        datos_heat = datos_heat[
+            datos_heat['año'] == año
+        ].copy()
+
+        grupo_y = 'dia_año'
+        eje_y = 'Día del año'
+        titulo_periodo = f'Año {año}'
+
+    if datos_heat.empty:
+        st.warning('No hay datos para el periodo seleccionado.')
+        return pd.DataFrame(), None
+
+    tabla_heat = (
+        datos_heat
+        .groupby([grupo_y, 'hora'], as_index=False)[col_valor]
+        .mean()
+        .rename(columns={col_valor: 'value'})
+    )
+
+    df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes()
+
+    tabla_heat['escala'] = pd.cut(
+        tabla_heat['value'],
+        bins=df_limites['rango'],
+        labels=etiquetas,
+        right=True
+    )
+
+    # Escala numérica interna, consecutiva, solo para pintar colores
+    mapa_escala_num = {
+        etiqueta: i for i, etiqueta in enumerate(etiquetas)
+    }
+
+    tabla_heat['escala_num'] = (
+        tabla_heat['escala']
+        .map(mapa_escala_num)
+        .astype(float)
+    )
+
+    matriz_num = tabla_heat.pivot(
+        index=grupo_y,
+        columns='hora',
+        values='escala_num'
+    )
+
+    matriz_value = tabla_heat.pivot(
+        index=grupo_y,
+        columns='hora',
+        values='value'
+    )
+
+    matriz_escala = tabla_heat.pivot(
+        index=grupo_y,
+        columns='hora',
+        values='escala'
+    )
+
+    matriz_num = matriz_num.reindex(columns=range(24))
+    matriz_value = matriz_value.reindex(columns=range(24))
+    matriz_escala = matriz_escala.reindex(columns=range(24))
+
+    custom_colorscale = []
+    n = len(etiquetas)
+
+    for i, etiqueta in enumerate(etiquetas):
+        color = colores[etiqueta]
+
+        custom_colorscale.append([i / (n - 1), color])
+        custom_colorscale.append([i / (n - 1), color])
+
+    graf_heat = px.imshow(
+        matriz_num,
+        labels={
+            'x': 'Hora',
+            'y': eje_y,
+            'color': 'escala_cv'
+        },
+        title=f'Mapa de calor horario del {titulo_comp}. {titulo_periodo}',
+        aspect='auto',
+        color_continuous_scale=custom_colorscale,
+        zmin=0,
+        zmax=n - 1
+    )
+
+    graf_heat.update_traces(
+        customdata=np.dstack([
+            matriz_value.values,
+            matriz_escala.astype(str).values
+        ]),
+        hovertemplate=
+        'Día: %{y}<br>' +
+        'Hora: %{x}<br>' +
+        'Valor: %{customdata[0]:.2f} €/MWh<br>' +
+        'Escala: %{customdata[1]}<extra></extra>'
+    )
+
+    graf_heat.update_layout(
+        height=800,
+        title=dict(
+            font=dict(size=20),
+            x=0.5,
+            xanchor='center'
+        ),
+        xaxis=dict(
+            tickmode='linear',
+            dtick=1,
+            title='Hora'
+        ),
+        yaxis=dict(
+            autorange='reversed',
+            title=eje_y
+        )
+    )
+
+    graf_heat.update_xaxes(
+        showgrid=True,
+        gridwidth=1,
+        gridcolor='rgba(255,255,255,0.2)',
+        dtick=1
+    )
+
+    graf_heat.update_yaxes(
+        showgrid=True,
+        gridwidth=1,
+        gridcolor='rgba(255,255,255,0.2)',
+        dtick=1
+    )
+
+    graf_heat.update_traces(
+        xgap=1,
+        ygap=1
+    )
+
+    graf_heat.update_layout(
+        coloraxis_colorbar=dict(
+            title=dict(text='escala_cv'),
+            tickmode='array',
+            tickvals=list(range(len(etiquetas))),
+            ticktext=list(etiquetas)
+        )
+    )
+
+    return tabla_heat, graf_heat
+
+
+def mapa_calor_mes_gradual(datos):
+    datos_heat = datos.copy()
+
+    componente = st.session_state.get('componente', 'SPOT')
+    año = st.session_state.get('año_seleccionado_esc', 2025)
+    mes_nombre = st.session_state.get('mes_seleccionado_esc', 'todos')
+
+    mapa_meses = {
+        'ene': 1, 'feb': 2, 'mar': 3, 'abr': 4,
+        'may': 5, 'jun': 6, 'jul': 7, 'ago': 8,
+        'sep': 9, 'oct': 10, 'nov': 11, 'dic': 12
+    }
+
+    datos_heat['fecha'] = pd.to_datetime(datos_heat['fecha'])
+    datos_heat['hora'] = pd.to_numeric(datos_heat['hora'], errors='coerce')
+    datos_heat['dia'] = datos_heat['fecha'].dt.day
+    datos_heat['dia_año'] = datos_heat['fecha'].dt.dayofyear
+    datos_heat['mes_num'] = datos_heat['fecha'].dt.month
+    datos_heat['año'] = datos_heat['fecha'].dt.year
+
+    if componente == 'SPOT':
+        col_valor = 'value_spot' if 'value_spot' in datos_heat.columns else 'value'
+        titulo_comp = 'SPOT'
+    elif componente == 'SSAA':
+        col_valor = 'value_ssaa' if 'value_ssaa' in datos_heat.columns else 'value'
+        titulo_comp = 'SSAA'
+    elif componente == 'SPOT+SSAA':
+        col_valor = 'value'
+        titulo_comp = 'SPOT+SSAA'
+    else:
+        col_valor = 'value'
+        titulo_comp = componente
+
+    if mes_nombre != 'todos':
+        mes_num = mapa_meses[mes_nombre]
+
+        datos_heat = datos_heat[
+            (datos_heat['año'] == año) &
+            (datos_heat['mes_num'] == mes_num)
+        ].copy()
+
+        grupo_y = 'dia'
+        eje_y = 'Día del mes'
+        titulo_periodo = f'{mes_nombre.upper()} {año}'
+    else:
+        datos_heat = datos_heat[
+            datos_heat['año'] == año
+        ].copy()
+
+        grupo_y = 'dia_año'
+        eje_y = 'Día del año'
+        titulo_periodo = f'Año {año}'
+
+    if datos_heat.empty:
+        st.warning('No hay datos para el periodo seleccionado.')
+        return pd.DataFrame(), None
+
+    tabla_heat = (
+        datos_heat
+        .groupby([grupo_y, 'hora'], as_index=False)[col_valor]
+        .mean()
+        .rename(columns={col_valor: 'value'})
+    )
+
+    df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes()
+    etiquetas = list(etiquetas)
+
+    tabla_heat['escala'] = pd.cut(
+        tabla_heat['value'],
+        bins=df_limites['rango'],
+        labels=etiquetas,
+        right=True
+    )
+
+    matriz_value = tabla_heat.pivot(
+        index=grupo_y,
+        columns='hora',
+        values='value'
+    )
+
+    matriz_escala = tabla_heat.pivot(
+        index=grupo_y,
+        columns='hora',
+        values='escala'
+    )
+
+    matriz_value = matriz_value.reindex(columns=range(24))
+    matriz_escala = matriz_escala.reindex(columns=range(24))
+
+ 
+
+    vmin = matriz_value.min().min()
+    vmax = matriz_value.max().max()
+
+    custom_colorscale = []
+
+    for i, etiqueta in enumerate(etiquetas):
+        pos = i / (len(etiquetas) - 1)
+        custom_colorscale.append([pos, colores[etiqueta]])
+
+
+    graf_heat = px.imshow(
+        matriz_value,
+        labels={
+            'x': 'Hora',
+            'y': eje_y,
+            'color': '€/MWh'
+        },
+        title=f'Mapa de calor horario gradual del {titulo_comp}. {titulo_periodo}',
+        aspect='auto',
+        color_continuous_scale=custom_colorscale,
+        zmin=vmin,
+        zmax=vmax
+    )
+
+    graf_heat.update_traces(
+        customdata=np.dstack([
+            matriz_value.values,
+            matriz_escala.astype(str).values
+        ]),
+        hovertemplate=
+        'Día: %{y}<br>' +
+        'Hora: %{x}<br>' +
+        'Valor: %{customdata[0]:.2f} €/MWh<br>' +
+        'Escala: %{customdata[1]}<extra></extra>',
+        xgap=1,
+        ygap=1
+    )
+
+    graf_heat.update_layout(
+        title=dict(
+            font=dict(size=20),
+            x=0.5,
+            xanchor='center'
+        ),
+        xaxis=dict(
+            tickmode='linear',
+            dtick=1,
+            title='Hora'
+        ),
+        yaxis=dict(
+            autorange='reversed',
+            title=eje_y,
+            tickmode='linear',
+            dtick=1
+        ),
+        coloraxis_colorbar=dict(
+            title=dict(text='€/MWh')
+        ),
+        height=800
+    )
+
+    return tabla_heat, graf_heat

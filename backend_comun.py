@@ -13,7 +13,7 @@ import locale
 
 colores_precios = {'precio_2.0': 'goldenrod', 'precio_3.0': 'darkred', 'precio_6.1': '#1C83E1', 'precio_curva': 'limegreen'}
 
-def rango_componentes():
+def rango_componentes_old():
     componente = st.session_state.get('componente', 'SPOT')
     if componente in ['SPOT', 'SPOT+SSAA']:
         return {
@@ -24,6 +24,20 @@ def rango_componentes():
         return {
                 'rango': [-50, 4.01, 8.01, 12.01, 16.01, 20.01, 24.01, 28.01, 10000], #9 elementos
                 'valor_asignado': ['muy bajo', 'bajo', 'medio', 'alto', 'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2'],
+        }
+
+def rango_componentes():
+    componente = st.session_state.get('componente', 'SPOT')
+
+    if componente in ['SPOT', 'SPOT+SSAA']:
+        return {
+            'rango': [-50, 0, 20.01, 40.01, 60.01, 80.01, 100.01, 120.01, 140.01, 160.01, 10000],
+            'valor_asignado': ['≤0', 'muy bajo', 'bajo', 'medio', 'alto', 'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2']
+        }
+    else:
+        return {
+            'rango': [-50, 0, 4.01, 8.01, 12.01, 16.01, 20.01, 24.01, 28.01, 32.01, 10000],
+            'valor_asignado': ['≤0', 'muy bajo', 'bajo', 'medio', 'alto', 'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2']
         }
     
 ESTILO_GRAF = dict(

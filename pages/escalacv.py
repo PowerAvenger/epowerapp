@@ -4,7 +4,8 @@ from utilidades import (generar_menu, init_app_json_escalacv,
 )
 
 from backend_escalacv import (diarios_totales, diarios, mensuales, horarios, medias_horarias, evolucion_mensual, meses_español, 
-                              obtener_df_scatter_mensual, graficar_scatter_combo, obtener_puntos_anuales, graficar_simulacion_cuadratica, graficar_bandas_ssaa
+                              obtener_df_scatter_mensual, graficar_scatter_combo, obtener_puntos_anuales, graficar_simulacion_cuadratica, graficar_bandas_ssaa,
+                              mapa_calor_mes, mapa_calor_mes_gradual
                               
 )
 import datetime
@@ -88,7 +89,6 @@ fecha_fin_año = datetime(st.session_state.año_seleccionado_esc, 12, 31)
 datos_año_comparado = datos_totales[datos_totales['año'] == st.session_state.año_seleccionado_comp]
 
 #datos diarios
-#datos_dia, graf_ecv_diario = diarios(datos_año_filtrado, fecha_ini_año, fecha_fin_año)
 datos_dia, graf_ecv_diario = diarios(datos_año_filtrado, fecha_ini_año, fecha_fin_año, datos_año_comparado)
 valor_medio_diario = round(datos_dia['value'].mean(),2)
 valor_minimo_diario = datos_dia['value'].min()
@@ -206,6 +206,7 @@ with tab1:
             st.metric(f'Precio mínimo diario ( {fecha_min_diario})', value=valor_minimo_diario)
             st.metric(f'Precio máximo diario ({fecha_max_diario})', value=valor_maximo_diario)
 
+
     with st.container():
         col5,col6,col7=st.columns([.4,.4,.2])
         with col5:
@@ -239,9 +240,18 @@ with tab1:
             st.metric(f'Precio mínimo horario (hora: {hora_min_select})', value=valor_minimo_horario_select)
             st.metric(f'Precio máximo horario (hora: {hora_max_select})', value=valor_maximo_horario_select)
 
-            #st.metric(f'Precio medio diario ( {fecha_min_horario})', value=valor_minimo_horario)
 
 
+    with st.container():
+        col5,col6,col7=st.columns([.4,.4,.2])
+        with col5:
+            matriz_heat, graf_heat = mapa_calor_mes(datos_año_filtrado)
+            st.plotly_chart(graf_heat, use_container_width=True)
+        with col6:
+            
+            matriz_heat_difuso, graf_heat_difuso= mapa_calor_mes_gradual(datos_año_filtrado)
+            st.plotly_chart(graf_heat_difuso, use_container_width=True)
+        
 
 with tab2:  
     col1, col2 = st.columns(2) 

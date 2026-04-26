@@ -7,7 +7,8 @@ from backend_curvadecarga import (
     normalize_curve_simple, 
     graficar_curva_horaria, graficar_diario_apilado, graficar_mensual_apilado, graficar_queso_periodos, 
     graficar_media_horaria, graficar_media_horaria_combinada, graficar_boxplot_horario,
-    graficar_neteo_horario, graficar_neteo_mensual
+    graficar_neteo_horario, graficar_neteo_mensual,
+    graficar_heatmap_dia_hora
     )
 from utilidades import generar_menu
 
@@ -299,7 +300,8 @@ if st.session_state.get("df_norm") is not None:
     with tab2:
         
         graf_medias_horarias_combinadas, ymax = graficar_media_horaria_combinada()
-        #graf = graficar_media_horaria_combinada_2()
+        zmax_heatmap = st.session_state.df_norm_h["consumo_neto_kWh"].max()
+
         graf_medias_horarias_total=graficar_media_horaria('Todos', ymax)
         graf_medias_horarias_lab=graficar_media_horaria('L-V',ymax)
         graf_medias_horarias_ffss=graficar_media_horaria('FS', ymax)
@@ -312,19 +314,28 @@ if st.session_state.get("df_norm") is not None:
         graf_bigotes_lab = graficar_boxplot_horario('L-V')
         graf_bigotes_ffss = graficar_boxplot_horario('FS')
 
+        graf_heatmap_total = graficar_heatmap_dia_hora('Todos', zmax_heatmap)
+        graf_heatmap_lab = graficar_heatmap_dia_hora('L-V', zmax_heatmap)
+        graf_heatmap_ffss = graficar_heatmap_dia_hora('FS', zmax_heatmap)
+
         c1, c2, c3, c4 = st.columns(4)
         with c1:
             st.plotly_chart(graf_medias_horarias_total, use_container_width=True)
             st.plotly_chart(graf_medias_horarias_total_ranking, use_container_width=True)
             st.plotly_chart(graf_bigotes_total, use_container_width=True)
+            st.plotly_chart(graf_heatmap_total, use_container_width=True)
         with c2:
             st.plotly_chart(graf_medias_horarias_lab, use_container_width=True)
             st.plotly_chart(graf_medias_horarias_lab_ranking, use_container_width=True)
             st.plotly_chart(graf_bigotes_lab, use_container_width=True)
+            st.plotly_chart(graf_heatmap_lab, use_container_width=True)
+
         with c3:
             st.plotly_chart(graf_medias_horarias_ffss, use_container_width=True)
             st.plotly_chart(graf_medias_horarias_ffss_ranking, use_container_width=True)
             st.plotly_chart(graf_bigotes_ffss, use_container_width=True)
+           
+            st.plotly_chart(graf_heatmap_ffss, use_container_width=True)
         with c4:
             st.plotly_chart(graf_medias_horarias_combinadas, use_container_width=True)
             

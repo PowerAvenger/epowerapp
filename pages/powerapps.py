@@ -67,11 +67,15 @@ with col32:
     st.page_link('pages/marginales.py', label = 'Tecnologías que casan precio marginal', icon = "⚡️")
     st.image('images/marginales.jpg')
 with col33:
+    st.subheader('Optimización RDL 7/2026',divider='rainbow')
+    st.page_link('pages/opt2_rdl.py', label = 'Sácale todo el provecho a la flexibilización de potencias', icon = "⚡️")
+    st.image('images/opt rdl 7 2026.jpg')
+with col34:
     url10 = "https://spo-epowerapp.streamlit.app/"
     st.subheader('SPO: Super Power OMIE',divider='rainbow')
     st.write("Gana el [MVPStarPower](%s) del año y bate a OMIP!" % url10)
     st.image('images/spo.jpg')
-with col34:
+with col35:
     url10 = "https://interpolados-epowerapp.streamlit.app/"
     st.subheader('Interpolados qh REE',divider='rainbow')
     st.write("Cuando la [interpolación](%s) REE apenas tiene impacto" % url10)
