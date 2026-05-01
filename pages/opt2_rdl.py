@@ -17,6 +17,9 @@ if 'mantener_potencia' not in st.session_state:
 if 'mes_inicio_rdl' not in st.session_state:
     st.session_state.mes_inicio_rdl = 'may'
 
+if 'p6_limite' not in st.session_state:
+    st.session_state.p6_limite = 50
+
 pot_con_ini = {
     'P1': 50,
     'P2': 50,
@@ -71,13 +74,17 @@ if st.sidebar.button('Cargar potencias contratadas', use_container_width=True, t
 
 pot_con = st.session_state.df_pot["Potencia (kW)"].to_dict()
 p6 = float(st.session_state.df_pot.loc["P6", "Potencia (kW)"])
+p6_limite = None
 
 st.sidebar.radio(
     "Selecciona potencia P6",
-    ["Mantener", "No mantener"],
+    ["Mantener", "No mantener", "Limitar"],
     horizontal=True,
     key='mantener_potencia'
 )
+
+if st.session_state.mantener_potencia == "Limitar":
+    st.sidebar.number_input("Límite mínimo P6 (kW)", min_value=50, max_value=pot_con["P6"], step=1, key="p6_limite")
 
 mes_default_idx = meses.index('may') if 'may' in meses else 0
 if st.session_state.mes_inicio_rdl not in meses:
@@ -148,7 +155,8 @@ if submit_opt and st.session_state.df_norm is not None:
         pot_con=pot_con,
         pyc_tp=pyc_tp_opt,
         tepp=tepp_opt,
-        mes_inicio=st.session_state.mes_inicio_rdl
+        mes_inicio=st.session_state.mes_inicio_rdl,
+        p6_limite=st.session_state.p6_limite if st.session_state.mantener_potencia == "Limitar" else None
     )
 
     st.session_state.resultados_potencia_rdl = resultados

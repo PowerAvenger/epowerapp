@@ -82,13 +82,14 @@ def _aplicar_monotonia_solo_no_afectados(
     return pot
 
 
-def optimizar_mes_fase1(
+def optimizar_mes_fase1_old(
     df_mes: pd.DataFrame,
     tarifa: str,
     pot_con: dict,
     pyc_tp: dict,
     tepp: dict,
     fijar_P6: bool,
+    p6_limite=None
 ):
     mes = df_mes["mes_nom"].iloc[0]
     pot_inicial = list(pot_con.values())
@@ -141,6 +142,236 @@ def optimizar_mes_fase1(
     if not fijar_P6:
         for p in pot_fase1:
             pot_fase1[p] = min(pot_fase1[p], p6_max)
+
+    return pot_opt_ini, pot_fase1, resultado
+
+
+def optimizar_mes_fase1_old(
+    df_mes: pd.DataFrame,
+    tarifa: str,
+    pot_con: dict,
+    pyc_tp: dict,
+    tepp: dict,
+    fijar_P6: bool,
+    p6_limite=None
+):
+    mes = df_mes["mes_nom"].iloc[0]
+
+    # P6 inicial contratada
+    p6_inicial = float(pot_con["P6"])
+
+    # Tope efectivo de P6
+    # - Si se fija P6: P6 debe quedarse en su valor inicial.
+    # - Si se limita P6: P6 no puede superar el límite indicado.
+    # - Si no se fija ni se limita: P6 no puede superar su valor inicial.
+    if fijar_P6:
+        p6_max = p6_inicial
+    elif p6_limite is not None:
+        p6_max = min(float(p6_limite), p6_inicial)
+    else:
+        p6_max = p6_inicial
+
+    # Vector inicial.
+    # Si p6_limite es menor que alguna potencia inicial, recortamos el punto inicial
+    # para que SLSQP no arranque fuera de los bounds.
+    pot_inicial = [
+        min(float(v), p6_max)
+        for v in pot_con.values()
+    ]
+
+    def funcion_objetivo_mes(pot_opt_vector):
+        potencias = dict(zip(pot_con.keys(), pot_opt_vector))
+
+        coste_potfra, coste_excesos, _, _, _ = calcular_costes(
+            df_mes,
+            tarifa,
+            pyc_tp,
+            tepp,
+            [mes],
+            potencias
+        )
+
+        return float(coste_potfra + coste_excesos)
+
+    # Potencias crecientes: P2 >= P1, P3 >= P2, ..., P6 >= P5
+    constraints = [
+        {
+            "type": "ineq",
+            "fun": lambda x, i=i: x[i + 1] - x[i]
+        }
+        for i in range(len(pot_inicial) - 1)
+    ]
+
+    # Si P6 se mantiene, la fijamos exactamente al valor inicial
+    if fijar_P6:
+        constraints.append({
+            "type": "eq",
+            "fun": lambda x: x[-1] - p6_inicial
+        })
+
+    # Como las potencias deben ser crecientes y P6 tiene un tope,
+    # ninguna potencia puede superar ese mismo tope.
+    bounds = [(0.0, p6_max)] * len(pot_inicial)
+
+    resultado = minimize(
+        funcion_objetivo_mes,
+        pot_inicial,
+        method="SLSQP",
+        constraints=constraints,
+        bounds=bounds
+    )
+
+    pot_opt_ini = dict(
+        zip(
+            pot_con.keys(),
+            resultado.x if resultado.success else pot_inicial
+        )
+    )
+
+    pot_fase1 = ajustar_potencias(
+        pot_opt_ini,
+        fijar_P6=fijar_P6,
+        pot_con=pot_con
+    )
+
+    # Blindaje final:
+    # - Si P6 está fijada, restauramos P6 inicial.
+    # - Si P6 está limitada/no fijada, ninguna potencia puede superar p6_max.
+    if fijar_P6:
+        pot_fase1["P6"] = p6_inicial
+    else:
+        for p in pot_fase1:
+            pot_fase1[p] = min(float(pot_fase1[p]), p6_max)
+
+    # Segundo blindaje de potencias crecientes tras posibles recortes
+    periodos = list(pot_fase1.keys())
+    for i in range(len(periodos) - 2, -1, -1):
+        p_actual = periodos[i]
+        p_siguiente = periodos[i + 1]
+        pot_fase1[p_actual] = min(
+            float(pot_fase1[p_actual]),
+            float(pot_fase1[p_siguiente])
+        )
+
+    return pot_opt_ini, pot_fase1, resultado
+
+
+def optimizar_mes_fase1(
+    df_mes: pd.DataFrame,
+    tarifa: str,
+    pot_con: dict,
+    pyc_tp: dict,
+    tepp: dict,
+    fijar_P6: bool,
+    p6_limite=None
+):
+    mes = df_mes["mes_nom"].iloc[0]
+
+    # P6 inicial contratada
+    p6_inicial = float(pot_con["P6"])
+
+    # p6_limite se interpreta como MÍNIMO permitido de P6.
+    # Es decir:
+    # - Mantener P6  -> P6 = P6 inicial
+    # - No mantener  -> 0 <= P6 <= P6 inicial
+    # - Limitar P6   -> p6_limite <= P6 <= P6 inicial
+    if p6_limite is not None:
+        p6_min = min(float(p6_limite), p6_inicial)
+    else:
+        p6_min = 0.0
+
+    # Vector inicial real.
+    # No recortamos P1-P5 por p6_limite, porque p6_limite solo afecta al mínimo de P6.
+    pot_inicial = [
+        float(v)
+        for v in pot_con.values()
+    ]
+
+    def funcion_objetivo_mes(pot_opt_vector):
+        potencias = dict(zip(pot_con.keys(), pot_opt_vector))
+
+        coste_potfra, coste_excesos, _, _, _ = calcular_costes(
+            df_mes,
+            tarifa,
+            pyc_tp,
+            tepp,
+            [mes],
+            potencias
+        )
+
+        return float(coste_potfra + coste_excesos)
+
+    # Potencias crecientes:
+    # P2 >= P1, P3 >= P2, ..., P6 >= P5
+    constraints = [
+        {
+            "type": "ineq",
+            "fun": lambda x, i=i: x[i + 1] - x[i]
+        }
+        for i in range(len(pot_inicial) - 1)
+    ]
+
+    # Si P6 se mantiene, la fijamos exactamente al valor inicial
+    if fijar_P6:
+        constraints.append({
+            "type": "eq",
+            "fun": lambda x: x[-1] - p6_inicial
+        })
+
+    # Bounds por periodo
+    bounds = []
+
+    for p in pot_con.keys():
+        if p == "P6":
+            if fijar_P6:
+                bounds.append((p6_inicial, p6_inicial))
+            else:
+                bounds.append((p6_min, p6_inicial))
+        else:
+            # P1-P5 pueden moverse entre 0 y P6 inicial.
+            # Como hay restricción creciente, nunca podrán quedar por encima de P6.
+            bounds.append((0.0, p6_inicial))
+
+    resultado = minimize(
+        funcion_objetivo_mes,
+        pot_inicial,
+        method="SLSQP",
+        constraints=constraints,
+        bounds=bounds
+    )
+
+    pot_opt_ini = dict(
+        zip(
+            pot_con.keys(),
+            resultado.x if resultado.success else pot_inicial
+        )
+    )
+
+    pot_fase1 = ajustar_potencias(
+        pot_opt_ini,
+        fijar_P6=fijar_P6,
+        pot_con=pot_con
+    )
+
+    # Blindaje final P6
+    if fijar_P6:
+        pot_fase1["P6"] = p6_inicial
+    else:
+        pot_fase1["P6"] = max(float(pot_fase1["P6"]), p6_min)
+        pot_fase1["P6"] = min(float(pot_fase1["P6"]), p6_inicial)
+
+    # Reasegurar potencias crecientes hacia atrás:
+    # P5 <= P6, P4 <= P5, ..., P1 <= P2
+    periodos = list(pot_fase1.keys())
+
+    for i in range(len(periodos) - 2, -1, -1):
+        p_actual = periodos[i]
+        p_siguiente = periodos[i + 1]
+
+        pot_fase1[p_actual] = min(
+            float(pot_fase1[p_actual]),
+            float(pot_fase1[p_siguiente])
+        )
 
     return pot_opt_ini, pot_fase1, resultado
 
@@ -284,7 +515,8 @@ def calcular_optimizacion_rdl(
     pot_con: dict,
     pyc_tp: dict,
     tepp: dict,
-    mes_inicio: str
+    mes_inicio: str,
+    p6_limite=None
 ):
     idx_ini = MESES_ORDEN.index(mes_inicio)
     meses_eval = MESES_ORDEN[idx_ini:]
@@ -325,7 +557,8 @@ def calcular_optimizacion_rdl(
             pot_con=pot_con,
             pyc_tp=pyc_tp,
             tepp=tepp,
-            fijar_P6=fijar_P6
+            fijar_P6=fijar_P6,
+            p6_limite=p6_limite
         )
 
         pot_final, delta_max, bajada_aplicada = aplicar_fase2_rdl(
