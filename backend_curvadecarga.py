@@ -825,6 +825,48 @@ def graficar_mensual_apilado(df_norm):
     return fig
 
 
+def tabla_mensual_periodos(df_norm):
+
+    df_plot = (
+        df_norm
+        .assign(
+            mes=lambda d: d["fecha_hora"].dt.to_period("M").dt.to_timestamp()
+        )
+        .groupby(["mes", "periodo"], as_index=False)["consumo_neto_kWh"]
+        .sum()
+    )
+
+    colores_periodo = COLORES_3P if st.session_state.atr_dfnorm == "2.0" else COLORES_6P
+    orden_periodos = list(colores_periodo.keys())
+
+    df_plot["periodo"] = pd.Categorical(
+        df_plot["periodo"],
+        categories=orden_periodos,
+        ordered=True
+    )
+
+    tabla = (
+        df_plot
+        .pivot_table(
+            index="mes",
+            columns="periodo",
+            values="consumo_neto_kWh",
+            aggfunc="sum",
+            fill_value=0,
+            observed=False
+        )
+        .reset_index()
+    )
+
+    tabla["Total"] = tabla[orden_periodos].sum(axis=1)
+
+    tabla["Mes"] = tabla["mes"].dt.strftime("%b %Y")
+
+    tabla = tabla[["Mes"] + orden_periodos + ["Total"]]
+
+    return tabla
+
+
 def graficar_neteo_mensual(df_norm):
 
     df_plot = (
@@ -1298,4 +1340,517 @@ def graficar_heatmap_dia_hora(tipo_dia='Todos', zmax=None):
     )
 
     return fig
+
+
+
+def calcular_patron_horario_boxplot(df=None, variable="consumo_neto_kWh"):
+    """
+    Calcula el patrón horario de consumo por tipo de día y hora usando criterios de boxplot.
+
+    Devuelve una tabla con:
+    - q1
+    - mediana
+    - q3
+    - iqr
+    - limite_inf
+    - limite_sup
+
+    El límite superior se usará después para marcar consumos potencialmente revisables.
+    """
+
+    if df is None:
+        df = st.session_state.df_norm_h.copy()
+    else:
+        df = df.copy()
+
+    # Asegurar columnas necesarias
+    df["fecha_hora"] = pd.to_datetime(df["fecha_hora"])
+
+    if "hora" not in df.columns:
+        df["hora"] = df["fecha_hora"].dt.hour
+
+    if "tipo_dia" not in df.columns:
+        df["tipo_dia"] = np.where(df["fecha_hora"].dt.dayofweek < 5, "L-V", "FS")
+
+    # Asegurar numérico
+    df[variable] = pd.to_numeric(df[variable], errors="coerce")
+
+    df = df.dropna(subset=[variable, "tipo_dia", "hora"])
+
+    patron = (
+        df.groupby(["tipo_dia", "hora"])[variable]
+        .agg(
+            q1=lambda x: x.quantile(0.25),
+            mediana="median",
+            q3=lambda x: x.quantile(0.75),
+            media="mean",
+            std="std",
+            n="count"
+        )
+        .reset_index()
+    )
+
+    patron["iqr"] = patron["q3"] - patron["q1"]
+
+    patron["limite_inf"] = patron["q1"] - 1.5 * patron["iqr"]
+    patron["limite_sup"] = patron["q3"] + 1.5 * patron["iqr"]
+
+    # En consumo no tiene sentido un límite inferior negativo
+    patron["limite_inf"] = patron["limite_inf"].clip(lower=0)
+
+    return patron
+
+
+def detectar_consumos_atipicos_horarios(
+    df=None,
+    patron=None,
+    variable="consumo_neto_kWh",
+    min_exceso_kwh=0,
+    min_ratio=1.0
+):
+    """
+    Cruza cada registro horario con el patrón horario tipo boxplot.
+
+    Marca como potencialmente revisable una hora si:
+    - consumo real > limite_sup del boxplot para su tipo_dia + hora
+    - exceso_vs_mediana >= min_exceso_kwh
+    - ratio_vs_mediana >= min_ratio
+
+    Parámetros:
+    - min_exceso_kwh permite evitar marcar diferencias pequeñas.
+    - min_ratio permite exigir que el consumo sea X veces superior a lo esperado.
+    """
+
+    if df is None:
+        df = st.session_state.df_norm_h.copy()
+    else:
+        df = df.copy()
+
+    if patron is None:
+        patron = calcular_patron_horario_boxplot(df, variable=variable)
+    else:
+        patron = patron.copy()
+
+    # Asegurar tipos y columnas base
+    df["fecha_hora"] = pd.to_datetime(df["fecha_hora"])
+
+    if "fecha" not in df.columns:
+        df["fecha"] = df["fecha_hora"].dt.date
+    else:
+        df["fecha"] = pd.to_datetime(df["fecha"]).dt.date
+
+    if "hora" not in df.columns:
+        df["hora"] = df["fecha_hora"].dt.hour
+
+    if "tipo_dia" not in df.columns:
+        df["tipo_dia"] = np.where(df["fecha_hora"].dt.dayofweek < 5, "L-V", "FS")
+
+    df[variable] = pd.to_numeric(df[variable], errors="coerce")
+
+    # Nos quedamos con las columnas del patrón que necesitamos
+    cols_patron = [
+        "tipo_dia",
+        "hora",
+        "q1",
+        "mediana",
+        "q3",
+        "iqr",
+        "limite_inf",
+        "limite_sup"
+    ]
+
+    df_analisis = df.merge(
+        patron[cols_patron],
+        on=["tipo_dia", "hora"],
+        how="left"
+    )
+
+    # Métricas frente al patrón
+    df_analisis["consumo_real"] = df_analisis[variable]
+
+    df_analisis["exceso_vs_mediana"] = (
+        df_analisis["consumo_real"] - df_analisis["mediana"]
+    )
+
+    df_analisis["exceso_vs_limite_sup"] = (
+        df_analisis["consumo_real"] - df_analisis["limite_sup"]
+    )
+
+    # Evitar divisiones raras si la mediana es 0
+    df_analisis["ratio_vs_mediana"] = np.where(
+        df_analisis["mediana"] > 0,
+        df_analisis["consumo_real"] / df_analisis["mediana"],
+        np.nan
+    )
+
+    # Regla principal: superar el bigote superior
+    df_analisis["supera_limite_sup"] = (
+        df_analisis["consumo_real"] > df_analisis["limite_sup"]
+    )
+
+    # Regla filtrada para no marcar casos poco relevantes
+    df_analisis["es_revisable"] = (
+        df_analisis["supera_limite_sup"]
+        & (df_analisis["exceso_vs_mediana"] >= min_exceso_kwh)
+        & (df_analisis["ratio_vs_mediana"] >= min_ratio)
+    )
+
+    return df_analisis
+
+
+def resumir_atipicos_por_dia(df_analisis):
+    df = df_analisis.copy()
+
+    df["fecha"] = pd.to_datetime(df["fecha"])
+
+    # columnas auxiliares solo para revisables
+    df["exceso_mediana_revisable"] = np.where(
+        df["es_revisable"],
+        df["exceso_vs_mediana"].clip(lower=0),
+        0
+    )
+
+    df["exceso_limite_revisable"] = np.where(
+        df["es_revisable"],
+        df["exceso_vs_limite_sup"].clip(lower=0),
+        0
+    )
+
+    df["ratio_revisable"] = np.where(
+        df["es_revisable"],
+        df["ratio_vs_mediana"],
+        np.nan
+    )
+
+    resumen = (
+        df.groupby("fecha")
+        .agg(
+            horas_totales=("hora", "count"),
+            horas_revisables=("es_revisable", "sum"),
+            exceso_total_vs_mediana=("exceso_mediana_revisable", "sum"),
+            exceso_total_vs_limite_sup=("exceso_limite_revisable", "sum"),
+            ratio_max=("ratio_revisable", "max"),
+            consumo_total=("consumo_real", "sum")
+        )
+        .reset_index()
+    )
+
+    resumen["pct_horas_revisables"] = np.where(
+        resumen["horas_totales"] > 0,
+        100 * resumen["horas_revisables"] / resumen["horas_totales"],
+        0
+    )
+
+    resumen["tiene_alerta"] = resumen["horas_revisables"] > 0
+
+    return resumen
+
+def calcular_kpis_atipicos(df_analisis, resumen_dia=None):
+    if resumen_dia is None:
+        resumen_dia = resumir_atipicos_por_dia(df_analisis)
+
+    total_horas = len(df_analisis)
+    horas_revisables = int(df_analisis["es_revisable"].sum())
+    pct_horas_revisables = 100 * horas_revisables / total_horas if total_horas > 0 else 0
+
+    dias_con_alerta = int((resumen_dia["horas_revisables"] > 0).sum())
+    total_dias = len(resumen_dia)
+
+    exceso_total = resumen_dia["exceso_total_vs_mediana"].sum()
+
+    return {
+        "total_horas": total_horas,
+        "horas_revisables": horas_revisables,
+        "pct_horas_revisables": pct_horas_revisables,
+        "dias_con_alerta": dias_con_alerta,
+        "total_dias": total_dias,
+        "exceso_total_vs_mediana": exceso_total
+    }
+
+def mostrar_kpis_atipicos(kpis):
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        st.metric("Horas revisables", f"{kpis['horas_revisables']:,}".replace(",", "."))
+
+    with c2:
+        st.metric("% horas revisables", f"{kpis['pct_horas_revisables']:.1f}%")
+
+    with c3:
+        st.metric("Días con alerta", f"{kpis['dias_con_alerta']:,}".replace(",", "."))
+
+    with c4:
+        st.metric("Exceso total vs mediana", f"{kpis['exceso_total_vs_mediana']:.1f} kWh")
+
+
+def graficar_top_dias_revisables(
+    resumen_dia,
+    top_n=20,
+    metrica="exceso_total_vs_mediana"
+):
+    df_plot = (
+        resumen_dia[resumen_dia["horas_revisables"] > 0]
+        .sort_values(metrica, ascending=False)
+        .head(top_n)
+        .copy()
+    )
+
+    if df_plot.empty:
+        return None
+
+    df_plot["fecha_str"] = df_plot["fecha"].dt.strftime("%d.%m.%Y")
+
+    etiquetas = {
+        "exceso_total_vs_mediana": "Exceso total vs mediana (kWh)",
+        "exceso_total_vs_limite_sup": "Exceso total vs límite superior (kWh)",
+        "horas_revisables": "Horas revisables"
+    }
+
+    fig = px.bar(
+        df_plot,
+        x="fecha_str",
+        y=metrica,
+        hover_data={
+            "fecha_str": False,
+            "horas_revisables": True,
+            "pct_horas_revisables": ":.1f",
+            "ratio_max": ":.2f",
+            "consumo_total": ":.1f"
+        },
+        labels={
+            "fecha_str": "Fecha",
+            metrica: etiquetas.get(metrica, metrica)
+        },
+        text="horas_revisables",
+        
+    )
+
+    fig.update_layout(
+        title=dict(
+            text=f"Top {top_n} días con mayor señal revisable",
+            x=0.5,
+            xanchor="center"
+        ),
+        xaxis_title="Fecha",
+        yaxis_title=etiquetas.get(metrica, metrica)
+    )
+
+    fig.update_traces(
+        texttemplate="%{text}",
+        textposition="outside"
+    )
+
+    return fig
+
+def graficar_heatmap_alertas(
+    df_analisis,
+    tipo_dia="Todos",
+    metrica="exceso_vs_mediana",
+    zmax=None
+):
+    df = df_analisis.copy()
+
+    if tipo_dia != "Todos":
+        df = df[df["tipo_dia"] == tipo_dia].copy()
+
+    df["fecha"] = pd.to_datetime(df["fecha"])
+    df["hora"] = df["hora"].astype(int)
+
+    # Valor a representar:
+    # 0 si no es revisable
+    # exceso si es revisable
+    df["valor_plot"] = np.where(
+        df["es_revisable"],
+        df[metrica].clip(lower=0),
+        0
+    )
+
+    tabla = (
+        df.pivot_table(
+            index="fecha",
+            columns="hora",
+            values="valor_plot",
+            aggfunc="max"
+        )
+        .sort_index()
+        .reindex(columns=range(24))
+        .fillna(0)
+    )
+
+    # Hover auxiliar
+    df["fecha_hover"] = df["fecha"].dt.strftime("%d.%m.%Y")
+
+    mapa_dias = {
+        0: "Lunes",
+        1: "Martes",
+        2: "Miércoles",
+        3: "Jueves",
+        4: "Viernes",
+        5: "Sábado",
+        6: "Domingo"
+    }
+
+    df["dia_semana_hover"] = df["fecha"].dt.dayofweek.map(mapa_dias)
+
+    df["hover_estado"] = np.where(df["es_revisable"], "ALERTA", "Normal")
+
+    tabla_hover_estado = (
+        df.pivot_table(index="fecha", columns="hora", values="hover_estado", aggfunc="first")
+        .reindex(index=tabla.index, columns=tabla.columns)
+    )
+
+    tabla_hover_fecha = (
+        df.pivot_table(index="fecha", columns="hora", values="fecha_hover", aggfunc="first")
+        .reindex(index=tabla.index, columns=tabla.columns)
+    )
+
+    tabla_hover_dia = (
+        df.pivot_table(index="fecha", columns="hora", values="dia_semana_hover", aggfunc="first")
+        .reindex(index=tabla.index, columns=tabla.columns)
+    )
+
+    tabla_hover_consumo = (
+        df.pivot_table(index="fecha", columns="hora", values="consumo_real", aggfunc="mean")
+        .reindex(index=tabla.index, columns=tabla.columns)
+    )
+
+    tabla_hover_mediana = (
+        df.pivot_table(index="fecha", columns="hora", values="mediana", aggfunc="mean")
+        .reindex(index=tabla.index, columns=tabla.columns)
+    )
+
+    tabla_hover_limite = (
+        df.pivot_table(index="fecha", columns="hora", values="limite_sup", aggfunc="mean")
+        .reindex(index=tabla.index, columns=tabla.columns)
+    )
+
+    # zmax automático si no se pasa
+    if zmax is None:
+        zmax_calc = np.nanmax(tabla.values)
+        zmax = zmax_calc if zmax_calc > 0 else 1
+
+    escala_alertas = [
+        [0.00, "#000000"],
+        [0.03, "#000000"],
+        [0.0301, "#fff7bc"],
+        [0.25, "#fee391"],
+        [0.50, "#fdae6b"],
+        [0.75, "#f16913"],
+        [1.00, "#bd0026"]
+    ]
+
+    fig = px.imshow(
+        tabla,
+        aspect="auto",
+        color_continuous_scale=escala_alertas,
+        zmin=0,
+        zmax=zmax,
+        labels=dict(
+            x="Hora",
+            y="Fecha",
+            color="Exceso (kWh)"
+        )
+    )
+
+    customdata = np.dstack([
+        tabla_hover_fecha.values,
+        tabla_hover_dia.values,
+        tabla_hover_estado.values,
+        tabla_hover_consumo.values,
+        tabla_hover_mediana.values,
+        tabla_hover_limite.values
+    ])
+
+    fig.update_traces(
+        customdata=customdata,
+        xgap=1,
+        ygap=1,
+        hovertemplate=(
+            "<b>%{customdata[0]}</b> · %{customdata[1]}<br>"
+            "Hora: %{x}:00<br>"
+            "Estado: %{customdata[2]}<br>"
+            "Consumo real: %{customdata[3]:.2f} kWh<br>"
+            "Mediana: %{customdata[4]:.2f} kWh<br>"
+            "Límite superior: %{customdata[5]:.2f} kWh<br>"
+            "Exceso mostrado: %{z:.2f} kWh"
+            "<extra></extra>"
+        )
+    )
+
+    titulo_map = {
+        "Todos": "TOTAL",
+        "L-V": "LUNES A VIERNES",
+        "FS": "FIN DE SEMANA"
+    }
+
+    fig.update_layout(
+        title=dict(
+            text=f"Mapa de horas potencialmente revisables: <span style='color:#ffc107'>{titulo_map.get(tipo_dia, tipo_dia)}</span>",
+            x=0.5,
+            xanchor="center",
+            font=dict(size=16, color="white")
+        ),
+        template="plotly_dark",
+        height=800,
+        margin=dict(l=10, r=10, t=80, b=20),
+        coloraxis_colorbar=dict(
+            title=dict(text="Exceso (kWh)", side="top"),
+            orientation="h",
+            x=0.5,
+            xanchor="center",
+            y=1.04,
+            yanchor="bottom",
+            len=0.65,
+            thickness=12
+        ),
+    )
+
+    fig.update_xaxes(
+        title="Hora del día",
+        tickmode="linear",
+        dtick=2
+    )
+
+    df_ticks = (
+        pd.DataFrame({"fecha": tabla.index})
+        .assign(mes=lambda x: x["fecha"].dt.to_period("M"))
+        .groupby("mes")["fecha"]
+        .min()
+        .reset_index()
+    )
+
+    fig.update_yaxes(
+        title="Fecha",
+        tickmode="array",
+        tickvals=df_ticks["fecha"],
+        ticktext=[f.strftime("%b %Y") for f in df_ticks["fecha"]]
+    )
+
+    return fig
+
+def obtener_top_horas_revisables(df_analisis, top_n=50):
+    cols = [
+        "fecha_hora",
+        "fecha",
+        "tipo_dia",
+        "hora",
+        "consumo_real",
+        "mediana",
+        "limite_sup",
+        "exceso_vs_mediana",
+        "exceso_vs_limite_sup",
+        "ratio_vs_mediana"
+    ]
+
+    df_top = (
+        df_analisis[df_analisis["es_revisable"]]
+        .copy()[cols]
+        .sort_values(
+            ["exceso_vs_mediana", "ratio_vs_mediana"],
+            ascending=[False, False]
+        )
+        .head(top_n)
+    )
+
+    return df_top
 

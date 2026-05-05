@@ -5,11 +5,15 @@ from dateutil.relativedelta import relativedelta
 from datetime import timedelta
 from backend_curvadecarga import (
     normalize_curve_simple, 
-    graficar_curva_horaria, graficar_diario_apilado, graficar_mensual_apilado, graficar_queso_periodos, 
+    graficar_curva_horaria, graficar_diario_apilado, graficar_mensual_apilado, tabla_mensual_periodos, graficar_queso_periodos, 
     graficar_media_horaria, graficar_media_horaria_combinada, graficar_boxplot_horario,
     graficar_neteo_horario, graficar_neteo_mensual,
-    graficar_heatmap_dia_hora
+    graficar_heatmap_dia_hora,
+    calcular_patron_horario_boxplot, detectar_consumos_atipicos_horarios,
+    resumir_atipicos_por_dia, calcular_kpis_atipicos, mostrar_kpis_atipicos, graficar_top_dias_revisables, graficar_heatmap_alertas, calcular_patron_horario_boxplot, obtener_top_horas_revisables
     )
+
+        
 from utilidades import generar_menu
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
@@ -292,6 +296,8 @@ if st.session_state.get("df_norm") is not None:
         with c2:
             graf_mensual = graficar_mensual_apilado(st.session_state.df_norm_h)
             st.plotly_chart(graf_mensual, use_container_width=True)
+            tabla_mensual = tabla_mensual_periodos(st.session_state.df_norm_h)
+            st.dataframe(tabla_mensual, use_container_width=True, hide_index=True)
         with c3:
             graf_medias_horarias_total=graficar_media_horaria('Todos', ymax = None)
             st.plotly_chart(graf_medias_horarias_total, use_container_width=True)    
@@ -318,6 +324,27 @@ if st.session_state.get("df_norm") is not None:
         graf_heatmap_lab = graficar_heatmap_dia_hora('L-V', zmax_heatmap)
         graf_heatmap_ffss = graficar_heatmap_dia_hora('FS', zmax_heatmap)
 
+        patron_horario = calcular_patron_horario_boxplot()
+        df_analisis_horario = detectar_consumos_atipicos_horarios(
+            patron=patron_horario,
+            min_exceso_kwh=0,
+            min_ratio=1.0
+        )
+
+        df_revisables = df_analisis_horario[df_analisis_horario["es_revisable"]].copy()
+
+        resumen_dia = resumir_atipicos_por_dia(df_analisis_horario)
+        kpis = calcular_kpis_atipicos(df_analisis_horario, resumen_dia)
+
+        mostrar_kpis_atipicos(kpis)
+
+        fig_top = graficar_top_dias_revisables(resumen_dia, top_n=20, metrica="exceso_total_vs_mediana")
+
+        serie_alertas = df_analisis_horario.loc[df_analisis_horario["es_revisable"], "exceso_vs_mediana"]
+        zmax_alertas = serie_alertas.quantile(0.95) if not serie_alertas.empty else 1
+        fig_lv = graficar_heatmap_alertas(df_analisis_horario, tipo_dia="L-V", metrica="exceso_vs_mediana", zmax=zmax_alertas)
+        fig_fs = graficar_heatmap_alertas(df_analisis_horario, tipo_dia="FS", metrica="exceso_vs_mediana", zmax=zmax_alertas)
+
         c1, c2, c3, c4 = st.columns(4)
         with c1:
             st.plotly_chart(graf_medias_horarias_total, use_container_width=True)
@@ -329,16 +356,60 @@ if st.session_state.get("df_norm") is not None:
             st.plotly_chart(graf_medias_horarias_lab_ranking, use_container_width=True)
             st.plotly_chart(graf_bigotes_lab, use_container_width=True)
             st.plotly_chart(graf_heatmap_lab, use_container_width=True)
+            st.plotly_chart(fig_lv, use_container_width=True)
+        
 
         with c3:
             st.plotly_chart(graf_medias_horarias_ffss, use_container_width=True)
             st.plotly_chart(graf_medias_horarias_ffss_ranking, use_container_width=True)
             st.plotly_chart(graf_bigotes_ffss, use_container_width=True)
-           
             st.plotly_chart(graf_heatmap_ffss, use_container_width=True)
+            st.plotly_chart(fig_fs, use_container_width=True)
         with c4:
             st.plotly_chart(graf_medias_horarias_combinadas, use_container_width=True)
+        
+        
+        st.write("Patrón horario boxplot")
+        st.dataframe(patron_horario)
             
+        
+
+        st.write("Análisis horario frente al patrón")
+        st.dataframe(df_analisis_horario)
+
+        
+
+        st.write("Horas potencialmente revisables")
+        st.dataframe(
+            df_revisables[
+                [
+                    "fecha_hora",
+                    "fecha",
+                    "tipo_dia",
+                    "hora",
+                    "consumo_real",
+                    "mediana",
+                    "limite_sup",
+                    "exceso_vs_mediana",
+                    "exceso_vs_limite_sup",
+                    "ratio_vs_mediana"
+                ]
+            ].sort_values("exceso_vs_mediana", ascending=False)
+        )
+
+        
+
+        
+        if fig_top is not None:
+            st.plotly_chart(fig_top, use_container_width=True)
+
+        
+
+        
+        
+
+        st.write("Top horas revisables")
+        st.dataframe(obtener_top_horas_revisables(df_analisis_horario, top_n=50))
 
     with tab3:
         graf_horario_neteo = graficar_neteo_horario(st.session_state.df_norm_h, st.session_state.frec)
