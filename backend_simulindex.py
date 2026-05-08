@@ -513,6 +513,25 @@ def obtener_spot_mensual():
 
     return df_spot_mensual
 
+@st.cache_data
+def obtener_spot_diario():
+    
+    df = st.session_state.df_sheets.copy()
+    df["fecha"] = pd.to_datetime(df["fecha"])
+    df = df.set_index("fecha")
+
+    df_spot_diario = (
+        df[["spot"]]
+        .resample("D")
+        .mean()
+        .sort_index()
+        .reset_index()
+    )
+
+    df_spot_diario["spot"] = df_spot_diario["spot"].round(2)
+
+    return df_spot_diario
+
 
 
 
@@ -524,8 +543,13 @@ def obtener_grafico_omip(df):
         x='Fecha',
         y='Precio',
         facet_col='Entrega',
+        #markers=True,
         labels={'Precio':'€/MWh'}
         )
+    
+    # Cada facet con su propia escala Y
+    #graf.update_yaxes(matches=None)
+    #graf.update_yaxes(range=[0, 100])
     
     graf.update_layout(
         xaxis=dict(
@@ -786,6 +810,7 @@ def construir_escenarios(df_uso, lista_simul, df_hist, colores_precios, añadir_
 from datetime import datetime
 import pandas as pd
 
+# CONSTRUIMOS UN DF CON MIX DE DATOS HISTÓRICOS Y FUTUROS PARA VISUALIZAR LOS PRECIOS MEDIOS MENSUALES DEL 2026
 def construir_curva_2026(df_spot_mensual, df_ftb_m, df_ftb_q, fecha_ultimo_omip):
     
     año = 2026
@@ -793,8 +818,6 @@ def construir_curva_2026(df_spot_mensual, df_ftb_m, df_ftb_q, fecha_ultimo_omip)
     mes_fin_mensual = min(mes_actual + 6, 12)
 
     # nos quedamos con la última cotización disponible
-    #fecha_ref_m = df_ftb_m["Fecha"].max()
-    #fecha_ref_q = df_ftb_q["Fecha"].max()
     fecha_ref_m = fecha_ultimo_omip
     fecha_ref_q = fecha_ultimo_omip
     fecha_ref_m = pd.to_datetime(fecha_ultimo_omip, dayfirst=True)
@@ -806,14 +829,8 @@ def construir_curva_2026(df_spot_mensual, df_ftb_m, df_ftb_q, fecha_ultimo_omip)
     print(df_ftb_q[df_ftb_q["Fecha"] == fecha_ref_q]["Inicio Entrega"].unique())
 
     df_ftb_m = df_ftb_m[df_ftb_m["Fecha"] == fecha_ref_m]
-    #print(df_FTB_mensual["Entrega_dt"].unique())
     df_ftb_q = df_ftb_q[df_ftb_q["Fecha"] == fecha_ref_q]
-    #df_ftb_q = df_ftb_q[df_ftb_q["Fecha"] <= fecha_ref_q]
-
-    #df_ftb_q = df_ftb_q.sort_values("Fecha").drop_duplicates(
-    #    subset=["Inicio Entrega"], keep="last"
-    #)
-
+    
     df_ftb_m["Entrega_dt"] = pd.to_datetime(df_ftb_m["Entrega_dt"])
     df_ftb_q["Inicio Entrega"] = pd.to_datetime(df_ftb_q["Inicio Entrega"], dayfirst=True)
 
@@ -888,8 +905,7 @@ def construir_curva_2026(df_spot_mensual, df_ftb_m, df_ftb_q, fecha_ultimo_omip)
     return df_curva
 
 
-
-
+# GRAFICAMOS LA CURVA ANTERIOR
 def graficar_2026(df_2026, precio_medio_2026):
 
     
@@ -980,64 +996,465 @@ def graficar_2026(df_2026, precio_medio_2026):
 
         template="plotly_dark",
         hovermode="x unified",
-        height=650
+        height=500
     )
 
     return fig
 
 
-def construir_curva_omip_forward(df_ftb_m, df_ftb_q, fecha_ref):
+import pandas as pd
+import plotly.graph_objects as go
+from datetime import datetime
 
-    from datetime import datetime
+
+# CONSTRUIMOS UN DF CON LA EVOLUCIÓN DE LA MEDIA DIARIA OMIE PREVISTO 2026
+def construir_media_prevista_2026_diaria_old(
+    df_spot_diario,
+    df_ftb_m,
+    df_ftb_q,
+    año=2026,
+    col_fecha_spot="fecha",
+    col_spot="spot"
+):
+    """
+    Construye la evolución diaria de la media prevista 2026.
+
+    Para cada fecha de cotización OMIP:
+    - meses anteriores: media OMIE real cerrada
+    - mes actual: media OMIE acumulada hasta esa fecha
+    - meses futuros cercanos: FTB mensual si existe
+    - resto de meses: FTB trimestral
+
+    Devuelve:
+    - fecha_cotizacion
+    - media_2026
+    """
+
+    df_spot = df_spot_diario.copy()
+    df_m = df_ftb_m.copy()
+    df_q = df_ftb_q.copy()
+
+    # Fechas
+    df_spot[col_fecha_spot] = pd.to_datetime(df_spot[col_fecha_spot])
+    df_m["Fecha"] = pd.to_datetime(df_m["Fecha"], dayfirst=True)
+    df_q["Fecha"] = pd.to_datetime(df_q["Fecha"], dayfirst=True)
+
+    # Entregas OMIP
+    df_m["Entrega_dt"] = pd.to_datetime(df_m["Entrega_dt"])
+    df_q["Inicio Entrega"] = pd.to_datetime(df_q["Inicio Entrega"], dayfirst=True)
+
+    # Nos quedamos con fechas de cotización disponibles en OMIP
+    fechas_m = set(df_m["Fecha"].dropna().dt.normalize())
+    fechas_q = set(df_q["Fecha"].dropna().dt.normalize())
+
+    fechas_cotizacion = sorted(fechas_m.union(fechas_q))
+
+    # Opcional: solo fechas del año 2026 o anteriores/dentro del seguimiento
+    fechas_cotizacion = [
+        f for f in fechas_cotizacion
+        if pd.Timestamp(f).year == año
+    ]
+
+    filas_media = []
+
+    for fecha_ref in fechas_cotizacion:
+
+        fecha_ref = pd.Timestamp(fecha_ref).normalize()
+
+        mes_actual = fecha_ref.month
+        mes_fin_mensual = min(mes_actual + 6, 12)
+
+        precios_mes = []
+
+        try:
+
+            for mes in range(1, 13):
+
+                fecha_mes = pd.Timestamp(año, mes, 1)
+
+                # 1) Meses anteriores: OMIE cerrado
+                if mes < mes_actual:
+
+                    filtro_spot = (
+                        (df_spot[col_fecha_spot].dt.year == año) &
+                        (df_spot[col_fecha_spot].dt.month == mes)
+                    )
+
+                    precio = df_spot.loc[filtro_spot, col_spot].mean()
+
+                # 2) Mes actual: OMIE acumulado hasta fecha_ref
+                elif mes == mes_actual:
+
+                    filtro_spot = (
+                        (df_spot[col_fecha_spot] >= fecha_mes) &
+                        (df_spot[col_fecha_spot] <= fecha_ref)
+                    )
+
+                    precio = df_spot.loc[filtro_spot, col_spot].mean()
+
+                # 3) Meses futuros cercanos: FTB mensual si existe
+                elif mes <= mes_fin_mensual:
+
+                    filtro_m = (
+                        (df_m["Fecha"].dt.normalize() == fecha_ref) &
+                        (df_m["Entrega_dt"].dt.year == año) &
+                        (df_m["Entrega_dt"].dt.month == mes)
+                    )
+
+                    if df_m.loc[filtro_m].shape[0] > 0:
+
+                        precio = df_m.loc[filtro_m, "Precio"].iloc[0]
+
+                    else:
+
+                        trimestre = (mes - 1) // 3 + 1
+                        mes_inicio_trim = (trimestre - 1) * 3 + 1
+
+                        filtro_q = (
+                            (df_q["Fecha"].dt.normalize() == fecha_ref) &
+                            (df_q["Inicio Entrega"].dt.year == año) &
+                            (df_q["Inicio Entrega"].dt.month == mes_inicio_trim)
+                        )
+
+                        precio = df_q.loc[filtro_q, "Precio"].iloc[0]
+
+                # 4) Futuro lejano: FTB trimestral
+                else:
+
+                    trimestre = (mes - 1) // 3 + 1
+                    mes_inicio_trim = (trimestre - 1) * 3 + 1
+
+                    filtro_q = (
+                        (df_q["Fecha"].dt.normalize() == fecha_ref) &
+                        (df_q["Inicio Entrega"].dt.year == año) &
+                        (df_q["Inicio Entrega"].dt.month == mes_inicio_trim)
+                    )
+
+                    precio = df_q.loc[filtro_q, "Precio"].iloc[0]
+
+                precios_mes.append(precio)
+
+            media_2026 = pd.Series(precios_mes, dtype="float").mean()
+
+            filas_media.append({
+                "fecha_cotizacion": fecha_ref,
+                "media_2026": media_2026
+            })
+
+        except Exception as e:
+            print(f"No se pudo calcular media para {fecha_ref.date()}: {e}")
+
+    df_media = pd.DataFrame(filas_media)
+
+    if not df_media.empty:
+        df_media = df_media.sort_values("fecha_cotizacion").reset_index(drop=True)
+
+    return df_media
+
+# CONSTRUIMOS UN DF CON LA EVOLUCIÓN DE LA MEDIA DIARIA OMIE PREVISTO 2026
+def construir_media_prevista_2026_diaria(
+    df_spot_diario,
+    df_ftb_m,
+    df_ftb_q,
+    año=2026,
+    col_fecha_spot="fecha",
+    col_spot="spot",
+    #fecha_ref_max=None
+):
+    """
+    Construye la evolución diaria de la media prevista 2026.
+
+    Para cada día con SPOT disponible:
+    - meses anteriores: media OMIE real cerrada
+    - mes actual: media OMIE acumulada hasta ese día
+    - meses futuros: último OMIP mensual disponible hasta ese día
+    - si no hay mensual: último OMIP trimestral disponible hasta ese día
+
+    La fecha diaria la marca el SPOT, no OMIP.
+    """
+
+    import pandas as pd
+    import numpy as np
+
+    df_spot = df_spot_diario.copy()
+    df_m = df_ftb_m.copy()
+    df_q = df_ftb_q.copy()
+
+    # Fechas
+    df_spot[col_fecha_spot] = pd.to_datetime(df_spot[col_fecha_spot]).dt.normalize()
+    df_m["Fecha"] = pd.to_datetime(df_m["Fecha"], dayfirst=True).dt.normalize()
+    df_q["Fecha"] = pd.to_datetime(df_q["Fecha"], dayfirst=True).dt.normalize()
+
+    # Entregas OMIP
+    df_m["Entrega_dt"] = pd.to_datetime(df_m["Entrega_dt"]).dt.to_period("M").dt.to_timestamp()
+    df_q["Inicio Entrega"] = pd.to_datetime(df_q["Inicio Entrega"], dayfirst=True).dt.to_period("M").dt.to_timestamp()
+
+    # Precios numéricos
+    df_spot[col_spot] = pd.to_numeric(df_spot[col_spot], errors="coerce")
+    df_m["Precio"] = pd.to_numeric(df_m["Precio"], errors="coerce")
+    df_q["Precio"] = pd.to_numeric(df_q["Precio"], errors="coerce")
+
+    fecha_ini = pd.Timestamp(año, 1, 1)
+
+    fecha_ref_max = df_spot.loc[
+        df_spot[col_fecha_spot].dt.year == año,
+        col_fecha_spot
+    ].max()
+
+    # Fechas diarias: manda SPOT
+    fechas_cotizacion = sorted(
+        df_spot.loc[
+            (df_spot[col_fecha_spot] >= fecha_ini) &
+            (df_spot[col_fecha_spot] <= fecha_ref_max),
+            col_fecha_spot
+        ].dropna().unique()
+    )
+
+    filas_media = []
+
+    for fecha_ref in fechas_cotizacion:
+
+        fecha_ref = pd.Timestamp(fecha_ref).normalize()
+        mes_actual = fecha_ref.month
+
+        precios_mes = []
+
+        try:
+
+            for mes in range(1, 13):
+
+                fecha_mes = pd.Timestamp(año, mes, 1)
+
+                # 1) Meses anteriores: OMIE cerrado
+                if mes < mes_actual:
+
+                    filtro_spot = (
+                        (df_spot[col_fecha_spot].dt.year == año) &
+                        (df_spot[col_fecha_spot].dt.month == mes)
+                    )
+
+                    precio = df_spot.loc[filtro_spot, col_spot].mean()
+
+                # 2) Mes actual: OMIE acumulado hasta fecha_ref
+                elif mes == mes_actual:
+
+                    filtro_spot = (
+                        (df_spot[col_fecha_spot] >= fecha_mes) &
+                        (df_spot[col_fecha_spot] <= fecha_ref)
+                    )
+
+                    precio = df_spot.loc[filtro_spot, col_spot].mean()
+
+                # 3) Meses futuros: OMIP mensual si existe hasta fecha_ref
+                else:
+
+                    filtro_m = (
+                        (df_m["Fecha"] <= fecha_ref) &
+                        (df_m["Entrega_dt"].dt.year == año) &
+                        (df_m["Entrega_dt"].dt.month == mes)
+                    )
+
+                    df_m_mes = df_m.loc[filtro_m].sort_values("Fecha")
+
+                    if not df_m_mes.empty:
+                        precio = df_m_mes["Precio"].iloc[-1]
+
+                    else:
+                        # 4) Fallback trimestral: último trimestre disponible hasta fecha_ref
+                        trimestre = (mes - 1) // 3 + 1
+                        mes_inicio_trim = (trimestre - 1) * 3 + 1
+                        inicio_trim = pd.Timestamp(año, mes_inicio_trim, 1)
+
+                        filtro_q = (
+                            (df_q["Fecha"] <= fecha_ref) &
+                            (df_q["Inicio Entrega"] == inicio_trim)
+                        )
+
+                        df_q_mes = df_q.loc[filtro_q].sort_values("Fecha")
+
+                        if df_q_mes.empty:
+                            precio = np.nan
+                        else:
+                            precio = df_q_mes["Precio"].iloc[-1]
+
+                precios_mes.append(precio)
+
+            precios_mes = pd.Series(precios_mes, dtype="float")
+
+            if precios_mes.notna().sum() == 12:
+                media_2026 = precios_mes.mean()
+
+                filas_media.append({
+                    "fecha_cotizacion": fecha_ref,
+                    "media_2026": media_2026
+                })
+
+            else:
+                print(
+                    f"No se pudo calcular media completa para {fecha_ref.date()}: "
+                    f"{precios_mes.notna().sum()}/12 meses válidos"
+                )
+
+        except Exception as e:
+            print(f"No se pudo calcular media para {fecha_ref.date()}: {e}")
+
+    df_media = pd.DataFrame(filas_media)
+
+    if not df_media.empty:
+        df_media = (
+            df_media
+            .sort_values("fecha_cotizacion")
+            .reset_index(drop=True)
+        )
+        df_media["media_2026"] = df_media["media_2026"].round(2)
+
+    return df_media
+
+# GRAFICAMOS SEGÚN DF ANTERIOR
+def graficar_media_prevista_2026(df_media_2026):
+
+    df = df_media_2026.copy()
+    df["fecha_cotizacion"] = pd.to_datetime(df["fecha_cotizacion"])
+    df = df.sort_values("fecha_cotizacion")
+
+    ultima_media = df["media_2026"].iloc[-1]
+
+    fig = go.Figure()
+
+    fig.add_scatter(
+        x=df["fecha_cotizacion"],
+        y=df["media_2026"],
+        mode="lines",
+        name="Media prevista 2026",
+        line=dict(
+            color="yellow",
+            width=3,
+            dash="dot"
+        ),
+        hovertemplate=
+            "<b>Media prevista 2026</b><br>"
+            "%{x|%d/%m/%Y}<br>"
+            "%{y:.1f} €/MWh"
+            "<extra></extra>"
+    )
+
+    fig.add_hline(
+        y=ultima_media,
+        line_dash="dot",
+        line_color="white",
+        annotation_text=f"Última media ≈ {ultima_media:.1f} €/MWh",
+        annotation_position="top right",
+        annotation_font_size=18
+    )
+
+    fig.update_layout(
+        title=dict(
+            text="Evolución diaria de la media OMIE prevista 2026",
+            x=0.5,
+            xanchor="center",
+            font=dict(size=26)
+        ),
+
+        yaxis=dict(
+            title="€/MWh",
+            range=[
+                max(0, df["media_2026"].min() - 5),
+                df["media_2026"].max() + 5
+            ],
+            title_font=dict(size=18),
+            tickfont=dict(size=16)
+        ),
+
+        xaxis=dict(
+            title="Fecha de cotización",
+            tickfont=dict(size=16)
+        ),
+
+        legend=dict(
+            font=dict(size=16)
+        ),
+
+        hoverlabel=dict(
+            font_size=16
+        ),
+
+        template="plotly_dark",
+        hovermode="x unified",
+        height=500
+    )
+
+    return fig
+
+
+# CONSTRUIMOS UN DF CON LA EVOLUCIÓN DEL PRECIO MENSUAL FUTURO Y LA MEDIA OMIP PARA 12 MESES MÓVILES
+def construir_curva_omip_mensual(df_ftb_m, df_ftb_q, fecha_ref):
+
     import pandas as pd
 
-    año = 2026
-    mes_actual = datetime.now().month
+    print("fecha_ref recibida:", fecha_ref)
+    print("fecha_ref parseada:", pd.to_datetime(fecha_ref, dayfirst=True).normalize())
 
-    #df_ftb_m = df_ftb_m[df_ftb_m["Fecha"] == fecha_ref].copy()
-    #df_ftb_q = df_ftb_q[df_ftb_q["Fecha"] == fecha_ref].copy()
+    #fecha_ref = pd.to_datetime(fecha_ref).normalize()
+    fecha_ref = pd.to_datetime(fecha_ref, dayfirst=True).normalize()
+
+    año = fecha_ref.year
+    mes_actual = fecha_ref.month
+
+    df_ftb_m = df_ftb_m.copy()
+    df_ftb_q = df_ftb_q.copy()
+
+    # Normalizar fechas ANTES de filtrar
+    df_ftb_m["Fecha"] = pd.to_datetime(df_ftb_m["Fecha"]).dt.normalize()
+    df_ftb_q["Fecha"] = pd.to_datetime(df_ftb_q["Fecha"]).dt.normalize()
+
+    df_ftb_m["Entrega_dt"] = pd.to_datetime(df_ftb_m["Entrega_dt"])
+    df_ftb_q["Inicio Entrega"] = pd.to_datetime(
+        df_ftb_q["Inicio Entrega"],
+        dayfirst=True
+    )
+
+    # Último dato disponible hasta fecha_ref
     df_ftb_m = df_ftb_m[df_ftb_m["Fecha"] <= fecha_ref].copy()
     df_ftb_q = df_ftb_q[df_ftb_q["Fecha"] <= fecha_ref].copy()
 
-    df_ftb_m["Entrega_dt"] = pd.to_datetime(df_ftb_m["Entrega_dt"])
-    df_ftb_q["Inicio Entrega"] = pd.to_datetime(df_ftb_q["Inicio Entrega"], dayfirst=True)
-
-    df_ftb_m = df_ftb_m.sort_values("Fecha").drop_duplicates(
-        subset=["Entrega_dt"], keep="last"
+    df_ftb_m = (
+        df_ftb_m
+        .sort_values(["Entrega_dt", "Fecha"])
+        .drop_duplicates(subset=["Entrega_dt"], keep="last")
     )
 
-    df_ftb_q = df_ftb_q.sort_values("Fecha").drop_duplicates(
-        subset=["Inicio Entrega"], keep="last"
+    df_ftb_q = (
+        df_ftb_q
+        .sort_values(["Inicio Entrega", "Fecha"])
+        .drop_duplicates(subset=["Inicio Entrega"], keep="last")
     )
 
     filas = []
 
-    # 🔥 12 meses forward
+    # 12 meses forward desde el mes siguiente a fecha_ref
     for i in range(1, 13):
 
-        mes = mes_actual + i
-        año_mes = año
+        fecha = fecha_ref + pd.DateOffset(months=i)
+        fecha = pd.Timestamp(fecha.year, fecha.month, 1)
 
-        if mes > 12:
-            mes -= 12
-            año_mes += 1
+        año_mes = fecha.year
+        mes = fecha.month
 
-        fecha = pd.Timestamp(año_mes, mes, 1)
-
-        # 1️⃣ intentar mensual
+        # 1. Intentar mensual
         filtro_m = (
             (df_ftb_m["Entrega_dt"].dt.year == año_mes) &
             (df_ftb_m["Entrega_dt"].dt.month == mes)
         )
 
-        df_m = df_ftb_m.loc[filtro_m, "Precio"]
+        df_m = df_ftb_m.loc[filtro_m]
 
         if not df_m.empty:
-            precio = df_m.iloc[0]
+            precio = df_m["Precio"].iloc[0]
             tipo = "FTB mensual"
+            fecha_dato = df_m["Fecha"].iloc[0]
 
         else:
-            # 2️⃣ fallback trimestral
+            # 2. Fallback trimestral
             trimestre = (mes - 1) // 3 + 1
             mes_inicio = (trimestre - 1) * 3 + 1
 
@@ -1046,28 +1463,33 @@ def construir_curva_omip_forward(df_ftb_m, df_ftb_q, fecha_ref):
                 (df_ftb_q["Inicio Entrega"].dt.month == mes_inicio)
             )
 
-            df_q = df_ftb_q.loc[filtro_q, "Precio"]
+            df_q = df_ftb_q.loc[filtro_q]
 
             if df_q.empty:
-                raise ValueError(f"No hay dato para {año_mes}-{mes}")
+                raise ValueError(f"No hay dato OMIP para {año_mes}-{mes:02d}")
 
-            precio = df_q.iloc[0]
+            precio = df_q["Precio"].iloc[0]
             tipo = "FTB trimestral"
+            fecha_dato = df_q["Fecha"].iloc[0]
 
         filas.append({
             "fecha": fecha,
-            "precio": precio,
-            "tipo": tipo
+            "precio": round(float(precio), 2),
+            "tipo": tipo,
+            "fecha_dato": fecha_dato
         })
 
     df_curva = pd.DataFrame(filas)
-    print(df_curva)
+
+    print("CURVA OMIP FORWARD")
+    #print(df_curva)
 
     return df_curva
 
-def graficar_curva_omip(df_omip, precio_medio=None):
 
-    
+
+def graficar_curva_omip_mensual(df_omip, precio_medio=None):
+  
 
     fig = go.Figure()
 
@@ -1131,7 +1553,175 @@ def graficar_curva_omip(df_omip, precio_medio=None):
 
         template="plotly_dark",
         hovermode="x unified",
-        height=650
+        height=500
+    )
+
+    return fig
+
+
+
+
+def construir_evolucion_media_omip(df_ftb_m, df_ftb_q, fecha_ref, fecha_inicio="01.01.2026"):
+    import pandas as pd
+    import numpy as np
+
+    fecha_ref = pd.to_datetime(fecha_ref, dayfirst=True).normalize()
+    fecha_inicio = pd.to_datetime(fecha_inicio, dayfirst=True).normalize()
+
+    df_m = df_ftb_m.copy()
+    df_q = df_ftb_q.copy()
+
+    # Fechas
+    df_m["Fecha"] = pd.to_datetime(df_m["Fecha"], dayfirst=True).dt.normalize()
+    df_q["Fecha"] = pd.to_datetime(df_q["Fecha"], dayfirst=True).dt.normalize()
+
+    df_m["Entrega_dt"] = pd.to_datetime(df_m["Entrega_dt"]).dt.to_period("M").dt.to_timestamp()
+    df_q["Inicio Entrega"] = pd.to_datetime(df_q["Inicio Entrega"], dayfirst=True).dt.to_period("M").dt.to_timestamp()
+
+    # Precio numérico
+    df_m["Precio"] = pd.to_numeric(df_m["Precio"], errors="coerce")
+    df_q["Precio"] = pd.to_numeric(df_q["Precio"], errors="coerce")
+
+    # Solo fechas útiles
+    df_m = df_m[(df_m["Fecha"] >= fecha_inicio) & (df_m["Fecha"] <= fecha_ref)].copy()
+    df_q = df_q[(df_q["Fecha"] >= fecha_inicio) & (df_q["Fecha"] <= fecha_ref)].copy()
+
+    # Lista de fechas de cotización
+    fechas = sorted(
+        set(df_m["Fecha"].dropna().unique()).union(
+            set(df_q["Fecha"].dropna().unique())
+        )
+    )
+
+    fechas = [pd.Timestamp(f).normalize() for f in fechas]
+
+    # Preparar diccionarios por mes de entrega
+    mensual_por_mes = {
+        mes: grupo.sort_values("Fecha")[["Fecha", "Precio"]].dropna()
+        for mes, grupo in df_m.groupby("Entrega_dt")
+    }
+
+    trimestral_por_inicio = {
+        mes: grupo.sort_values("Fecha")[["Fecha", "Precio"]].dropna()
+        for mes, grupo in df_q.groupby("Inicio Entrega")
+    }
+
+    def ultimo_precio_hasta(diccionario, clave, fecha):
+        if clave not in diccionario:
+            return np.nan
+
+        g = diccionario[clave]
+        idx = g["Fecha"].searchsorted(fecha, side="right") - 1
+
+        if idx < 0:
+            return np.nan
+
+        return g["Precio"].iloc[idx]
+
+    filas = []
+
+    for f in fechas:
+
+        precios = []
+        tipos = []
+
+        for i in range(1, 13):
+            mes_forward = f + pd.DateOffset(months=i)
+            mes_forward = pd.Timestamp(mes_forward.year, mes_forward.month, 1)
+
+            # 1. Intentar mensual
+            precio_m = ultimo_precio_hasta(mensual_por_mes, mes_forward, f)
+
+            if pd.notna(precio_m):
+                precios.append(precio_m)
+                tipos.append("mensual")
+            else:
+                # 2. Fallback trimestral
+                trimestre = (mes_forward.month - 1) // 3 + 1
+                mes_inicio_tri = (trimestre - 1) * 3 + 1
+                inicio_tri = pd.Timestamp(mes_forward.year, mes_inicio_tri, 1)
+
+                precio_q = ultimo_precio_hasta(trimestral_por_inicio, inicio_tri, f)
+
+                if pd.notna(precio_q):
+                    precios.append(precio_q)
+                    tipos.append("trimestral")
+
+        if len(precios) == 12:
+            filas.append({
+                "Fecha": f,
+                "media_forward_12m": np.mean(precios),
+                "min_forward": np.min(precios),
+                "max_forward": np.max(precios),
+                "n_meses": len(precios),
+                "n_mensuales": tipos.count("mensual"),
+                "n_trimestrales": tipos.count("trimestral")
+            })
+
+    df_evol = pd.DataFrame(filas)
+
+    if not df_evol.empty:
+        df_evol["media_forward_12m"] = df_evol["media_forward_12m"].round(2)
+        df_evol["min_forward"] = df_evol["min_forward"].round(2)
+        df_evol["max_forward"] = df_evol["max_forward"].round(2)
+
+    return df_evol
+
+def graficar_evolucion_media_omip(df_evol):
+    import plotly.graph_objects as go
+
+    df_plot = df_evol.copy().sort_values("Fecha")
+
+    ultima_media = df_plot["media_forward_12m"].iloc[-1]
+
+    fig = go.Figure()
+
+    fig.add_scatter(
+        x=df_plot["Fecha"],
+        y=df_plot["media_forward_12m"],
+        mode="lines",
+        name="Media OMIP forward 12M",
+        line=dict(
+            color="yellow",
+            width=3,
+            dash="dot"
+        ),
+        hovertemplate=(
+            "<b>%{x|%d/%m/%Y}</b><br>"
+            "Media forward 12M: %{y:.2f} €/MWh<br>"
+            "<extra></extra>"
+        )
+    )
+
+    fig.add_hline(
+        y=ultima_media,
+        line_dash="dot",
+        line_color="white",
+        annotation_text=f"Última media ≈ {ultima_media:.1f} €/MWh",
+        annotation_position="top right",
+        annotation_font_size=18
+    )
+
+    fig.update_layout(
+        title=dict(
+            text="Evolución diaria de la media OMIP forward 12M",
+            x=0.5,
+            xanchor="center",
+            font=dict(size=26)
+        ),
+        yaxis=dict(
+            title="€/MWh",
+            range=[0, None],
+            title_font=dict(size=18),
+            tickfont=dict(size=15)
+        ),
+        xaxis=dict(
+            title="Fecha de cotización",
+            tickfont=dict(size=15)
+        ),
+        template="plotly_dark",
+        hovermode="x unified",
+        height=500
     )
 
     return fig

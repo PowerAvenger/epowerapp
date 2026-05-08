@@ -29,6 +29,9 @@ if "df_ofertas_fijas" not in st.session_state:
 if "margen_fijo" not in st.session_state:
     st.session_state.margen_fijo = 0.0
 
+if 'opcion_comparativa' not in st.session_state:
+    st.session_state.opcion_comparativa = 'Cobertura'
+
 
 #inicializamos variables de sesión
 generar_menu()
@@ -184,26 +187,75 @@ if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None an
 
     df_filtrado_cober = df_filtrado_sheets.copy()
     
-    #precio_cober_omip = 40
-    precio_cober_omip = st.session_state.get('precio_cobertura', 50.0)
+    
+    if 'precio_cobertura' not in st.session_state:
+        st.session_state.precio_cobertura = 50
+    #precio_cober_omip = st.session_state.get('precio_cobertura', 50.0)
 
-    df_filtrado_cober["spot"] = precio_cober_omip * apuntamiento_spot
+    df_filtrado_cober["spot"] = st.session_state.precio_cobertura * apuntamiento_spot
     df_filtrado_cober = calcular_precios_atr(df_filtrado_cober)
 
     df_curva_cober_omip = construir_df_curva_sheets(df_filtrado_cober)
     df_curva_cober_omip = añadir_costes_curva(df_curva_cober_omip)
-
-    
     df_curva_cober_omip = df_curva_cober_omip.drop_duplicates(subset=["fecha", "hora", "spot"])
-    
-       
-    df_heat = st.session_state.df_curva_sheets[["fecha","hora"]].copy()
+           
+    #df_heat = st.session_state.df_curva_sheets[["fecha","hora"]].copy()
 
-    df_heat["coste_index"] = df_curva_sheets["coste_total"]
-    df_heat["coste_cober"] = df_curva_cober_omip["coste_total"]
+    if st.session_state.opcion_comparativa == "Cobertura":
 
-    df_heat["dif_coste"] = df_heat["coste_cober"] - df_heat["coste_index"]  
+        df_curva_comp = df_curva_cober_omip.copy()
+        #df_heat["coste_comp"] = df_curva_comp["coste_total"].values
+        titulo_comp = "Comparativa INDEXADO vs COBERTURA" 
+        nombre_color = "Cobertura"
+
+    else:
+
+        fila_oferta = st.session_state.df_ofertas_fijas[st.session_state.df_ofertas_fijas["oferta"] == st.session_state.opcion_comparativa].iloc[0]
+        periodos = [f"P{i}" for i in range(1, 7)]
+
+        precios_fijo = {
+            p: fila_oferta[p]
+            for p in periodos
+            if p in fila_oferta.index
+        }
+
+        df_curva_comp = df_curva_sheets.copy()
+
+        df_curva_comp["precio_fijo"] = df_curva_comp["periodo"].map(precios_fijo)
+
+        df_curva_comp["coste_total"] = (df_curva_comp["consumo_neto_kWh"] * df_curva_comp["precio_fijo"])
+
+        titulo_comp = f"Comparativa INDEXADO vs FIJO {st.session_state.opcion_comparativa}"
+        nombre_color = st.session_state.opcion_comparativa
+
     
+    # ==========================================
+    # PREPARAR DF INDEX Y DF COMP
+    # ==========================================
+    df_index = (
+        df_curva_sheets[["fecha", "hora", "coste_total"]]
+        .copy()
+        .groupby(["fecha", "hora"], as_index=False)["coste_total"]
+        .sum()
+        .rename(columns={"coste_total": "coste_index"})
+    )
+
+    df_comp = (
+        df_curva_comp[["fecha", "hora", "coste_total"]]
+        .copy()
+        .groupby(["fecha", "hora"], as_index=False)["coste_total"]
+        .sum()
+        .rename(columns={"coste_total": "coste_comp"})
+    )
+
+    df_heat = df_index.merge(
+        df_comp,
+        on=["fecha", "hora"],
+        how="inner"
+    )
+
+    df_heat["dif_coste"] = df_heat["coste_index"]- df_heat["coste_comp"]
+
     heatmap_data = df_heat.pivot_table(
         index="fecha",
         columns="hora",
@@ -230,7 +282,8 @@ if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None an
     fig_heat.update_layout(
 
         title=dict(
-            text="Cobertura OMIP vs Indexado – Diferencia de coste horario",
+            #text="Cobertura OMIP vs Indexado – Diferencia de coste horario",
+            text="",
             x=0.5,              # centra el título
             xanchor="center",
             font=dict(size=22)
@@ -507,9 +560,14 @@ with tab1:
                 st.dataframe(df_tabla_margen, use_container_width=True )
 
 with tab2:
-    if 'df_curva_sheets' not in st.session_state or st.session_state.df_curva_sheets is None:
+    #if 'df_curva_sheets' not in st.session_state or st.session_state.df_curva_sheets is None:
+    if 'df_curva_sheets' not in st.session_state:
         st.warning('Introduce una curva de carga')
         st.stop()
+    elif st.session_state.df_curva_sheets is None:
+        st.warning('Asegúrate de tener seleccionado un rango de fechas')
+        st.stop()
+    
     c1, c2, c3 = st.columns(3)
     with c1:
         
@@ -519,18 +577,24 @@ with tab2:
         print(df_uso)
         df_resumen = obtener_df_resumen(df_uso, None, 0.0)
         df_resumen_view = formatear_df_resumen(df_resumen)
-        st.subheader(f'Resumen de INDEXADO para el suministro con peaje de acceso :orange[{st.session_state.atr_dfnorm}]')
+        st.subheader(f':orange[{st.session_state.texto_precios}]')
+        st.subheader(f'Resumen de :blue[INDEXADO]')
         st.dataframe(df_resumen_view, use_container_width=True)
 
         df_resumen_cober = obtener_df_resumen(df_curva_cober_omip, None, 0.0)
         df_resumen_cober_view = formatear_df_resumen(df_resumen_cober)
-        st.subheader(f'Resumen de COBERTURA para el suministro con peaje de acceso :orange[{st.session_state.atr_dfnorm}]')
-        st.number_input('Introduce el valor de la cobertura realizada', min_value=20.0, max_value=120.0, step=.1, key = 'precio_cobertura' )
+        #st.subheader(f'Resumen de :violet[COBERTURA] para el suministro con peaje de acceso :orange[{st.session_state.atr_dfnorm}]')
+        st.subheader(f'Resumen de :violet[COBERTURA]')
+        ca,cb = st.columns(2)
+        with ca:
+            st.number_input('Introduce el valor de la cobertura realizada', min_value=20.0, max_value=120.0, step=.1, key = 'precio_cobertura', help = 'Se aplicará un apuntamiento medio real a la cobertura realizada')
+        with cb:
+            st.metric('Apuntamiento medio ponderado', value=apuntamiento_spot)
         st.dataframe(df_resumen_cober_view, use_container_width=True)
 
 
         # CARGAR EXCEL CON PRECIOS FIJOS
-        st.subheader(f'Tabla de precios FIJOS para comparar')
+        st.subheader(f'Tabla de precios :red[FIJOS] para comparar')
         uploaded_file = st.file_uploader(
             "Sube el Excel con ofertas de precio fijo",
             type=["xlsx", "xls"]
@@ -593,20 +657,6 @@ with tab2:
                     hide_index=True
                 )
 
-            # 🔁 Reemplazar directamente
-            #st.session_state.df_ofertas_fijas = df_new.copy()
-
-            #st.subheader("Ofertas fijas cargadas")
-
-            #if st.session_state.df_ofertas_fijas.empty:
-            #    st.info("Aún no hay ofertas cargadas")
-            #else:
-            #    st.dataframe(
-            #        st.session_state.df_ofertas_fijas,
-            #        use_container_width=True,
-            #        hide_index=True
-            #    )
-
 
         with c2:
 
@@ -653,7 +703,7 @@ with tab2:
 
             resultados.append({
                 "Oferta": "Cobertura",
-                "Tipo": "Indexado",
+                "Tipo": "Cobertura",
                 "Coste anual (€)": coste_cober,
                 "Precio medio (€/kWh)": precio_medio_cober
             })
@@ -693,36 +743,64 @@ with tab2:
                 lambda x: f"{x:,.1f} %".replace(",", "X").replace(".", ",").replace("X", ".")
             )
 
-
+            st.subheader(f'Peaje de acceso :orange[{st.session_state.atr_dfnorm}]')
             st.subheader("📊 Comparativa TOTALPOWER")
-            st.dataframe(df_view, use_container_width=True)
+            st.dataframe(df_view, use_container_width=True, hide_index=True)
 
             orden_ofertas = df_resultados["Oferta"].tolist()
 
+            colores_tipo = {
+                "Fijo": "#EF4444",
+                "Indexado": "#1E3AFF",
+                "Cobertura": "#8B5CF6"
+            }
             fig = px.bar(
                 df_resultados,
-                x="Oferta",
-                y="Coste anual (€)",
+                y="Oferta",
+                x="Coste anual (€)",
                 color="Tipo",
-                title=f"Coste por tipo de contrato para el  {st.session_state.texto_precios}",
+                color_discrete_map=colores_tipo,
+                title=f"Coste por oferta/tipo de contrato",
                 text_auto=".2f",
-                category_orders={"Oferta": orden_ofertas}
+                category_orders={"Oferta": orden_ofertas},
+                orientation ='h'
             )
 
             fig.update_layout(
-                yaxis_title="Coste anual (€)",
-                xaxis_title="",
+                xaxis_title="Coste anual (€)",
+                yaxis_title="",
                 legend_title="",
                 title_font=dict(size=24),
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="center",
+                    x=0.5
+                )
             )
             fig.update_traces(
-                textfont_size=20,
-                width=0.4
+                textfont_size=24,
+                width=0.6
             )
 
             st.plotly_chart(fig, use_container_width=True)
 
         with c3:
+
+            opciones_comparativa = ["Cobertura"]
+
+            if (
+                "df_ofertas_fijas" in st.session_state
+                and st.session_state.df_ofertas_fijas is not None
+                and not st.session_state.df_ofertas_fijas.empty
+            ):
+                opciones_comparativa += st.session_state.df_ofertas_fijas["oferta"].tolist()
+
+            st.selectbox("Selecciona la opción a comparar contra el indexado", opciones_comparativa, index=0, key = 'opcion_comparativa')
+            
+            #st.subheader(f'Comparativa INDEXADO vs {st.session_state.opcion_comparativa}')
+            st.subheader(titulo_comp)
             st.plotly_chart(fig_heat, use_container_width=True)
 
             graf_medias_horarias=graficar_media_horaria('Total')

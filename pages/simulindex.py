@@ -1,11 +1,13 @@
 import streamlit as st
 from backend_simulindex import (obtener_historicos_meff, obtener_meff_trimestral, obtener_meff_mensual,
                                 pyc_2026,
-                                obtener_hist_mensual, obtener_spot_mensual,
+                                obtener_hist_mensual, obtener_spot_mensual, obtener_spot_diario,
                                 obtener_graf_hist, obtener_grafico_omip, obtener_grafico_omip_omie,
                                 obtener_trimestres_futuros, construir_escenarios,
                                 construir_curva_2026, graficar_2026,
-                                construir_curva_omip_forward, graficar_curva_omip)
+                                construir_curva_omip_mensual, graficar_curva_omip_mensual,
+                                construir_media_prevista_2026_diaria, graficar_media_prevista_2026,
+                                construir_evolucion_media_omip, graficar_evolucion_media_omip)
 from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, formatear_df_resultados
 import pandas as pd
 import plotly.express as px
@@ -247,10 +249,36 @@ precio_medio_2026 = round(df_2026["precio"].mean(),2)
 graf_2026 = graficar_2026(df_2026, precio_medio_2026)
 st.session_state.precio_omie_previsto = precio_medio_2026
 
-df_año_movil = construir_curva_omip_forward(df_FTB_mensual, df_FTB_trimestral, fecha_ultimo_omip_trimestral)
+df_año_movil = construir_curva_omip_mensual(df_FTB_mensual, df_FTB_trimestral, fecha_ultimo_omip_trimestral)
 precio_medio_omip = round(df_año_movil["precio"].mean(),2)
-graf_año_movil = graficar_curva_omip(df_año_movil, precio_medio_omip)
+graf_año_movil = graficar_curva_omip_mensual(df_año_movil, precio_medio_omip)
 st.session_state.precio_omip_previsto = precio_medio_omip
+
+df_spot_diario = obtener_spot_diario()
+df_media_2026 = construir_media_prevista_2026_diaria(
+    df_spot_diario=df_spot_diario,
+    df_ftb_m=df_FTB_mensual,
+    df_ftb_q=df_FTB_trimestral,
+    año=2026,
+    col_fecha_spot="fecha",
+    col_spot="spot"
+)
+
+fig_media_2026 = graficar_media_prevista_2026(df_media_2026)
+
+
+df_evol_media_forward = construir_evolucion_media_omip(
+    df_ftb_m=df_FTB_mensual,
+    df_ftb_q=df_FTB_trimestral,
+    fecha_ref=fecha_ultimo_omip_trimestral,
+    fecha_inicio="01.01.2026"
+)
+
+fig_media_forward = graficar_evolucion_media_omip(df_evol_media_forward)
+
+#r
+
+
 
 
 intercept_20, slope_20, r2_20 = resultados['precio_2.0']
@@ -349,8 +377,10 @@ with tab3:
     c1, c2 = st.columns(2)
     with c1:
         st.write(graf_2026)
+        st.write(fig_media_2026)
     with c2:
         st.write(graf_año_movil)
+        st.plotly_chart(fig_media_forward, use_container_width=True)
 
 # PANTALLA DE COMPARACIONES OMIP EVOL VS OMIE
 with tab4:
