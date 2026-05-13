@@ -50,13 +50,6 @@ if 'df_sheets_old' not in st.session_state:
 
 init_app_index()
 
-# FNEE AÑADIDO AL DF
-#st.session_state.df_sheets = añadir_fnee(st.session_state.df_sheets)
-
-
-
-
-
 st.session_state.df_sheets = calcular_precios_atr(st.session_state.df_sheets)
 print('df sheets con fnee y margen según fórmula')
 print (st.session_state.df_sheets)
@@ -448,13 +441,14 @@ with tab1:
             st.subheader("Peso de los componentes por peaje de acceso", divider='rainbow')
             #_, graf20, graf30, graf61 = pt1(df_filtrado)
             graf20, graf30, graf61 = graficar_queso_componentes(df_filtrado)
-            col10,col11,col12=st.columns(3)
-            with col10:
-                st.write(graf20)    
-            with col11:
-                st.write(graf30)
-            with col12:
-                st.write(graf61)
+            with st.container():
+                col10,col11,col12=st.columns(3)
+                with col10:
+                    st.write(graf20)    
+                with col11:
+                    st.write(graf30)
+                with col12:
+                    st.write(graf61)
                 
             # gráfico de evolución de los precios medios mensuales
             st.subheader("Evolución de los precios medios de indexado", divider='rainbow')
@@ -462,25 +456,18 @@ with tab1:
 
             df_res, fig = analizar_dependencia_omie(st.session_state.df_sheets)
 
-            st.dataframe(df_res)
-            st.plotly_chart(fig, use_container_width=True)
+            st.subheader('Impacto OMIE en el precio final')
+            with st.container():
+                col10,col11,col12=st.columns(3)
+                with col10:
+                    st.markdown('Tabla de datos')
+                    st.dataframe(df_res, hide_index=True)
+                with col11:
+                    st.plotly_chart(fig, use_container_width=True)
+                with col12:
+                   fig = grafico_elasticidad_lineal(df_res)
+                   st.plotly_chart(fig)
 
-            fig = grafico_elasticidad_lineal(df_res)
-            st.plotly_chart(fig)
-
-            #df_res, fig = visualizar_impacto_omie(st.session_state.df_sheets, atr="2.0")
-
-            #st.dataframe(df_res)
-
-            #for _, row in df_res.iterrows():
-            #    st.markdown(f"""
-            #**{int(row['año'])}**
-
-            #- OMIE: {row['omie_ini']:.1f} → {row['omie_fin']:.1f} ({row['var_omie']:.0f}%)
-            #3- Precio: {row['precio_ini']:.1f} → {row['precio_fin']:.1f} ({row['var_precio']:.0f}%)
-            #""")
-
-            #st.plotly_chart(fig, use_container_width=True)
 
         with col2:
             if media_atr_curva is not None:
