@@ -25,14 +25,6 @@ meses_completos = pd.DataFrame({
 
 from backend_comun import rango_componentes
 
-def get_limites_componentes_old():
-    datos_limites = rango_componentes()
-    df_limites = pd.DataFrame(datos_limites)
-    etiquetas = df_limites['valor_asignado'][:-1]
-    valor_asignado_a_rango = {
-        row['valor_asignado']: row['rango'] for _, row in df_limites.iterrows()
-    }
-    return df_limites, etiquetas, valor_asignado_a_rango
 
 def get_limites_componentes():
     datos_limites = rango_componentes()
@@ -164,6 +156,7 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
     datos_dia['escala']=pd.cut(datos_dia['value'],bins=df_limites['rango'],labels=etiquetas,right=False)
     datos_dia['color']=datos_dia['escala'].map(colores)
     escala_dia=datos_dia['escala'].unique()
+    #escala_dia = [x for x in escala_dia if pd.notna(x) and x in valor_asignado_a_rango]
     escala_ordenada_dia = sorted(escala_dia, key=lambda x: valor_asignado_a_rango[x], reverse=True)
     datos_dia['escala']=pd.Categorical(datos_dia['escala'],categories=escala_ordenada_dia, ordered=True)
 

@@ -7,7 +7,8 @@ from backend_simulindex import (obtener_historicos_meff, obtener_meff_trimestral
                                 construir_curva_2026, graficar_2026,
                                 construir_curva_omip_mensual, graficar_curva_omip_mensual,
                                 construir_media_prevista_2026_diaria, graficar_media_prevista_2026,
-                                construir_evolucion_media_omip, graficar_evolucion_media_omip)
+                                construir_evolucion_media_omip, añadir_omie_real_12m_posterior, graficar_evolucion_media_omip,
+                                añadir_suavizado_omip_y_diferencial, graficar_omip_suavizado_vs_omie_real)
 from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, formatear_df_resultados
 import pandas as pd
 import plotly.express as px
@@ -271,15 +272,32 @@ df_evol_media_forward = construir_evolucion_media_omip(
     df_ftb_m=df_FTB_mensual,
     df_ftb_q=df_FTB_trimestral,
     fecha_ref=fecha_ultimo_omip_trimestral,
-    fecha_inicio="01.01.2026"
+    fecha_inicio="01.01.2024"
 )
-
+df_evol_media_forward = añadir_omie_real_12m_posterior(
+    df_evol=df_evol_media_forward,
+    df_spot_diario=df_spot_diario,   # aquí tu DF diario de OMIE real
+    col_fecha_evol="Fecha",
+    col_fecha_spot="fecha",
+    col_spot="spot"
+)
 fig_media_forward = graficar_evolucion_media_omip(df_evol_media_forward)
 
-#r
+ventana_suavizado = 15
+df_evol_media_forward_suav = añadir_suavizado_omip_y_diferencial(
+    df_evol=df_evol_media_forward,
+    ventana_dias=ventana_suavizado,
+    col_fecha="Fecha",
+    col_omip="media_forward_12m",
+    col_omie="omie_real_12m"
+)
 
+fig_omip_suav_vs_omie = graficar_omip_suavizado_vs_omie_real(
+    df_evol=df_evol_media_forward_suav,
+    ventana_dias=ventana_suavizado
+)
 
-
+#
 
 intercept_20, slope_20, r2_20 = resultados['precio_2.0']
 print(f"2.0 → slope: {slope_20:.4f} | R²: {r2_20:.3f} | intercept: {intercept_20:.2f}")
@@ -381,6 +399,7 @@ with tab3:
     with c2:
         st.write(graf_año_movil)
         st.plotly_chart(fig_media_forward, use_container_width=True)
+        st.plotly_chart(fig_omip_suav_vs_omie, use_container_width=True)
 
 # PANTALLA DE COMPARACIONES OMIP EVOL VS OMIE
 with tab4:
