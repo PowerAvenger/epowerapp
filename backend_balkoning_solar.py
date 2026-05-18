@@ -3,6 +3,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import pvlib
 import streamlit as st
+from backend_comun import aplicar_estilo, aplicar_texto_pie_porcentaje
 
 @st.cache_data()
 def obtener_pvgis_horario(latitud, longitud, año_pvgis, inclinacion, orientacion, potencia_paneles, use_horizon, user_horizon):
@@ -274,6 +275,9 @@ def graficar_quesos_balance(df, parametro, colores_energia, tipo_balance):
             y=-0.1            # debajo del gráfico (ajusta si quieres)
         )
     )
+
+    fig = aplicar_texto_pie_porcentaje(fig)
+    fig = aplicar_estilo(fig)
     
     return fig
 

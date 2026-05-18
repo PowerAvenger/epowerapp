@@ -403,7 +403,7 @@ with tab1:
 
         #COLUMNA PRINCIPAL
         with col1:
-            st.subheader(f'Resumen de precios medios minoristas por peaje de acceso. **:orange[{st.session_state.texto_precios}]**', divider = 'rainbow')
+            st.subheader(f'Resumen de precios finales de INDEXADO. **:orange[{st.session_state.texto_precios}]**', divider = 'rainbow')
             
             with st.container():
                 col5, col6, col7, col8, col9 = st.columns(5)
@@ -514,37 +514,31 @@ with tab1:
                 st.plotly_chart(graf_periodos, use_container_width=True)
             st.subheader("Tabla resumen de precios por peaje de acceso", divider='rainbow')
             with st.expander("Nota sobre los precios de indexado:"):
-                st.caption("Basados en las fórmulas tipo con todos los componentes de mercado y costes regulados. Se incluye FNEE, SRAD y 1€/MWh por diferencias con los SSAA C2. Por supuesto peajes y cargos según tarifa de acceso. Añadir margen al gusto en 'Opciones' de la barra lateral")
+                st.caption("Basados en la parametrización de la fórmula de indexado PT. Por supuesto peajes y cargos según tarifa de acceso.")
                 
             with st.container():
 
                 texto_precios=f'{st.session_state.texto_precios}. Precios en c€/kWh'
                 st.caption(st.session_state.texto_precios)
 
-                def fmt4(x):
-                    try:
-                        return f"{float(x):.4f}" if pd.notnull(x) else x
-                    except:
-                        return x
+                from backend_comun import formatear_columnas_tabla
+                cols_precios = ["P1", "P2", "P3", "P4", "P5", "P6", "Media"]
 
-                df_tabla_precios = df_tabla_precios.round(4).applymap(fmt4)
-                df_tabla_costes = df_tabla_costes.round(4).applymap(fmt4)
-                df_tabla_pyc = df_tabla_pyc.round(4).applymap(fmt4)
-                df_tabla_margen = df_tabla_margen.round(4).applymap(fmt4)
-
-                st.text ('Precios medios de indexado', help='PRECIO MEDIO (FINAL) DE LA ENERGÍA.Suma de costes (energía y ATR)')
-                #st.dataframe(tabla_precios, use_container_width=True)
-                st.dataframe(df_tabla_precios, use_container_width=True)
+                st.text ('Precios medios de indexado', help='PRECIO MEDIO FINAL DE LA ENERGÍA. Suma de costes (energía y ATR) y margen')
+                df_tabla_precios_fmt = formatear_columnas_tabla(df_tabla_precios, columnas_cent_eur_kwh=cols_precios, incluir_unidades=False)
+                st.dataframe(df_tabla_precios_fmt, use_container_width=True)
                 
                 st.text ('Costes medios de indexado', help = 'COSTE MEDIO DE LA ENERGÍA, sin incluir ATR ni MARGEN.')
-                st.dataframe(df_tabla_costes, use_container_width=True)
-                
+                df_tabla_costes_fmt = formatear_columnas_tabla(df_tabla_costes, columnas_cent_eur_kwh=cols_precios, incluir_unidades=False)    
+                st.dataframe(df_tabla_costes_fmt, use_container_width=True)
+
                 st.text ('Costes de ATR')
-                #tabla_atr['Media'] = (tabla_precios['Media'] - tabla_costes['Media']).fillna(0)
-                st.dataframe(df_tabla_pyc, use_container_width=True )
+                df_tabla_pycs_fmt = formatear_columnas_tabla(df_tabla_pyc, columnas_cent_eur_kwh=cols_precios, incluir_unidades=False)
+                st.dataframe(df_tabla_pycs_fmt, use_container_width=True )
                 
                 st.text ('Margen')
-                st.dataframe(df_tabla_margen, use_container_width=True )
+                df_tabla_margen_fmt = formatear_columnas_tabla(df_tabla_margen, columnas_cent_eur_kwh=cols_precios, incluir_unidades=False)
+                st.dataframe(df_tabla_margen_fmt, use_container_width=True )
 
 with tab2:
     #if 'df_curva_sheets' not in st.session_state or st.session_state.df_curva_sheets is None:
@@ -563,10 +557,30 @@ with tab2:
         print('df_uso para usar en resumen')
         print(df_uso)
         df_resumen = obtener_df_resumen(df_uso, None, 0.0)
-        df_resumen_view = formatear_df_resumen(df_resumen)
+        from backend_comun import formatear_resumen_mixto
+        #df_resumen_view = formatear_df_resumen(df_resumen)
+        df_resumen_fmt = df_resumen.copy()
+
+        # Transponemos porque las unidades están en el índice, no en columnas
+        df_resumen_fmt = df_resumen_fmt.T
+
+        df_resumen_fmt = formatear_columnas_tabla(
+            df_resumen_fmt,
+            columnas_kwh=["Consumo (kWh)"],
+            columnas_euros=["Coste (€)"],
+            columnas_eur_kwh=["Precio medio (€/kWh)"],
+            incluir_unidades=False,
+        )
+
+        # Volvemos al formato original
+        df_resumen_fmt = df_resumen_fmt.T
+
+        
+        
         st.subheader(f':orange[{st.session_state.texto_precios}]')
         st.subheader(f'Resumen de :blue[INDEXADO]')
-        st.dataframe(df_resumen_view, use_container_width=True)
+        #st.dataframe(df_resumen_view, use_container_width=True)
+        st.dataframe(df_resumen_fmt, use_container_width=True)
 
         df_resumen_cober = obtener_df_resumen(df_curva_cober_omip, None, 0.0)
         df_resumen_cober_view = formatear_df_resumen(df_resumen_cober)

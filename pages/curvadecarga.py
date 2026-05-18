@@ -5,9 +5,9 @@ from dateutil.relativedelta import relativedelta
 from datetime import timedelta
 from backend_curvadecarga import (
     normalize_curve_simple, 
-    graficar_curva_horaria, graficar_diario_apilado, graficar_mensual_apilado, tabla_mensual_periodos, graficar_queso_periodos, 
+    graficar_curva_horaria, graficar_diario_apilado, graficar_mensual_apilado, tabla_mensual_periodos, formatear_tabla_mensual_es, graficar_queso_periodos, 
     graficar_media_horaria, graficar_media_horaria_combinada, graficar_boxplot_horario,
-    graficar_neteo_horario, graficar_neteo_mensual,
+    graficar_neteo_mensual,
     graficar_heatmap_dia_hora,
     calcular_patron_horario_boxplot, detectar_consumos_atipicos_horarios,
     resumir_atipicos_por_dia, calcular_kpis_atipicos, mostrar_kpis_atipicos, graficar_top_dias_revisables, graficar_heatmap_alertas, calcular_patron_horario_boxplot, obtener_top_horas_revisables
@@ -64,8 +64,7 @@ if 'frec' not in st.session_state:
 
 if normalizar and uploaded:    
     try:
-        #df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, frec = normalize_curve_simple(uploaded, origin=uploaded.name if hasattr(uploaded, "name") else uploaded)
-
+        
         dfs_norm = []
         dfs_in = []
 
@@ -155,7 +154,9 @@ if normalizar and uploaded:
                 atr_dfnorm = "3.0"
         
 
-        if frec =='QH':
+        #if frec =='QH':
+        if frec in ["QH", "10MIN"]:
+
             # Agregar cada 4 muestras por hora
             # Agrupar a nivel horario (suma de los 4 cuartos horarios)
             df_norm_h = (
@@ -163,6 +164,7 @@ if normalizar and uploaded:
                 .agg({
                     "consumo_neto_kWh": "sum",
                     "vertido_neto_kWh": "sum",
+                    "generacion_kWh": "sum",
                     "periodo": "first",
                     "tipo_dia":"first"
                 })
@@ -182,7 +184,7 @@ if normalizar and uploaded:
             )
         else:
             # Ya está en frecuencia horaria → copiar
-            df_norm_h = df_norm[["fecha_hora", "fecha", "hora","consumo_neto_kWh", "vertido_neto_kWh", "periodo", "tipo_dia"]].copy()
+            df_norm_h = df_norm[["fecha_hora", "fecha", "hora","consumo_neto_kWh", "vertido_neto_kWh", "generacion_kWh", "periodo", "tipo_dia"]].copy()
 
         
         consumototalhorario= df_norm_h['consumo_neto_kWh'].sum()
@@ -232,6 +234,9 @@ if st.session_state.get("df_norm") is not None:
     
     tab1, tab2, tab3, tab4 = st.tabs(['Resumen', 'Perfiles Horarios', 'Autoconsumo', 'Comparaciones'])
 
+    # ===============================================================
+    # RESUMEN GENERAL
+    # ===============================================================
     with tab1:
         altura_df = 250
         c1,c2,c3=st.columns([.35,.35,.3])
@@ -270,8 +275,6 @@ if st.session_state.get("df_norm") is not None:
                 st.metric("Vertido neteo KWh", f"{st.session_state.vertido_neto:,.0f}".replace(",", "."))
 
 
-        # --- Gráfico ---
-
         c1,c2=st.columns([.7,.3])
         with c1:
             st.subheader("Gráfico de consumo")
@@ -297,7 +300,10 @@ if st.session_state.get("df_norm") is not None:
             graf_mensual = graficar_mensual_apilado(st.session_state.df_norm_h)
             st.plotly_chart(graf_mensual, use_container_width=True)
             tabla_mensual = tabla_mensual_periodos(st.session_state.df_norm_h)
-            st.dataframe(tabla_mensual, use_container_width=True, hide_index=True)
+            #df_tabla_fmt = formatear_tabla_mensual_es(tabla_mensual)
+            from backend_comun import formatear_tabla_consumos
+            df_tabla_fmt = formatear_tabla_consumos(tabla_mensual, columna_mes="Mes", incluir_unidades=False)
+            st.dataframe(df_tabla_fmt, use_container_width=True, hide_index=True)
         with c3:
             graf_medias_horarias_total=graficar_media_horaria('Todos', ymax = None)
             st.plotly_chart(graf_medias_horarias_total, use_container_width=True)    
@@ -411,14 +417,114 @@ if st.session_state.get("df_norm") is not None:
         st.write("Top horas revisables")
         st.dataframe(obtener_top_horas_revisables(df_analisis_horario, top_n=50))
 
+    # ================================================================================================
+    # AUTOCONSUMO
+    # ================================================================================================
+    from backend_curvadecarga import graficar_dem_ver, graficar_con_gen
     with tab3:
-        graf_horario_neteo = graficar_neteo_horario(st.session_state.df_norm_h, st.session_state.frec)
-        st.plotly_chart(graf_horario_neteo, use_container_width=True)
+        df_norm_h_modif = st.session_state.df_norm_h.copy()
+        df_norm_h_modif['demanda_neto_kWh'] = df_norm_h_modif['consumo_neto_kWh']
+        if df_norm_h_modif["generacion_kWh"].sum() > 0:
+            df_norm_h_modif['consumo_neto_kWh'] = df_norm_h_modif['demanda_neto_kWh'] + df_norm_h_modif['generacion_kWh'] - df_norm_h_modif['vertido_neto_kWh']
+            df_norm_h_modif["autoconsumo_kWh"] = (df_norm_h_modif["generacion_kWh"] - df_norm_h_modif["vertido_neto_kWh"])
+            df_norm_h_modif["autoconsumo_kWh"] = df_norm_h_modif["autoconsumo_kWh"].apply(lambda x: x if x > 0 else 0)
+        else:
+            df_norm_h_modif["autoconsumo_kWh"] = 0
 
-        c1,c2,c3 = st.columns(3)   
-        with c1:
-            graf_mensual_neteo = graficar_neteo_mensual(st.session_state.df_norm_h)
-            st.plotly_chart(graf_mensual_neteo)
+        df_be = df_norm_h_modif.agg({
+            "consumo_neto_kWh": "sum",
+            "generacion_kWh": "sum",
+            "demanda_neto_kWh": "sum",
+            "vertido_neto_kWh": "sum",
+            "autoconsumo_kWh": "sum",
+        }).to_frame().T
+
+        #calculamos el % de cobertura del consumo, autoconsumo por un lado y demanda por otro
+        df_be['%_autoconsumo']=round(df_be['autoconsumo_kWh']*100/df_be['consumo_neto_kWh'],2)
+        df_be['%_demanda']=100-df_be['%_autoconsumo']
+        #calculamos el % de aprovechamiento de la generación
+        df_be['%_vertido_neto_kWh']=round(df_be['vertido_neto_kWh']*100/df_be['generacion_kWh'],2)
+        df_be['%_generacion']=100-df_be['%_vertido_neto_kWh']
+
+        
+        colores_energia = {
+            'consumo_neto_kWh': '#3498DB',        # azul
+            'demanda_neto_kWh': '#E74C3C',         # naranja  
+            'generacion_kWh': '#F7DC6F',  # amarillo suave
+            'vertido_neto_kWh': '#AF7AC5',        # lila / violeta claro
+            'autoconsumo_kWh': '#2ECC71'     # verde
+        }
+
+        from backend_balkoning_solar import graficar_quesos_balance
+        #graf_con_gen = graficar_con_gen(df_be)
+        #graf_cobertura = graficar_barras_balance(df_be, 'cobertura', colores_energia)
+        #graf_aprovechamiento = graficar_barras_balance(df_be, 'aprovechamiento', colores_energia)
+
+        total_consumo = df_be['consumo_neto_kWh'].sum()
+        total_genfv = df_be['generacion_kWh'].sum()
+        total_demanda = df_be['demanda_neto_kWh'].sum()
+        total_vertido = df_be['vertido_neto_kWh'].sum()
+        #total_aprovechamiento = total_genfv-total_vertido
+        total_autoconsumo = df_be['autoconsumo_kWh'].sum()
+        #print(total_autoconsumo)
+
+        cobertura_media_porc=round(total_autoconsumo*100/total_consumo,2)
+        aprovechamiento_medio_porc=round(100-total_vertido*100/total_genfv,2)
+
+
+        # DATAFRANES PARA QUESOS RESUMEN BALANCE ENERGÉTICO
+        df_aprovechamiento = pd.DataFrame({
+            'concepto': ['autoconsumo_kWh', 'vertido_neto_kWh'],
+            'energia_kwh': [total_autoconsumo, total_vertido]
+        })
+        df_cobertura = pd.DataFrame({
+            'concepto': ['autoconsumo_kWh', 'demanda_neto_kWh'],
+            'energia_kwh': [total_autoconsumo, total_demanda]
+        })
+        graf_aprovechamiento_total = graficar_quesos_balance(df_aprovechamiento, aprovechamiento_medio_porc, colores_energia, 'aprovechamiento')
+        graf_cobertura_total = graficar_quesos_balance(df_cobertura, cobertura_media_porc, colores_energia, 'cobertura')
+
+        graf_dem_ver = graficar_dem_ver(df_norm_h_modif, colores_energia)
+        graf_con_gen = graficar_con_gen(df_norm_h_modif, colores_energia)
+        
+
+        with st.container():
+            st.subheader('Balance energético')
+            c1, c2, c3= st.columns([.3,.4,.4])
+        #c1,c2 = st.columns([.3,.7])
+            with c1:
+            
+                c21, c22 = st.columns(2)
+                with c21:
+                    st.metric("Consumo total (kWh)", f"{total_consumo:,.0f}".replace(",", "."))
+                    st.metric("Demanda total (kWh)", f"{total_demanda:,.0f}".replace(",", "."))
+                    st.metric("Generación FV (kWh)", f"{total_genfv:,.0f}".replace(",", "."))
+                with c22:
+                    st.metric("", "")
+                    st.metric("Autoconsumo (kWh)", f"{total_autoconsumo:,.0f}".replace(",", "."))
+                    st.metric("Vertido (kWh)", f"{total_vertido:,.0f}".replace(",", "."))
+            with c2:
+                st.plotly_chart(graf_aprovechamiento_total)
+            with c3:
+                st.plotly_chart(graf_cobertura_total)
+        #with c2:
+        with st.container():
+            c1,c2 = st.columns([.3,.7])
+            with c1:
+                graf_mensual_neteo = graficar_neteo_mensual(st.session_state.df_norm_h)
+                st.plotly_chart(graf_mensual_neteo)
+
+            with c2:                
+                st.plotly_chart(graf_dem_ver, use_container_width=True)
+        with st.container():
+            c1,c2 = st.columns([.3,.7])
+            with c2:
+                st.plotly_chart(graf_con_gen, use_container_width=True)
+        
+
+        #c1,c2,c3 = st.columns(3)   
+        #with c1:
+            
     
     with tab4:
         c1, c2, c3, c4 = st.columns(4)

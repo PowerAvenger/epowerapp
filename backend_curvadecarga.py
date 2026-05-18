@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import io, re
 from unidecode import unidecode
-from backend_comun import aplicar_estilo
+from backend_comun import aplicar_estilo, aplicar_texto_pie_porcentaje
 
 
 TZ = "Europe/Madrid"
@@ -37,7 +37,8 @@ COLORES_6P = {
 
 colores_neteo= {
     "consumo_neto_kWh": "#e74c3c",   # rojo
-    "vertido_neto_kWh": "#27ae60"    # verde
+    "vertido_neto_kWh": "#27ae60",    # verde
+    "generacion_kWh" : "#f1c40f"
 }
 
 # ===============================
@@ -134,13 +135,6 @@ def _guess_cols(df: pd.DataFrame):
     cols = list(df.columns)
     cleaned = {c: _clean(c) for c in cols}
 
-    #def find(patterns):
-    #    for c, cc in cleaned.items():
-    #        for p in patterns:
-    #            if re.search(p, cc, re.IGNORECASE):
-    #                return c
-    #    return None
-
     def find(patterns, prefer_qh_consumo=False):
         matches = []
 
@@ -152,6 +146,24 @@ def _guess_cols(df: pd.DataFrame):
 
         if not matches:
             return None
+        
+        col_consumo_total = None
+        col_consumo_red = None
+
+        for c in matches:
+            cc = cleaned[c]
+
+            if re.search(r"\bconsumo\s+total\b.*\(?kwh\)?", cc, re.IGNORECASE):
+                col_consumo_total = c
+
+            if re.search(r"\bconsumo\s+red\b.*\(?kwh\)?", cc, re.IGNORECASE):
+                col_consumo_red = c
+
+        if col_consumo_total is not None and col_consumo_red is not None:
+            return col_consumo_red
+
+        if col_consumo_red is not None:
+            return col_consumo_red
 
         if prefer_qh_consumo:
             col_h = None
@@ -186,7 +198,9 @@ def _guess_cols(df: pd.DataFrame):
     c_ind = find(["reactiva", "kvarh", "inductiva"])
     c_cap = find(["capac"])
     #c_ver = find([r"gener", r"vertid", r"exportad", r"as", r"prod"])
-    c_ver = find([r"generaci[oó]n", r"vertid", r"exportad", r"as", r"prod"])
+    #c_ver = find([r"generaci[oó]n", r"vertid", r"exportad", r"as", r"prod"])
+    c_ver = find([r"vertid", r"exporta"])
+    c_gen = find(["generac"])
 
     print("\n--- Columnas originales ---")
     print(cols)
@@ -194,7 +208,7 @@ def _guess_cols(df: pd.DataFrame):
     for c, cc in cleaned.items():
         print(f"{c} → {cc}")
 
-    return c_dt, c_date, c_time, c_quarter, c_kwh, c_per, c_ind, c_cap, c_ver
+    return c_dt, c_date, c_time, c_quarter, c_kwh, c_per, c_ind, c_cap, c_ver, c_gen
 
 def _parse_date_ddmmyyyy(series: pd.Series) -> pd.Series:
     s = series.astype(str).str.strip()
@@ -246,7 +260,7 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
     #   Detección automática de formato de fecha (día primero o año primero)."""
     
     df, header_row = _read_any(uploaded)
-    c_dt, c_date, c_time, c_quarter, c_kwh, c_per, c_ind, c_cap, c_ver = _guess_cols(df)
+    c_dt, c_date, c_time, c_quarter, c_kwh, c_per, c_ind, c_cap, c_ver, c_gen = _guess_cols(df)
 
     if not (c_dt or (c_date and c_time)):
         raise ValueError("No se encontró columna de fecha u hora reconocible.")
@@ -256,7 +270,11 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
 
     # --- Consumo ---
     kwh_consumo = pd.to_numeric(df[c_kwh].str.replace(",", ".", regex=False), errors="coerce")
-    kwh_vertido = pd.to_numeric(df[c_ver].str.replace(",", ".", regex=False), errors="coerce") if c_ver else np.nan
+    #kwh_vertido = pd.to_numeric(df[c_ver].str.replace(",", ".", regex=False), errors="coerce") if c_ver else np.nan
+    #kwh_generacion = pd.to_numeric(df[c_gen].str.replace(",", ".", regex=False), errors="coerce") if c_gen else np.nan
+    kwh_vertido = pd.to_numeric(df[c_ver].astype(str).str.replace(",", ".", regex=False), errors="coerce") if c_ver else pd.Series(0, index=df.index)
+    kwh_generacion = pd.to_numeric(df[c_gen].astype(str).str.replace(",", ".", regex=False), errors="coerce") if c_gen else pd.Series(0, index=df.index)
+
 
     msg_unidades = ""
 
@@ -264,6 +282,13 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
         kwh_consumo = kwh_consumo / 1000
         kwh_vertido = kwh_vertido / 1000
         msg_unidades = "Detectado consumo en Wh → Convertido automáticamente a kWh"
+        # Caso especial:
+        # la columna detectada como generación realmente es vertido
+        kwh_vertido = kwh_generacion / 1000
+
+        # generación real no informada
+        kwh_generacion = pd.Series(0, index=df.index)
+
 
     # Flag usado sólo en formatos hora y cuarto que creo solo son de endesa cuarto horarios, donde la energía viene como potencia cuartohoria (consumox4)
     endesa_qh = False
@@ -438,6 +463,9 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
     elif abs(delta_min - 15) < 1:
         freq = "QH"    # Cuartohoraria
         ajuste_tiempo = pd.Timedelta(minutes=15)
+    elif abs(delta_min - 10) < 1:
+        freq = "10MIN"  # Diezminutal
+        ajuste_tiempo = pd.Timedelta(minutes=10)
     else:
         freq = "desconocida"
         ajuste_tiempo = pd.Timedelta(0)
@@ -466,6 +494,12 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
             dt_adj = dt0 - pd.Timedelta(minutes=15)
         else:
             dt_adj = dt0.copy()
+    elif freq == "10MIN":
+        # si empieza en 00:10, corregir desplazando 10min atrás
+        if first_valid.minute == 10:
+            dt_adj = dt0 - pd.Timedelta(minutes=10)
+        else:
+            dt_adj = dt0.copy()
     else:
         dt_adj = dt0.copy()
 
@@ -473,7 +507,8 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
     # Redondeo
     PANDAS_FREQ = {
         "H": "H",
-        "QH": "15T"
+        "QH": "15T",
+        "10MIN": "10T"
     }
     dt_adj = dt_adj.dt.floor(PANDAS_FREQ[freq])
     dt_tz = _localize_madrid(dt_adj)
@@ -574,6 +609,7 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
         "fecha_hora": dt_tz,
         "consumo_kWh": kwh_consumo,
         "excedentes_kWh": kwh_vertido,
+        "generacion_kWh": kwh_generacion,
         "reactiva_kVArh": ind,
         "capacitiva_kVArh": cap,
         "periodo": periodo
@@ -704,17 +740,19 @@ def graficar_queso_periodos(df_norm):
     # Etiquetas con porcentaje y kWh
     fig.update_traces(
         textinfo="label+percent",
-        hovertemplate="%{label}<br>%{value:.0f} kWh<br>(%{percent})"
+        hovertemplate="%{label}<br>%{value:,.0f} kWh<br>(%{percent})"
     )
 
     # 🔹 Añadir texto central con el total
     fig.add_annotation(
-        text=f"<b>{int(total):,} kWh</b>".replace(",", "."),
+        #text=f"<b>{int(total):,} kWh</b>".replace(",", "."),
+        text=f"<b>{int(total):,} kWh</b>",
         showarrow=False,
         font=dict(size=18)
     )
 
     fig = aplicar_estilo(fig)
+    fig = aplicar_texto_pie_porcentaje(fig, size=16)
 
     return fig, df_periodos
 
@@ -820,6 +858,8 @@ def graficar_mensual_apilado(df_norm):
         )
     )
 
+    
+
     fig = aplicar_estilo(fig)
     
     return fig
@@ -866,7 +906,54 @@ def tabla_mensual_periodos(df_norm):
 
     return tabla
 
+def formatear_tabla_mensual_es(df_tabla, col_mes="Mes"):
 
+    MESES_ES = {
+        1: "ene", 2: "feb", 3: "mar", 4: "abr",
+        5: "may", 6: "jun", 7: "jul", 8: "ago",
+        9: "sep", 10: "oct", 11: "nov", 12: "dic"
+    }
+
+    df_fmt = df_tabla.copy()
+
+    # Si la columna de mes es datetime, la pasamos a formato español.
+    # Si ya es texto, la dejamos tal cual.
+    if col_mes in df_fmt.columns:
+
+        if pd.api.types.is_datetime64_any_dtype(df_fmt[col_mes]):
+            df_fmt["Mes"] = (
+                df_fmt[col_mes].dt.month.map(MESES_ES).str.capitalize()
+                + " "
+                + df_fmt[col_mes].dt.year.astype(str)
+            )
+
+            # Solo eliminar col_mes si NO es ya "Mes"
+            if col_mes != "Mes":
+                df_fmt = df_fmt.drop(columns=[col_mes])
+
+        else:
+            # Si ya viene como texto tipo "Apr 2025", no tocamos el mes
+            if col_mes != "Mes":
+                df_fmt = df_fmt.rename(columns={col_mes: "Mes"})
+
+    # Formatear solo columnas numéricas / periodos
+    cols_num = [c for c in df_fmt.columns if c != "Mes"]
+
+    for col in cols_num:
+        df_fmt[col] = (
+            pd.to_numeric(df_fmt[col], errors="coerce")
+            .fillna(0)
+            .round(0)
+            .astype(int)
+            .map(lambda x: f"{x:,.0f}".replace(",", "."))
+        )
+
+    return df_fmt
+
+
+# ====================================================================================================================
+# SECCIÓN AUTOCONSUMO
+# ====================================================================================================================
 def graficar_neteo_mensual(df_norm):
 
     df_plot = (
@@ -911,29 +998,42 @@ def graficar_neteo_mensual(df_norm):
     return fig
 
 
-def graficar_neteo_horario(df_norm, frec):
+def graficar_dem_ver(df, colores_energia=None):
 
-    df_plot = df_norm.copy()
+    import plotly.graph_objects as go
 
-    titulo = (
-        "Curva cuarto horaria de demanda / vertido (kWh)"
-        if frec == "QH"
-        else "Curva horaria de demanda / vertido (kWh)"
+    df_plot = df.copy()
+
+    if colores_energia is None:
+        colores_energia = {
+            "demanda_neto_kWh": "#E67E22",
+            "vertido_neto_kWh": "#AF7AC5",
+        }
+
+    titulo = "Curva horaria de demanda / vertido (kWh)"
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Bar(
+            x=df_plot["fecha_hora"],
+            y=df_plot["demanda_neto_kWh"],
+            name="Demanda",
+            marker_color=colores_energia.get("demanda_neto_kWh")
+        )
     )
 
-    fig = px.bar(
-        df_plot,
-        x="fecha_hora",
-        y=["consumo_neto_kWh", "vertido_neto_kWh"],
-        labels={
-            "fecha_hora": "Fecha y hora",
-            "value": "kWh"
-        },
-        color_discrete_map=colores_neteo,
-        title=titulo
+    fig.add_trace(
+        go.Bar(
+            x=df_plot["fecha_hora"],
+            y=df_plot["vertido_neto_kWh"],
+            name="Vertido",
+            marker_color=colores_energia.get("vertido_neto_kWh")
+        )
     )
 
     fig.update_layout(
+        title=titulo,
         bargap=0.1,
         legend=dict(
             orientation="h",
@@ -942,8 +1042,68 @@ def graficar_neteo_horario(df_norm, frec):
             xanchor="center",
             title_text=""
         ),
+        xaxis_title="Fecha y hora",
+        yaxis_title="kWh",
+        barmode="relative"
+    )
+
+    fig = aplicar_estilo(fig)
+
+    return fig
+
+def graficar_con_gen(df, colores_energia=None):
+
+    import plotly.graph_objects as go
+
+    df_plot = df.copy()
+
+    if colores_energia is None:
+        colores_energia = {
+            "consumo_neto_kWh": "#3498DB",
+            "generacion_kWh": "#F7DC6F",
+        }
+
+    titulo = "Curva horaria de consumo / generación (kWh)"
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Bar(
+            x=df_plot["fecha_hora"],
+            y=df_plot["consumo_neto_kWh"],
+            name="Consumo",
+            marker_color=colores_energia.get("consumo_neto_kWh")
+        )
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=df_plot["fecha_hora"],
+            y=df_plot["generacion_kWh"],
+            name="Generación",
+            mode="lines",
+            line=dict(
+                color=colores_energia.get("generacion_kWh"),
+                width=3
+            )
+        )
+    )
+
+    fig.update_layout(
+        title=titulo,
+        bargap=0.1,
+        legend=dict(
+            orientation="h",
+            y=1.02,
+            x=0.5,
+            xanchor="center",
+            title_text=""
+        ),
+        xaxis_title="Fecha y hora",
         yaxis_title="kWh"
     )
+
+    fig = aplicar_estilo(fig)
 
     return fig
 
@@ -1010,7 +1170,8 @@ def graficar_media_horaria(tipo_dia, ymax=None, ordenar=False):
         coloraxis_showscale=False,
         yaxis=dict(
             range=[0, ymax]
-        )
+        ),
+        separators=",."
 
     )
     # 🔒 Forzar orden solo si ordenar=True
@@ -1022,6 +1183,16 @@ def graficar_media_horaria(tipo_dia, ymax=None, ordenar=False):
         )
     else:
         fig.update_xaxes(dtick=1)
+    
+    fig.update_traces(
+        hovertemplate=(
+            "<b>Hora:</b> %{x}:00<br>"
+            "<b>Consumo medio:</b> %{y:.2f} kWh"
+            "<extra></extra>"
+        )
+    )
+
+    fig = aplicar_estilo(fig)
 
     return fig
 
@@ -1853,4 +2024,8 @@ def obtener_top_horas_revisables(df_analisis, top_n=50):
     )
 
     return df_top
+
+
+
+    return df_fmt
 

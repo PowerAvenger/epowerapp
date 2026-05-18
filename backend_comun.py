@@ -3,8 +3,7 @@ import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
 import streamlit as st
-from datetime import datetime,date
-import locale
+
 
 
 
@@ -33,7 +32,8 @@ ESTILO_GRAF = dict(
     tick_size = 12,
     hover_size = 16,
     legend_size = 13,
-    height = 500
+    height = 500,
+    separators=",."
 )
 
 ESTILO_GRAF_COMPACTO = dict(
@@ -73,12 +73,253 @@ def aplicar_estilo(fig):
             font=dict(size=ESTILO_GRAF["legend_size"])
         ),
 
-        height=ESTILO_GRAF["height"]
+        height=ESTILO_GRAF["height"],
+        separators=ESTILO_GRAF["separators"],
 
     )
 
     return fig
-    
+
+
+def aplicar_texto_pie_porcentaje(fig, size=18, position="auto", color=None):
+    """
+    Aumenta y pone en negrita los porcentajes en gráficos tipo pie/donut.
+    """
+
+    textfont = dict(size=size)
+    if color is not None:
+        textfont["color"] = color
+
+    fig.update_traces(
+        textinfo="percent",
+        texttemplate="<b>%{percent}</b>",
+        textfont=dict(
+            size=size,
+            color=color
+        ),
+        textposition=position
+    )
+
+    return fig
+
+
+MESES_ES = {
+    1: "ene", 2: "feb", 3: "mar", 4: "abr",
+    5: "may", 6: "jun", 7: "jul", 8: "ago",
+    9: "sep", 10: "oct", 11: "nov", 12: "dic"
+}
+
+
+def formato_numero_es(valor, decimales=0):
+    """
+    Formatea un número en estilo español:
+    22920.5 -> 22.921
+    1234.56 -> 1.234,56
+    """
+    if pd.isna(valor):
+        return ""
+
+    try:
+        valor = float(valor)
+    except Exception:
+        return valor
+
+    texto = f"{valor:,.{decimales}f}"
+    texto = texto.replace(",", "X").replace(".", ",").replace("X", ".")
+
+    return texto
+
+
+def formato_kwh(valor, decimales=0, unidad=False):
+    texto = formato_numero_es(valor, decimales)
+
+    if texto == "":
+        return ""
+
+    return f"{texto} kWh" if unidad else texto
+
+
+def formato_mwh(valor, decimales=2, unidad=False):
+    texto = formato_numero_es(valor, decimales)
+
+    if texto == "":
+        return ""
+
+    return f"{texto} MWh" if unidad else texto
+
+
+def formato_euros(valor, decimales=2, unidad=True):
+    texto = formato_numero_es(valor, decimales)
+
+    if texto == "":
+        return ""
+
+    return f"{texto} €" if unidad else texto
+
+
+def formato_eur_mwh(valor, decimales=2, unidad=True):
+    texto = formato_numero_es(valor, decimales)
+
+    if texto == "":
+        return ""
+
+    return f"{texto} €/MWh" if unidad else texto
+
+
+def formato_eur_kwh(valor, decimales=6, unidad=True):
+    texto = formato_numero_es(valor, decimales)
+
+    if texto == "":
+        return ""
+
+    return f"{texto} €/kWh" if unidad else texto
+
+def formato_cent_eur_kwh(valor, decimales=4, unidad=True):
+    texto = formato_numero_es(valor, decimales)
+
+    if texto == "":
+        return ""
+
+    return f"{texto} €/kWh" if unidad else texto
+
+
+def formato_pct(valor, decimales=2, unidad=True):
+    texto = formato_numero_es(valor, decimales)
+
+    if texto == "":
+        return ""
+
+    return f"{texto} %" if unidad else texto
+
+
+def formato_mes_es(valor, capitalizar=True):
+    """
+    Convierte fechas o textos parseables tipo 'Apr 2025' en 'Abr 2025'.
+    """
+    fecha = pd.to_datetime(valor, errors="coerce")
+
+    if pd.isna(fecha):
+        return valor
+
+    mes = MESES_ES.get(fecha.month, "")
+
+    if capitalizar:
+        mes = mes.capitalize()
+
+    return f"{mes} {fecha.year}"
+
+def formatear_columnas_tabla(
+    df,
+    columnas_kwh=None,
+    columnas_mwh=None,
+    columnas_euros=None,
+    columnas_eur_mwh=None,
+    columnas_eur_kwh=None,
+    columnas_cent_eur_kwh=None,
+    columnas_pct=None,
+    columna_mes=None,
+    incluir_unidades=False
+):
+    """
+    Devuelve una copia del DataFrame formateada para visualización.
+    No usar el resultado para cálculos.
+    """
+
+    df_fmt = df.copy()
+
+    columnas_kwh = columnas_kwh or []
+    columnas_mwh = columnas_mwh or []
+    columnas_euros = columnas_euros or []
+    columnas_eur_mwh = columnas_eur_mwh or []
+    columnas_eur_kwh = columnas_eur_kwh or []
+    columnas_cent_eur_kwh = columnas_cent_eur_kwh or []
+    columnas_pct = columnas_pct or []
+
+    if columna_mes is not None and columna_mes in df_fmt.columns:
+        df_fmt[columna_mes] = df_fmt[columna_mes].map(formato_mes_es)
+
+    for col in columnas_kwh:
+        if col in df_fmt.columns:
+            df_fmt[col] = df_fmt[col].map(
+                lambda x: formato_kwh(x, decimales=0, unidad=incluir_unidades)
+            )
+
+    for col in columnas_mwh:
+        if col in df_fmt.columns:
+            df_fmt[col] = df_fmt[col].map(
+                lambda x: formato_mwh(x, decimales=2, unidad=incluir_unidades)
+            )
+
+    for col in columnas_euros:
+        if col in df_fmt.columns:
+            df_fmt[col] = df_fmt[col].map(
+                lambda x: formato_euros(x, decimales=2, unidad=incluir_unidades)
+            )
+
+    for col in columnas_eur_mwh:
+        if col in df_fmt.columns:
+            df_fmt[col] = df_fmt[col].map(
+                lambda x: formato_eur_mwh(x, decimales=2, unidad=incluir_unidades)
+            )
+
+    for col in columnas_eur_kwh:
+        if col in df_fmt.columns:
+            df_fmt[col] = df_fmt[col].map(
+                lambda x: formato_eur_kwh(x, decimales=6, unidad=incluir_unidades)
+            )
+    for col in columnas_cent_eur_kwh:
+        if col in df_fmt.columns:
+            df_fmt[col] = df_fmt[col].map(
+                lambda x: formato_cent_eur_kwh(x, decimales=4, unidad=incluir_unidades)
+            )
+
+    for col in columnas_pct:
+        if col in df_fmt.columns:
+            df_fmt[col] = df_fmt[col].map(
+                lambda x: formato_pct(x, decimales=2, unidad=incluir_unidades)
+            )
+
+    return df_fmt
+
+# usada para formatear consumos con columna de mes en formato Abr 2026
+def formatear_tabla_consumos(df, columna_mes=None, incluir_unidades=False):
+    columnas_kwh = [
+        c for c in df.columns
+        if c.startswith("P") or c in ["Total", "consumo_neto_kWh", "demanda_neto_kWh", "vertido_neto_kWh"]
+    ]
+
+    return formatear_columnas_tabla(
+        df,
+        columnas_kwh=columnas_kwh,
+        columna_mes=columna_mes,
+        incluir_unidades=incluir_unidades
+    )
+
+# usada para formatear consumos, costes y precios medios (telemindex y simulindex p.e.)
+def formatear_resumen_mixto(df_resumen):
+    """
+    Formatea una tabla resumen con magnitudes por filas:
+    - Consumo (kWh)
+    - Coste (€)
+    - Precio medio (€/kWh)
+
+    Solo presentación.
+    """
+
+    df_t = df_resumen.T.copy()
+
+    df_t_fmt = formatear_columnas_tabla(
+        df_t,
+        columnas_kwh=["Consumo (kWh)"],
+        columnas_euros=["Coste (€)"],
+        columnas_eur_kwh=["Precio medio (€/kWh)"],
+        incluir_unidades=False,
+        decimales_kwh=0,
+        decimales_euros=2,
+        decimales_eur_kwh=6
+    )
+
+    return df_t_fmt.T
 
 @st.cache_resource
 def autenticar_google_sheets():

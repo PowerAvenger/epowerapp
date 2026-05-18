@@ -1,30 +1,23 @@
 import streamlit as st
-from utilidades import (generar_menu, init_app_json_escalacv, 
-                        init_app, init_app_index
-)
-
-from backend_escalacv import (diarios_totales, diarios, mensuales, horarios, medias_horarias, evolucion_mensual, meses_español, 
-                              obtener_df_scatter_mensual, graficar_scatter_combo, obtener_puntos_anuales, graficar_simulacion_cuadratica, graficar_bandas_ssaa,
-                              mapa_calor_mes, mapa_calor_mes_gradual
-                              
-)
 import datetime
 from datetime import datetime
-import numpy as np
-import pandas as pd
-import plotly.graph_objects as go 
+from streamlit_plotly_events import plotly_events
+
+from utilidades import (
+    generar_menu,
+    init_app_json_escalacv, init_app, init_app_index
+)
+
+from backend_escalacv import (
+    diarios_totales, diarios, mensuales, horarios, medias_horarias, evolucion_mensual, meses_español, 
+    obtener_df_scatter_mensual, graficar_scatter_combo, obtener_puntos_anuales, graficar_simulacion_cuadratica, graficar_bandas_ssaa,
+    mapa_calor_mes, mapa_calor_mes_gradual
+)
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
 
 generar_menu()
-
-
-
-
-#if 'inicio' not in st.session_state:
-#    st.cache_data.clear()
-#    st.session_state.inicio = True
 
 fecha_hoy=datetime.today().date()
 num_mes_actual = fecha_hoy.month
@@ -44,12 +37,8 @@ if 'mes_seleccionado_esc' not in st.session_state:
 if 'componente' not in st.session_state:
     st.session_state.componente = 'SPOT'
 
-
-
-
-
 init_app_json_escalacv()
-#init_datos_combinados_escalacv()
+
 
 datos_total = st.session_state.datos_total_escalacv
 fecha_ini = st.session_state.fecha_ini_escalacv
@@ -66,7 +55,6 @@ control_mes = (
     .reset_index()
 )
 
-#st.dataframe(control_mes)
 
 ultimo_registro = datos_total['fecha'].max()
 valor_minimo_horario_total = datos_total['value'].min()
@@ -105,7 +93,7 @@ print (f'fecha max dia select: {fecha_max_select_dia}')
 
 graf_ecv_mensual = mensuales(datos_dia)
 graf_ecv_evol_mes_años = evolucion_mensual(datos_totales)
-#graf_ecv_mensual = mensuales(datos_año_filtrado)
+
 
 
 
@@ -123,7 +111,7 @@ if isinstance(st.session_state.dia_seleccionado_esc, datetime):
     st.session_state.dia_seleccionado_esc = st.session_state.dia_seleccionado_esc.date()
 
 
-#datos_horarios, graf_horario_dia, datos_horarios_filtrado = horarios(datos_total)
+
 
 print('datos año filtrado')
 print(datos_año_filtrado)
@@ -172,14 +160,10 @@ if 'dos_colores' in st.session_state and st.session_state.dos_colores:
     st.sidebar.toggle('Peso componentes', key = 'peso_comp')
 
 
-
-
-
-
     
 # VISUALIZACIÓN ÁREA PRINCIPAL---------------------------------------------------------------------------------------------------------
 
-tab1, tab2 = st.tabs(['General', 'Simulador'])
+tab1, tab2, tab3 = st.tabs(['General', 'Mapa de Calor','Simulador'])
 
 with tab1:
     # Gráfijo fijo de medias diarias y anuales
@@ -242,18 +226,21 @@ with tab1:
 
 
 
+    
+        
+
+with tab2:
     with st.container():
         col5,col6,col7=st.columns([.4,.4,.2])
         with col5:
             matriz_heat, graf_heat = mapa_calor_mes(datos_año_filtrado)
             st.plotly_chart(graf_heat, use_container_width=True)
         with col6:
-            
             matriz_heat_difuso, graf_heat_difuso= mapa_calor_mes_gradual(datos_año_filtrado)
             st.plotly_chart(graf_heat_difuso, use_container_width=True)
-        
+            
 
-with tab2:  
+with tab3:  
     col1, col2 = st.columns(2) 
 
     with col1:

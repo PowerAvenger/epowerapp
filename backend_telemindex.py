@@ -1,7 +1,7 @@
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-from backend_comun import aplicar_estilo
+from backend_comun import aplicar_estilo, aplicar_texto_pie_porcentaje
 
 
 COMPONENTES_SSAA_TOTAL = [
@@ -308,9 +308,183 @@ def tabla_precios_medios_horarios(df):
         aggfunc='mean'
     ).reset_index()
 
-
+# GRAFICO PRINCIPAL CON LAS BARRAS DE OMIE Y SSAA Y LAS LINEAS DE PRECIO FINAL. HORARIAS
 # GRAFICO PRINCIPAL CON LAS BARRAS DE OMIE Y SSAA Y LAS LINEAS DE PRECIO FINAL. HORARIAS
 def graficar_precios_medios_horarios(df_filtrado, colores_precios):
+
+    pt2 = tabla_precios_medios_horarios(df_filtrado)
+
+    # =========================
+    # Curva personalizada
+    # =========================
+    atr = st.session_state.atr_dfnorm
+    col_curva = f"precio_{atr}_curva"
+
+    if (
+        "df_curva_sheets" in st.session_state
+        and st.session_state.df_curva_sheets is not None
+        and "coste_total" in st.session_state.df_curva_sheets.columns
+    ):
+        dfc = st.session_state.df_curva_sheets.copy()
+
+        # Consumo en MWh
+        dfc["consumo_MWh"] = dfc["consumo_neto_kWh"] / 1000
+
+        # Evitar divisiones por cero
+        curva = (
+            dfc.groupby("hora")
+            .apply(
+                lambda g: (
+                    g["coste_total"].sum() / g["consumo_MWh"].sum()
+                    if g["consumo_MWh"].sum() != 0
+                    else None
+                )
+            )
+            .reset_index(name=col_curva)
+        )
+
+        pt2 = pt2.merge(curva, on="hora", how="left")
+
+    # =========================
+    # Columnas para hover
+    # =========================
+    columnas_hover = [
+        "hora",
+        "spot",
+        "ssaa",
+        "precio_2.0",
+        "precio_3.0",
+        "precio_6.1"
+    ]
+
+    if col_curva in pt2.columns:
+        columnas_hover.append(col_curva)
+
+    customdata = pt2[columnas_hover].to_numpy()
+    idx = {col: i for i, col in enumerate(columnas_hover)}
+
+    hovertemplate = (
+        "<b>Hora %{customdata[" + str(idx["hora"]) + "]:02.0f}:00</b><br><br>"
+        "spot: %{customdata[" + str(idx["spot"]) + "]:.2f} €/MWh<br>"
+        "ssaa: %{customdata[" + str(idx["ssaa"]) + "]:.2f} €/MWh<br>"
+        "precio_2.0: %{customdata[" + str(idx["precio_2.0"]) + "]:.2f} €/MWh<br>"
+        "precio_3.0: %{customdata[" + str(idx["precio_3.0"]) + "]:.2f} €/MWh<br>"
+        "precio_6.1: %{customdata[" + str(idx["precio_6.1"]) + "]:.2f} €/MWh"
+    )
+
+    if col_curva in idx:
+        hovertemplate += (
+            "<br>" + col_curva + ": "
+            "%{customdata[" + str(idx[col_curva]) + "]:.2f} €/MWh"
+        )
+
+    hovertemplate += "<extra></extra>"
+
+    # =========================
+    # Figura base: líneas ATR
+    # =========================
+    graf_pt1 = px.line(
+        pt2,
+        x="hora",
+        y=["precio_2.0", "precio_3.0", "precio_6.1"],
+        height=600,
+        labels={
+            "value": "€/MWh",
+            "variable": "Precios según ATR"
+        },
+        color_discrete_map=colores_precios,
+    )
+
+    # Quitamos hover de las líneas reales
+    graf_pt1.update_traces(
+        line=dict(width=4),
+        hoverinfo="skip",
+        hovertemplate=None
+    )
+
+    # =========================
+    # Layout
+    # =========================
+    graf_pt1.update_layout(
+        margin=dict(t=10),
+        xaxis=dict(
+            tickmode="array",
+            tickvals=pt2["hora"]
+        ),
+        barmode="relative",
+        #hovermode="x unified",
+        hovermode="x",
+        title=""
+    )
+
+    # =========================
+    # Barras spot y ssaa
+    # =========================
+    graf_pt1.add_bar(
+        x=pt2["hora"],
+        y=pt2["spot"],
+        name="spot",
+        marker_color="green",
+        width=0.5,
+        hoverinfo="skip",
+        hovertemplate=None
+    )
+
+    graf_pt1.add_bar(
+        x=pt2["hora"],
+        y=pt2["ssaa"],
+        name="ssaa",
+        marker_color="#5f259f",
+        width=0.5,
+        hoverinfo="skip",
+        hovertemplate=None
+    )
+
+    # =========================
+    # Línea curva personalizada
+    # =========================
+    if col_curva in pt2.columns:
+
+        clave_color = f"precio_{atr}"
+        color_curva = colores_precios.get(clave_color, "white")
+
+        graf_pt1.add_scatter(
+            x=pt2["hora"],
+            y=pt2[col_curva],
+            mode="lines",
+            name=col_curva,
+            line=dict(
+                color=color_curva,
+                width=6,
+                dash="dot"
+            ),
+            hoverinfo="skip",
+            hovertemplate=None
+        )
+
+    # =========================
+    # Traza invisible SOLO para hover unificado
+    # =========================
+    graf_pt1.add_scatter(
+        x=pt2["hora"],
+        y=pt2["precio_2.0"],
+        mode="markers",
+        marker=dict(
+            size=1,
+            color="rgba(0,0,0,0)"
+        ),
+        name="",
+        showlegend=False,
+        customdata=customdata,
+        hovertemplate=hovertemplate
+    )
+
+    graf_pt1 = aplicar_estilo(graf_pt1)
+
+    return graf_pt1
+
+# GRAFICO PRINCIPAL CON LAS BARRAS DE OMIE Y SSAA Y LAS LINEAS DE PRECIO FINAL. HORARIAS
+def graficar_precios_medios_horarios_old(df_filtrado, colores_precios):
     #pt2 = pt1(df_filtrado)[0]
     pt2 = tabla_precios_medios_horarios(df_filtrado)
     #print('pt2')
@@ -367,6 +541,8 @@ def graficar_precios_medios_horarios(df_filtrado, colores_precios):
             name=f'precio_{atr}_curva',
             line=dict(color=color_curva, width=6, dash="dot")
         )
+
+        graf_pt1 = aplicar_estilo(graf_pt1)
 
     return graf_pt1
 
@@ -431,6 +607,73 @@ def construir_pie_atr_generico(df, atr, color_scale, titulo):
 def graficar_queso_componentes(df_filtrado):
 
     golden_seq_r = [
+        "#8B6508",
+        "#B8860B",
+        "#DAA520",
+        "#F4C430",
+        "#FFD700",
+        "#FFF4B0"
+    ]
+    
+    graf20 = construir_pie_atr_generico(
+        df_filtrado,
+        "2.0",
+        golden_seq_r,
+        "Peaje de acceso 2.0"
+    )
+
+    graf20.update_traces(
+        hovertemplate=(
+            "<b>Componente:</b> %{label}<br>"
+            "<b>Coste:</b> %{value:.2f} €"
+            "<extra></extra>"
+        )
+    )
+    graf20 = aplicar_texto_pie_porcentaje(graf20, size=18)
+
+    graf20 = aplicar_estilo(graf20)
+
+
+    graf30 = construir_pie_atr_generico(
+        df_filtrado,
+        "3.0",
+        px.colors.sequential.Reds_r,
+        "Peaje de acceso 3.0"
+    )
+    graf30 = aplicar_texto_pie_porcentaje(graf30, size=18)
+    graf30.update_traces(
+        hovertemplate=(
+            "<b>Componente:</b> %{label}<br>"
+            "<b>Coste:</b> %{value:.2f} €"
+            "<extra></extra>"
+        )
+    )
+
+    graf30 = aplicar_estilo(graf30)
+
+
+    graf61 = construir_pie_atr_generico(
+        df_filtrado,
+        "6.1",
+        px.colors.sequential.Blues_r,
+        "Peaje de acceso 6.1"
+    )
+    graf61 = aplicar_texto_pie_porcentaje(graf61, size=18)
+    graf61.update_traces(
+        hovertemplate=(
+            "<b>Componente:</b> %{label}<br>"
+            "<b>Coste:</b> %{value:.2f} €"
+            "<extra></extra>"
+        )
+    )
+
+    graf61 = aplicar_estilo(graf61)
+
+    return graf20, graf30, graf61
+
+def graficar_queso_componentes_old(df_filtrado):
+
+    golden_seq_r = [
             "#8B6508",
             "#B8860B",
             "#DAA520",
@@ -445,18 +688,21 @@ def graficar_queso_componentes(df_filtrado):
         golden_seq_r,
         "Peaje de acceso 2.0"
     )
+    graf20=aplicar_estilo(graf20)
 
     graf30 = construir_pie_atr_generico(
         df_filtrado, "3.0",
         px.colors.sequential.Reds_r,
         "Peaje de acceso 3.0"
     )
+    graf30=aplicar_estilo(graf30)
 
     graf61 = construir_pie_atr_generico(
         df_filtrado, "6.1",
         px.colors.sequential.Blues_r,
         "Peaje de acceso 6.1"
     )
+    graf61=aplicar_estilo(graf61)
 
     return graf20, graf30, graf61
 

@@ -297,7 +297,7 @@ fig_omip_suav_vs_omie = graficar_omip_suavizado_vs_omie_real(
     ventana_dias=ventana_suavizado
 )
 
-#
+#   
 
 intercept_20, slope_20, r2_20 = resultados['precio_2.0']
 print(f"2.0 → slope: {slope_20:.4f} | R²: {r2_20:.3f} | intercept: {intercept_20:.2f}")
@@ -390,7 +390,9 @@ with tab2:
         st.info('Aquí tienes la evolución de :blue[OMIP] por meses', icon = "ℹ️")
         st.write(graf_omip_mensual)
 
-    
+# =======================================================================================================================================================================
+# SECCIÓN PREVISIÓN ANUAL
+# =======================================================================================================================================================================    
 with tab3:
     c1, c2 = st.columns(2)
     with c1:
@@ -401,7 +403,10 @@ with tab3:
         st.plotly_chart(fig_media_forward, use_container_width=True)
         st.plotly_chart(fig_omip_suav_vs_omie, use_container_width=True)
 
-# PANTALLA DE COMPARACIONES OMIP EVOL VS OMIE
+
+# =======================================================================================================================================================================
+# OMIP VS OMIE
+# =======================================================================================================================================================================
 with tab4:
     with st.container():
         col5, col6 = st.columns([0.2, 0.8])
@@ -419,7 +424,9 @@ with tab4:
             st.plotly_chart(graf_omip_omie_mensual)
 
 
-
+# =======================================================================================================================================================================
+# SECCIÓN COMPARADOR
+# =======================================================================================================================================================================
 with tab5:
 
     if 'df_curva_sheets' not in st.session_state or st.session_state.df_curva_sheets is None or simulcurva is None:
@@ -672,16 +679,18 @@ with tab5:
             st.plotly_chart(graf_periodos, use_container_width=True)
 
 
+
+# =======================================================================================================================================================================
+# SECCIÓN COBERTURA TRIMESTRAL
+# =======================================================================================================================================================================
 with tab6:
     
     if 'df_curva_sheets' not in st.session_state or st.session_state.df_curva_sheets is None or simulcurva is None:
         st.warning('Introduce una curva de carga anual')
         st.stop()
 
-       
-    
-    
     c1, c2, c3 = st.columns(3)
+
     with c1:
         st.subheader(f'Selecciona el trimestre de la cobertura')
         st.selectbox('Selecciona trimestre futuro', options=lista_trimestres_futuros, key='trimestre_futuro')
