@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import io, re
 from unidecode import unidecode
+import plotly.graph_objects as go
 from backend_comun import aplicar_estilo, aplicar_texto_pie_porcentaje
 
 
@@ -954,35 +955,54 @@ def formatear_tabla_mensual_es(df_tabla, col_mes="Mes"):
 # ====================================================================================================================
 # SECCIÓN AUTOCONSUMO
 # ====================================================================================================================
-def graficar_neteo_mensual(df_norm):
+def graficar_dem_ver_mensual(df_norm, colores_energia):
+
+    nombres_energia = {
+        "demanda_neto_kWh": "Demanda",
+        "vertido_neto_kWh": "Vertido"
+    }
 
     df_plot = (
         df_norm
         .assign(
             mes=lambda d: d["fecha_hora"].dt.to_period("M").dt.to_timestamp()
         )
-        .groupby(["mes"], as_index=False)[["consumo_neto_kWh","vertido_neto_kWh"]]
+        .groupby(["mes"], as_index=False)[["demanda_neto_kWh", "vertido_neto_kWh"]]
         .sum()
     )
 
     # Etiqueta de mes bonita
+    #df_plot["Mes"] = df_plot["mes"].map(formato_mes_es)
     df_plot["Mes"] = df_plot["mes"].dt.strftime("%b %Y")
 
     fig = px.bar(
         df_plot,
         x="Mes",
-        y=["consumo_neto_kWh", "vertido_neto_kWh"],
-        #color="periodo",
-        color_discrete_map=colores_neteo,
+        y=["demanda_neto_kWh", "vertido_neto_kWh"],
+        color_discrete_map=colores_energia,
         labels={
             "Mes": "Mes",
-            "consumo_kWh": "Consumo mensual (kWh)"
+            "value": "Energía (kWh)",
+            "variable": ""
         },
-        title="Demanda/Vertido mensual por periodos (kWh)"
+        title="Demanda/Vertido mensual (kWh)"
     )
-    
+
+    fig.for_each_trace(
+        lambda trace: trace.update(
+            name=nombres_energia.get(trace.name, trace.name),
+            legendgroup=nombres_energia.get(trace.name, trace.name),
+            hovertemplate=(
+                "<b>Mes:</b> %{x}<br>"
+                f"<b>{nombres_energia.get(trace.name, trace.name)}:</b> "
+                "%{y:,.0f} kWh"
+                "<extra></extra>"
+            )
+        )
+    )
+
     fig.update_layout(
-        barmode = 'stack',
+        barmode="stack",
         bargap=0.3,
         legend=dict(
             orientation="h",
@@ -993,9 +1013,95 @@ def graficar_neteo_mensual(df_norm):
             title_text=""
         )
     )
+
     fig.update_yaxes(tickformat=",.0f")
 
+    fig = aplicar_estilo(fig)
+
     return fig
+
+def graficar_con_gen_mensual(df_norm, colores_energia):
+
+    nombres_energia = {
+        "consumo_neto_kWh": "Consumo",
+        "generacion_kWh": "Generación"
+    }
+
+    df_plot = (
+        df_norm
+        .assign(
+            mes=lambda d: d["fecha_hora"].dt.to_period("M").dt.to_timestamp()
+        )
+        .groupby(["mes"], as_index=False)[["consumo_neto_kWh", "generacion_kWh"]]
+        .sum()
+    )
+
+    # Etiqueta de mes bonita
+    df_plot["Mes"] = df_plot["mes"].dt.strftime("%b %Y")
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Scatter(
+            x=df_plot["Mes"],
+            y=df_plot["consumo_neto_kWh"],
+            mode="lines",
+            name="Consumo",
+            line=dict(
+                color=colores_energia.get("consumo_neto_kWh", "#3498DB"),
+                width=3
+            ),
+            fill="tozeroy",
+            fillcolor="rgba(52, 152, 219, 0.35)",
+            hovertemplate=(
+                "<b>Mes:</b> %{x}<br>"
+                "<b>Consumo:</b> %{y:,.0f} kWh"
+                "<extra></extra>"
+            )
+        )
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=df_plot["Mes"],
+            y=df_plot["generacion_kWh"],
+            mode="lines",
+            name="Generación",
+            line=dict(
+                color=colores_energia.get("generacion_kWh", "#F7DC6F"),
+                width=3
+            ),
+            fill="tozeroy",
+            fillcolor="rgba(247, 220, 111, 0.35)",
+            hovertemplate=(
+                "<b>Mes:</b> %{x}<br>"
+                "<b>Generación:</b> %{y:,.0f} kWh"
+                "<extra></extra>"
+            )
+        )
+    )
+
+    fig.update_layout(
+        title="Consumo/Generación mensual (kWh)",
+        xaxis_title="Mes",
+        yaxis_title="Energía (kWh)",
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="center",
+            x=0.5,
+            title_text=""
+        )
+    )
+
+    fig.update_yaxes(tickformat=",.0f")
+
+    fig = aplicar_estilo(fig)
+
+    return fig
+
+
 
 
 def graficar_dem_ver(df, colores_energia=None):
@@ -1053,7 +1159,7 @@ def graficar_dem_ver(df, colores_energia=None):
 
 def graficar_con_gen(df, colores_energia=None):
 
-    import plotly.graph_objects as go
+    
 
     df_plot = df.copy()
 

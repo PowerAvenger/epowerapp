@@ -581,7 +581,22 @@ with tab2:
         st.subheader(f'Resumen de :blue[INDEXADO]')
         #st.dataframe(df_resumen_view, use_container_width=True)
         st.dataframe(df_resumen_fmt, use_container_width=True)
+        from io import BytesIO
 
+        output = BytesIO()
+        df_resumen.to_excel(output, index=True, engine="openpyxl")
+        output.seek(0)
+        fecha_inicio, fecha_fin = st.session_state.rango_curvadecarga
+        nombre_excel = f"resumen_indexado_{fecha_inicio:%Y%m%d}_{fecha_fin:%Y%m%d}.xlsx"
+
+
+        st.download_button(
+            "Descargar Excel",
+            data=output,
+            file_name=nombre_excel,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        
         df_resumen_cober = obtener_df_resumen(df_curva_cober_omip, None, 0.0)
         df_resumen_cober_view = formatear_df_resumen(df_resumen_cober)
         #st.subheader(f'Resumen de :violet[COBERTURA] para el suministro con peaje de acceso :orange[{st.session_state.atr_dfnorm}]')

@@ -317,19 +317,23 @@ def graficar_precios_medios_horarios(df_filtrado, colores_precios):
     # =========================
     # Curva personalizada
     # =========================
-    atr = st.session_state.atr_dfnorm
-    col_curva = f"precio_{atr}_curva"
+    atr = None
+    col_curva = None
+
+    
 
     if (
         "df_curva_sheets" in st.session_state
         and st.session_state.df_curva_sheets is not None
         and "coste_total" in st.session_state.df_curva_sheets.columns
     ):
+        atr = st.session_state.atr_dfnorm
+        col_curva = f"precio_{atr}_curva"
         dfc = st.session_state.df_curva_sheets.copy()
 
         # Consumo en MWh
         dfc["consumo_MWh"] = dfc["consumo_neto_kWh"] / 1000
-
+        
         # Evitar divisiones por cero
         curva = (
             dfc.groupby("hora")

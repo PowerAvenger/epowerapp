@@ -7,7 +7,7 @@ from backend_curvadecarga import (
     normalize_curve_simple, 
     graficar_curva_horaria, graficar_diario_apilado, graficar_mensual_apilado, tabla_mensual_periodos, formatear_tabla_mensual_es, graficar_queso_periodos, 
     graficar_media_horaria, graficar_media_horaria_combinada, graficar_boxplot_horario,
-    graficar_neteo_mensual,
+    graficar_dem_ver_mensual, graficar_con_gen_mensual,
     graficar_heatmap_dia_hora,
     calcular_patron_horario_boxplot, detectar_consumos_atipicos_horarios,
     resumir_atipicos_por_dia, calcular_kpis_atipicos, mostrar_kpis_atipicos, graficar_top_dias_revisables, graficar_heatmap_alertas, calcular_patron_horario_boxplot, obtener_top_horas_revisables
@@ -511,13 +511,17 @@ if st.session_state.get("df_norm") is not None:
         with st.container():
             c1,c2 = st.columns([.3,.7])
             with c1:
-                graf_mensual_neteo = graficar_neteo_mensual(st.session_state.df_norm_h)
-                st.plotly_chart(graf_mensual_neteo)
+                graf_dem_ver_mensual = graficar_dem_ver_mensual(df_norm_h_modif, colores_energia)
+                st.plotly_chart(graf_dem_ver_mensual)
 
-            with c2:                
-                st.plotly_chart(graf_dem_ver, use_container_width=True)
+            with c2:
+               st.plotly_chart(graf_dem_ver, use_container_width=True)     
         with st.container():
             c1,c2 = st.columns([.3,.7])
+            with c1: 
+                graf_con_gen_mensual = graficar_con_gen_mensual(df_norm_h_modif, colores_energia)                
+                st.plotly_chart(graf_con_gen_mensual, use_container_width=True)
+                
             with c2:
                 st.plotly_chart(graf_con_gen, use_container_width=True)
         
