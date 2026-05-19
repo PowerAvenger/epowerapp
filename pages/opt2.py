@@ -247,6 +247,30 @@ if resultados is not None:
     graf_costes_potcon = graficar_comparacion_mensual(df_coste_tp_mes)
     graf_ahorro = graficar_gauge_ahorro(ahorro_opt, ahorro_opt_porc)
     graf_resumen = graficar_resumen (coste_potfra_potcon, coste_excesos_potcon, coste_potfra_potopt, coste_excesos_potopt)
+    def formatear_tabla_costes_tp_mes(df_coste_tp_mes):
+                df = df_coste_tp_mes.copy()
+
+                # Transponer
+                df = df.T
+
+                # Renombrar filas
+                nombres_filas = {
+                    "coste_pot_mes": "Potencia a facturar",
+                    "coste_excesos_mes": "Excesos a facturar",
+                    "coste_pot_mes_opt": "Potencia optimizada",
+                    "coste_excesos_mes_opt": "Excesos optimizados",
+                }
+
+                df = df.rename(index=nombres_filas)
+
+                # Formato español: 3.038,49 €
+                df_fmt = df.applymap(
+                    lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + " €"
+                    if pd.notna(x) else ""
+                )
+
+                return df_fmt
+    df_coste_tp_mes_fmt = formatear_tabla_costes_tp_mes(df_coste_tp_mes)
 
     # ===============================================================================================================================    
     # INTERFAZ STREAMLIT
@@ -273,38 +297,12 @@ if resultados is not None:
             st.metric('AHORRO (€)', f'{ahorro_opt:,.2f}'.replace(',','X').replace('.',',').replace('X','.'), delta=f'{ahorro_opt_porc:,.1f}%')
         with c4:
             st.write(graf_costes_potcon)
-
-            def formatear_tabla_costes_tp_mes(df_coste_tp_mes):
-                df = df_coste_tp_mes.copy()
-
-                # Transponer
-                df = df.T
-
-                # Renombrar filas
-                nombres_filas = {
-                    "coste_pot_mes": "Potencia a facturar",
-                    "coste_excesos_mes": "Excesos a facturar",
-                    "coste_pot_mes_opt": "Potencia optimizada",
-                    "coste_excesos_mes_opt": "Excesos optimizados",
-                }
-
-                df = df.rename(index=nombres_filas)
-
-                # Formato español: 3.038,49 €
-                df_fmt = df.applymap(
-                    lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + " €"
-                    if pd.notna(x) else ""
-                )
-
-                return df_fmt
-            df_coste_tp_mes_fmt = formatear_tabla_costes_tp_mes(df_coste_tp_mes)
-            
-            #st.plotly_chart(graf_pie_peso)
         
         c11, c12= st.columns([.55, .45])
         with c11:
             st.plotly_chart(graf_costes_pot_periodos, use_container_width=True)
         with c12:
+            st.subheader('Tabla mensual de detalle de costes')
             st.dataframe(df_coste_tp_mes_fmt, use_container_width=True)
 
     with tab2:    
