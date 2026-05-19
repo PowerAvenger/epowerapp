@@ -101,18 +101,54 @@ def _read_any(uploaded_or_path):
             sep = ";" if sample.count(";") > sample.count(",") else ","
             df = pd.read_csv(io.BytesIO(content), sep=sep, dtype=str, header=None)
         else:
-            #uploaded_or_path.seek(0)
+            
             xls = pd.ExcelFile(uploaded_or_path)
+
+            mejor_df = None
+            mejor_hoja = None
+            mejor_score = 0
+
+            MIN_FILAS = 20
+            MIN_COLUMNAS = 2
             for sheet in xls.sheet_names:
-                #df = pd.read_excel(uploaded_or_path, dtype=str, header=None)
-                df = pd.read_excel(uploaded_or_path, sheet_name=sheet, dtype=str, header=None)
-                if not df.empty:
-                    print(f"Usando hoja: {sheet}")
-                    break
-            #if df.empty:
-                #uploaded_or_path.seek(0)
-            #    df = pd.read_excel(uploaded_or_path)
-            print(df)
+                #df = pd.read_excel(uploaded_or_path, sheet_name=sheet, dtype=str, header=None)
+                #if not df.empty:
+                #    print(f"Usando hoja: {sheet}")
+                #    break
+                #print(df)
+                df_tmp = pd.read_excel(
+                    uploaded_or_path,
+                    sheet_name=sheet,
+                    dtype=str,
+                    header=None
+                )
+
+                if df_tmp.empty:
+                    continue
+
+                df_tmp_limpio = df_tmp.dropna(how="all").dropna(axis=1, how="all")
+
+                filas, columnas = df_tmp_limpio.shape
+                score = filas * columnas
+
+                print(f"Hoja revisada: {sheet} | filas={filas}, columnas={columnas}, score={score}")
+
+                if filas < MIN_FILAS or columnas < MIN_COLUMNAS:
+                    print(f"Descartando hoja pequeña: {sheet}")
+                    continue
+
+                if score > mejor_score:
+                    mejor_score = score
+                    mejor_df = df_tmp_limpio
+                    mejor_hoja = sheet
+
+            if mejor_df is None:
+                raise ValueError(
+                    f"No se ha encontrado ninguna hoja válida. Hojas disponibles: {xls.sheet_names}"
+                )
+
+            df = mejor_df
+            print(f"Usando hoja: {mejor_hoja} | score={mejor_score}")
 
     # --- Detección automática de cabecera ---
     header_row = detect_header_row(df)
@@ -192,7 +228,7 @@ def _guess_cols(df: pd.DataFrame):
     
     #c_kwh = find([r"consumo", r"energia", r"kwh", r"ae", r"active.?energy", r"importada", r"activa"])
     c_kwh = find(
-        [r"consumo", r"energia", r"kwh", r"ae", r"active.?energy", r"importada", r"activa"],
+        [r"consumo", r"AI", r"energia", r"kwh", r"ae", r"active.?energy", r"importada", r"activa"],
         prefer_qh_consumo=True
     )
     c_per = find([r"periodo", r"^p$", r"^p[1-6]$"])

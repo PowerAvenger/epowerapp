@@ -6,7 +6,8 @@ from scipy.optimize import minimize
 import plotly.graph_objects as go
 import math
 import streamlit as st
-import gc 
+import gc
+from backend_comun import aplicar_estilo 
 
 pyc_tp = {
     2025: {
@@ -218,18 +219,9 @@ tepp = {
 
 meses = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
 
-
-
-
-
-
 def leer_curva_normalizada(pot_con):
     df_in = st.session_state.df_norm.copy()
-    # --- Leer CSV detectando delimitador automáticamente ---
-    #df_in = pd.read_csv(curva, sep=None, engine='python', encoding='utf-8')
-    print("📄 Fichero leído correctamente:")
-    print(df_in.head())
-
+    
     # --- Renombrar columnas clave para homogeneizar ---
     renombrar = {
         'consumo_kWh': 'consumo',
@@ -337,45 +329,6 @@ def calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, potencias):
     return coste_potfra_temp, coste_excesos_temp, coste_tp_temp, df_coste_potfra_temp, df_excesos_temp
 
 
-
-
-
-# GRÁFICO INICIAL DE COSTES A PARTIR DE LAS POTENCIAS CONTRATADAS
-def grafico_costes_con(df_coste_tp_mes):
-    graf_costes_potcon = go.Figure()
-
-    # Grupo 1: Coste potencia contratada + excesos contratados
-    graf_costes_potcon.add_trace(
-        go.Bar(
-            x=df_coste_tp_mes.index,
-            y=df_coste_tp_mes['coste_pot_mes'],
-            name="Coste potencia a facturar",
-            marker_color="deepskyblue",
-            offsetgroup=0,
-        
-        )
-    )
-    graf_costes_potcon.add_trace(
-        go.Bar(
-            x=df_coste_tp_mes.index,
-            y=df_coste_tp_mes['coste_excesos_mes'],
-            name="Coste de los excesos a facturar",
-            marker_color="blue",
-            offsetgroup=0,
-            base=df_coste_tp_mes['coste_pot_mes']
-        )
-    )
-
-    graf_costes_potcon.update_layout(
-        #title = f'Coste total previsto 2025 del actual término de potencia del CUPS : {int(coste_tp_potcon)}€',
-        #title = f'Coste total previsto 2025 del actual término de potencia del CUPS {cups}: {int(coste_tp_potcon)}€',
-        yaxis_title = 'Coste (€)',
-        #width=1400
-    )
-
-    return graf_costes_potcon
-
-
 def funcion_objetivo(pot_opt, df_in, tarifa, pyc_tp, tepp, meses, pot_con):
     #pot_opt son las potencias a optimizar en base a la suma de costes (return)
     #coste_potfra_potopt, coste_excesos_potopt, coste_tp_potopt, df_coste_potfra_potopt, df_coste_excesos_potopt = calcular_costes(pot_opt, df_in, tarifa, pyc_tp, kp, tep, meses, pot_con)
@@ -405,65 +358,8 @@ def ajustar_potencias(pot_opt_ini, fijar_P6=False, pot_con=None):
 
 
 
-
-
-
-
-
-#def graficar_costes_opt(graf_costes_potcon, df_coste_tp_mes, coste_tp_potcon, coste_tp_potopt):
-def graficar_costes_opt(graf_costes_potcon, df_coste_tp_mes):
-    graf_costes_potcon.add_trace(
-        go.Bar(
-            x=df_coste_tp_mes.index,
-            y=df_coste_tp_mes['coste_pot_mes_opt'],
-            name="Coste potencias optimizadas",
-            marker_color="lightgreen",
-            offsetgroup=1
-        )
-    )
-    graf_costes_potcon.add_trace(
-        go.Bar(
-            x=df_coste_tp_mes.index,
-            y=df_coste_tp_mes['coste_excesos_mes_opt'],
-            name="Coste excesos optimizados",
-            marker_color="green",
-            offsetgroup=1,
-            base=df_coste_tp_mes['coste_pot_mes_opt']
-        )
-    )
-
-    # Configuración del diseño
-    graf_costes_potcon.update_layout(
-        barmode="group",  # Agrupar los dos grupos
-        xaxis_title="Mes",
-        yaxis_title="Coste (€)",
-        #title = (
-            #f'Coste total previsto 2025 del término de potencia del CUPS {cups}.<br>'
-            #f'Con las actuales potencias contratadas: {int(coste_tp_potcon)}€<br>'
-            #f'Con las potencias optimizadas: {int(coste_tp_potopt)}€<br>'
-            #f'Ahorro anual estimado: {ahorro_opt}€'
-        #),
-        
-        #legend_title="Categoría",
-        margin=dict(l=40, r=20, t=40, b=40),
-        bargap=0.2,
-        #width=1400    # Ajusta la separación entre grupos de barras
-    )
-
-    return graf_costes_potcon
-
-
 #FUNCIÓN GLOBAL PARA OPTIMIZAR++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
-    #pot_con = st.session_state.df_pot["Potencia (kW)"].to_dict()
-    #fijar_P6 = st.session_state["mantener_potencia"] == "Mantener"
-    #tarifa = st.session_state.atr_dfnorm
-    print(f'fijar_P6 = {fijar_P6}')
-
-    #df_in = leer_curva_normalizada(pot_con)
-
-    #potencias_contratadas = list(pot_con.values())
-    #coste_potfra_potcon, coste_excesos_potcon, coste_tp_potcon, df_coste_potfra_potcon, df_coste_excesos_potcon = calcular_costes(potencias_contratadas, df_in, tarifa, pyc_tp, kp, tep, meses, pot_con)
     coste_potfra_potcon, coste_excesos_potcon, coste_tp_potcon, df_coste_potfra_potcon, df_coste_excesos_potcon = calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, pot_con)
     df_coste_potfra_potcon['coste_pot_mes'] = df_coste_potfra_potcon.sum(axis=1)
     totales_potfra_potcon = df_coste_potfra_potcon.sum()
@@ -477,7 +373,7 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
     
     df_coste_tp_mes = pd.concat([df_coste_potfra_potcon['coste_pot_mes'], df_coste_excesos_potcon['coste_excesos_mes']], axis=1)
 
-    graf_costes_potcon= grafico_costes_con(df_coste_tp_mes)
+    #graf_costes_potcon= grafico_costes_con(df_coste_tp_mes)
 
 
 
@@ -538,7 +434,8 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
     ahorro_opt = round(coste_tp_potcon - coste_tp_potopt, 2)
     ahorro_opt_porc = ahorro_opt * 100 / coste_tp_potcon
 
-    graf_costes_potcon = graficar_costes_opt(graf_costes_potcon, df_coste_tp_mes)
+    #graf_costes_potcon = graficar_costes_opt(graf_costes_potcon, df_coste_tp_mes)
+    #graf_comparativa_mensual = graficar_comparacion_mensual(df_coste_tp_mes)
 
     
 
@@ -633,105 +530,24 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
         legend_title_text="Tipo de Coste",
         yaxis_title="Coste (€)",
         xaxis_title="Potencia (kW)",
-        margin=dict(l=40, r=20, t=40, b=40),
+        margin=dict(l=40, r=20, t=60, b=0),
         #width = 1600
         height = 600,
-        autosize = True
+        autosize = True,
+        
     )
+    fig_periodos.for_each_annotation(
+        lambda a: a.update(text=a.text.replace("Periodo=", ""))
+    )
+    fig_periodos = aplicar_estilo(fig_periodos)
 
     
 
-    #======================================================================
-    # DIAGRAMA DE BARRAS RESUMEN COMPARATIVO CONTRATADO VS OPTIMIZADO
-    #======================================================================
-    fig_resumen = go.Figure()
-
-    # 🔵 CONTRATADO – Potencia
-    fig_resumen.add_trace(
-        go.Bar(
-            x=["Contratado"],
-            y=[coste_potfra_potcon],
-            name="Potencia (Contratado)",
-            marker_color="lightblue"
-        )
-    )
-
-    # 🔵 CONTRATADO – Excesos
-    fig_resumen.add_trace(
-        go.Bar(
-            x=["Contratado"],
-            y=[coste_excesos_potcon],
-            name="Excesos (Contratado)",
-            marker_color="blue"
-        )
-    )
-
-    # 🟢 OPTIMIZADO – Potencia
-    fig_resumen.add_trace(
-        go.Bar(
-            x=["Optimizado"],
-            y=[coste_potfra_potopt],
-            name="Potencia (Optimizado)",
-            marker_color="lightgreen"
-        )
-    )
-
-    # 🟢 OPTIMIZADO – Excesos
-    fig_resumen.add_trace(
-        go.Bar(
-            x=["Optimizado"],
-            y=[coste_excesos_potopt],
-            name="Excesos (Optimizado)",
-            marker_color="green"
-        )
-    )
-
-    fig_resumen.update_layout(
-        barmode="stack",
-        title="Resumen de costes: Contratado vs Optimizado",
-        yaxis_title="Coste (€)",
-        xaxis_title="Situación",
-        legend_title_text="Tipo de coste",
-        #height=600,
-        margin=dict(t=60, b=40, l=40, r=40)
-    )
     
-
-    #======================================================================
-    # DIAGRAMA GAUGE DE AHORRO EN %. TIPO VELOCIMETRO
-    #======================================================================
+    
     ahorro_opt = coste_tp_potcon - coste_tp_potopt
     ahorro_opt_porc = ahorro_opt * 100 / coste_tp_potcon
-        
-    colors = [
-        "rgba(204, 255, 204, 0.6)",  # Very light green
-        "rgba(144, 238, 144, 0.6)",  # Light green
-        "rgba(34, 139, 34, 0.6)",    # Medium green
-        "rgba(0, 128, 0, 0.6)",      # Dark green
-        "rgba(0, 100, 0, 0.6)"       # Very dark green
-    ]
     
-    fig_ahorro = go.Figure(go.Indicator(
-        mode = "gauge+number",  # Agregar número y delta
-        value = ahorro_opt_porc,  # El valor del indicador
-        domain = {'x': [0, 1], 'y': [0, 1]},
-        title = {'text': "Ahorro Obtenido (%)", 'font': {'size': 30}},
-        gauge = {
-            'axis': {'range': [None, 50]},  # Rango de 0 a 100
-            'bar': {'color': "green"},  # Color de la barra
-            'bgcolor': "white",  # Fondo blanco
-            'steps': [
-                {'range': [0, 10], 'color': colors[0]},
-                {'range': [10, 20], 'color': colors[1]},
-                {'range': [20, 30], 'color': colors[2]},
-                {'range': [30, 40], 'color': colors[3]},
-                {'range': [40, 50], 'color': colors[4]},
-            ],
-            
-        }
-    ))
-
-    fig_ahorro.update_traces(number_suffix='%', selector=dict(type='indicator'))
 
 
     #======================================================================
@@ -791,7 +607,234 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
     del data
     gc.collect()
 
-    return graf_costes_potcon, fig_resumen, coste_tp_potcon, coste_tp_potopt, ahorro_opt, ahorro_opt_porc, df_potencias, fig_ahorro, fig_periodos, fig_anillo
+    return df_coste_tp_mes, coste_tp_potcon, coste_tp_potopt, ahorro_opt, ahorro_opt_porc, df_potencias, fig_periodos, fig_anillo, coste_potfra_potcon, coste_excesos_potcon, coste_potfra_potopt, coste_excesos_potopt
+
+
+#======================================================================
+# DIAGRAMA GAUGE DE AHORRO EN %. TIPO VELOCIMETRO
+#======================================================================
+def graficar_gauge_ahorro(ahorro_opt, ahorro_opt_porc):
+    
+    
+    ahorro_opt_fmt = f"{ahorro_opt:,.0f}".replace(",", ".")
+    
+    colors = [
+        "rgba(204, 255, 204, 0.6)",  # Very light green
+        "rgba(144, 238, 144, 0.6)",  # Light green
+        "rgba(34, 139, 34, 0.6)",    # Medium green
+        "rgba(0, 128, 0, 0.6)",      # Dark green
+        "rgba(0, 100, 0, 0.6)"       # Very dark green
+    ]
+    fig_ahorro = go.Figure(go.Indicator(
+        mode = "gauge+number",  # Agregar número y delta
+        value = ahorro_opt_porc,  # El valor del indicador
+        domain = {'x': [0, 1], 'y': [0, 1]},
+        #title = {'text': "Ahorro Obtenido (%)", 'font': {'size': 30}},
+        title={
+            'text': f"Ahorro previsto: {ahorro_opt_fmt} €",
+            'font': {'size': 40}
+        },
+        gauge = {
+            'axis': {'range': [None, 50]},  # Rango de 0 a 100
+            'bar': {'color': "green"},  # Color de la barra
+            'bgcolor': "white",  # Fondo blanco
+            'steps': [
+                {'range': [0, 10], 'color': colors[0]},
+                {'range': [10, 20], 'color': colors[1]},
+                {'range': [20, 30], 'color': colors[2]},
+                {'range': [30, 40], 'color': colors[3]},
+                {'range': [40, 50], 'color': colors[4]},
+            ],
+        }
+    ))
+    fig_ahorro.update_traces(number_suffix='%', selector=dict(type='indicator'))
+    fig_ahorro.update_layout(
+        height=250,
+        margin=dict(l=5, r=5, t=60, b=5)
+    )
+    return fig_ahorro
+
+
+#======================================================================
+# DIAGRAMA DE BARRAS RESUMEN COMPARATIVO CONTRATADO VS OPTIMIZADO
+#======================================================================
+    
+def graficar_resumen (coste_potfra_potcon, coste_excesos_potcon, coste_potfra_potopt, coste_excesos_potopt):
+    fig_resumen = go.Figure()
+
+
+    # 🔵 CONTRATADO – Potencia
+    fig_resumen.add_trace(
+        go.Bar(
+            x=["Previsto"],
+            y=[coste_potfra_potcon],
+            name="Potencia (Previsto)",
+            marker_color="lightblue"
+        )
+    )
+
+    # 🔵 CONTRATADO – Excesos
+    fig_resumen.add_trace(
+        go.Bar(
+            x=["Previsto"],
+            y=[coste_excesos_potcon],
+            name="Excesos (Previsto)",
+            marker_color="blue"
+        )
+    )
+
+    # 🟢 OPTIMIZADO – Potencia
+    fig_resumen.add_trace(
+        go.Bar(
+            x=["Optimizado"],
+            y=[coste_potfra_potopt],
+            name="Potencia (Optimizado)",
+            marker_color="lightgreen"
+        )
+    )
+
+    # 🟢 OPTIMIZADO – Excesos
+    fig_resumen.add_trace(
+        go.Bar(
+            x=["Optimizado"],
+            y=[coste_excesos_potopt],
+            name="Excesos (Optimizado)",
+            marker_color="green"
+        )
+    )
+
+    fig_resumen.update_layout(
+        barmode="stack",
+        title="Resumen de costes: Previsto vs Optimizado",
+        yaxis_title="Coste (€)",
+        #xaxis_title="Situación",
+        legend_title_text="Tipo de coste",
+        #height=600,
+        margin=dict(t=60, b=40, l=40, r=40)
+    )
+    fig_resumen = aplicar_estilo(fig_resumen)
+
+    return fig_resumen
+
+
+def graficar_comparacion_mensual(df_coste_tp_mes):
+
+    fig = go.Figure()
+
+    df = df_coste_tp_mes.copy()
+
+    meses = df.index.astype(str).tolist()
+    x = np.arange(len(df))
+
+    ancho = 0.35
+    x_actual = x - ancho / 2
+    x_opt = x + ancho / 2
+
+    # ACTUAL - potencia
+    fig.add_trace(
+        go.Bar(
+            x=x_actual,
+            y=df["coste_pot_mes"],
+            width=ancho,
+            name="Potencia previsto",
+            marker_color="deepskyblue",
+            customdata=np.column_stack([meses, df["coste_pot_mes"]]),
+            hovertemplate=(
+                "<b>Mes:</b> %{customdata[0]}<br>"
+                "<b>Escenario:</b> Actual<br>"
+                "<b>Coste potencia PREVISTO:</b> %{customdata[1]:,.2f} €"
+                "<extra></extra>"
+            ),
+        )
+    )
+
+    # ACTUAL - excesos
+    fig.add_trace(
+        go.Bar(
+            x=x_actual,
+            y=df["coste_excesos_mes"],
+            width=ancho,
+            name="Excesos previsto",
+            marker_color="blue",
+            base=df["coste_pot_mes"],
+            customdata=np.column_stack([meses, df["coste_excesos_mes"]]),
+            hovertemplate=(
+                "<b>Mes:</b> %{customdata[0]}<br>"
+                "<b>Escenario:</b> Actual<br>"
+                "<b>Coste de los excesos PREVISTO:</b> %{customdata[1]:,.2f} €"
+                "<extra></extra>"
+            ),
+        )
+    )
+
+    # OPTIMIZADO - potencia
+    fig.add_trace(
+        go.Bar(
+            x=x_opt,
+            y=df["coste_pot_mes_opt"],
+            width=ancho,
+            name="Potencia optimizado",
+            marker_color="lightgreen",
+            customdata=np.column_stack([meses, df["coste_pot_mes_opt"]]),
+            hovertemplate=(
+                "<b>Mes:</b> %{customdata[0]}<br>"
+                "<b>Escenario:</b> Optimizado<br>"
+                "<b>Coste potencia OPTIMIZADO:</b> %{customdata[1]:,.2f} €"
+                "<extra></extra>"
+            ),
+        )
+    )
+
+    # OPTIMIZADO - excesos
+    fig.add_trace(
+        go.Bar(
+            x=x_opt,
+            y=df["coste_excesos_mes_opt"],
+            width=ancho,
+            name="Coste excesos optimizados",
+            marker_color="green",
+            base=df["coste_pot_mes_opt"],
+            customdata=np.column_stack([meses, df["coste_excesos_mes_opt"]]),
+            hovertemplate=(
+                "<b>Mes:</b> %{customdata[0]}<br>"
+                "<b>Escenario:</b> Optimizado<br>"
+                "<b>Coste excesos optimizados:</b> %{customdata[1]:,.2f} €"
+                "<extra></extra>"
+            ),
+        )
+    )
+
+    fig.update_layout(
+        title={
+            "text": "Comparativa mensual de costes de potencia: prevista vs optimizada",
+            "x": 0.5,
+            "xanchor": "center",
+            "font": {"size": 24}
+        },
+        xaxis=dict(
+            tickmode="array",
+            tickvals=x,
+            ticktext=meses,
+            title="Mes",
+        ),
+        yaxis_title="Coste (€)",
+        barmode="overlay",
+        margin=dict(l=40, r=20, t=60, b=40),
+        bargap=0.25,
+        legend_title=None,
+        hovermode="closest",
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=.98,
+            xanchor="center",
+            x=0.5
+        )
+    )
+
+    fig = aplicar_estilo(fig)
+
+    return fig
 
 
 

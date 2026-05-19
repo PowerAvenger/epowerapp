@@ -228,11 +228,7 @@ if submit_opt and st.session_state.df_norm is not None:
             st.warning('Suministro no válido para optimización por excesos', icon='⚠️')
             st.stop()
 
-        #graf_costes_potcon, graf_resumen, coste_tp_potcon, coste_tp_potopt, ahorro_opt, ahorro_opt_porc, df_potencias, graf_ahorro, graf_costes_pot_periodos, graf_pie_peso = calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp_opt, tepp_opt)
-        
-        resultados = calcular_optimizacion(
-            df_in, fijar_P6, tarifa, pot_con, pyc_tp_opt, tepp_opt
-        )
+        resultados = calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp_opt, tepp_opt)
 
         st.session_state.resultados_potencia = resultados
         
@@ -245,32 +241,71 @@ elif "resultados_potencia" in st.session_state:
 
 # 🔹 si hay resultados → muestro
 if resultados is not None:
-    graf_costes_potcon, graf_resumen, coste_tp_potcon, coste_tp_potopt, ahorro_opt, ahorro_opt_porc, df_potencias, graf_ahorro, graf_costes_pot_periodos, graf_pie_peso = resultados
-        
-    # INTERFAZ STREAMLIT++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    df_coste_tp_mes, coste_tp_potcon, coste_tp_potopt, ahorro_opt, ahorro_opt_porc, df_potencias, graf_costes_pot_periodos, graf_pie_peso, coste_potfra_potcon, coste_excesos_potcon, coste_potfra_potopt, coste_excesos_potopt = resultados
+
+    from backend_opt2 import graficar_comparacion_mensual, graficar_gauge_ahorro, graficar_resumen
+    graf_costes_potcon = graficar_comparacion_mensual(df_coste_tp_mes)
+    graf_ahorro = graficar_gauge_ahorro(ahorro_opt, ahorro_opt_porc)
+    graf_resumen = graficar_resumen (coste_potfra_potcon, coste_excesos_potcon, coste_potfra_potopt, coste_excesos_potopt)
+
+    # ===============================================================================================================================    
+    # INTERFAZ STREAMLIT
+    # ===============================================================================================================================    
 
     tab1, tab2 = st.tabs(['Resultados', 'Informe'])
     with tab1:
         st.header('Resultados de la optimización del Término de Potencia para tipos 1, 2 y 3 (>50kW)', divider = 'rainbow')
-        c1, c2, c3, c4 = st.columns([.5, .2, .1, .2])
+        c1, c2, c3, c4 = st.columns([.25, .2, .1, .45])
         with c1:
-            st.write(graf_costes_potcon)
+            st.write("")
+            st.write(graf_ahorro)
+            st.write("") 
+            st.write("")
+            st.subheader('Tabla de potencias y costes Tp')
+            st.dataframe(df_potencias, hide_index=True, use_container_width=True)
+            
+            
         with c2:
             st.write(graf_resumen)
         with c3:
-            st.metric('Coste ACTUAL (€)', f'{coste_tp_potcon:,.2f}'.replace(',','X').replace('.',',').replace('X','.'))
+            st.metric('Coste PREVISTO (€)', f'{coste_tp_potcon:,.2f}'.replace(',','X').replace('.',',').replace('X','.'))
             st.metric('Coste OPTIMIZADO (€)', f'{coste_tp_potopt:,.2f}'.replace(',','X').replace('.',',').replace('X','.'))
             st.metric('AHORRO (€)', f'{ahorro_opt:,.2f}'.replace(',','X').replace('.',',').replace('X','.'), delta=f'{ahorro_opt_porc:,.1f}%')
         with c4:
-            st.plotly_chart(graf_pie_peso)
+            st.write(graf_costes_potcon)
+
+            def formatear_tabla_costes_tp_mes(df_coste_tp_mes):
+                df = df_coste_tp_mes.copy()
+
+                # Transponer
+                df = df.T
+
+                # Renombrar filas
+                nombres_filas = {
+                    "coste_pot_mes": "Potencia a facturar",
+                    "coste_excesos_mes": "Excesos a facturar",
+                    "coste_pot_mes_opt": "Potencia optimizada",
+                    "coste_excesos_mes_opt": "Excesos optimizados",
+                }
+
+                df = df.rename(index=nombres_filas)
+
+                # Formato español: 3.038,49 €
+                df_fmt = df.applymap(
+                    lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + " €"
+                    if pd.notna(x) else ""
+                )
+
+                return df_fmt
+            df_coste_tp_mes_fmt = formatear_tabla_costes_tp_mes(df_coste_tp_mes)
+            
+            #st.plotly_chart(graf_pie_peso)
         
-        c11, c12, c13= st.columns([.25, .05, .7])
+        c11, c12= st.columns([.55, .45])
         with c11:
-            st.subheader('Tabla de potencias')
-            st.dataframe(df_potencias, hide_index=True, use_container_width=True)
-            st.write(graf_ahorro)
-        with c13:
             st.plotly_chart(graf_costes_pot_periodos, use_container_width=True)
+        with c12:
+            st.dataframe(df_coste_tp_mes_fmt, use_container_width=True)
 
     with tab2:    
         st.subheader("📄 Generar informe")
