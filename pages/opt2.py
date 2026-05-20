@@ -278,32 +278,41 @@ if resultados is not None:
 
     tab1, tab2 = st.tabs(['Resultados', 'Informe'])
     with tab1:
-        st.header('Resultados de la optimización del Término de Potencia para tipos 1, 2 y 3 (>50kW)', divider = 'rainbow')
-        c1, c2, c3, c4 = st.columns([.25, .2, .1, .45])
-        with c1:
-            st.write("")
-            st.write(graf_ahorro)
-            st.write("") 
-            st.write("")
-            st.subheader('Tabla de potencias y costes Tp')
-            st.dataframe(df_potencias, hide_index=True, use_container_width=True)
-            
-            
-        with c2:
-            st.write(graf_resumen)
-        with c3:
-            st.metric('Coste PREVISTO (€)', f'{coste_tp_potcon:,.2f}'.replace(',','X').replace('.',',').replace('X','.'))
-            st.metric('Coste OPTIMIZADO (€)', f'{coste_tp_potopt:,.2f}'.replace(',','X').replace('.',',').replace('X','.'))
-            st.metric('AHORRO (€)', f'{ahorro_opt:,.2f}'.replace(',','X').replace('.',',').replace('X','.'), delta=f'{ahorro_opt_porc:,.1f}%')
-        with c4:
-            st.write(graf_costes_potcon)
+        
         
         c11, c12= st.columns([.55, .45])
         with c11:
-            st.plotly_chart(graf_costes_pot_periodos, use_container_width=True)
+            st.header('Resultados de la optimización del Término de Potencia para tipos 1, 2 y 3 (>50kW)', divider = 'rainbow')
+            with st.container(border=True):
+                c1, c2, c3 = st.columns([0.25, 0.20, 0.10])
+                with c1:
+                    st.write("")
+                    st.write(graf_ahorro)
+                    st.write("") 
+                    st.write("")
+                    st.subheader('Tabla de potencias y costes Tp')
+                    st.dataframe(df_potencias, hide_index=True, use_container_width=True)
+                with c2:
+                    st.write(graf_resumen)
+                with c3:
+                    st.metric('Coste PREVISTO (€)', f'{coste_tp_potcon:,.2f}'.replace(',','X').replace('.',',').replace('X','.'))
+                    st.metric('Coste OPTIMIZADO (€)', f'{coste_tp_potopt:,.2f}'.replace(',','X').replace('.',',').replace('X','.'))
+                    st.metric('AHORRO (€)', f'{ahorro_opt:,.2f}'.replace(',','X').replace('.',',').replace('X','.'), delta=f'{ahorro_opt_porc:,.1f}%')
+            st.header('Detalle de optimización por periodos', divider = 'rainbow')  
+            with st.container(border=True):
+                st.plotly_chart(graf_costes_pot_periodos, use_container_width=True)
         with c12:
-            st.subheader('Tabla mensual de detalle de costes')
-            st.dataframe(df_coste_tp_mes_fmt, use_container_width=True)
+            st.header('Detalle de costes mensuales (€)', divider = 'rainbow')
+            with st.container(border=True):
+                st.write(graf_costes_potcon)
+                st.subheader('Tabla mensual de detalle de costes')
+                st.dataframe(df_coste_tp_mes_fmt, use_container_width=True)
+        
+        #c11, c12= st.columns([.55, .45])
+        #with c11:
+            
+        #with c12:
+            
 
     with tab2:    
         st.subheader("📄 Generar informe")
