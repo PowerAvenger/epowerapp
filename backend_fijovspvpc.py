@@ -6,8 +6,8 @@ import datetime
 from datetime import datetime
 import numpy as np
 import cvxpy as cp
-
 import plotly.graph_objects as go
+from backend_comun import aplicar_estilo
 
 
 
@@ -654,6 +654,8 @@ def mapa_diferencias(te_pvpc, tp_pvpc):
     
     fig.update_xaxes(range=[precios_energia.min(), precios_energia.max()], constrain='domain')
     fig.update_yaxes(range=[precios_potencia.min(), precios_potencia.max()], constrain='domain')
+
+    fig = aplicar_estilo(fig)
 
     return fig
 

@@ -3,10 +3,11 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 from utilidades import generar_menu
-from backend_opt2 import (leer_curva_normalizada, calcular_costes, calcular_optimizacion, pyc_tp, tepp, meses)
+from backend_opt2 import (leer_curva_normalizada, calcular_costes, calcular_optimizacion, pyc_tp, tepp45, tepp123, meses, normalizar_tabla_maximetros)
 from backend_curvadecarga import colores_periodo
 from report_generator import generar_informe
 from utils_docx import generar_docx_bytes, insertar_tabla
+
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
@@ -47,7 +48,8 @@ df_pot_edit = st.sidebar.data_editor(
 )
 
 MIN_P1 = 0.1
-MIN_P6 = 50.01
+#MIN_P6 = 50.01
+MIN_P6 = 0.1
 def validar_potencias(df):
     errores = []
 
@@ -82,6 +84,9 @@ print('df_pot')
 print(st.session_state.df_pot)
 
 p6 = float(st.session_state.df_pot.loc["P6", "Potencia (kW)"])
+# modo1 = True  -> tipos 4/5: maxímetros
+# modo1 = False -> tipos 1/2/3: curva de carga
+modo1 = p6 <= 50
 
 
 st.sidebar.radio(
@@ -91,11 +96,6 @@ st.sidebar.radio(
     key='mantener_potencia'
 )
 
-#if st.session_state.get('usuario_free', True):
-#    st.warning("🔒 Este módulo es solo para usuarios premium")
-    #st.info("Puedes acceder al resto de módulos sin problema.")
-#    st.stop()
-    
 if 'atr_dfnorm' not in st.session_state:
     st.session_state.atr_dfnorm = 'Ninguno'
 
@@ -109,110 +109,169 @@ if 'frec' not in st.session_state:
 
 habilitar_opt = False
 habilitar_ver = False
+tarifa = st.session_state.atr_dfnorm
 
-if 'df_norm' not in st.session_state or st.session_state.df_norm is None:
-    #st.session_state.df_norm = None
-    st.sidebar.warning('Por favor introduce una curva de carga')
-    habilitar_opt = False
-    habilitar_ver = False
-else:
-    tarifa = st.session_state.atr_dfnorm
-    if tarifa != '2.0':
-        df_in = leer_curva_normalizada(pot_con)
-        st.sidebar.write(f'El peaje del suministro es **:orange[{st.session_state.atr_dfnorm}]**')
-        st.sidebar.info('Pincha en la opción activada')
-        fecha_ini, fecha_fin = st.session_state.rango_curvadecarga
-        dias_rango = (fecha_fin - fecha_ini).days + 1
-        año_ver = fecha_ini.year
+#if modo1 and tarifa == "Ninguno":
+if modo1 and tarifa:
+    tarifa = st.sidebar.selectbox(
+        "Peaje de acceso",
+        ["2.0", "3.0", "6.1", "6.2", "6.3", "6.4"],
+        index=1,
+        key="tarifa_maximetros"
+    )
 
-        const_verif = 31
-        const_optim_inf = 320
-        const_optim_sup = 366
+if modo1:
+    # P6 <= 50 → maxímetros
 
-        if st.session_state.frec =='H':
-            coef_excesos = 2
-            st.sidebar.warning('Cálculo de excesos con curva HORARIA', icon='⚠️')
-        else:
-            coef_excesos = 1
+    st.sidebar.write(f'El peaje del suministro es **:orange[{tarifa}]**')
+    st.sidebar.info('Modo P6 ≤ 50: optimización mediante maxímetros')
 
-        # mes natural: se puede verificar
-        if dias_rango <= const_verif:
-            st.sidebar.info('Es posible verificar.')
-            habilitar_opt = False
-            
-            habilitar_ver = True
-            pyc_tp_ver = pyc_tp[año_ver][tarifa]
-            tepp_ver = {
-                k: v * coef_excesos
-                for k, v in tepp[año_ver][tarifa].items()
-            }
+    archivo_max = st.sidebar.file_uploader(
+        "Sube tabla de maxímetros",
+        type=["xlsx"],
+        key="upload_maximetros"
+    )
 
-            #añadido para pruebas con menos de 12 meses
-            habilitar_opt = True
-            año_opt = 2026
-            pyc_tp_opt = pyc_tp[año_opt][tarifa]
-        
-            tepp_opt = {
-                k: v * coef_excesos
-                for k, v in tepp[año_opt][tarifa].items()
-            }
-            
-        # no hay días suficientes para optimizar
-        elif (const_verif < dias_rango < const_optim_inf): #or (dias_rango > const_optim_sup):
-            st.sidebar.warning('No es posible ejecutar ninguna acción.', icon='⚠️')
+    if archivo_max is not None:
+        try:
+            df_maximetros_raw = pd.read_excel(archivo_max)
+
+            df_maximetros = normalizar_tabla_maximetros(
+                df_maximetros_raw,
+                meses
+            )
+
+            st.session_state.df_maximetros = df_maximetros
+            st.sidebar.success("Tabla de maxímetros cargada correctamente")
+
+        except Exception as e:
+            st.sidebar.error(f"Error en tabla de maxímetros: {e}")
             habilitar_opt = False
             habilitar_ver = False
 
-        # sobran días: se recorta a los últimos 365    
-        elif dias_rango > const_optim_sup:
-            st.sidebar.warning('Curva demasiado larga → se recortan los últimos 365 días', icon='⚠️')
-
-            # 🔹 fecha de corte (365 días naturales)
-            fecha_ini = fecha_fin - pd.Timedelta(days=364)
-
-            # 🔹 filtrar por fechas completas (date vs date)
-            df_in = df_in[
-                (df_in["fecha"] >= fecha_ini) &
-                (df_in["fecha"] <= fecha_fin)
-            ]
-            print('curva recortada')
-            print(df_in)
-            # 🔹 recalcular rango real
-            fecha_ini = df_in["fecha"].min()
-            fecha_fin = df_in["fecha"].max()
-            dias_rango = (fecha_fin - fecha_ini).days + 1
-
-            st.sidebar.info(f'Nuevo rango: {fecha_ini} → {fecha_fin}')
-            st.sidebar.write("Días finales:", dias_rango)
-
-            habilitar_opt = True
-            habilitar_ver = False
-
-            año_opt = 2026
-            pyc_tp_opt = pyc_tp[año_opt][tarifa]
-        
-            tepp_opt = {
-                k: v * coef_excesos
-                for k, v in tepp[año_opt][tarifa].items()
-            }
-        else:
-            # 365 días: se puede optimizar    
-            st.sidebar.info('Es posible optimizar.')
-            habilitar_opt = True
-            habilitar_ver = False
-            
-            año_opt = 2026
-            pyc_tp_opt = pyc_tp[año_opt][tarifa]
-        
-            tepp_opt = {
-                k: v * coef_excesos
-                for k, v in tepp[año_opt][tarifa].items()
-            }
-        
-    else:
-        st.sidebar.error('No es posible ejecutar ninguna acción. El peaje de acceso es 2.0TD', icon='⚠️')
+    if 'df_maximetros' not in st.session_state or st.session_state.df_maximetros is None:
+        st.sidebar.warning('Por favor introduce una tabla de maxímetros')
         habilitar_opt = False
         habilitar_ver = False
+
+    else:
+        df_in = st.session_state.df_maximetros.copy()
+
+        año_opt = 2026
+        pyc_tp_opt = pyc_tp[año_opt][tarifa]
+
+        tepp_opt = {
+            k: v if v is not None else None
+            for k, v in tepp45[año_opt][tarifa].items()
+        }
+
+        habilitar_opt = True
+        habilitar_ver = False
+
+else:
+    if 'df_norm' not in st.session_state or st.session_state.df_norm is None:
+        #st.session_state.df_norm = None
+        st.sidebar.warning('Por favor introduce una curva de carga')
+        habilitar_opt = False
+        habilitar_ver = False
+    else:
+        #tarifa = st.session_state.atr_dfnorm
+        if tarifa != '2.0':
+            df_in = leer_curva_normalizada(pot_con)
+            st.sidebar.write(f'El peaje del suministro es **:orange[{st.session_state.atr_dfnorm}]**')
+            st.sidebar.info('Pincha en la opción activada')
+            fecha_ini, fecha_fin = st.session_state.rango_curvadecarga
+            dias_rango = (fecha_fin - fecha_ini).days + 1
+            año_ver = fecha_ini.year
+
+            const_verif = 31
+            const_optim_inf = 320
+            const_optim_sup = 366
+
+            if st.session_state.frec =='H':
+                coef_excesos = 2
+                st.sidebar.warning('Cálculo de excesos con curva HORARIA', icon='⚠️')
+            else:
+                coef_excesos = 1
+
+            # mes natural: se puede verificar
+            if dias_rango <= const_verif:
+                st.sidebar.info('Es posible verificar.')
+                habilitar_opt = False
+                
+                habilitar_ver = True
+                pyc_tp_ver = pyc_tp[año_ver][tarifa]
+                tepp_ver = {
+                    k: v * coef_excesos
+                    for k, v in tepp123[año_ver][tarifa].items()
+                }
+
+                #añadido para pruebas con menos de 12 meses
+                habilitar_opt = True
+                año_opt = 2026
+                pyc_tp_opt = pyc_tp[año_opt][tarifa]
+            
+                tepp_opt = {
+                    k: v * coef_excesos
+                    for k, v in tepp123[año_opt][tarifa].items()
+                }
+                
+            # no hay días suficientes para optimizar
+            elif (const_verif < dias_rango < const_optim_inf): #or (dias_rango > const_optim_sup):
+                st.sidebar.warning('No es posible ejecutar ninguna acción.', icon='⚠️')
+                habilitar_opt = False
+                habilitar_ver = False
+
+            # sobran días: se recorta a los últimos 365    
+            elif dias_rango > const_optim_sup:
+                st.sidebar.warning('Curva demasiado larga → se recortan los últimos 365 días', icon='⚠️')
+
+                # 🔹 fecha de corte (365 días naturales)
+                fecha_ini = fecha_fin - pd.Timedelta(days=364)
+
+                # 🔹 filtrar por fechas completas (date vs date)
+                df_in = df_in[
+                    (df_in["fecha"] >= fecha_ini) &
+                    (df_in["fecha"] <= fecha_fin)
+                ]
+                print('curva recortada')
+                print(df_in)
+                # 🔹 recalcular rango real
+                fecha_ini = df_in["fecha"].min()
+                fecha_fin = df_in["fecha"].max()
+                dias_rango = (fecha_fin - fecha_ini).days + 1
+
+                st.sidebar.info(f'Nuevo rango: {fecha_ini} → {fecha_fin}')
+                st.sidebar.write("Días finales:", dias_rango)
+
+                habilitar_opt = True
+                habilitar_ver = False
+
+                año_opt = 2026
+                pyc_tp_opt = pyc_tp[año_opt][tarifa]
+            
+                tepp_opt = {
+                    k: v * coef_excesos
+                    for k, v in tepp123[año_opt][tarifa].items()
+                }
+            else:
+                # 365 días: se puede optimizar    
+                st.sidebar.info('Es posible optimizar.')
+                habilitar_opt = True
+                habilitar_ver = False
+                
+                año_opt = 2026
+                pyc_tp_opt = pyc_tp[año_opt][tarifa]
+            
+                tepp_opt = {
+                    k: v * coef_excesos
+                    for k, v in tepp123[año_opt][tarifa].items()
+                }
+            
+        else:
+            st.sidebar.error('No es posible ejecutar ninguna acción. El peaje de acceso es 2.0TD', icon='⚠️')
+            habilitar_opt = False
+            habilitar_ver = False
         
 
 submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=not habilitar_opt)
@@ -222,20 +281,48 @@ submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', us
 resultados = None    
 
 # OPTIMIZACIÓN DE POTENCIA. USADO EN MODO PREMIUM Y MODO DEMO.  
-if submit_opt and st.session_state.df_norm is not None:
-        
-        if p6 < 50 or st.session_state.atr_dfnorm == '2.0':
-            st.warning('Suministro no válido para optimización por excesos', icon='⚠️')
+#if submit_opt and st.session_state.df_norm is not None:
+#    if p6 < 50 or st.session_state.atr_dfnorm == '2.0':
+#        st.warning('Suministro no válido para optimización por excesos', icon='⚠️')
+#        st.stop()
+
+#    resultados = calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp_opt, tepp_opt)
+#    st.session_state.resultados_potencia = resultados
+# si no recalcula → recupero
+
+# OPTIMIZACIÓN DE POTENCIA. USADO EN MODO PREMIUM Y MODO DEMO.  
+if submit_opt:
+
+    # Seguridad: si por lo que sea no hay tarifa válida
+    if tarifa == 'Ninguno':
+        st.warning('Selecciona/carga el peaje del suministro antes de optimizar', icon='⚠️')
+        st.stop()
+
+    # MODO 1: P6 <= 50 → maxímetros
+    if modo1:
+        if 'df_maximetros' not in st.session_state or st.session_state.df_maximetros is None:
+            st.warning('Falta la tabla de maxímetros para optimizar', icon='⚠️')
             st.stop()
 
-        resultados = calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp_opt, tepp_opt)
+    # MODO 2: P6 > 50 → curva de carga
+    else:
+        if 'df_norm' not in st.session_state or st.session_state.df_norm is None:
+            st.warning('Falta la curva de carga para optimizar', icon='⚠️')
+            st.stop()
 
-        st.session_state.resultados_potencia = resultados
-        
+    resultados = calcular_optimizacion(
+        df_in,
+        fijar_P6,
+        tarifa,
+        pot_con,
+        pyc_tp_opt,
+        tepp_opt
+    )
 
-# 🔹 si no recalcula → recupero
+    st.session_state.resultados_potencia = resultados
+
+
 elif "resultados_potencia" in st.session_state:
-
     resultados = st.session_state.resultados_potencia
 
 
@@ -282,7 +369,10 @@ if resultados is not None:
         
         c11, c12= st.columns([.55, .45])
         with c11:
-            st.header('Resultados de la optimización del Término de Potencia para tipos 1, 2 y 3 (>50kW)', divider = 'rainbow')
+            if modo1:
+                st.header('Resultados de la optimización del Término de Potencia para tipos 4 y 5 (=<50kW)', divider = 'rainbow')
+            else:
+                st.header('Resultados de la optimización del Término de Potencia para tipos 1, 2 y 3 (>50kW)', divider = 'rainbow')
             with st.container(border=True):
                 c1, c2, c3 = st.columns([0.25, 0.20, 0.10])
                 with c1:

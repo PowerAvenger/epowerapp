@@ -7,7 +7,9 @@ import plotly.graph_objects as go
 import math
 import streamlit as st
 import gc
-from backend_comun import aplicar_estilo 
+from backend_comun import aplicar_estilo
+import re
+from datetime import datetime, date 
 
 pyc_tp = {
     2025: {
@@ -112,7 +114,8 @@ pyc_tp = {
     }
 }
 
-tepp = {
+# tipos 1, 2 y 3
+tepp123 = {
     2025: {
         '2.0': {
             'P1': 2.953979,
@@ -216,6 +219,109 @@ tepp = {
     }
 }
 
+tepp45 = {
+    2025: {
+        '2.0': {
+            'P1': 0.275041,
+            'P2': 0.005297,
+            'P3': None,
+            'P4': None,
+            'P5': None,
+            'P6': None
+        },
+        '3.0': {
+            'P1': 0.168944,
+            'P2': 0.089294,
+            'P3': 0.028322,
+            'P4': 0.021656,
+            'P5': 0.000806,
+            'P6': 0.000717
+        },
+        '6.1': {
+            'P1': 0.272540,
+            'P2': 0.144093,
+            'P3': 0.054076,
+            'P4': 0.038105,
+            'P5': 0.009852,
+            'P6': 0.008771
+        },
+        '6.2': {
+            'P1': 0.171493,
+            'P2': 0.097260,
+            'P3': 0.025605,
+            'P4': 0.015601,
+            'P5': 0.000612,
+            'P6': 0.000543
+        },
+        '6.3': {
+            'P1': 0.247625,
+            'P2': 0.149204,
+            'P3': 0.048608,
+            'P4': 0.031679,
+            'P5': 0.001040,
+            'P6': 0.000916
+        },
+        '6.4': {
+            'P1': 0.185913,
+            'P2': 0.111149,
+            'P3': 0.026992,
+            'P4': 0.018762,
+            'P5': 0.000558,
+            'P6': 0.000372
+        }
+    },
+
+    2026: {
+        '2.0': {
+            'P1': 0.279426,
+            'P2': 0.005316,
+            'P3': None,
+            'P4': None,
+            'P5': None,
+            'P6': None
+        },
+        '3.0': {
+            'P1': 0.171373,
+            'P2': 0.090584,
+            'P3': 0.028721,
+            'P4': 0.021891,
+            'P5': 0.006142,
+            'P6': 0.006142
+        },
+        '6.1': {
+            'P1': 0.275735,
+            'P2': 0.146094,
+            'P3': 0.054668,
+            'P4': 0.038455,
+            'P5': 0.000817,
+            'P6': 0.000722
+        },
+        '6.2': {
+            'P1': 0.173206,
+            'P2': 0.097562,
+            'P3': 0.025825,
+            'P4': 0.015703,
+            'P5': 0.000612,
+            'P6': 0.000542
+        },
+        '6.3': {
+            'P1': 0.238584,
+            'P2': 0.143616,
+            'P3': 0.048105,
+            'P4': 0.031355,
+            'P5': 0.001018,
+            'P6': 0.000889
+        },
+        '6.4': {
+            'P1': 0.186364,
+            'P2': 0.111026,
+            'P3': 0.027859,
+            'P4': 0.019355,
+            'P5': 0.000575,
+            'P6': 0.000394
+        }
+    }
+}
 
 meses = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
 
@@ -283,41 +389,247 @@ def leer_curva_normalizada(pot_con):
     return df_in
 
 
+def detectar_entrada_potencia(df):
+    cols = set(df.columns)
+
+    cols_maximetros = {"mes_nom", "P1", "P2", "P3", "P4", "P5", "P6"}
+    cols_curva = {"mes_nom", "periodo", "potencia"}
+
+    if cols_maximetros.issubset(cols):
+        return "maximetros"
+
+    if cols_curva.issubset(cols):
+        return "curva"
+
+    raise ValueError(
+        "No se reconoce el formato de entrada. "
+        "Debe ser curva con columnas ['mes_nom', 'periodo', 'potencia'] "
+        "o tabla de maxímetros con ['mes_nom', 'P1', ..., 'P6']."
+    )
+
+
+def normalizar_tabla_maximetros(df, meses):
+    df = df.copy()
+
+    df.columns = (
+        df.columns
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .str.replace(" ", "_")
+        .str.replace("-", "_")
+    )
+
+    posibles_col_mes = [
+        "mes_nom", "mes", "meses", "fecha", "fechas",
+        "periodo", "periodo_facturacion", "rango"
+    ]
+
+    col_mes = None
+    for c in posibles_col_mes:
+        if c in df.columns:
+            col_mes = c
+            break
+
+    if col_mes is None:
+        raise ValueError(
+            "No encuentro columna de mes/fecha. Usa una columna tipo MES, mes_nom, fecha o periodo."
+        )
+
+    renombrar_periodos = {}
+
+    for c in df.columns:
+        c_limpio = c.upper().replace(" ", "").replace("_", "")
+        if c_limpio in ["P1", "P2", "P3", "P4", "P5", "P6"]:
+            renombrar_periodos[c] = c_limpio
+
+    df = df.rename(columns=renombrar_periodos)
+
+    periodos = ["P1", "P2", "P3", "P4", "P5", "P6"]
+    columnas_faltantes = [p for p in periodos if p not in df.columns]
+
+    if columnas_faltantes:
+        raise ValueError(
+            f"Faltan columnas de periodos: {columnas_faltantes}. "
+            "El Excel debe tener P1, P2, P3, P4, P5 y P6."
+        )
+
+    mapa_num_mes = dict(zip(range(1, 13), meses))
+
+    mapa_txt_mes = {
+        "ene": "ene", "enero": "ene",
+        "feb": "feb", "febrero": "feb",
+        "mar": "mar", "marzo": "mar",
+        "abr": "abr", "abril": "abr",
+        "may": "may", "mayo": "may",
+        "jun": "jun", "junio": "jun",
+        "jul": "jul", "julio": "jul",
+        "ago": "ago", "agosto": "ago",
+        "sep": "sep", "sept": "sep", "septiembre": "sep",
+        "oct": "oct", "octubre": "oct",
+        "nov": "nov", "noviembre": "nov",
+        "dic": "dic", "diciembre": "dic",
+    }
+
+    def convertir_a_mes_nom(valor):
+        if pd.isna(valor):
+            return None
+
+        if isinstance(valor, (pd.Timestamp, datetime, date)):
+            return mapa_num_mes.get(valor.month)
+
+        txt = str(valor).strip().lower()
+
+        # Caso número de mes: 1, 01, 12...
+        if txt.isdigit():
+            mes_num = int(txt)
+            return mapa_num_mes.get(mes_num)
+
+        txt_limpio = (
+            txt.replace(".", "")
+               .replace("-", " ")
+               .replace("_", " ")
+               .strip()
+        )
+
+        # Caso nombre o abreviatura: enero, ene, feb...
+        if txt_limpio in mapa_txt_mes:
+            return mapa_txt_mes[txt_limpio]
+
+        # Caso rango o fecha dentro del texto:
+        # "01/01/2025 - 31/01/2025"
+        # "del 1/1/25 al 31/1/25"
+        fechas = re.findall(r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}", txt)
+
+        if fechas:
+            fecha = pd.to_datetime(
+                fechas[0],
+                dayfirst=True,
+                errors="coerce"
+            )
+
+            if pd.notna(fecha):
+                return mapa_num_mes.get(fecha.month)
+
+        # Caso fecha interpretable por pandas
+        fecha = pd.to_datetime(
+            txt,
+            dayfirst=True,
+            errors="coerce"
+        )
+
+        if pd.notna(fecha):
+            return mapa_num_mes.get(fecha.month)
+
+        return None
+
+    df["mes_nom"] = df[col_mes].apply(convertir_a_mes_nom)
+
+    if df["mes_nom"].isna().any():
+        filas_malas = df[df["mes_nom"].isna()].index.tolist()
+        raise ValueError(
+            f"No he podido interpretar el mes en estas filas: {filas_malas}"
+        )
+
+    df = df[["mes_nom"] + periodos].copy()
+
+    for p in periodos:
+        df[p] = pd.to_numeric(df[p], errors="coerce").fillna(0)
+
+    # Si hay meses duplicados, nos quedamos con el máximo por periodo
+    df = (
+        df.groupby("mes_nom", as_index=False)[periodos]
+        .max()
+    )
+
+    df["mes_nom"] = pd.Categorical(
+        df["mes_nom"],
+        categories=meses,
+        ordered=True
+    )
+
+    df = df.sort_values("mes_nom").reset_index(drop=True)
+
+    df["mes_nom"] = df["mes_nom"].astype(str)
+
+    return df
+
+
 # Función para calcular los costes a partir de las potencias
 def calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, potencias):
-    # Obtenemos los valores pyc_tp, kp y tep según la tarifa del suministro
-    #pyc_tp_tarifa = pyc_tp.get(tarifa, {})
-    #kp_tarifa = kp.get(tarifa, {})
-    #tep_tarifa = tep.get(tarifa, {})
-    #tepp_tarifa = tepp.get(tarifa, {})
-    # Copia de df_in para no modificar los datos originales
     df_temp = df_in.copy()
-    
-    # Actualizamos las potencias optimizadas en la columna 'pot_opt'
-    #df_temp['pot_opt'] = df_temp['periodo'].map(dict(zip(pot_con.keys(), potencias)))
-    df_temp['pot_opt'] = df_temp['periodo'].map(potencias)
-    
-    # Calculamos los excesos y excesos_cuadrado
-    df_temp['excesos_opt'] = np.maximum(df_temp['potencia'] - df_temp['pot_opt'], 0)
-    df_temp['excesos_cuad_opt'] = df_temp['excesos_opt'] ** 2
-    
-    # Calculamos el coste de potencia
+    modo_calc = detectar_entrada_potencia(df_temp)
+    # ============================================================
+    # 1. Coste de potencia facturada
+    # ============================================================
     df_coste_potfra_temp = pd.DataFrame(index=meses, columns=potencias.keys())
     for periodo, pot_opt_value in potencias.items():
-        #df_coste_potfra_temp[periodo] = round(pot_opt_value * pyc_tp_tarifa[periodo] / 12, 2)
-        #df_coste_potfra_temp[periodo] = pot_opt_value * pyc_tp_tarifa[periodo] / 12
         df_coste_potfra_temp[periodo] = pot_opt_value * pyc_tp[periodo] / 12
-
     coste_potfra_temp = df_coste_potfra_temp.sum().sum()
     
-    # Calculamos el coste de excesos
-    df_excesos_temp = pd.pivot_table(df_temp, values='excesos_cuad_opt', index='mes_nom', columns='periodo', aggfunc='sum')
-    df_excesos_temp = np.sqrt(df_excesos_temp)
-    #for periodo, x in tepp_tarifa.items():
-    for periodo, x in tepp.items():
-        #df_excesos_temp[periodo] = round(df_excesos_temp[periodo] * k * tep_tarifa, 2)
-        if periodo in df_excesos_temp.columns:
-            df_excesos_temp[periodo] = df_excesos_temp[periodo] * x 
+    # ============================================================
+    # 2. Coste de excesos
+    # ============================================================
+    if modo_calc == 'curva':
+        
+        
+        # Actualizamos las potencias optimizadas en la columna 'pot_opt'
+        df_temp['pot_opt'] = df_temp['periodo'].map(potencias)
+        
+        # Calculamos los excesos y excesos_cuadrado
+        df_temp['excesos_opt'] = np.maximum(df_temp['potencia'] - df_temp['pot_opt'], 0)
+        df_temp['excesos_cuad_opt'] = df_temp['excesos_opt'] ** 2
+        
+        
+        
+        # Calculamos el coste de excesos
+        df_excesos_temp = pd.pivot_table(df_temp, values='excesos_cuad_opt', index='mes_nom', columns='periodo', aggfunc='sum')
+        df_excesos_temp = np.sqrt(df_excesos_temp)
+        for periodo, x in tepp.items():
+            if periodo in df_excesos_temp.columns:
+                df_excesos_temp[periodo] = df_excesos_temp[periodo] * x 
+    
+    elif modo_calc == "maximetros":
+        # --------------------------------------------------------
+        # Nuevo caso: tabla mensual de maxímetros tipos 4 y 5
+        # Espera columnas: mes_nom, P1, P2, P3, P4, P5, P6
+        # --------------------------------------------------------
+
+        periodos = list(potencias.keys())
+
+        columnas_necesarias = ["mes_nom"] + periodos
+        columnas_faltantes = [c for c in columnas_necesarias if c not in df_temp.columns]
+
+        if columnas_faltantes:
+            raise ValueError(
+                f"Faltan columnas en la tabla de maxímetros: {columnas_faltantes}"
+            )
+
+        df_excesos_temp = df_temp.set_index("mes_nom")[periodos].copy()
+
+        # Convertir maxímetros a numérico por seguridad
+        for periodo in periodos:
+            df_excesos_temp[periodo] = pd.to_numeric(
+                df_excesos_temp[periodo],
+                errors="coerce"
+            ).fillna(0)
+
+        # Exceso = maxímetro mensual - potencia contratada/optimizada
+        for periodo in periodos:
+            df_excesos_temp[periodo] = np.maximum(
+                df_excesos_temp[periodo] - potencias[periodo],
+                0
+            )
+
+        # Aplicar coeficientes de exceso específicos, por ejemplo tepp_45
+        for periodo, x in tepp.items():
+            if periodo in df_excesos_temp.columns:
+                df_excesos_temp[periodo] = df_excesos_temp[periodo] * x * 30
+
+    else:
+        raise ValueError(f"Modo de cálculo no reconocido: {modo_calc}")
+
+
             
     df_excesos_temp.index = pd.Categorical(df_excesos_temp.index, categories=meses, ordered=True)
     #ordenamos
@@ -330,8 +642,6 @@ def calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, potencias):
 
 
 def funcion_objetivo(pot_opt, df_in, tarifa, pyc_tp, tepp, meses, pot_con):
-    #pot_opt son las potencias a optimizar en base a la suma de costes (return)
-    #coste_potfra_potopt, coste_excesos_potopt, coste_tp_potopt, df_coste_potfra_potopt, df_coste_excesos_potopt = calcular_costes(pot_opt, df_in, tarifa, pyc_tp, kp, tep, meses, pot_con)
     potencias = dict(zip(pot_con.keys(), pot_opt))
     coste_potfra_potopt, coste_excesos_potopt, coste_tp_potopt, df_coste_potfra_potopt, df_coste_excesos_potopt = calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, potencias)
     return coste_potfra_potopt + coste_excesos_potopt
@@ -364,18 +674,12 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
     df_coste_potfra_potcon['coste_pot_mes'] = df_coste_potfra_potcon.sum(axis=1)
     totales_potfra_potcon = df_coste_potfra_potcon.sum()
     totales_potfra_potcon.name = 'total año'
-    #df_coste_potfra_potcon = pd.concat([df_coste_potfra_potcon, totales_potfra_potcon.to_frame().T])
-    
+        
     df_coste_excesos_potcon['coste_excesos_mes'] = df_coste_excesos_potcon.sum(axis=1)
     totales_excesos_potcon = df_coste_excesos_potcon.sum()
     totales_excesos_potcon.name = 'total año'
-    #df_coste_excesos_potcon = pd.concat([df_coste_excesos_potcon, totales_excesos_potcon.to_frame().T])
-    
+        
     df_coste_tp_mes = pd.concat([df_coste_potfra_potcon['coste_pot_mes'], df_coste_excesos_potcon['coste_excesos_mes']], axis=1)
-
-    #graf_costes_potcon= grafico_costes_con(df_coste_tp_mes)
-
-
 
     pot_inicial = list(pot_con.values())  # Valores iniciales de las potencias contratadas
     constraints = [{'type': 'ineq', 'fun': lambda x, i=i: x[i + 1] - x[i]} for i in range(len(pot_inicial) - 1)]
@@ -385,9 +689,7 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
             'type': 'eq',  # 'eq' para que la restricción sea igual (P6 debe ser igual a pot_con['P6'])
             'fun': lambda x: x[-1] - pot_con['P6']  # Asegura que la última potencia (P6) sea igual a la contratada
         })
-
-
-    
+ 
     # Optimización
     resultado = minimize(
         funcion_objetivo,
@@ -409,35 +711,22 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
     pot_opt = ajustar_potencias(pot_opt_ini, fijar_P6=fijar_P6, pot_con=pot_con)
 
     coste_potfra_potopt, coste_excesos_potopt, coste_tp_potopt, df_coste_potfra_potopt, df_coste_excesos_potopt = calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, pot_opt)
-    #coste_potfra_potopt, coste_excesos_potopt, coste_tp_potopt, df_coste_potfra_potopt, df_coste_excesos_potopt = calcular_costes(list(pot_opt.values()), df_in, tarifa, pyc_tp, kp, tep, meses, pot_con)
-
-    
+        
     df_coste_potfra_potopt['coste_pot_mes_opt'] = df_coste_potfra_potopt.sum(axis=1)
     df_coste_excesos_potopt['coste_excesos_mes_opt'] = df_coste_excesos_potopt.sum(axis=1)
     totales_potfra_potopt = df_coste_potfra_potopt.sum()
     print(f'total coste potencia a facturar OPTIMIZADA: {totales_potfra_potopt}')
     totales_potfra_potopt.name = 'total año'
-    #df_coste_potfra_potopt = pd.concat([df_coste_potfra_potopt, totales_potfra_potopt.to_frame().T])
-    
+        
     totales_excesos_potopt = df_coste_excesos_potopt.sum()
     totales_excesos_potopt.name = 'total año'
-    #df_coste_excesos_potopt = pd.concat([df_coste_excesos_potopt, totales_excesos_potopt.to_frame().T])
-    
-
     
     df_coste_tp_mes_opt = pd.concat([df_coste_potfra_potopt['coste_pot_mes_opt'], df_coste_excesos_potopt['coste_excesos_mes_opt']], axis=1)
-
-    
+ 
     df_coste_tp_mes = pd.concat([df_coste_tp_mes, df_coste_tp_mes_opt,], axis=1)
     
-
     ahorro_opt = round(coste_tp_potcon - coste_tp_potopt, 2)
     ahorro_opt_porc = ahorro_opt * 100 / coste_tp_potcon
-
-    #graf_costes_potcon = graficar_costes_opt(graf_costes_potcon, df_coste_tp_mes)
-    #graf_comparativa_mensual = graficar_comparacion_mensual(df_coste_tp_mes)
-
-    
 
     df_potencias = pd.DataFrame({
         'Potencias (kW)': ['Contratadas', 'Optimizadas'],
@@ -466,7 +755,6 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
         min_pot = min(pot_con[periodo], pot_opt[periodo])
         max_pot = max(pot_con[periodo], pot_opt[periodo])
         intervalo = max(1, (max_pot - min_pot) // 10)
-        #pot_rangos[periodo] = np.arange(min_pot, max_pot + intervalo, intervalo)
         # Crear el rango de potencias y añadir las potencias optimizadas y contratadas
         rango_potencias = np.arange(min_pot, max_pot, intervalo)
         
@@ -488,7 +776,7 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
             potencias_actuales[periodo] = potencia  # Cambiamos solo la potencia de este periodo
             
             # Calculamos costes por mes, referenciados al periodo
-            #_, _, _, df_coste_pot_temp, df_aei_temp = calcular_costes(list(potencias_actuales.values()), df_in, tarifa, pyc_tp, kp, tep, meses, pot_con)
+            
             _, _, _, df_coste_pot_temp, df_aei_temp = calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, potencias_actuales)
             
             # Sumamos los costes de todos los meses para este periodo específico

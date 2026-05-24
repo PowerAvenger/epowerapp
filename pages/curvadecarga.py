@@ -185,6 +185,21 @@ if normalizar and uploaded:
         else:
             # Ya está en frecuencia horaria → copiar
             df_norm_h = df_norm[["fecha_hora", "fecha", "hora","consumo_neto_kWh", "vertido_neto_kWh", "generacion_kWh", "periodo", "tipo_dia"]].copy()
+        
+        df_norm_h = (
+            df_norm_h.groupby("fecha_hora", as_index=False)
+            .agg({
+                "fecha": "first",
+                "hora": "first",
+                "consumo_neto_kWh": "sum",
+                "vertido_neto_kWh": "sum",
+                "generacion_kWh": "sum",
+                "periodo": "first",
+                "tipo_dia": "first"
+            })
+            .sort_values("fecha_hora")
+            .reset_index(drop=True)
+        )
 
         
         consumototalhorario= df_norm_h['consumo_neto_kWh'].sum()
@@ -308,11 +323,23 @@ if st.session_state.get("df_norm") is not None:
             graf_medias_horarias_total=graficar_media_horaria('Todos', ymax = None)
             st.plotly_chart(graf_medias_horarias_total, use_container_width=True)    
             
-            
+    # ========================================================================================================
+    # ANÁLISIS
+    # ========================================================================================================         
     with tab2:
         
         graf_medias_horarias_combinadas, ymax = graficar_media_horaria_combinada()
-        zmax_heatmap = st.session_state.df_norm_h["consumo_neto_kWh"].max()
+        #zmax_heatmap = st.session_state.df_norm_h["consumo_neto_kWh"].max()
+        zmax_heatmap = st.session_state.df_norm_h["consumo_neto_kWh"].quantile(0.98)
+        print (zmax_heatmap) 
+        print(st.session_state.df_norm_h["consumo_neto_kWh"].describe())
+
+        print(
+            st.session_state.df_norm_h.loc[
+                st.session_state.df_norm_h["consumo_neto_kWh"] == st.session_state.df_norm_h["consumo_neto_kWh"].max(),
+                ["fecha_hora", "fecha", "hora", "consumo_neto_kWh"]
+            ]
+        )
 
         graf_medias_horarias_total=graficar_media_horaria('Todos', ymax)
         graf_medias_horarias_lab=graficar_media_horaria('L-V',ymax)

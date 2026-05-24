@@ -9,7 +9,7 @@ from backend_simulindex import (obtener_historicos_meff, obtener_meff_trimestral
                                 construir_media_prevista_2026_diaria, graficar_media_prevista_2026,
                                 construir_evolucion_media_omip, añadir_omie_real_12m_posterior, graficar_evolucion_media_omip,
                                 añadir_suavizado_omip_y_diferencial, graficar_omip_suavizado_vs_omie_real)
-from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, formatear_df_resultados
+from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, formatear_df_resultados, aplicar_estilo
 import pandas as pd
 import plotly.express as px
 from utilidades import generar_menu, init_app, init_app_index
@@ -104,7 +104,7 @@ if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is
             .dt.to_period("M")
             .nunique()
         )
-    MIN_MESES_OPT = 10
+    MIN_MESES_OPT = 4
     if n_meses_df(st.session_state.df_curva_sheets) >= MIN_MESES_OPT:
         #CÓDIGO AÑADIDO PARA USAR PYCS2026 EN LA SIMULACION
         #st.session_state.pyc_2026 = pyc_2026
@@ -666,7 +666,7 @@ with tab5:
                 textposition="inside",
                 textfont_size=16  # ← ajusta aquí
             )
-
+            fig = aplicar_estilo(fig)
             st.plotly_chart(fig, use_container_width=True)
 
 

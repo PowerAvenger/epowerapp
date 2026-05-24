@@ -3,7 +3,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from datetime import datetime
-from backend_comun import obtener_df_resumen
+from backend_comun import obtener_df_resumen, aplicar_estilo
+import pandas as pd
+import numpy as np
+
 
 #valores de peajes y cargos usados en la simulación en €/kWh
 pyc_2026 = {
@@ -421,7 +424,7 @@ def obtener_graf_hist(df_hist, omip, colores_precios, añadir_hist):
 
     simul_curva = None
 
-    if 'precio_curva' in resultados and df_hist.shape[0] > 10:
+    if 'precio_curva' in resultados and df_hist.shape[0] >= 5:
 
         intercept_curve, slope_curve, r2_curve = resultados['precio_curva']
         simul_curva = round(intercept_curve + slope_curve * omip + añadir_hist, 1)
@@ -1000,6 +1003,7 @@ def graficar_2026(df_2026, precio_medio_2026):
     return fig
 
 # CONSTRUIMOS UN DF CON LA EVOLUCIÓN DE LA MEDIA DIARIA OMIE PREVISTO 2026
+@st.cache_data()
 def construir_media_prevista_2026_diaria(
     df_spot_diario,
     df_ftb_m,
@@ -1159,6 +1163,7 @@ def construir_media_prevista_2026_diaria(
     return df_media
 
 # GRAFICAMOS SEGÚN DF ANTERIOR
+@st.cache_data()
 def graficar_media_prevista_2026(df_media_2026):
 
     df = df_media_2026.copy()
@@ -1235,6 +1240,7 @@ def graficar_media_prevista_2026(df_media_2026):
 
 
 # CONSTRUIMOS UN DF CON LA EVOLUCIÓN DEL PRECIO MENSUAL FUTURO Y LA MEDIA OMIP PARA 12 MESES MÓVILES
+@st.cache_data()
 def construir_curva_omip_mensual(df_ftb_m, df_ftb_q, fecha_ref):
 
     import pandas as pd
@@ -1335,7 +1341,7 @@ def construir_curva_omip_mensual(df_ftb_m, df_ftb_q, fecha_ref):
     return df_curva
 
 
-
+@st.cache_data()
 def graficar_curva_omip_mensual(df_omip, precio_medio=None):
   
 
@@ -1408,7 +1414,7 @@ def graficar_curva_omip_mensual(df_omip, precio_medio=None):
 
 
 
-
+@st.cache_data()
 def construir_evolucion_media_omip(df_ftb_m, df_ftb_q, fecha_ref, fecha_inicio="01.01.2025"):
     import pandas as pd
     import numpy as np
@@ -1515,7 +1521,7 @@ def construir_evolucion_media_omip(df_ftb_m, df_ftb_q, fecha_ref, fecha_inicio="
 
     return df_evol
 
-
+@st.cache_data()
 def añadir_omie_real_12m_posterior(
     df_evol,
     df_spot_diario,
@@ -1632,7 +1638,7 @@ def añadir_omie_real_12m_posterior(
 
 
 
-
+@st.cache_data()
 def graficar_evolucion_media_omip(df_evol):
 
     df_plot = df_evol.copy().sort_values("Fecha")
@@ -1828,7 +1834,7 @@ def graficar_evolucion_media_omip(df_evol):
     return fig
 
 
-
+@st.cache_data()
 def añadir_suavizado_omip_y_diferencial(
     df_evol,
     ventana_dias=30,
@@ -1916,185 +1922,7 @@ def añadir_suavizado_omip_y_diferencial(
     return df
 
 
-def graficar_omip_suavizado_vs_omie_real_old(
-    df_evol,
-    ventana_dias=30,
-    col_fecha="Fecha",
-    col_omip_suav="media_forward_12m_suav",
-    col_omie="omie_real_12m",
-    col_dif="diferencial_suav_omie",
-    col_dif_pct="diferencial_pct_suav_omie"
-):
-    
-    from plotly.subplots import make_subplots
-    
-
-    df_plot = df_evol.copy()
-
-    df_plot[col_fecha] = pd.to_datetime(
-        df_plot[col_fecha],
-        errors="coerce",
-        dayfirst=True
-    )
-
-    columnas_numericas = [
-        col_omip_suav,
-        col_omie,
-        col_dif,
-        col_dif_pct
-    ]
-
-    for col in columnas_numericas:
-        if col in df_plot.columns:
-            df_plot[col] = pd.to_numeric(df_plot[col], errors="coerce")
-
-    df_plot = df_plot.dropna(subset=[col_fecha]).sort_values(col_fecha).copy()
-
-    # OMIE real solo donde la ventana 12M está completa
-    if "ventana_completa" in df_plot.columns:
-        df_real = df_plot[df_plot["ventana_completa"] == True].copy()
-    else:
-        df_real = df_plot.copy()
-
-    df_real = df_real.dropna(subset=[col_omie])
-
-    # Diferencial solo donde existe
-    df_dif = df_plot.dropna(subset=[col_dif_pct]).copy()
-
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
-
-    # =====================================================
-    # 1. OMIP forward 12M suavizado - eje izquierdo
-    # =====================================================
-    fig.add_trace(
-        go.Scatter(
-            x=df_plot[col_fecha],
-            y=df_plot[col_omip_suav],
-            mode="lines",
-            name=f"OMIP forward 12M suavizado ({ventana_dias}d)",
-            line=dict(
-                color="orange",
-                width=1,
-                #dash = 'dot',
-            ),
-            customdata=df_plot[[col_omie, col_dif, col_dif_pct]],
-            hovertemplate=(
-                "<b>%{x|%d/%m/%Y}</b><br>"
-                "OMIP suavizado: %{y:.2f} €/MWh<br>"
-                "OMIE real 12M posterior: %{customdata[0]:.2f} €/MWh<br>"
-                "Diferencial OMIP - OMIE: %{customdata[1]:+.2f} €/MWh<br>"
-                "Diferencial: %{customdata[2]:+.1f}%<br>"
-                "<extra></extra>"
-            )
-        ),
-        secondary_y=False
-    )
-
-    # =====================================================
-    # 2. OMIE real 12M posterior - eje izquierdo
-    # =====================================================
-    if not df_real.empty:
-        fig.add_trace(
-            go.Scatter(
-                x=df_real[col_fecha],
-                y=df_real[col_omie],
-                mode="lines",
-                name="OMIE real 12M posterior",
-                line=dict(
-                    color="green",
-                    width=3,
-                    #dash="line"
-                ),
-                customdata=df_real[[col_omip_suav, col_dif, col_dif_pct]],
-                hovertemplate=(
-                    "<b>%{x|%d/%m/%Y}</b><br>"
-                    "OMIE real 12M posterior: %{y:.2f} €/MWh<br>"
-                    "OMIP suavizado: %{customdata[0]:.2f} €/MWh<br>"
-                    "Diferencial OMIP - OMIE: %{customdata[1]:+.2f} €/MWh<br>"
-                    "Diferencial: %{customdata[2]:+.1f}%<br>"
-                    "<extra></extra>"
-                )
-            ),
-            secondary_y=False
-        )
-
-    # =====================================================
-    # 3. Diferencial porcentual - eje derecho
-    # =====================================================
-    if not df_dif.empty:
-        fig.add_trace(
-            go.Scatter(
-                x=df_dif[col_fecha],
-                y=df_dif[col_dif_pct],
-                mode="lines",
-                name="Diferencial OMIP - OMIE (%)",
-                line=dict(
-                    color="deepskyblue",
-                    width=2,
-                    dash="dot"
-                ),
-                customdata=df_dif[[col_dif]],
-                hovertemplate=(
-                    "<b>%{x|%d/%m/%Y}</b><br>"
-                    "Diferencial: %{y:+.1f}%<br>"
-                    "Diferencial OMIP - OMIE: %{customdata[0]:+.2f} €/MWh<br>"
-                    "<extra></extra>"
-                )
-            ),
-            secondary_y=True
-        )
-
-    # =====================================================
-    # 4. Layout
-    # =====================================================
-    fig.update_layout(
-        title=dict(
-            text=f"OMIP suavizado vs OMIE real posterior 12M · ventana {ventana_dias} días",
-            x=0.5,
-            xanchor="center",
-            font=dict(size=20)
-        ),
-        template="plotly_dark",
-        hovermode="x unified",
-        height=550,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="center",
-            x=0.5,
-            font=dict(size=14)
-        )
-    )
-
-    fig.update_xaxes(
-        title_text="Fecha de cotización",
-        tickfont=dict(size=14)
-    )
-
-    # Eje izquierdo: precios
-    fig.update_yaxes(
-        title_text="€/MWh",
-        secondary_y=False,
-        rangemode="tozero",
-        title_font=dict(size=14),
-        tickfont=dict(size=14),
-        showgrid=True
-    )
-
-    # Eje derecho: diferencial porcentual
-    # Sin grid ni líneas horizontales para que no moleste
-    fig.update_yaxes(
-        title_text="Diferencial %",
-        secondary_y=True,
-        title_font=dict(size=14),
-        tickfont=dict(size=14),
-        showgrid=False,
-        zeroline=False
-    )
-
-    return fig
-
+@st.cache_data()
 def graficar_omip_suavizado_vs_omie_real(
     df_evol,
     ventana_dias=30,
@@ -2105,9 +1933,7 @@ def graficar_omip_suavizado_vs_omie_real(
     col_dif_pct="diferencial_pct_suav_omie"
 ):
     
-    import pandas as pd
-    import numpy as np
-    import plotly.graph_objects as go
+ 
 
     df_plot = df_evol.copy()
 
@@ -2296,5 +2122,6 @@ def graficar_omip_suavizado_vs_omie_real(
         tickfont=dict(size=14),
         showgrid=True
     )
+    fig = aplicar_estilo(fig)
 
     return fig
