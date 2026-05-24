@@ -1,7 +1,7 @@
 import streamlit as st
 import datetime
 from datetime import datetime
-from streamlit_plotly_events import plotly_events
+
 
 from utilidades import (
     generar_menu,
