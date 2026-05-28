@@ -180,8 +180,8 @@ if resultados is not None:
     st.header('Resultados de la optimización RDL del Término de Potencia', divider='rainbow')
 
     c1, c2, c3 = st.columns([.5, .25, .25])
-    with c1:
-        st.plotly_chart(resultados["graf_costes_potcon"], use_container_width=True)
+    #with c1:
+        #st.plotly_chart(resultados["graf_costes_potcon"], use_container_width=True)
     with c2:
         st.plotly_chart(resultados["graf_resumen"], use_container_width=True)
     with c3:

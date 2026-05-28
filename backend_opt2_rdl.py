@@ -10,8 +10,8 @@ from scipy.optimize import minimize
 
 from backend_opt2 import (
     calcular_costes,
-    grafico_costes_con,
-    graficar_costes_opt,
+    #grafico_costes_con,
+    #graficar_costes_opt,
     ajustar_potencias,
 )
 
@@ -614,8 +614,8 @@ def calcular_optimizacion_rdl(
     ahorro_opt = float(coste_tp_potcon - coste_tp_potopt)
     ahorro_opt_porc = (ahorro_opt * 100 / coste_tp_potcon) if coste_tp_potcon else 0.0
 
-    graf_costes_potcon = grafico_costes_con(df_coste_tp_mes)
-    graf_costes_potcon = graficar_costes_opt(graf_costes_potcon, df_coste_tp_mes)
+    #graf_costes_potcon = grafico_costes_con(df_coste_tp_mes)
+    #graf_costes_potcon = graficar_costes_opt(graf_costes_potcon, df_coste_tp_mes)
 
     graf_resumen = _crear_fig_resumen(
         df_coste_tp_mes["coste_pot_mes"].sum(),
@@ -639,7 +639,7 @@ def calcular_optimizacion_rdl(
     gc.collect()
 
     return {
-        "graf_costes_potcon": graf_costes_potcon,
+        #"graf_costes_potcon": graf_costes_potcon,
         "graf_resumen": graf_resumen,
         "coste_tp_potcon": coste_tp_potcon,
         "coste_tp_potopt": coste_tp_potopt,

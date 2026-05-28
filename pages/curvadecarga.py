@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 from dateutil.relativedelta import relativedelta
 from datetime import timedelta
+import plotly.express as px
 from backend_curvadecarga import (
     normalize_curve_simple, 
     graficar_curva_horaria, graficar_diario_apilado, graficar_mensual_apilado, tabla_mensual_periodos, formatear_tabla_mensual_es, graficar_queso_periodos, 
@@ -908,6 +909,7 @@ if st.session_state.get("df_norm") is not None:
         with c2:
             st.subheader('Tabla de reactiva mensual (kVArh)')
             st.dataframe(df_tabla_fmt_react, use_container_width=True, hide_index=True)
+            st.subheader('Tabla de costes de excesos (€)')
             st.dataframe(df_coste_excesos_reactiva_fmt, use_container_width=True, hide_index=True)
         with c3:
             st.subheader('Tabla de excesos REACTIVA (kVArh)')
