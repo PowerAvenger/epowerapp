@@ -295,6 +295,20 @@ def formatear_tabla_consumos(df, columna_mes=None, incluir_unidades=False):
         incluir_unidades=incluir_unidades
     )
 
+# usada para formatear tablas económicas con columna de mes en formato Abr 2026
+def formatear_tabla_euros(df, columna_mes=None, incluir_unidades=False):
+    columnas_euros = [
+        c for c in df.columns
+        if c.startswith("P") or c in ["Total", "coste", "importe"]
+    ]
+
+    return formatear_columnas_tabla(
+        df,
+        columnas_euros=columnas_euros,
+        columna_mes=columna_mes,
+        incluir_unidades=incluir_unidades
+    )
+
 # usada para formatear consumos, costes y precios medios (telemindex y simulindex p.e.)
 def formatear_resumen_mixto(df_resumen):
     """

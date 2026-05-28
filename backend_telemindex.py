@@ -1,6 +1,9 @@
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
+import statsmodels.api as sm
 import streamlit as st
+import numpy as np
 from backend_comun import aplicar_estilo, aplicar_texto_pie_porcentaje
 
 
@@ -965,13 +968,22 @@ def check_medias(df, atr="2.0"):
     print(f"PYC_{atr}:", df[f"pyc_{atr}"].mean())
 
 
-import pandas as pd
-import statsmodels.api as sm
-import plotly.express as px
 
-def analizar_dependencia_omie(df_sheets):
+def analizar_dependencia_omie(df_sheets, atr="2.0"):
+
 
     df = df_sheets.copy()
+
+    # -----------------------------
+    # COLUMNA DE PRECIO SEGÚN ATR
+    # -----------------------------
+    col_precio = f"precio_{atr}"
+
+    if col_precio not in df.columns:
+        raise ValueError(
+            f"No existe la columna '{col_precio}' en df_sheets. "
+            f"Columnas disponibles: {list(df.columns)}"
+        )
 
     # -----------------------------
     # PREPARACIÓN
@@ -985,7 +997,7 @@ def analizar_dependencia_omie(df_sheets):
         df.groupby(["año", "mes"], as_index=False)
         .agg({
             "spot": "mean",
-            "precio_2.0": "mean"
+            col_precio: "mean"
         })
     )
 
@@ -996,26 +1008,30 @@ def analizar_dependencia_omie(df_sheets):
     # -----------------------------
     for año in sorted(df_mensual["año"].unique()):
 
-        df_year = df_mensual[df_mensual["año"] == año]
+        df_year = df_mensual[df_mensual["año"] == año].copy()
 
         # evitar años con pocos datos
         if len(df_year) < 2:
             continue
 
         X = sm.add_constant(df_year["spot"])
-        y = df_year["precio_2.0"]
+        y = df_year[col_precio]
 
         model = sm.OLS(y, X).fit()
 
         slope = model.params["spot"]
 
-        elasticidad = (slope * df_year["spot"].mean()) / df_year["precio_2.0"].mean()
+        elasticidad = (
+            slope * df_year["spot"].mean()
+        ) / df_year[col_precio].mean()
 
-        #peso_spot = (df_year["spot"] * slope).mean() / df_year["precio_2.0"].mean()
-        peso_spot = df_year["spot"].mean() / df_year["precio_2.0"].mean()
+        peso_spot = (
+            df_year["spot"].mean()
+        ) / df_year[col_precio].mean()
 
         resultados.append({
             "año": año,
+            "atr": atr,
             "elasticidad": elasticidad,
             "peso_spot": peso_spot,
             "slope": slope
@@ -1031,7 +1047,7 @@ def analizar_dependencia_omie(df_sheets):
         x="año",
         y=["elasticidad", "peso_spot"],
         markers=True,
-        title="Evolución de la dependencia del OMIE"
+        title=f"Evolución de la dependencia del SPOT - ATR {atr}"
     )
 
     fig.update_layout(
@@ -1041,101 +1057,18 @@ def analizar_dependencia_omie(df_sheets):
         xaxis=dict(
             dtick=1,
             tickformat="d"
-        )
+        ),
+        legend_title_text=""
     )
+    fig = aplicar_estilo(fig)
 
     return df_res, fig
 
 
-import pandas as pd
-import statsmodels.api as sm
-import plotly.express as px
 
-def visualizar_impacto_omie(df_sheets, atr="2.0"):
 
-    df = df_sheets.copy()
 
-    # -----------------------------
-    # PREPARACIÓN
-    # -----------------------------
-    df["fecha"] = pd.to_datetime(df["fecha"])
-    df["año"] = df["fecha"].dt.year
-    df["mes"] = df["fecha"].dt.month
-
-    df_mensual = (
-        df.groupby(["año", "mes"], as_index=False)
-        .agg({
-            "spot": "mean",
-            f"precio_{atr}": "mean"
-        })
-    )
-
-    resultados = []
-
-    # -----------------------------
-    # CÁLCULO POR AÑO
-    # -----------------------------
-    for año in sorted(df_mensual["año"].unique()):
-
-        df_year = df_mensual[df_mensual["año"] == año]
-
-        if len(df_year) < 2:
-            continue
-
-        X = sm.add_constant(df_year["spot"])
-        y = df_year[f"precio_{atr}"]
-
-        model = sm.OLS(y, X).fit()
-
-        intercept = model.params["const"]
-        slope = model.params["spot"]
-
-        # -----------------------------
-        # EJEMPLO AUTOMÁTICO
-        # -----------------------------
-        omie_ini = df_year["spot"].max()
-        omie_fin = df_year["spot"].min()
-
-        precio_ini = intercept + slope * omie_ini
-        precio_fin = intercept + slope * omie_fin
-
-        var_omie = (omie_fin - omie_ini) / omie_ini * 100
-        var_precio = (precio_fin - precio_ini) / precio_ini * 100
-
-        resultados.append({
-            "año": año,
-            "omie_ini": omie_ini,
-            "omie_fin": omie_fin,
-            "precio_ini": precio_ini,
-            "precio_fin": precio_fin,
-            "var_omie": var_omie,
-            "var_precio": var_precio
-        })
-
-    df_res = pd.DataFrame(resultados)
-
-    # -----------------------------
-    # GRÁFICO
-    # -----------------------------
-    fig = px.bar(
-        df_res,
-        x="año",
-        y=["var_omie", "var_precio"],
-        barmode="group",
-        title="Impacto del OMIE en el precio final"
-    )
-
-    fig.update_layout(
-        title={'x':0.5, 'xanchor':'center'},
-        yaxis_title="Variación (%)",
-        xaxis_title="Año"
-    )
-
-    return df_res, fig
-
-import plotly.graph_objects as go
-
-def grafico_elasticidad_lineal(df_res):
+def graficar_elasticidad_lineal_old(df_res):
 
     fig = go.Figure()
 
@@ -1160,18 +1093,129 @@ def grafico_elasticidad_lineal(df_res):
         ))
 
     fig.update_layout(
-        title="Relación OMIE → Precio final (elasticidad)",
-        xaxis_title="Variación relativa OMIE (%)",
-        yaxis_title="Variación relativa Precio (%)",
+        title="Relación SPOT → Precio final (elasticidad)",
+        xaxis_title="Variación relativa SPOT (%)",
+        yaxis_title="Variación relativa Precio Final (%)",
         title_x=0.5,
         showlegend=False,
         width=700,
-        height=500
+        #height=500
     )
     fig = aplicar_estilo(fig)
 
     fig.update_layout(margin=dict(r=80))
     fig.update_xaxes(range=[0, 1.2])
-    fig.update_yaxes(range=[0, 0.7])
+    fig.update_yaxes(range=[0, 1.0])
+
+    return fig
+
+def graficar_elasticidad_lineal(df_res, atr="2.0", spot_ref=None, n_puntos=101):
+
+    
+    import plotly.graph_objects as go
+
+    fig = go.Figure()
+
+    # Rango eje X: variación relativa del SPOT
+    # 0.50 = +50%
+    x_vals = np.linspace(0, 1, n_puntos)
+
+    hovertemplate = (
+        "<b>Año:</b> %{customdata[0]}<br>"
+        "<b>ATR:</b> %{customdata[1]}<br>"
+        "<b>Elasticidad:</b> %{customdata[2]:.3f}<br>"
+        "<b>Variación SPOT:</b> %{x:.1%}<br>"
+        "<b>Variación precio final:</b> %{y:.1%}"
+        "<extra></extra>"
+    )
+
+    for _, row in df_res.iterrows():
+
+        año = int(row["año"])
+        elasticidad = row["elasticidad"]
+
+        y_vals = x_vals * elasticidad
+
+        customdata = np.column_stack([
+            np.repeat(año, len(x_vals)),
+            np.repeat(atr, len(x_vals)),
+            np.repeat(elasticidad, len(x_vals))
+        ])
+
+        fig.add_trace(go.Scatter(
+            x=x_vals,
+            y=y_vals,
+            mode="lines",
+            name=str(año),
+            customdata=customdata,
+            hovertemplate=hovertemplate
+        ))
+
+        # Etiqueta del año al final de cada línea
+        fig.add_trace(go.Scatter(
+            x=[x_vals[-1]],
+            y=[y_vals[-1]],
+            mode="markers+text",
+            name=f"{año}_label",
+            text=[str(año)],
+            textposition="top right",
+            textfont=dict(size=20),
+            marker=dict(size=8),
+            customdata=np.array([[año, atr, elasticidad]]),
+            hovertemplate=hovertemplate,
+            showlegend=False
+        ))
+
+    # -----------------------------
+    # MARCADOR DE REFERENCIA
+    # -----------------------------
+    if spot_ref is not None:
+
+        for _, row in df_res.iterrows():
+
+            año = int(row["año"])
+            elasticidad = row["elasticidad"]
+            precio_ref = spot_ref * elasticidad
+
+            fig.add_trace(go.Scatter(
+                x=[spot_ref],
+                y=[precio_ref],
+                mode="markers",
+                name=f"{año} - punto seleccionado",
+                marker=dict(size=12),
+                customdata=np.array([[año, atr, elasticidad]]),
+                hovertemplate=hovertemplate,
+                showlegend=False
+            ))
+
+        fig.add_vline(
+            x=spot_ref,
+            line_width=2,
+            line_dash="dot",
+            annotation_text=f"SPOT +{spot_ref:.0%}",
+            annotation_position="top"
+        )
+
+    fig.update_layout(
+        title=f"Relación SPOT → Precio final (elasticidad) - ATR {atr}",
+        xaxis_title="Variación relativa SPOT (%)",
+        yaxis_title="Variación relativa Precio final (%)",
+        title_x=0.5,
+        showlegend=False,
+        width=700,
+        margin=dict(r=90)
+    )
+
+    fig.update_xaxes(
+        range=[0, 1.2],
+        tickformat=".0%"
+    )
+
+    fig.update_yaxes(
+        range=[0, 1.0],
+        tickformat=".0%"
+    )
+
+    fig = aplicar_estilo(fig)
 
     return fig

@@ -10,8 +10,10 @@ from backend_curvadecarga import (
     graficar_dem_ver_mensual, graficar_con_gen_mensual,
     graficar_heatmap_dia_hora,
     calcular_patron_horario_boxplot, detectar_consumos_atipicos_horarios,
-    resumir_atipicos_por_dia, calcular_kpis_atipicos, mostrar_kpis_atipicos, graficar_top_dias_revisables, graficar_heatmap_alertas, calcular_patron_horario_boxplot, obtener_top_horas_revisables
+    resumir_atipicos_por_dia, calcular_kpis_atipicos, mostrar_kpis_atipicos, graficar_top_dias_revisables, graficar_heatmap_alertas, calcular_patron_horario_boxplot, obtener_top_horas_revisables,
+    calcular_tabla_excesos_reactiva, calcular_tabla_factor_potencia, estilo_factor_potencia, calcular_tabla_precio_penalizacion_reactiva, calcular_tabla_coste_excesos_reactiva
     )
+from backend_comun import formatear_tabla_consumos, formatear_tabla_euros
 
         
 from utilidades import generar_menu
@@ -88,6 +90,7 @@ if normalizar and uploaded:
         vertido_total=df_norm['excedentes_kWh'].sum()
         consumo_neto=df_norm['consumo_neto_kWh'].sum()
         vertido_neto=df_norm['vertido_neto_kWh'].sum()
+        reactiva_total=df_norm['reactiva_kVArh'].sum()
 
 
         zona_mensajes.success("✅ Curva normalizada correctamente")
@@ -163,6 +166,7 @@ if normalizar and uploaded:
                 df_norm.groupby(["fecha", "hora"], as_index=False)
                 .agg({
                     "consumo_neto_kWh": "sum",
+                    "reactiva_kVArh":"sum",
                     "vertido_neto_kWh": "sum",
                     "generacion_kWh": "sum",
                     "periodo": "first",
@@ -184,7 +188,7 @@ if normalizar and uploaded:
             )
         else:
             # Ya está en frecuencia horaria → copiar
-            df_norm_h = df_norm[["fecha_hora", "fecha", "hora","consumo_neto_kWh", "vertido_neto_kWh", "generacion_kWh", "periodo", "tipo_dia"]].copy()
+            df_norm_h = df_norm[["fecha_hora", "fecha", "hora","consumo_neto_kWh", "reactiva_kVArh","vertido_neto_kWh", "generacion_kWh", "periodo", "tipo_dia"]].copy()
         
         df_norm_h = (
             df_norm_h.groupby("fecha_hora", as_index=False)
@@ -192,6 +196,7 @@ if normalizar and uploaded:
                 "fecha": "first",
                 "hora": "first",
                 "consumo_neto_kWh": "sum",
+                "reactiva_kVArh":"sum",
                 "vertido_neto_kWh": "sum",
                 "generacion_kWh": "sum",
                 "periodo": "first",
@@ -211,6 +216,7 @@ if normalizar and uploaded:
         st.session_state.frec = frec
         st.session_state.df_in = df_in
         st.session_state.consumo_total=consumo_total
+        st.session_state.reactiva_total = reactiva_total
         st.session_state.vertido_total=vertido_total
         st.session_state.consumo_neto=consumo_neto
         st.session_state.vertido_neto=vertido_neto
@@ -237,7 +243,7 @@ if st.session_state.get("df_norm") is not None:
     st.sidebar.markdown(f'Peaje actualmente seleccionado: **:orange[{st.session_state.atr_dfnorm}]**')
     st.sidebar.markdown(f'Resolución temporal de la curva: **:orange[{st.session_state.frec}]**')
     # --- Descarga ---
-    csv_bytes = st.session_state.df_norm.reset_index().to_csv(index=False, sep=";").encode("utf-8")
+    csv_bytes = st.session_state.df_norm.reset_index(drop=True).to_csv(index=False, sep=";", decimal=",", float_format="%.3f").encode("utf-8")
     if not st.session_state.get('usuario_autenticado', False):
         habilitar_descarga = False
         #st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=True)
@@ -245,9 +251,19 @@ if st.session_state.get("df_norm") is not None:
         habilitar_descarga = True
         #st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=False)
     st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=not habilitar_descarga, use_container_width=True)
+    
+    csv_bytes_h = st.session_state.df_norm_h.reset_index(drop=True).to_csv(index=False, sep=";", decimal=",", float_format="%.3f").encode("utf-8")
+    if not st.session_state.get('usuario_autenticado', False):
+        habilitar_descarga = False
+        #st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=True)
+    else:
+        habilitar_descarga = True
+        #st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=False)
+    st.sidebar.download_button("⬇️ Descargar CSV agrupado horario", csv_bytes_h, "curva_agrupado.csv", "text/csv", disabled=not habilitar_descarga, use_container_width=True)
+
 
     
-    tab1, tab2, tab3, tab4 = st.tabs(['Resumen', 'Perfiles Horarios', 'Autoconsumo', 'Comparaciones'])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(['Resumen', 'Perfiles Horarios', 'Autoconsumo', 'Comparaciones', 'Reactiva'])
 
     # ===============================================================
     # RESUMEN GENERAL
@@ -284,11 +300,11 @@ if st.session_state.get("df_norm") is not None:
                 #st.subheader("Resumen datos")
                 st.metric("Consumo total KWh", f"{st.session_state.consumo_total:,.0f}".replace(",", "."))
                 st.metric("Vertido total KWh", f"{st.session_state.vertido_total:,.0f}".replace(",", "."))
+                st.metric("Reactiva total kVArh", f"{st.session_state.reactiva_total:,.0f}".replace(",", "."))
             with c33:
                 #st.subheader("Resumen datos")
                 st.metric("Consumo neteo KWh", f"{st.session_state.consumo_neto:,.0f}".replace(",", "."))
                 st.metric("Vertido neteo KWh", f"{st.session_state.vertido_neto:,.0f}".replace(",", "."))
-
 
         c1,c2=st.columns([.7,.3])
         with c1:
@@ -296,16 +312,10 @@ if st.session_state.get("df_norm") is not None:
             # Mostrar gráfico
             graf_horario = graficar_curva_horaria(st.session_state.df_norm_h, st.session_state.frec)
             st.plotly_chart(graf_horario, use_container_width=True)
-            
-
-
         with c2:
             st.subheader("Consumo por periodos")
             graf_periodos, df_periodos = graficar_queso_periodos(st.session_state.df_norm_h)
             st.plotly_chart(graf_periodos, use_container_width=True)
-            #st.subheader("Medias horarias")
-            #graf_medias_horarias=graficar_media_horaria(st.session_state.df_norm)
-            #st.plotly_chart(graf_medias_horarias, use_container_width=True)
         
         c1,c2,c3=st.columns([.4,.3,.3])
         with c1:
@@ -314,11 +324,10 @@ if st.session_state.get("df_norm") is not None:
         with c2:
             graf_mensual = graficar_mensual_apilado(st.session_state.df_norm_h)
             st.plotly_chart(graf_mensual, use_container_width=True)
-            tabla_mensual = tabla_mensual_periodos(st.session_state.df_norm_h)
-            #df_tabla_fmt = formatear_tabla_mensual_es(tabla_mensual)
+            tabla_mensual_consumos = tabla_mensual_periodos(st.session_state.df_norm_h)
             from backend_comun import formatear_tabla_consumos
-            df_tabla_fmt = formatear_tabla_consumos(tabla_mensual, columna_mes="Mes", incluir_unidades=False)
-            st.dataframe(df_tabla_fmt, use_container_width=True, hide_index=True)
+            tabla_mensual_consumos_fmt = formatear_tabla_consumos(tabla_mensual_consumos, columna_mes="Mes", incluir_unidades=False)
+            st.dataframe(tabla_mensual_consumos_fmt, use_container_width=True, hide_index=True)
         with c3:
             graf_medias_horarias_total=graficar_media_horaria('Todos', ymax = None)
             st.plotly_chart(graf_medias_horarias_total, use_container_width=True)    
@@ -496,7 +505,12 @@ if st.session_state.get("df_norm") is not None:
         #print(total_autoconsumo)
 
         cobertura_media_porc=round(total_autoconsumo*100/total_consumo,2)
-        aprovechamiento_medio_porc=round(100-total_vertido*100/total_genfv,2)
+        #aprovechamiento_medio_porc=round(100-total_vertido*100/total_genfv,2)
+        aprovechamiento_medio_porc = (
+            round(100 - total_vertido * 100 / total_genfv, 2)
+            if pd.notna(total_genfv) and total_genfv != 0
+            else 0
+        )
 
 
         # DATAFRANES PARA QUESOS RESUMEN BALANCE ENERGÉTICO
@@ -518,7 +532,6 @@ if st.session_state.get("df_norm") is not None:
         with st.container():
             st.subheader('Balance energético')
             c1, c2, c3= st.columns([.3,.4,.4])
-        #c1,c2 = st.columns([.3,.7])
             with c1:
             
                 c21, c22 = st.columns(2)
@@ -527,7 +540,7 @@ if st.session_state.get("df_norm") is not None:
                     st.metric("Demanda total (kWh)", f"{total_demanda:,.0f}".replace(",", "."))
                     st.metric("Generación FV (kWh)", f"{total_genfv:,.0f}".replace(",", "."))
                 with c22:
-                    st.metric("", "")
+                    #st.metric("", "")
                     st.metric("Autoconsumo (kWh)", f"{total_autoconsumo:,.0f}".replace(",", "."))
                     st.metric("Vertido (kWh)", f"{total_vertido:,.0f}".replace(",", "."))
             with c2:
@@ -571,280 +584,335 @@ if st.session_state.get("df_norm") is not None:
             #if fecha_max_comparable <= fecha_ini_global:
             if fecha_max_comparable < fecha_ini_global:    
                 st.warning("No hay datos suficientes para realizar una comparativa anual (+1 año).")
-                st.stop()
-
-            # propuesta de rango inicial:
-            # si hay 1 año disponible, proponemos 1 año;
-            # si no, proponemos todo el tramo comparable disponible
-            fecha_delta = (pd.to_datetime(fecha_max_comparable) - relativedelta(years=1) + timedelta(days=1)).date()
-            if fecha_delta < fecha_ini_global:
-                fecha_delta = fecha_ini_global
-
-            rango_valido = (fecha_delta, fecha_max_comparable)
-
-
-            #inicialización del rango de fechas
-            #if "rango_fechas_comparativa" not in st.session_state:
-            #    fecha_fin_dt = pd.to_datetime(fecha_max_comparable)
-            #    fecha_delta = (fecha_fin_dt - relativedelta(years=1) + timedelta(days=1)).date()
-                #st.session_state.rango_fechas_comparativa = (fecha_delta, fecha_fin_global)
-            #    st.session_state.rango_fechas_comparativa = (fecha_delta, fecha_max_comparable)
-            
-            # inicialización / saneado del valor guardado en sesión
-            if "rango_fechas_comparativa" not in st.session_state:
-                st.session_state.rango_fechas_comparativa = rango_valido
+                #st.stop()
             else:
-                rango_actual = st.session_state.rango_fechas_comparativa
+                # propuesta de rango inicial:
+                # si hay 1 año disponible, proponemos 1 año;
+                # si no, proponemos todo el tramo comparable disponible
+                fecha_delta = (pd.to_datetime(fecha_max_comparable) - relativedelta(years=1) + timedelta(days=1)).date()
+                if fecha_delta < fecha_ini_global:
+                    fecha_delta = fecha_ini_global
 
-                if not isinstance(rango_actual, (list, tuple)) or len(rango_actual) != 2:
+                rango_valido = (fecha_delta, fecha_max_comparable)
+
+
+                #inicialización del rango de fechas
+                #if "rango_fechas_comparativa" not in st.session_state:
+                #    fecha_fin_dt = pd.to_datetime(fecha_max_comparable)
+                #    fecha_delta = (fecha_fin_dt - relativedelta(years=1) + timedelta(days=1)).date()
+                    #st.session_state.rango_fechas_comparativa = (fecha_delta, fecha_fin_global)
+                #    st.session_state.rango_fechas_comparativa = (fecha_delta, fecha_max_comparable)
+                
+                # inicialización / saneado del valor guardado en sesión
+                if "rango_fechas_comparativa" not in st.session_state:
                     st.session_state.rango_fechas_comparativa = rango_valido
                 else:
-                    f_ini, f_fin = rango_actual
-                    f_ini = pd.to_datetime(f_ini).date()
-                    f_fin = pd.to_datetime(f_fin).date()
+                    rango_actual = st.session_state.rango_fechas_comparativa
 
-                    # recortar a límites válidos
-                    f_ini = max(f_ini, fecha_ini_global)
-                    f_fin = min(f_fin, fecha_max_comparable)
-
-                    # si tras recortar queda inválido, reset
-                    if f_ini > f_fin:
+                    if not isinstance(rango_actual, (list, tuple)) or len(rango_actual) != 2:
                         st.session_state.rango_fechas_comparativa = rango_valido
                     else:
-                        st.session_state.rango_fechas_comparativa = (f_ini, f_fin)
+                        f_ini, f_fin = rango_actual
+                        f_ini = pd.to_datetime(f_ini).date()
+                        f_fin = pd.to_datetime(f_fin).date()
 
-            st.date_input("Selecciona periodo base", min_value=fecha_ini_global, max_value=fecha_max_comparable, key="rango_fechas_comparativa", format="DD.MM.YYYY")
+                        # recortar a límites válidos
+                        f_ini = max(f_ini, fecha_ini_global)
+                        f_fin = min(f_fin, fecha_max_comparable)
 
-            # =========================
-            # 🔹 4. RECUPERAR FECHAS
-            # =========================
-            rango = st.session_state.get("rango_fechas_comparativa")
+                        # si tras recortar queda inválido, reset
+                        if f_ini > f_fin:
+                            st.session_state.rango_fechas_comparativa = rango_valido
+                        else:
+                            st.session_state.rango_fechas_comparativa = (f_ini, f_fin)
 
-            if rango is None or len(rango) != 2:
-                st.stop()
+                st.date_input("Selecciona periodo base", min_value=fecha_ini_global, max_value=fecha_max_comparable, key="rango_fechas_comparativa", format="DD.MM.YYYY")
 
-            fecha_inicio, fecha_fin = rango
+                # =========================
+                # 🔹 4. RECUPERAR FECHAS
+                # =========================
+                rango = st.session_state.get("rango_fechas_comparativa")
 
-            inicio = pd.to_datetime(fecha_inicio)
-            fin = pd.to_datetime(fecha_fin)
+                if rango is None or len(rango) != 2:
+                    st.stop()
 
-            # =========================
-            # 🔹 5. GENERAR +1 AÑO
-            # =========================
-            inicio_1y = inicio + relativedelta(years=1)
-            fin_1y = fin + relativedelta(years=1)
+                fecha_inicio, fecha_fin = rango
 
-            # =========================
-            # 🔹 6. CHECK DATOS DISPONIBLES
-            # =========================
-            fecha_max_df = st.session_state.df_norm_h["fecha_hora"].max()
+                inicio = pd.to_datetime(fecha_inicio)
+                fin = pd.to_datetime(fecha_fin)
 
-            if fin_1y > fecha_max_df:
-                st.warning("No hay datos completos para el periodo comparativo (+1 año)")
-                st.stop()
-            
-            # =========================
-            # 🔹 7. FILTRADO
-            # =========================
-            df_base = st.session_state.df_norm_h[
-                (st.session_state.df_norm_h["fecha_hora"] >= inicio) &
-                (st.session_state.df_norm_h["fecha_hora"] < fin + pd.Timedelta(days=1))
-            ].copy()
+                # =========================
+                # 🔹 5. GENERAR +1 AÑO
+                # =========================
+                inicio_1y = inicio + relativedelta(years=1)
+                fin_1y = fin + relativedelta(years=1)
 
-            df_comp = st.session_state.df_norm_h[
-                (st.session_state.df_norm_h["fecha_hora"] >= inicio_1y) &
-                (st.session_state.df_norm_h["fecha_hora"] < fin_1y + pd.Timedelta(days=1))
-            ].copy()
-            # =========================
-            # 🔹 8. ETIQUETADO
-            # =========================
-            df_base["periodo_comp"] = "Base"
-            df_comp["periodo_comp"] = "+1 año"
+                # =========================
+                # 🔹 6. CHECK DATOS DISPONIBLES
+                # =========================
+                fecha_max_df = st.session_state.df_norm_h["fecha_hora"].max()
 
-            df_total = pd.concat([df_base, df_comp])
+                if fin_1y > fecha_max_df:
+                    st.warning("No hay datos completos para el periodo comparativo (+1 año)")
+                    st.stop()
+                
+                # =========================
+                # 🔹 7. FILTRADO
+                # =========================
+                df_base = st.session_state.df_norm_h[
+                    (st.session_state.df_norm_h["fecha_hora"] >= inicio) &
+                    (st.session_state.df_norm_h["fecha_hora"] < fin + pd.Timedelta(days=1))
+                ].copy()
 
-            # =========================
-            # 🔹 9. COLUMNAS TEMPORALES
-            # =========================
-            df_total["mes_nom"] = df_total["fecha_hora"].dt.strftime("%b")
-            df_total["mes_num"] = df_total["fecha_hora"].dt.month
-            df_total["mes_label"] = df_total["fecha_hora"].dt.strftime("%b %Y")
-            df_total["año"] = df_total["fecha_hora"].dt.year
+                df_comp = st.session_state.df_norm_h[
+                    (st.session_state.df_norm_h["fecha_hora"] >= inicio_1y) &
+                    (st.session_state.df_norm_h["fecha_hora"] < fin_1y + pd.Timedelta(days=1))
+                ].copy()
+                # =========================
+                # 🔹 8. ETIQUETADO
+                # =========================
+                df_base["periodo_comp"] = "Base"
+                df_comp["periodo_comp"] = "+1 año"
 
-            # 🔥 clave
-            mes_inicio = inicio.month
-            df_total["mes_orden"] = (df_total["mes_num"] - mes_inicio) % 12
+                df_total = pd.concat([df_base, df_comp])
 
-            # =========================
-            # 🔹 10. AGREGACIÓN MENSUAL
-            # =========================
-            df_mensual = (
-                df_total
-                .groupby(["periodo_comp", "mes_num", "mes_nom", "mes_orden"], as_index=False)["consumo_neto_kWh"]
-                .sum()
-            )
+                # =========================
+                # 🔹 9. COLUMNAS TEMPORALES
+                # =========================
+                df_total["mes_nom"] = df_total["fecha_hora"].dt.strftime("%b")
+                df_total["mes_num"] = df_total["fecha_hora"].dt.month
+                df_total["mes_label"] = df_total["fecha_hora"].dt.strftime("%b %Y")
+                df_total["año"] = df_total["fecha_hora"].dt.year
 
-            # =========================
-            # 🔹 11. PIVOT
-            # =========================
-            df_pivot = df_mensual.pivot(
-                index=["mes_num", "mes_nom", "mes_orden"],
-                columns="periodo_comp",
-                values="consumo_neto_kWh"
-            ).reset_index()
+                # 🔥 clave
+                mes_inicio = inicio.month
+                df_total["mes_orden"] = (df_total["mes_num"] - mes_inicio) % 12
 
-            
-            # =========================
-            # 🔹 12. DIFERENCIALES
-            # =========================
-            if "Base" in df_pivot.columns and "+1 año" in df_pivot.columns:
-                df_pivot["Δ"] = df_pivot["+1 año"] - df_pivot["Base"]
-                df_pivot["Δ %"] = df_pivot["Δ"] / df_pivot["Base"] * 100
+                # =========================
+                # 🔹 10. AGREGACIÓN MENSUAL
+                # =========================
+                df_mensual = (
+                    df_total
+                    .groupby(["periodo_comp", "mes_num", "mes_nom", "mes_orden"], as_index=False)["consumo_neto_kWh"]
+                    .sum()
+                )
 
-            fila_total = {
-                "Mes": "TOTAL",
-                "Base": df_pivot["Base"].sum(),
-                "+1 año": df_pivot["+1 año"].sum()
-            }
+                # =========================
+                # 🔹 11. PIVOT
+                # =========================
+                df_pivot = df_mensual.pivot(
+                    index=["mes_num", "mes_nom", "mes_orden"],
+                    columns="periodo_comp",
+                    values="consumo_neto_kWh"
+                ).reset_index()
 
-            fila_total["Δ"] = fila_total["+1 año"] - fila_total["Base"]
-            fila_total["Δ %"] = fila_total["Δ"] / fila_total["Base"] * 100
+                
+                # =========================
+                # 🔹 12. DIFERENCIALES
+                # =========================
+                if "Base" in df_pivot.columns and "+1 año" in df_pivot.columns:
+                    df_pivot["Δ"] = df_pivot["+1 año"] - df_pivot["Base"]
+                    df_pivot["Δ %"] = df_pivot["Δ"] / df_pivot["Base"] * 100
 
-            # =========================
-            # 🔹 13. ORDEN
-            # =========================
-            #df_pivot = df_pivot.sort_values("mes_num")
-            df_pivot = df_pivot.sort_values("mes_orden")
+                fila_total = {
+                    "Mes": "TOTAL",
+                    "Base": df_pivot["Base"].sum(),
+                    "+1 año": df_pivot["+1 año"].sum()
+                }
 
-            df_pivot["Mes"] = df_pivot["mes_nom"] + f" ({inicio.year}/{inicio_1y.year})"
+                fila_total["Δ"] = fila_total["+1 año"] - fila_total["Base"]
+                fila_total["Δ %"] = fila_total["Δ"] / fila_total["Base"] * 100
 
-            # =========================
-            # 🔹 14. FORMATO VISUAL
-            # =========================
-            df_pivot = df_pivot.drop(columns=["mes_num", "mes_orden"])
-            #df_pivot = df_pivot.rename(columns={"mes_nom": "Mes"})
-            df_pivot = df_pivot[["Mes", "Base", "+1 año", "Δ", "Δ %"]]
+                # =========================
+                # 🔹 13. ORDEN
+                # =========================
+                #df_pivot = df_pivot.sort_values("mes_num")
+                df_pivot = df_pivot.sort_values("mes_orden")
 
-            # añadir TOTAL
-            df_pivot = pd.concat([df_pivot, pd.DataFrame([fila_total])], ignore_index=True)
+                df_pivot["Mes"] = df_pivot["mes_nom"] + f" ({inicio.year}/{inicio_1y.year})"
+
+                # =========================
+                # 🔹 14. FORMATO VISUAL
+                # =========================
+                df_pivot = df_pivot.drop(columns=["mes_num", "mes_orden"])
+                #df_pivot = df_pivot.rename(columns={"mes_nom": "Mes"})
+                df_pivot = df_pivot[["Mes", "Base", "+1 año", "Δ", "Δ %"]]
+
+                # añadir TOTAL
+                df_pivot = pd.concat([df_pivot, pd.DataFrame([fila_total])], ignore_index=True)
 
 
 
-            # =========================
-            # 🔹 15. MOSTRAR
-            # =========================
-            st.dataframe(df_pivot, use_container_width=True, hide_index=True)
+                # =========================
+                # 🔹 15. MOSTRAR
+                # =========================
+                st.dataframe(df_pivot, use_container_width=True, hide_index=True)
 
-            delta = fila_total["Δ"]
-            delta_pct = fila_total["Δ %"]
+                delta = fila_total["Δ"]
+                delta_pct = fila_total["Δ %"]
 
-            # decidir texto
-            if delta > 0:
-                texto_tipo = "incremento"
-            elif delta < 0:
-                texto_tipo = "decremento"
-            else:
-                texto_tipo = "variación nula"
+                # decidir texto
+                if delta > 0:
+                    texto_tipo = "incremento"
+                elif delta < 0:
+                    texto_tipo = "decremento"
+                else:
+                    texto_tipo = "variación nula"
 
-            # formateo español (punto miles, coma decimal)
-            def formato_es(valor, decimales=0):
-                return f"{valor:,.{decimales}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                # formateo español (punto miles, coma decimal)
+                def formato_es(valor, decimales=0):
+                    return f"{valor:,.{decimales}f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-            delta_str = formato_es(delta, 0)
-            delta_pct_str = formato_es(delta_pct, 2)
+                delta_str = formato_es(delta, 0)
+                delta_pct_str = formato_es(delta_pct, 2)
 
-            # construir texto
-            resumen = f"El {texto_tipo} del consumo en el periodo seleccionado ha sido de {delta_str} kWh ({delta_pct_str}%)."
+                # construir texto
+                resumen = f"El {texto_tipo} del consumo en el periodo seleccionado ha sido de {delta_str} kWh ({delta_pct_str}%)."
 
-            # 🔥 TEXTO FINAL (número amarillo, unidad blanca, mismo tamaño)
-            resumen_html = f"""
-            <div style="font-size:28px; text-align:center; color:white;">
-                El <b>{texto_tipo}</b> del consumo en el periodo seleccionado ha sido de 
-                <span style="font-size:36px; font-weight:bold;">
-                    <span style="color:yellow;">{delta_str}</span> kWh
-                </span> 
-                (<span style="font-size:36px; font-weight:bold;">
-                    <span style="color:yellow;">{delta_pct_str}</span> %
-                </span>).
-            </div>
-            """
+                # 🔥 TEXTO FINAL (número amarillo, unidad blanca, mismo tamaño)
+                resumen_html = f"""
+                <div style="font-size:28px; text-align:center; color:white;">
+                    El <b>{texto_tipo}</b> del consumo en el periodo seleccionado ha sido de 
+                    <span style="font-size:36px; font-weight:bold;">
+                        <span style="color:yellow;">{delta_str}</span> kWh
+                    </span> 
+                    (<span style="font-size:36px; font-weight:bold;">
+                        <span style="color:yellow;">{delta_pct_str}</span> %
+                    </span>).
+                </div>
+                """
 
-            st.markdown(resumen_html, unsafe_allow_html=True)
+                st.markdown(resumen_html, unsafe_allow_html=True)
 
-            #st.markdown(resumen)
+                #st.markdown(resumen)
 
-            import plotly.express as px
+                
 
-            color_base = "#1f77b4"
-            color_comp = "#ff7f0e"
+                color_base = "#1f77b4"
+                color_comp = "#ff7f0e"
 
-            df_plot = df_pivot[df_pivot["Mes"] != "TOTAL"]
+                df_plot = df_pivot[df_pivot["Mes"] != "TOTAL"]
 
-            fig_mensual = px.bar(
-                df_plot,
-                x="Mes",
-                y=["Base", "+1 año"],
-                barmode="group",
-                #title="Comparativa mensual de consumo (kWh)"
-            )
+                fig_mensual = px.bar(
+                    df_plot,
+                    x="Mes",
+                    y=["Base", "+1 año"],
+                    barmode="group",
+                    #title="Comparativa mensual de consumo (kWh)"
+                )
 
-            # asignar colores correctamente
-            fig_mensual.for_each_trace(
-                lambda t: t.update(marker_color=color_base) if t.name == "Base"
-                else t.update(marker_color=color_comp)
-            )
+                # asignar colores correctamente
+                fig_mensual.for_each_trace(
+                    lambda t: t.update(marker_color=color_base) if t.name == "Base"
+                    else t.update(marker_color=color_comp)
+                )
 
-            fig_mensual.update_layout(
-                title=dict(
-                    text="Comparativa MENSUAL del periodo (kWh)",
-                    x=0.5,
-                    xanchor="center"
-                ),
-                                                                            # 🔥 centrado
-                legend_title_text="Periodo",
-                xaxis_title="Mes",
-                yaxis_title="kWh",
-                bargap=0.25,                    # 🔥 separación entre grupos
-                bargroupgap=0.1                 # 🔥 separación dentro del grupo
-            )
+                fig_mensual.update_layout(
+                    title=dict(
+                        text="Comparativa MENSUAL del periodo (kWh)",
+                        x=0.5,
+                        xanchor="center"
+                    ),
+                                                                                # 🔥 centrado
+                    legend_title_text="Periodo",
+                    xaxis_title="Mes",
+                    yaxis_title="kWh",
+                    bargap=0.25,                    # 🔥 separación entre grupos
+                    bargroupgap=0.1                 # 🔥 separación dentro del grupo
+                )
 
-            st.plotly_chart(fig_mensual, use_container_width=True)
+                st.plotly_chart(fig_mensual, use_container_width=True)
 
-            df_total_plot = df_pivot[df_pivot["Mes"] == "TOTAL"]
+                df_total_plot = df_pivot[df_pivot["Mes"] == "TOTAL"]
 
-            fig_total = px.bar(
-                df_total_plot,
-                x=["TOTAL"],
-                y=["Base", "+1 año"],
-                barmode="group",
-                #title="Comparativa total del periodo (kWh)"
-            )
+                fig_total = px.bar(
+                    df_total_plot,
+                    x=["TOTAL"],
+                    y=["Base", "+1 año"],
+                    barmode="group",
+                    #title="Comparativa total del periodo (kWh)"
+                )
 
-            fig_total.for_each_trace(
-                lambda t: t.update(marker_color=color_base) if t.name == "Base"
-                else t.update(marker_color=color_comp)
-            )
+                fig_total.for_each_trace(
+                    lambda t: t.update(marker_color=color_base) if t.name == "Base"
+                    else t.update(marker_color=color_comp)
+                )
 
-            # 🔥 añadir valores encima de cada barra
-            fig_total.update_traces(
-                texttemplate="%{y:,.0f}",
-                textposition="inside",
-                textfont_size=20
-            )
+                # 🔥 añadir valores encima de cada barra
+                fig_total.update_traces(
+                    texttemplate="%{y:,.0f}",
+                    textposition="inside",
+                    textfont_size=20
+                )
 
-            fig_total.update_layout(
-                title=dict(
-                    text="Comparativa TOTAL del periodo (kWh)",
-                    x=0.5,
-                    xanchor="center"
-                ),                      # 🔥 centrado
-                showlegend=True,
-                xaxis_title="",
-                yaxis_title="kWh",
-                bargap=0.4,             # 🔥 más separación visual
-                bargroupgap=0.1
-            )
+                fig_total.update_layout(
+                    title=dict(
+                        text="Comparativa TOTAL del periodo (kWh)",
+                        x=0.5,
+                        xanchor="center"
+                    ),                      # 🔥 centrado
+                    showlegend=True,
+                    xaxis_title="",
+                    yaxis_title="kWh",
+                    bargap=0.4,             # 🔥 más separación visual
+                    bargroupgap=0.1
+                )
 
-            st.plotly_chart(fig_total, use_container_width=True)
+                st.plotly_chart(fig_total, use_container_width=True)
+
+    
+
+    with tab5:
+        tabla_mensual_reactiva = tabla_mensual_periodos(st.session_state.df_norm_h, columna_valor='reactiva_kVArh')
+        df_tabla_fmt_react = formatear_tabla_consumos(tabla_mensual_reactiva, columna_mes="Mes", incluir_unidades=False)    
+        tabla_excesos_reactiva = calcular_tabla_excesos_reactiva(tabla_mensual_consumos, tabla_mensual_reactiva, porcentaje_limite=0.33)
+        df_tabla_fmt_exc_react = formatear_tabla_consumos(tabla_excesos_reactiva, columna_mes="Mes", incluir_unidades=False)   
+        tabla_mensual_fp = calcular_tabla_factor_potencia(tabla_mensual_consumos, tabla_mensual_reactiva)
+        df_fp_fmt = tabla_mensual_fp.copy()
+        # Quitar None / NaN visualmente
+        #df_fp_fmt = df_fp_fmt.replace([None, np.nan], "")
+
+        # Columnas de periodos
+        cols_fp = [c for c in df_fp_fmt.columns if c != "Mes"]
+
+        # Crear styler
+        styler_fp = (
+            df_fp_fmt
+            .style
+            .applymap(estilo_factor_potencia, subset=cols_fp)
+            .format({
+                col: lambda x: "" if x == "" or pd.isna(x) else f"{float(x):.2f}"
+                for col in cols_fp
+            })
+        )
+
+        for col in df_fp_fmt.columns:
+            if col != "Mes":
+                df_fp_fmt[col] = df_fp_fmt[col].apply(
+                    lambda x: "" if pd.isna(x) else f"{x:.2f}"
+                )
+        
+        tabla_coste_excesos_reactiva = calcular_tabla_coste_excesos_reactiva(tabla_excesos_reactiva, tabla_mensual_fp)
+        df_coste_excesos_reactiva_fmt = formatear_tabla_euros(
+            tabla_coste_excesos_reactiva,
+            columna_mes="Mes",
+            incluir_unidades=False
+        )
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.subheader('Tabla de consumos mensuales (kWh)')
+            st.dataframe(tabla_mensual_consumos_fmt, use_container_width=True, hide_index=True)
+            st.subheader('Tabla de FPs Factores de Potencia')
+            st.dataframe(styler_fp, use_container_width=True, hide_index=True)
+        with c2:
+            st.subheader('Tabla de reactiva mensual (kVArh)')
+            st.dataframe(df_tabla_fmt_react, use_container_width=True, hide_index=True)
+            st.dataframe(df_coste_excesos_reactiva_fmt, use_container_width=True, hide_index=True)
+        with c3:
+            st.subheader('Tabla de excesos REACTIVA (kVArh)')
+            st.dataframe(df_tabla_fmt_exc_react, use_container_width=True, hide_index=True)
+
+
 
 

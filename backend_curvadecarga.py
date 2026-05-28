@@ -228,7 +228,7 @@ def _guess_cols(df: pd.DataFrame):
     
     #c_kwh = find([r"consumo", r"energia", r"kwh", r"ae", r"active.?energy", r"importada", r"activa"])
     c_kwh = find(
-        [r"consumo", r"AI", r"energia", r"kwh", r"ae", r"active.?energy", r"importada", r"activa"],
+        [r"consumo", r"AI", r"energia", r"kwh", r"ae", r"active.?energy", r"importada", r"activa", r"medida"],
         prefer_qh_consumo=True
     )
     c_per = find([r"periodo", r"^p$", r"^p[1-6]$"])
@@ -902,7 +902,7 @@ def graficar_mensual_apilado(df_norm):
     return fig
 
 
-def tabla_mensual_periodos(df_norm):
+def tabla_mensual_periodos_old(df_norm):
 
     df_plot = (
         df_norm
@@ -934,6 +934,55 @@ def tabla_mensual_periodos(df_norm):
         )
         .reset_index()
     )
+
+    tabla["Total"] = tabla[orden_periodos].sum(axis=1)
+
+    tabla["Mes"] = tabla["mes"].dt.strftime("%b %Y")
+
+    tabla = tabla[["Mes"] + orden_periodos + ["Total"]]
+
+    return tabla
+
+def tabla_mensual_periodos(df_norm, columna_valor="consumo_neto_kWh"):
+
+    if columna_valor not in df_norm.columns:
+        return None
+
+    df_plot = (
+        df_norm
+        .assign(
+            mes=lambda d: d["fecha_hora"].dt.to_period("M").dt.to_timestamp()
+        )
+        .groupby(["mes", "periodo"], as_index=False)[columna_valor]
+        .sum()
+    )
+
+    colores_periodo = COLORES_3P if st.session_state.atr_dfnorm == "2.0" else COLORES_6P
+    orden_periodos = list(colores_periodo.keys())
+
+    df_plot["periodo"] = pd.Categorical(
+        df_plot["periodo"],
+        categories=orden_periodos,
+        ordered=True
+    )
+
+    tabla = (
+        df_plot
+        .pivot_table(
+            index="mes",
+            columns="periodo",
+            values=columna_valor,
+            aggfunc="sum",
+            fill_value=0,
+            observed=False
+        )
+        .reset_index()
+    )
+
+    # Por seguridad, asegurar que existen todas las columnas P1...P6/P1...P3
+    for p in orden_periodos:
+        if p not in tabla.columns:
+            tabla[p] = 0
 
     tabla["Total"] = tabla[orden_periodos].sum(axis=1)
 
@@ -1141,8 +1190,6 @@ def graficar_con_gen_mensual(df_norm, colores_energia):
 
 
 def graficar_dem_ver(df, colores_energia=None):
-
-    import plotly.graph_objects as go
 
     df_plot = df.copy()
 
@@ -2169,5 +2216,153 @@ def obtener_top_horas_revisables(df_analisis, top_n=50):
 
 
 
-    return df_fmt
+def calcular_tabla_excesos_reactiva(tabla_consumos, tabla_reactiva, porcentaje_limite=0.33):
+
+    if tabla_consumos is None or tabla_reactiva is None:
+        return None
+
+    colores_periodo = COLORES_3P if st.session_state.atr_dfnorm == "2.0" else COLORES_6P
+    orden_periodos = list(colores_periodo.keys())
+
+    tabla_excesos = tabla_consumos[["Mes"]].copy()
+
+    for p in orden_periodos:
+        if p in tabla_consumos.columns and p in tabla_reactiva.columns:
+            exceso = tabla_reactiva[p] - tabla_consumos[p] * porcentaje_limite
+            tabla_excesos[p] = exceso.clip(lower=0)
+        else:
+            tabla_excesos[p] = 0
+
+    tabla_excesos["Total"] = tabla_excesos[orden_periodos].sum(axis=1)
+
+    return tabla_excesos   
+
+def calcular_tabla_factor_potencia(tabla_consumos, tabla_reactiva):
+
+    if tabla_consumos is None or tabla_reactiva is None:
+        return None
+
+    colores_periodo = COLORES_3P if st.session_state.atr_dfnorm == "2.0" else COLORES_6P
+    orden_periodos = list(colores_periodo.keys())
+
+    tabla_fp = tabla_consumos[["Mes"]].copy()
+
+    for p in orden_periodos:
+        if p in tabla_consumos.columns and p in tabla_reactiva.columns:
+            ea = tabla_consumos[p]
+            er = tabla_reactiva[p]
+
+            tabla_fp[p] = np.where(
+                (ea.notna()) & (er.notna()) & (ea != 0),
+                ea / np.sqrt(ea**2 + er**2),
+                np.nan
+            )
+
+            tabla_fp[p] = tabla_fp[p].round(2)
+        else:
+            tabla_fp[p] = np.nan
+
+    # Total: importante calcularlo con Total ER / Total EA, no sumando FP
+    if "Total" in tabla_consumos.columns and "Total" in tabla_reactiva.columns:
+        ea_total = tabla_consumos["Total"]
+        er_total = tabla_reactiva["Total"]
+
+        tabla_fp["Total"] = np.where(
+            (ea_total.notna()) & (er_total.notna()) & (ea_total != 0),
+            ea_total / np.sqrt(ea_total**2 + er_total**2),
+            np.nan
+        )
+
+        tabla_fp["Total"] = tabla_fp["Total"].round(2)
+    else:
+        tabla_fp["Total"] = np.nan
+
+    return tabla_fp
+
+def estilo_factor_potencia(val):
+    if pd.isna(val):
+        return ""
+
+    try:
+        val = float(val)
+    except:
+        return ""
+
+    if val < 0.95:
+        return "background-color: #EA9999; color: #000000;"  # rosa Excel
+    else:
+        return "background-color: #D9EAD3; color: #000000;"  # verde Excel
+    
+def calcular_tabla_precio_penalizacion_reactiva(tabla_fp):
+
+    if tabla_fp is None:
+        return None
+
+    colores_periodo = COLORES_3P if st.session_state.atr_dfnorm == "2.0" else COLORES_6P
+    orden_periodos = list(colores_periodo.keys())
+
+    tabla_precio = tabla_fp[["Mes"]].copy()
+
+    for p in orden_periodos:
+        if p in tabla_fp.columns:
+            fp = pd.to_numeric(tabla_fp[p], errors="coerce")
+
+            tabla_precio[p] = np.select(
+                [
+                    fp >= 0.95,
+                    (fp >= 0.80) & (fp < 0.95),
+                    fp < 0.80
+                ],
+                [
+                    0,
+                    0.0411554,
+                    0.062332
+                ],
+                default=np.nan
+            )
+        else:
+            tabla_precio[p] = np.nan
+
+    tabla_precio["Total"] = np.nan
+
+    return tabla_precio
+
+def calcular_tabla_coste_excesos_reactiva(tabla_excesos_reactiva, tabla_fp):
+
+    if tabla_excesos_reactiva is None or tabla_fp is None:
+        return None
+
+    colores_periodo = COLORES_3P if st.session_state.atr_dfnorm == "2.0" else COLORES_6P
+    orden_periodos = list(colores_periodo.keys())
+
+    tabla_coste = tabla_excesos_reactiva[["Mes"]].copy()
+
+    for p in orden_periodos:
+        if p in tabla_excesos_reactiva.columns and p in tabla_fp.columns:
+
+            excesos = pd.to_numeric(tabla_excesos_reactiva[p], errors="coerce").fillna(0)
+            fp = pd.to_numeric(tabla_fp[p], errors="coerce")
+
+            precio_penalizacion = np.select(
+                [
+                    fp >= 0.95,
+                    (fp >= 0.80) & (fp < 0.95),
+                    fp < 0.80
+                ],
+                [
+                    0,
+                    0.0411554,
+                    0.062332
+                ],
+                default=0
+            )
+
+            tabla_coste[p] = excesos * precio_penalizacion
+
+        else:
+            tabla_coste[p] = 0
+
+    tabla_coste["Total"] = tabla_coste[orden_periodos].sum(axis=1)
+
+    return tabla_coste
 

@@ -4,6 +4,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 import numpy as np
+from backend_comun import aplicar_estilo
 
 # LECTURA DE LOS JSON CON LOS DATOS DE ESTRUCTURA DE LA GENERACIÓN Y POTENCIA INSTALADA
 @st.cache_data
@@ -11,13 +12,10 @@ def leer_json(file_id, widget):
     url = f"https://drive.google.com/uc?export=download&id={file_id}"
     response = requests.get(url)
     datos_json = response.json()
-    
     column_mapping = {
         "estructura-generacion": {"valor": "gen_GWh_dia", "porcentaje": "porc_gen", "coef":1000},
         "potencia-instalada": {"valor": "pot_GW", "porcentaje": "porc_pot", "coef": 1000}
     }
-    
-    # Convertir a DataFrame
     df_in = pd.DataFrame(datos_json)
     df_in['fecha'] = pd.to_datetime(df_in['fecha'], utc=True).dt.tz_convert('Europe/Madrid').dt.tz_localize(None)
     df_in['mes_num'] = df_in['fecha'].dt.month
@@ -29,7 +27,6 @@ def leer_json(file_id, widget):
             "valor": column_mapping[widget]["valor"],
             "porcentaje": column_mapping[widget]["porcentaje"]
         }, inplace=True)
-    
     return df_in
     
      
@@ -63,16 +60,16 @@ def tablas_diario(df_in_gen, df_in_pot, horas_eqmax):
     df_out['FU'] = round(df_out['horas_eq']/df_out['horas_eqmax'], 1)
     df_out.sort_values(by='fecha', inplace=True)
     df_out.rename(columns={'porc_gen':'%_mix_gen', 'porc_pot':'%_mix_pot'}, inplace=True)
-    print('DF DIARIO TODOS LOS DIAS DESDE 2018')
-    print (df_out)
+    #print('DF DIARIO TODOS LOS DIAS DESDE 2018')
+    #print (df_out)
 
     df_check = df_out.copy()
 
-    print("Total filas:", len(df_check))
-    print("NaN en %_mix_gen:", df_check['%_mix_gen'].isna().sum())
-    print("Ceros en %_mix_gen:", (df_check['%_mix_gen'] == 0).sum())
-    print("Mín %_mix_gen:", df_check['%_mix_gen'].min())
-    print("Máx %_mix_gen:", df_check['%_mix_gen'].max())
+    #print("Total filas:", len(df_check))
+    #print("NaN en %_mix_gen:", df_check['%_mix_gen'].isna().sum())
+    #print("Ceros en %_mix_gen:", (df_check['%_mix_gen'] == 0).sum())
+    #print("Mín %_mix_gen:", df_check['%_mix_gen'].min())
+    #print("Máx %_mix_gen:", df_check['%_mix_gen'].max())
     
     return df_out
 
@@ -83,24 +80,17 @@ def tablas_año_seleccionado(df, tec_filtro):
 
     # vamos a añadir una columna auxiliar para calcular el FC anual
     df['pot_horas'] = df['pot_GW'] * 24
-
-   
     #tabla datos anual por tecnología. usada para grafico bolas, fu y mix    
     df_anual = df.groupby('tecnologia').agg({
         'gen_GWh_dia':'sum',
         'pot_GW':'mean',
         'pot_horas':'sum',
-        #'FC':'mean',
         'horas_eq':'sum',
-        #'FU':'mean',
         'horas_eqmax':'sum',
-        #'%_mix_gen':'mean',
     }).reset_index()
 
     df_anual['FC'] = df_anual['gen_GWh_dia'] / df_anual['pot_horas']
     df_anual['FU'] = df_anual['horas_eq'] / df_anual['horas_eqmax']
-
-    
     df_anual.rename(columns = {'gen_GWh_dia':'generacion_GWh'}, inplace = True)
     df_anual['horas_eq'] = df_anual['horas_eq'].astype(int)
     #eliminamos las filas de gen y pot total
@@ -108,18 +98,13 @@ def tablas_año_seleccionado(df, tec_filtro):
     #calculamos totales de generacion y potencia
     gen_total = round(df_anual['generacion_GWh'].sum(), 1)
     df_anual['%_mix_gen'] = df_anual['generacion_GWh'] / gen_total
-    #gen_total = df_anual['generacion_GWh'].sum()
     pot_total = round(df_anual['pot_GW'].sum(), 1)
-    #añadimos %_mix_gen correctamente
-    #df_anual['%_mix_gen'] = df_anual['generacion_GWh'] / gen_total
-    
     #creamos un df solo con las tecnologias seleccionadas
     df_anual_select = df_anual[df_anual['tecnologia'].isin(tec_filtro)].copy()
     df_anual_select['FNU'] = 1 - df_anual_select['FU']
 
     print ('df para visualización bolas, fc, fu y mix')
     print (df_anual_select)
-
 
     # Dataframe para gráfico de bolas FC
     df_out_bolas = df_anual_select.sort_values(['FC'], ascending = False)
@@ -146,7 +131,6 @@ def tablas_año_seleccionado(df, tec_filtro):
     df_out_mix = pd.concat([df_out_mix, pd.DataFrame([nueva_fila])], ignore_index=True)
     df_out_mix = df_out_mix.sort_values(['%_mix_gen'], ascending=False)
     
-
     return df_out_bolas, df_out_fc, df_out_fu, df_out_mix 
 
 # GRAFICO 1. DE BOLAS --------------------------------------------------------------------------------------------
@@ -160,7 +144,7 @@ def graficar_bolas(df, colores_tecnologia):
         )
     graf_bolas.update_traces(
         text = df['tecnologia'],  # Usa los índices (tecnologías) como texto
-        textposition = 'middle center',
+        textposition = 'middle right',
         hovertemplate = '<b>Tecnología: %{customdata[0]}</b><br><br>Potencia instalada (GW): %{customdata[1]:.1f}<br>Generación (GWh): %{customdata[2]:.0f}<br>FC: %{customdata[3]:.2f}<br>Horas equivalentes: %{customdata[4]:.0f}<extra></extra>',
         )
     graf_bolas.update_layout(
@@ -172,13 +156,17 @@ def graficar_bolas(df, colores_tecnologia):
             xanchor='center',
             x=.5
         ),
-        showlegend=True
+        showlegend=True,
+        title=""
         )
     graf_bolas.update_xaxes(
         showgrid=True
     )
+    graf_bolas=aplicar_estilo(graf_bolas)
     
     return graf_bolas
+
+
 
 
 #NUEVO GRÁFICO 2. DISPERSIÓN FC--------------------------------------------------------------------------
@@ -207,16 +195,14 @@ def graficar_new_fc(df, color_tecnologia):
         color = 'tecnologia', color_discrete_map = color_tecnologia,
         custom_data = df[['tecnologia', 'pot_GW', 'gen_GWh_dia', 'FC', 'horas_eq', 'fecha']],
         labels = {'x_jitter':'Tecnología'},
-        #animation_frame = 'datetime'
     )
 
     graf.update_traces(
-        #text = df['tecnologia'],  # Usa los índices (tecnologías) como texto
-        #textposition = 'middle center',
+        text = df['tecnologia'],  # Usa los índices (tecnologías) como texto
+        textposition = 'middle right',
         hovertemplate = '<b>Tecnología: %{customdata[0]}</b><br><br>Potencia instalada (GW): %{customdata[1]:.1f}<br>Generación (GWh): %{customdata[2]:.0f}<br>FC: %{customdata[3]:.2f}<br>Horas equivalentes: %{customdata[4]:.0f}<br>Fecha: %{customdata[5]|%Y-%m-%d}<extra></extra>',
-        )
+    )
 
-    
     graf.update_layout(
         xaxis=dict(
             tickmode='array',
@@ -227,6 +213,7 @@ def graficar_new_fc(df, color_tecnologia):
         ),
         #width=1000,
         showlegend = False,
+        title=""
     )
     for _, row in medias_fc.iterrows():
         tecnologia = row['tecnologia']
@@ -253,6 +240,7 @@ def graficar_new_fc(df, color_tecnologia):
             yshift = 20,
             font=dict(color='yellow', size=20)
         )
+        graf=aplicar_estilo(graf)
     return graf
 
 
@@ -273,14 +261,23 @@ def graficar_FU(df, colores_tecnologia):
 
     graf_FU.update_traces(
         texttemplate='%{text:.1%}',
-        textposition='inside',
-        hovertemplate = '<b>Tecnología: %{customdata[0]}</b><br><br>FC: %{customdata[1]:.2f}<br>Horas equivalentes: %{customdata[2]:.0f}<br>FU: %{customdata[3]:.2f}<br>Horas equivalentes max: %{customdata[4]:.0f}<extra></extra>',
+        #textposition='inside',
+        textfont=dict(size=18),
+        hovertemplate=(
+            '<b>Tecnología: %{customdata[0]}</b><br><br>'
+            'FC: %{customdata[1]:.2f}<br>'
+            'Horas equivalentes: %{customdata[2]:.0f}<br>'
+            'FU: %{customdata[3]:.2f}<br>'
+            'Horas equivalentes max: %{customdata[4]:.0f}'
+            '<extra></extra>'
+        ),
     )
     graf_FU.update_layout(
         xaxis_tickformat = '.0%',
         bargap = .4,
         showlegend = False,
         yaxis=dict(visible = True, title_text = None),
+        title=""
     )
 
     graf_FU.add_bar(
@@ -296,6 +293,7 @@ def graficar_FU(df, colores_tecnologia):
     graf_FU.update_xaxes(
         showgrid = True
     )
+    graf_FU=aplicar_estilo(graf_FU)
 
     return graf_FU
 
@@ -315,29 +313,27 @@ def graficar_mix(df, colores_tecnologia):
         #formateamos el texto de las barras
         #texttemplate = '%{text:.1%}',
         #textposition = 'inside',  # Coloca el texto en el centro de las burbujas
+        textfont=dict(size=15),  # Tamaño y color del texto
         hovertemplate = '<b>Tecnología: %{customdata[0]}</b><br><br>Potencia media instalada (GW): %{customdata[1]:.1f}<br>Generación (GWh): %{customdata[2]:.0f}<br>% mix: %{customdata[3]:.2f%}<extra></extra>',
         
-        #textfont=dict(size=12, color="black"),  # Tamaño y color del texto
+        
         )
     graf_mix.update_layout(
-        #title=dict(
-        #    text='Aportación al mix de generación (%)',
-        #    x=.5,
-        #    xanchor='center',
-        #),
         xaxis_tickformat = '.0%',
         bargap = .4,
         showlegend = False,
         yaxis = dict(visible = True, title_text = None),
+        title=""
     )
 
     graf_mix.update_xaxes(
         showgrid = True
     )
+    graf_mix=aplicar_estilo(graf_mix)
     return graf_mix
 
 #GRAFICO 4. MIX GENERACION EN QUESO------------------------------------------
-def graficar_mix_queso(df, colores_tecnologia):
+def graficar_mix_queso_old(df, colores_tecnologia):
     graf_mix_queso = px.pie(
         df, 
         names = 'tecnologia', 
@@ -348,6 +344,7 @@ def graficar_mix_queso(df, colores_tecnologia):
         hover_name = 'tecnologia',
         #hover_data = {'generacion_GWh': ':.0f'}, 
         hole = .4,
+        
     )
 
     graf_mix_queso.update_traces(textinfo = 'percent+label',
@@ -355,7 +352,42 @@ def graficar_mix_queso(df, colores_tecnologia):
         insidetextorientation = 'horizontal',
         #hovertemplate = '<b>Tecnología: %{customdata[0]}</b><br><br>Potencia media instalada (GW): %{customdata[1]:.1f}<br>Generación (GWh): %{customdata[2]:.0f}<br>% mix: %{customdata[3]:.1f}<extra></extra>',
     )
+    graf_mix_queso.update_layout(title="")
+    graf_mix_queso=aplicar_estilo(graf_mix_queso)
     
+    return graf_mix_queso
+
+# GRAFICO 4. MIX GENERACION EN QUESO ------------------------------------------
+def graficar_mix_queso(df, colores_tecnologia):
+
+    graf_mix_queso = px.pie(
+        df,
+        names='tecnologia',
+        values='generacion_GWh',
+        color='tecnologia',
+        color_discrete_map=colores_tecnologia,
+        hover_name='tecnologia',
+        hole=.4,
+        #custom_data=['tecnologia', 'generacion_GWh']
+    )
+
+    graf_mix_queso.update_traces(
+        textinfo='percent+label',
+        textposition='inside',
+        insidetextorientation='horizontal',
+        textfont=dict(size=15), 
+        hovertemplate=(
+            '<b>Tecnología: %{label}</b><br><br>'
+            'Generación: %{value:.0f} GWh<br>'
+            'Mix generación: %{percent:.1%}'
+            '<extra></extra>'
+        )
+    )
+
+    graf_mix_queso.update_layout(title="")
+
+    graf_mix_queso = aplicar_estilo(graf_mix_queso)
+
     return graf_mix_queso
 
 
@@ -370,8 +402,8 @@ def gen_evol(df_out_equiparado):
     
     df_out = df_in[df_in['tecnologia'].isin(st.session_state.tec_seleccionadas)]
         
-    print('df_out')
-    print(df_out)
+    #print('df_out')
+    #print(df_out)
     
     # % MIX GEN
     # calculamos la generación total por tecnología
@@ -382,8 +414,10 @@ def gen_evol(df_out_equiparado):
         .reset_index()
         .rename(columns={'gen_GWh_dia': 'gen_GWh'})
     )
-    print('df gen tec')
-    print(df_gen_tec)
+
+    #print('df gen tec')
+    #print(df_gen_tec)
+    
     # calculamos la generación TOTAL
     df_gen_total = (
         df_in[df_in['tecnologia'] == 'Generación total']
@@ -399,8 +433,8 @@ def gen_evol(df_out_equiparado):
     )
     df_mix['%_mix_gen'] = df_mix['gen_GWh'] / df_mix['gen_total']
 
-    print ('df mix')
-    print (df_mix)
+    #print ('df mix')
+    #print (df_mix)
 
 
     # FC
@@ -418,16 +452,9 @@ def gen_evol(df_out_equiparado):
     )
     df_fc['FC'] = df_fc['gen_GWh'] / df_fc['pot_horas']
 
-    print('df FC')
-    print(df_fc)
+    #print('df FC')
+    #print(df_fc)
 
-    # GENERACIÓN
-    #df_gen = (
-    #    df_out
-    #    .groupby(['año', 'tecnologia'])['gen_GWh_dia']
-    #    .sum()
-    #    .reset_index()
-    #)
 
     df_out_evol = (
         df_fc[['año', 'tecnologia', 'FC']]
@@ -448,17 +475,35 @@ def gen_evol(df_out_equiparado):
     #df_out_evol = df_out_evol.rename(columns ={'gen_GWh_dia': 'gen_GWh'})
     df_out_evol['%_mix_gen'] = df_out_evol['%_mix_gen']*100
     
-    print ('df_out_evol')
-    print (df_out_evol)
+    #print ('df_out_evol')
+    #print (df_out_evol)
 
     return df_out_evol
 
+
 def graficar_evol(df, colores_tecnologia, param):
-    graf_evol = px.line(df, x = 'año', y = param,
-        color = 'tecnologia',
-        color_discrete_map = colores_tecnologia,
-        #barmode='group'
+
+    graf_evol = px.line(
+        df,
+        x='año',
+        y=param,
+        color='tecnologia',
+        color_discrete_map=colores_tecnologia,
+        custom_data=['tecnologia', 'año', param],
+        markers=True
     )
+
+    graf_evol.update_traces(
+        line=dict(width=2),
+        marker=dict(size=5),
+        hovertemplate=(
+            '<b>Tecnología: %{customdata[0]}</b><br><br>'
+            'Año: %{customdata[1]}<br>'
+            f'{param}: ' + '%{customdata[2]:.2f}'
+            '<extra></extra>'
+        )
+    )
+
     graf_evol.update_layout(
         legend=dict(
             title='',
@@ -469,13 +514,14 @@ def graficar_evol(df, colores_tecnologia, param):
             x=.5
         ),
         showlegend=True,
-        xaxis = dict(tickmode = 'array'),
-        #bargroupgap = 0.1
+        xaxis=dict(tickmode='array'),
+        title=""
     )
-    graf_evol.update_xaxes(
-        showgrid = True
-    )
-    #graf_evol.update_yaxes(range = [0, 1])
+
+    graf_evol.update_xaxes(showgrid=True)
+
+    graf_evol = aplicar_estilo(graf_evol)
+
     return graf_evol
 
 # NUEVO GRÁFICO DE EVOLUCION DE LA EFICIENCIA DEL SISTEMA+++++++++++++++++++++++++++++++++++++++
@@ -520,16 +566,13 @@ def calc_efi(df, coef):
     
     df_out['eficiencia'] = df_out['gen_GWh'] / df_out['gen_max']
     
-    print ('df_out_efi_evol')
-    print (df_out)
+
+    #print ('df_out_efi_evol')
+    #print (df_out)
     return df_out
 
 def graficar_efi_evol(df):
-    graf = px.area(df, x = 'año', y = 'eficiencia',
-        #color = 'tecnologia',
-        #color_discrete_map = colores_tecnologia,
-        #barmode='group'
-    )
+    graf = px.area(df, x = 'año', y = 'eficiencia')
     graf.update_layout(
         legend=dict(
             title='',
@@ -541,7 +584,7 @@ def graficar_efi_evol(df):
         ),
         showlegend=True,
         xaxis = dict(tickmode = 'array'),
-        #bargroupgap = 0.1
+        title=""
     )
     graf.update_xaxes(
         showgrid = True
@@ -551,7 +594,7 @@ def graficar_efi_evol(df):
         fillcolor='rgba(255, 215, 0, 0.3)',  # fondo amarillo translúcido
         marker = dict(color='gold')
     )
-    #graf_evol.update_yaxes(range = [0, 1])
+    graf=aplicar_estilo(graf)
     return graf
 
 
@@ -602,18 +645,7 @@ def graficar_gen_diaria(df, df_omie, colores_tecnologia):
         ),
         showlegend=True,
         xaxis = dict(tickmode = 'array'),
-        
-        #yaxis2=dict(
-        #    title=dict(
-        #        text='Precio SPOT+SSAA (€/MWh)',
-        #        font=dict(color='cyan')
-        #    ),
-        #    overlaying='y',
-        #    side='right',
-        #    showgrid=False,
-        #    tickfont=dict(color='cyan')
-        #),
-        #bargroupgap = 0.1
+        title=""
     )
 
     # Verificar si hay una traza asociada a yaxis='y2'
@@ -632,6 +664,8 @@ def graficar_gen_diaria(df, df_omie, colores_tecnologia):
                 tickfont=dict(color='cyan')
             )
         )
+    
+    graf=aplicar_estilo(graf)
 
     return graf
 

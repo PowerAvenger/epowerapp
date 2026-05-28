@@ -999,6 +999,7 @@ def graficar_2026(df_2026, precio_medio_2026):
         hovermode="x unified",
         height=500
     )
+    fig = aplicar_estilo(fig)
 
     return fig
 
@@ -1180,7 +1181,7 @@ def graficar_media_prevista_2026(df_media_2026):
         mode="lines",
         name="Media prevista 2026",
         line=dict(
-            color="yellow",
+            color="darkorange",
             width=2,
             dash="dot"
         ),
@@ -1235,13 +1236,14 @@ def graficar_media_prevista_2026(df_media_2026):
         hovermode="x unified",
         height=500
     )
+    fig = aplicar_estilo(fig)
 
     return fig
 
 
 # CONSTRUIMOS UN DF CON LA EVOLUCIÓN DEL PRECIO MENSUAL FUTURO Y LA MEDIA OMIP PARA 12 MESES MÓVILES
 @st.cache_data()
-def construir_curva_omip_mensual(df_ftb_m, df_ftb_q, fecha_ref):
+def construir_curva_omip_mensual_12m(df_ftb_m, df_ftb_q, fecha_ref):
 
     import pandas as pd
 
@@ -1342,7 +1344,7 @@ def construir_curva_omip_mensual(df_ftb_m, df_ftb_q, fecha_ref):
 
 
 @st.cache_data()
-def graficar_curva_omip_mensual(df_omip, precio_medio=None):
+def graficar_curva_omip_mensual_12m(df_omip, precio_medio=None):
   
 
     fig = go.Figure()
@@ -1353,7 +1355,7 @@ def graficar_curva_omip_mensual(df_omip, precio_medio=None):
         mode="lines+markers+text",
         name="OMIP",
         line=dict(color="darkorange", width=3, dash='dash'),
-        marker=dict(size=14, symbol="square"),
+        marker=dict(size=10, symbol="square"),
         text=[f"{v:.1f}" for v in df_omip["precio"]],
         textposition="top center",
         textfont=dict(size=14, color="white"),
@@ -1409,6 +1411,7 @@ def graficar_curva_omip_mensual(df_omip, precio_medio=None):
         hovermode="x unified",
         height=500
     )
+    fig = aplicar_estilo(fig)
 
     return fig
 
@@ -1752,7 +1755,7 @@ def graficar_evolucion_media_omip(df_evol):
         mode="lines",
         name="Media OMIP forward 12M",
         line=dict(
-            color="yellow",
+            color="darkorange",
             width=1
         ),
         text=df_plot["hover_omip"],
@@ -1830,6 +1833,7 @@ def graficar_evolucion_media_omip(df_evol):
         hovermode="x",
         height=500
     )
+    fig = aplicar_estilo(fig)
 
     return fig
 
@@ -2125,3 +2129,320 @@ def graficar_omip_suavizado_vs_omie_real(
     fig = aplicar_estilo(fig)
 
     return fig
+
+#@st.cache_data()
+def graficar_omip_vs_omie_previsto_ajustado_1y(
+    df_evol,
+    ventana_dias=15,
+    col_fecha="Fecha",
+    col_omip="media_forward_12m",
+    col_omip_suav=None,
+    col_omie_real="omie_real_12m",
+    suavizar_omip=True,
+    fecha_max_omie_real=None,
+    titulo=None
+):
+    """
+    Gráfico nuevo:
+      - OMIP forward 12M suavizado
+      - OMIE real 12M posterior
+      - OMIE previsto 12M ajustado con el desvío porcentual observado 1 año antes
+      - Barras con el diferencial entre OMIE real y OMIE previsto ajustado
+
+    Fórmulas:
+
+        desvio_pct = (OMIE_real_12m - OMIP_forward_12m_suav) / OMIP_forward_12m_suav
+
+        OMIE_previsto_1y(t) = OMIP_forward_12m_suav(t) * (1 + desvio_pct(t - 1 año))
+
+        diferencial_nuevo(t) = OMIE_real_12m(t) - OMIE_previsto_1y(t)
+
+    Importante:
+    Si se pasa fecha_max_omie_real, se eliminan los valores de OMIE real posterior
+    para fechas en las que no puede existir una ventana posterior completa de 12 meses.
+    """
+
+    import pandas as pd
+    import numpy as np
+    import plotly.graph_objects as go
+
+    df_plot = df_evol.copy()
+
+    # ------------------------------------------------------------
+    # 1. Fechas y orden
+    # ------------------------------------------------------------
+    df_plot[col_fecha] = pd.to_datetime(
+        df_plot[col_fecha],
+        errors="coerce",
+        dayfirst=True
+    )
+
+    df_plot = (
+        df_plot
+        .dropna(subset=[col_fecha])
+        .sort_values(col_fecha)
+        .reset_index(drop=True)
+    )
+
+    # ------------------------------------------------------------
+    # 2. Conversión numérica
+    # ------------------------------------------------------------
+    for col in [col_omip, col_omie_real]:
+        if col in df_plot.columns:
+            df_plot[col] = pd.to_numeric(df_plot[col], errors="coerce")
+
+    # ------------------------------------------------------------
+    # 3. Control de validez del OMIE real posterior 12M
+    # ------------------------------------------------------------
+    if fecha_max_omie_real is not None:
+        fecha_max_omie_real = pd.to_datetime(
+            fecha_max_omie_real,
+            errors="coerce",
+            dayfirst=True
+        )
+
+        if pd.notna(fecha_max_omie_real):
+            fecha_limite_omie_posterior = fecha_max_omie_real - pd.DateOffset(years=1)
+
+            df_plot.loc[
+                df_plot[col_fecha] > fecha_limite_omie_posterior,
+                col_omie_real
+            ] = np.nan
+
+    # ------------------------------------------------------------
+    # 4. OMIP forward 12M suavizado
+    # ------------------------------------------------------------
+    if col_omip_suav is not None and col_omip_suav in df_plot.columns:
+        col_omip_base = col_omip_suav
+        df_plot[col_omip_base] = pd.to_numeric(
+            df_plot[col_omip_base],
+            errors="coerce"
+        )
+
+    else:
+        if suavizar_omip:
+            col_omip_base = f"{col_omip}_suav_{ventana_dias}d"
+            df_plot[col_omip_base] = (
+                df_plot[col_omip]
+                .rolling(window=ventana_dias, min_periods=1)
+                .mean()
+            )
+        else:
+            col_omip_base = col_omip
+
+    # ------------------------------------------------------------
+    # 5. Desvío porcentual histórico OMIE real vs OMIP
+    # ------------------------------------------------------------
+    df_plot["desvio_pct_omie_vs_omip"] = np.where(
+        df_plot[col_omip_base].notna()
+        & df_plot[col_omie_real].notna()
+        & (df_plot[col_omip_base] != 0),
+        (df_plot[col_omie_real] - df_plot[col_omip_base]) / df_plot[col_omip_base],
+        np.nan
+    )
+
+    # ------------------------------------------------------------
+    # 6. Desplazar ese desvío un año hacia delante
+    # ------------------------------------------------------------
+    df_desvios = df_plot[[col_fecha, "desvio_pct_omie_vs_omip"]].copy()
+
+    df_desvios = df_desvios.rename(
+        columns={
+            "desvio_pct_omie_vs_omip": "desvio_pct_1y"
+        }
+    )
+
+    df_desvios[col_fecha] = df_desvios[col_fecha] + pd.DateOffset(years=1)
+
+    df_desvios = (
+        df_desvios
+        .dropna(subset=["desvio_pct_1y"])
+        .groupby(col_fecha, as_index=False)["desvio_pct_1y"]
+        .mean()
+    )
+
+    df_plot = df_plot.merge(
+        df_desvios,
+        on=col_fecha,
+        how="left"
+    )
+
+    # ------------------------------------------------------------
+    # 7. OMIE previsto ajustado con desvío porcentual de hace 1 año
+    # ------------------------------------------------------------
+    df_plot["omie_previsto_ajustado_1y"] = np.where(
+        df_plot[col_omip_base].notna()
+        & df_plot["desvio_pct_1y"].notna(),
+        df_plot[col_omip_base] * (1 + df_plot["desvio_pct_1y"]),
+        np.nan
+    )
+
+    # ------------------------------------------------------------
+    # 8. Nuevo diferencial para barras
+    # ------------------------------------------------------------
+    df_plot["diferencial_omie_real_vs_previsto_1y"] = np.where(
+        df_plot[col_omie_real].notna()
+        & df_plot["omie_previsto_ajustado_1y"].notna(),
+        df_plot[col_omie_real] - df_plot["omie_previsto_ajustado_1y"],
+        np.nan
+    )
+
+    df_plot["diferencial_pct_omie_real_vs_previsto_1y"] = np.where(
+        df_plot["omie_previsto_ajustado_1y"].notna()
+        & df_plot[col_omie_real].notna()
+        & (df_plot["omie_previsto_ajustado_1y"] != 0),
+        df_plot["diferencial_omie_real_vs_previsto_1y"]
+        / df_plot["omie_previsto_ajustado_1y"],
+        np.nan
+    )
+
+    # ------------------------------------------------------------
+    # 9. Título
+    # ------------------------------------------------------------
+    if titulo is None:
+        titulo = (
+            "OMIP suavizado vs OMIE real posterior 12M "
+            f"· OMIE previsto ajustado 1Y · ventana {ventana_dias} días"
+        )
+
+    # ------------------------------------------------------------
+    # 10. Gráfico
+    # ------------------------------------------------------------
+    fig = go.Figure()
+
+    # Barras: diferencial nuevo
+    fig.add_trace(
+        go.Bar(
+            x=df_plot[col_fecha],
+            y=df_plot["diferencial_omie_real_vs_previsto_1y"],
+            name="Diferencial OMIE real - OMIE previsto 1Y (€/MWh)",
+            marker=dict(
+                color="rgba(0, 140, 190, 0.75)"
+            ),
+            hovertemplate=(
+                "<b>%{x|%d/%m/%Y}</b><br>"
+                "Diferencial real - previsto 1Y: %{y:.2f} €/MWh"
+                "<extra></extra>"
+            )
+        )
+    )
+
+    # Línea OMIP suavizado
+    fig.add_trace(
+        go.Scatter(
+            x=df_plot[col_fecha],
+            y=df_plot[col_omip_base],
+            mode="lines",
+            name=f"OMIP forward 12M suavizado ({ventana_dias}d)",
+            line=dict(
+                color="orange",
+                width=1.5
+            ),
+            hovertemplate=(
+                "<b>%{x|%d/%m/%Y}</b><br>"
+                "OMIP suavizado: %{y:.2f} €/MWh"
+                "<extra></extra>"
+            )
+        )
+    )
+
+    # Línea OMIE real posterior
+    fig.add_trace(
+        go.Scatter(
+            x=df_plot[col_fecha],
+            y=df_plot[col_omie_real],
+            mode="lines",
+            name="OMIE real 12M posterior",
+            line=dict(
+                color="green",
+                width=3
+            ),
+            hovertemplate=(
+                "<b>%{x|%d/%m/%Y}</b><br>"
+                "OMIE real posterior 12M: %{y:.2f} €/MWh"
+                "<extra></extra>"
+            )
+        )
+    )
+
+    # Línea amarilla: OMIE previsto ajustado 1Y
+    fig.add_trace(
+        go.Scatter(
+            x=df_plot[col_fecha],
+            y=df_plot["omie_previsto_ajustado_1y"],
+            mode="lines",
+            name="OMIE previsto 12M ajustado con desvío % 1Y",
+            line=dict(
+                color="yellow",
+                width=2,
+                dash="dot"
+            ),
+            marker=dict(
+                color="yellow",
+                size=5
+            ),
+            customdata=np.stack(
+                [
+                    df_plot["desvio_pct_1y"],
+                    df_plot["diferencial_omie_real_vs_previsto_1y"],
+                    df_plot["diferencial_pct_omie_real_vs_previsto_1y"]
+                ],
+                axis=-1
+            ),
+            hovertemplate=(
+                "<b>%{x|%d/%m/%Y}</b><br>"
+                "OMIE previsto ajustado 1Y: %{y:.2f} €/MWh<br>"
+                "Desvío aplicado 1Y: %{customdata[0]:.2%}<br>"
+                "Diferencial real - previsto: %{customdata[1]:.2f} €/MWh<br>"
+                "Diferencial real - previsto: %{customdata[2]:.2%}"
+                "<extra></extra>"
+            )
+        )
+    )
+
+    # Línea cero
+    fig.add_hline(
+        y=0,
+        line_dash="dash",
+        line_color="gray",
+        opacity=0.8
+    )
+
+    # ------------------------------------------------------------
+    # 11. Layout
+    # ------------------------------------------------------------
+    fig.update_layout(
+        title=dict(
+            text=titulo,
+            x=0.5,
+            xanchor="center"
+        ),
+        template="plotly_dark",
+        height=560,
+        barmode="relative",
+        hovermode="x unified",
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="center",
+            x=0.5
+        ),
+        margin=dict(
+            l=70,
+            r=40,
+            t=100,
+            b=70
+        ),
+        xaxis=dict(
+            title="Fecha de cotización",
+            rangeslider=dict(visible=False)
+        ),
+        yaxis=dict(
+            title="€/MWh",
+            zeroline=True,
+            zerolinecolor="gray"
+        )
+    )
+
+    return fig, df_plot

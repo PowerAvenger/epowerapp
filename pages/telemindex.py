@@ -10,7 +10,7 @@ from backend_telemindex import (filtrar_datos, añadir_fnee, calcular_precios_at
                                 evol_mensual, 
                                 construir_df_curva_sheets, añadir_costes_curva,
                                 check_medias,
-                                analizar_dependencia_omie, visualizar_impacto_omie, grafico_elasticidad_lineal) 
+                                analizar_dependencia_omie, graficar_elasticidad_lineal) 
 from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, aplicar_estilo
 from backend_curvadecarga import graficar_media_horaria, graficar_queso_periodos
 
@@ -31,6 +31,10 @@ if "margen_fijo" not in st.session_state:
 
 if 'opcion_comparativa' not in st.session_state:
     st.session_state.opcion_comparativa = 'Cobertura'
+
+#para lo del análisis de elasticidad y tal
+if 'peaje_analisis' not in st.session_state:
+    st.session_state.peaje_analisis = '2.0'
 
 
 #inicializamos variables de sesión
@@ -454,18 +458,20 @@ with tab1:
             st.subheader("Evolución de los precios medios de indexado", divider='rainbow')
             st.plotly_chart(graf_mensual)
 
-            df_res, fig = analizar_dependencia_omie(st.session_state.df_sheets)
+            df_res, fig = analizar_dependencia_omie(st.session_state.df_sheets, st.session_state.peaje_analisis)
 
-            st.subheader('Impacto OMIE en el precio final')
+            st.subheader('Impacto del SPOT en el precio final', divider='rainbow')
+            
             with st.container():
-                col10,col11,col12=st.columns(3)
+                col10,col11,col12=st.columns([.2,.4,.4])
                 with col10:
+                    st.selectbox("Selecciona peaje de acceso", ["2.0", "3.0", "6.1"], index=0, key ='peaje_analisis')
                     st.markdown('Tabla de datos')
                     st.dataframe(df_res, hide_index=True)
                 with col11:
                     st.plotly_chart(fig, use_container_width=True)
                 with col12:
-                   fig = grafico_elasticidad_lineal(df_res)
+                   fig = graficar_elasticidad_lineal(df_res, st.session_state.peaje_analisis)
                    st.plotly_chart(fig)
 
 

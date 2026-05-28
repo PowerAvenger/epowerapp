@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 from utilidades import generar_menu
-from backend_opt2 import leer_curva_normalizada, pyc_tp, tepp, meses
+from backend_opt2 import leer_curva_normalizada, pyc_tp, tepp123, meses
 from backend_opt2_rdl import calcular_optimizacion_rdl
 
 
@@ -128,7 +128,7 @@ else:
             habilitar_opt = True
             año_opt = 2026
             pyc_tp_opt = pyc_tp[año_opt][tarifa]
-            tepp_opt = {k: v * coef_excesos for k, v in tepp[año_opt][tarifa].items()}
+            tepp_opt = {k: v * coef_excesos for k, v in tepp123[año_opt][tarifa].items()}
         else:
             st.sidebar.warning('No es posible optimizar con el rango actual.', icon='⚠️')
     else:

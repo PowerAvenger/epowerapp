@@ -920,7 +920,7 @@ def graficar_gauge_ahorro(ahorro_opt, ahorro_opt_porc):
         #title = {'text': "Ahorro Obtenido (%)", 'font': {'size': 30}},
         title={
             'text': f"Ahorro previsto: {ahorro_opt_fmt} €",
-            'font': {'size': 40}
+            'font': {'size': 20}
         },
         gauge = {
             'axis': {'range': [None, 50]},  # Rango de 0 a 100

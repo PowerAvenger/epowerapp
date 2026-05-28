@@ -5,10 +5,10 @@ from backend_simulindex import (obtener_historicos_meff, obtener_meff_trimestral
                                 obtener_graf_hist, obtener_grafico_omip, obtener_grafico_omip_omie,
                                 obtener_trimestres_futuros, construir_escenarios,
                                 construir_curva_2026, graficar_2026,
-                                construir_curva_omip_mensual, graficar_curva_omip_mensual,
+                                construir_curva_omip_mensual_12m, graficar_curva_omip_mensual_12m,
                                 construir_media_prevista_2026_diaria, graficar_media_prevista_2026,
                                 construir_evolucion_media_omip, añadir_omie_real_12m_posterior, graficar_evolucion_media_omip,
-                                añadir_suavizado_omip_y_diferencial, graficar_omip_suavizado_vs_omie_real)
+                                añadir_suavizado_omip_y_diferencial, graficar_omip_suavizado_vs_omie_real, graficar_omip_vs_omie_previsto_ajustado_1y)
 from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, formatear_df_resultados, aplicar_estilo
 import pandas as pd
 import plotly.express as px
@@ -33,12 +33,12 @@ df_historicos_FTB, ultimo_registro = obtener_historicos_meff()
 df_FTB_trimestral, df_FTB_trimestral_futuros, fecha_ultimo_omip_trimestral, media_omip_trimestral, lista_trimestres_hist, trimestre_actual, df_ultimos_precios_trim = obtener_meff_trimestral(df_historicos_FTB)
 df_FTB_mensual, df_FTB_mensual_simulindex, fecha_ultimo_omip_mensual, media_omip_mensual, lista_meses_hist, mes_actual = obtener_meff_mensual(df_historicos_FTB)
 
-print(f'fecha ultimo omip mensual: {fecha_ultimo_omip_mensual}')
-print('df FTB mensual')
-print(df_FTB_mensual)
-print(f'fecha ultimo omip trimestral: {fecha_ultimo_omip_trimestral}')
-print('df FTB trimestral')
-print(df_FTB_trimestral)
+#print(f'fecha ultimo omip mensual: {fecha_ultimo_omip_mensual}')
+#print('df FTB mensual')
+#print(df_FTB_mensual)
+#print(f'fecha ultimo omip trimestral: {fecha_ultimo_omip_trimestral}')
+#print('df FTB trimestral')
+#print(df_FTB_trimestral)
 
 if 'omie_slider' not in st.session_state:
     st.session_state.omie_slider = round(media_omip_trimestral)
@@ -50,7 +50,7 @@ if 'trimestre_cobertura' not in st.session_state:
 if 'mes_cobertura' not in st.session_state:
     st.session_state.mes_cobertura = mes_actual 
 
-print("mes_cobertura:", repr(st.session_state.mes_cobertura))    
+#print("mes_cobertura:", repr(st.session_state.mes_cobertura))    
 
 lista_trimestres_futuros, trimestre_inicial = obtener_trimestres_futuros(df_FTB_trimestral_futuros)   
 
@@ -134,7 +134,7 @@ print(df_sheets_origen)
 df_hist = obtener_hist_mensual(df_sheets_origen)
 
 if 'media_ssaa_prev' not in st.session_state:
-    st.session_state.media_ssaa_prev = 23.0
+    st.session_state.media_ssaa_prev = 21.0
 if 'media_fnee_prev' not in st.session_state:
     st.session_state.media_fnee_prev = 2.68
 if 'media_rad3_prev' not in st.session_state:
@@ -177,8 +177,8 @@ graf_omip_trimestral_select = obtener_grafico_omip(df_trim_sel)
 # dfs para trimestres históricos
 df_FTB_trimestral_cobertura = df_FTB_trimestral[df_FTB_trimestral['Entrega'] == st.session_state.trimestre_cobertura]
 df_FTB_mensual_cobertura = df_FTB_mensual[df_FTB_mensual['Entrega'] == st.session_state.mes_cobertura]
-print('df FTB trimestral cobertura')
-print(df_FTB_trimestral_cobertura)
+#print('df FTB trimestral cobertura')
+#print(df_FTB_trimestral_cobertura)
 graf_omip_omie_trimestral = obtener_grafico_omip_omie(df_FTB_trimestral_cobertura, df_spot_mensual, st.session_state.trimestre_cobertura)
 graf_omip_omie_mensual = obtener_grafico_omip_omie(df_FTB_mensual_cobertura, df_spot_mensual, st.session_state.mes_cobertura)
 
@@ -250,9 +250,9 @@ precio_medio_2026 = round(df_2026["precio"].mean(),2)
 graf_2026 = graficar_2026(df_2026, precio_medio_2026)
 st.session_state.precio_omie_previsto = precio_medio_2026
 
-df_año_movil = construir_curva_omip_mensual(df_FTB_mensual, df_FTB_trimestral, fecha_ultimo_omip_trimestral)
+df_año_movil = construir_curva_omip_mensual_12m(df_FTB_mensual, df_FTB_trimestral, fecha_ultimo_omip_trimestral)
 precio_medio_omip = round(df_año_movil["precio"].mean(),2)
-graf_año_movil = graficar_curva_omip_mensual(df_año_movil, precio_medio_omip)
+graf_año_movil = graficar_curva_omip_mensual_12m(df_año_movil, precio_medio_omip)
 st.session_state.precio_omip_previsto = precio_medio_omip
 
 df_spot_diario = obtener_spot_diario()
@@ -297,7 +297,18 @@ fig_omip_suav_vs_omie = graficar_omip_suavizado_vs_omie_real(
     ventana_dias=ventana_suavizado
 )
 
-#   
+
+fecha_max_omie_real = df_spot_diario["fecha"].max()
+
+fig_omie_omip_ajuste, df_previsto_1y = graficar_omip_vs_omie_previsto_ajustado_1y(
+    df_evol=df_evol_media_forward_suav,
+    ventana_dias=15,
+    col_fecha="Fecha",
+    col_omip="media_forward_12m",
+    col_omip_suav="media_forward_12m_suav",
+    col_omie_real="omie_real_12m",
+    fecha_max_omie_real=fecha_max_omie_real
+)   
 
 intercept_20, slope_20, r2_20 = resultados['precio_2.0']
 print(f"2.0 → slope: {slope_20:.4f} | R²: {r2_20:.3f} | intercept: {intercept_20:.2f}")
@@ -402,6 +413,7 @@ with tab3:
         st.write(graf_año_movil)
         st.plotly_chart(fig_media_forward, use_container_width=True)
         st.plotly_chart(fig_omip_suav_vs_omie, use_container_width=True)
+        st.plotly_chart(fig_omie_omip_ajuste, use_container_width=True)
 
 
 # =======================================================================================================================================================================
@@ -560,7 +572,7 @@ with tab5:
             else:
                 st.checkbox("Aplicar margen comercial también a ofertas fijas", value=False, key='aplicar_margen_fijo')
                 if st.session_state.get("aplicar_margen_fijo", False):
-                    st.number_input('Introduce el margen para las ofertas FIJO.', min_value=0.0, max_value=30.0, step=.1, key = 'margen_simul_fijo') #€/MWh
+                    st.number_input('Introduce el margen para las ofertas FIJO en €/MWh.', min_value=0.0, max_value=30.0, step=.1, key = 'margen_simul_fijo') #€/MWh
                 st.dataframe(
                     #st.session_state.df_ofertas_fijas_simul,
                     df_ofertas_view,
