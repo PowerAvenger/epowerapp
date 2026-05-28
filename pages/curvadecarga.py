@@ -12,7 +12,7 @@ from backend_curvadecarga import (
     graficar_heatmap_dia_hora,
     calcular_patron_horario_boxplot, detectar_consumos_atipicos_horarios,
     resumir_atipicos_por_dia, calcular_kpis_atipicos, mostrar_kpis_atipicos, graficar_top_dias_revisables, graficar_heatmap_alertas, calcular_patron_horario_boxplot, obtener_top_horas_revisables,
-    calcular_tabla_excesos_reactiva, calcular_tabla_factor_potencia, estilo_factor_potencia, calcular_tabla_precio_penalizacion_reactiva, calcular_tabla_coste_excesos_reactiva
+    calcular_tabla_excesos_reactiva, calcular_tabla_factor_potencia, estilo_factor_potencia, calcular_tabla_precio_penalizacion_reactiva, calcular_tabla_coste_excesos_reactiva, estilo_coste_penalizacion
     )
 from backend_comun import formatear_tabla_consumos, formatear_tabla_euros
 
@@ -869,14 +869,10 @@ if st.session_state.get("df_norm") is not None:
         tabla_excesos_reactiva = calcular_tabla_excesos_reactiva(tabla_mensual_consumos, tabla_mensual_reactiva, porcentaje_limite=0.33)
         df_tabla_fmt_exc_react = formatear_tabla_consumos(tabla_excesos_reactiva, columna_mes="Mes", incluir_unidades=False)   
         tabla_mensual_fp = calcular_tabla_factor_potencia(tabla_mensual_consumos, tabla_mensual_reactiva)
+        
+        #aplicamos colores a la tabla mensual de FPs
         df_fp_fmt = tabla_mensual_fp.copy()
-        # Quitar None / NaN visualmente
-        #df_fp_fmt = df_fp_fmt.replace([None, np.nan], "")
-
-        # Columnas de periodos
         cols_fp = [c for c in df_fp_fmt.columns if c != "Mes"]
-
-        # Crear styler
         styler_fp = (
             df_fp_fmt
             .style
@@ -886,34 +882,76 @@ if st.session_state.get("df_norm") is not None:
                 for col in cols_fp
             })
         )
-
         for col in df_fp_fmt.columns:
             if col != "Mes":
                 df_fp_fmt[col] = df_fp_fmt[col].apply(
                     lambda x: "" if pd.isna(x) else f"{x:.2f}"
                 )
         
+        #calculamos penalizaciones y formateamos
         tabla_coste_excesos_reactiva = calcular_tabla_coste_excesos_reactiva(tabla_excesos_reactiva, tabla_mensual_fp)
-        df_coste_excesos_reactiva_fmt = formatear_tabla_euros(
-            tabla_coste_excesos_reactiva,
-            columna_mes="Mes",
-            incluir_unidades=False
+        #df_coste_excesos_reactiva_fmt = formatear_tabla_euros(tabla_coste_excesos_reactiva, columna_mes="Mes", incluir_unidades=False)
+        df_coste_exc_fmt = tabla_coste_excesos_reactiva.copy()
+        cols_coste = [c for c in df_coste_exc_fmt.columns if c != "Mes"]
+        for col in cols_coste:
+            df_coste_exc_fmt[col] = (
+                df_coste_exc_fmt[col]
+                #.replace("None", np.nan)
+                .replace(["None", "nan", "NaN", ""], np.nan)
+                #.replace(None, np.nan)
+            )
+            df_coste_exc_fmt[col] = pd.to_numeric(df_coste_exc_fmt[col], errors="coerce")
+        # 2) Convertimos NaN a "" SOLO para visualización
+        df_coste_exc_fmt[cols_coste] = df_coste_exc_fmt[cols_coste].astype(object)
+        df_coste_exc_fmt[cols_coste] = df_coste_exc_fmt[cols_coste].where(
+            pd.notna(df_coste_exc_fmt[cols_coste]),
+            ""
         )
+        # 3) Formato visual
+        def formato_coste_celda(x):
+            if x == "" or pd.isna(x):
+                return ""
+
+            try:
+                x = float(x)
+            except:
+                return ""
+
+            return f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        
+        styler_coste_exc = (
+            df_coste_exc_fmt
+            .style
+            .applymap(estilo_coste_penalizacion, subset=cols_coste)
+            .format({
+                #col: lambda x: "" if pd.isna(x) else f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                col: formato_coste_celda
+                for col in cols_coste
+            },
+            na_rep=""
+            )
+        )
+
+        total_penalizacion_reactiva = tabla_coste_excesos_reactiva["Total"].sum()
 
         c1, c2, c3 = st.columns(3)
         with c1:
             st.subheader('Tabla de consumos mensuales (kWh)')
             st.dataframe(tabla_mensual_consumos_fmt, use_container_width=True, hide_index=True)
-            st.subheader('Tabla de FPs Factores de Potencia')
+            st.subheader('Tabla de FP Factor de Potencia')
             st.dataframe(styler_fp, use_container_width=True, hide_index=True)
         with c2:
             st.subheader('Tabla de reactiva mensual (kVArh)')
             st.dataframe(df_tabla_fmt_react, use_container_width=True, hide_index=True)
-            st.subheader('Tabla de costes de excesos (€)')
-            st.dataframe(df_coste_excesos_reactiva_fmt, use_container_width=True, hide_index=True)
+            st.subheader('Tabla de penalización (€) por excesos de REACTIVA')
+            st.dataframe(styler_coste_exc, use_container_width=True, hide_index=True)
         with c3:
-            st.subheader('Tabla de excesos REACTIVA (kVArh)')
+            st.subheader('Tabla de excesos de REACTIVA (kVArh)')
             st.dataframe(df_tabla_fmt_exc_react, use_container_width=True, hide_index=True)
+            st.metric(
+                "Penalización reactiva (€)",
+                f"{total_penalizacion_reactiva:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            )
 
 
 

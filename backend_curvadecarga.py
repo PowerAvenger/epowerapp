@@ -2214,8 +2214,6 @@ def obtener_top_horas_revisables(df_analisis, top_n=50):
 
     return df_top
 
-
-
 def calcular_tabla_excesos_reactiva(tabla_consumos, tabla_reactiva, porcentaje_limite=0.33):
 
     if tabla_consumos is None or tabla_reactiva is None:
@@ -2227,15 +2225,26 @@ def calcular_tabla_excesos_reactiva(tabla_consumos, tabla_reactiva, porcentaje_l
     tabla_excesos = tabla_consumos[["Mes"]].copy()
 
     for p in orden_periodos:
+
+        # P6 no penaliza reactiva
+        if p == "P6":
+            tabla_excesos[p] = 0
+            continue
+
         if p in tabla_consumos.columns and p in tabla_reactiva.columns:
-            exceso = tabla_reactiva[p] - tabla_consumos[p] * porcentaje_limite
+            consumo = pd.to_numeric(tabla_consumos[p], errors="coerce").fillna(0)
+            reactiva = pd.to_numeric(tabla_reactiva[p], errors="coerce").fillna(0)
+
+            exceso = reactiva - consumo * porcentaje_limite
             tabla_excesos[p] = exceso.clip(lower=0)
         else:
             tabla_excesos[p] = 0
 
     tabla_excesos["Total"] = tabla_excesos[orden_periodos].sum(axis=1)
 
-    return tabla_excesos   
+    return tabla_excesos
+
+  
 
 def calcular_tabla_factor_potencia(tabla_consumos, tabla_reactiva):
 
@@ -2245,12 +2254,21 @@ def calcular_tabla_factor_potencia(tabla_consumos, tabla_reactiva):
     colores_periodo = COLORES_3P if st.session_state.atr_dfnorm == "2.0" else COLORES_6P
     orden_periodos = list(colores_periodo.keys())
 
+    # P6 no penaliza reactiva
+    periodos_penalizables = [p for p in orden_periodos if p != "P6"]
+
     tabla_fp = tabla_consumos[["Mes"]].copy()
 
     for p in orden_periodos:
+
+        # P6 vacío porque no aplica penalización de reactiva
+        if p == "P6":
+            tabla_fp[p] = np.nan
+            continue
+
         if p in tabla_consumos.columns and p in tabla_reactiva.columns:
-            ea = tabla_consumos[p]
-            er = tabla_reactiva[p]
+            ea = pd.to_numeric(tabla_consumos[p], errors="coerce")
+            er = pd.to_numeric(tabla_reactiva[p], errors="coerce")
 
             tabla_fp[p] = np.where(
                 (ea.notna()) & (er.notna()) & (ea != 0),
@@ -2262,22 +2280,26 @@ def calcular_tabla_factor_potencia(tabla_consumos, tabla_reactiva):
         else:
             tabla_fp[p] = np.nan
 
-    # Total: importante calcularlo con Total ER / Total EA, no sumando FP
-    if "Total" in tabla_consumos.columns and "Total" in tabla_reactiva.columns:
-        ea_total = tabla_consumos["Total"]
-        er_total = tabla_reactiva["Total"]
+    # Total calculado solo sobre periodos penalizables, excluyendo P6
+    ea_total = tabla_consumos[periodos_penalizables].apply(
+        pd.to_numeric, errors="coerce"
+    ).sum(axis=1)
 
-        tabla_fp["Total"] = np.where(
-            (ea_total.notna()) & (er_total.notna()) & (ea_total != 0),
-            ea_total / np.sqrt(ea_total**2 + er_total**2),
-            np.nan
-        )
+    er_total = tabla_reactiva[periodos_penalizables].apply(
+        pd.to_numeric, errors="coerce"
+    ).sum(axis=1)
 
-        tabla_fp["Total"] = tabla_fp["Total"].round(2)
-    else:
-        tabla_fp["Total"] = np.nan
+    tabla_fp["Total"] = np.where(
+        (ea_total.notna()) & (er_total.notna()) & (ea_total != 0),
+        ea_total / np.sqrt(ea_total**2 + er_total**2),
+        np.nan
+    )
+
+    tabla_fp["Total"] = tabla_fp["Total"].round(2)
 
     return tabla_fp
+
+
 
 def estilo_factor_potencia(val):
     if pd.isna(val):
@@ -2291,7 +2313,7 @@ def estilo_factor_potencia(val):
     if val < 0.95:
         return "background-color: #EA9999; color: #000000;"  # rosa Excel
     else:
-        return "background-color: #D9EAD3; color: #000000;"  # verde Excel
+        return "background-color: #B6D7A8; color: #000000;"  # verde Excel
     
 def calcular_tabla_precio_penalizacion_reactiva(tabla_fp):
 
@@ -2326,7 +2348,7 @@ def calcular_tabla_precio_penalizacion_reactiva(tabla_fp):
     tabla_precio["Total"] = np.nan
 
     return tabla_precio
-
+    
 def calcular_tabla_coste_excesos_reactiva(tabla_excesos_reactiva, tabla_fp):
 
     if tabla_excesos_reactiva is None or tabla_fp is None:
@@ -2338,6 +2360,64 @@ def calcular_tabla_coste_excesos_reactiva(tabla_excesos_reactiva, tabla_fp):
     tabla_coste = tabla_excesos_reactiva[["Mes"]].copy()
 
     for p in orden_periodos:
+
+        # P6 no aplica penalización de reactiva
+        if p == "P6":
+            tabla_coste[p] = np.nan
+            continue
+
+        if p in tabla_excesos_reactiva.columns and p in tabla_fp.columns:
+
+            excesos = pd.to_numeric(tabla_excesos_reactiva[p], errors="coerce").fillna(0)
+            fp = pd.to_numeric(tabla_fp[p], errors="coerce")
+
+            precio_penalizacion = np.select(
+                [
+                    fp >= 0.95,
+                    (fp >= 0.80) & (fp < 0.95),
+                    fp < 0.80
+                ],
+                [
+                    0,
+                    0.0411554,
+                    0.062332
+                ],
+                default=np.nan
+            )
+
+            coste = excesos * precio_penalizacion
+
+            # Si el FP es NaN, ese periodo no aplica / no existe en ese mes
+            coste = np.where(fp.isna(), np.nan, coste)
+
+            tabla_coste[p] = coste
+
+        else:
+            tabla_coste[p] = np.nan
+
+    periodos_afectados = [p for p in orden_periodos if p != "P6"]
+
+    tabla_coste["Total"] = tabla_coste[periodos_afectados].sum(axis=1, skipna=True)
+
+    return tabla_coste
+    
+def calcular_tabla_coste_excesos_reactiva_old(tabla_excesos_reactiva, tabla_fp):
+
+    if tabla_excesos_reactiva is None or tabla_fp is None:
+        return None
+
+    colores_periodo = COLORES_3P if st.session_state.atr_dfnorm == "2.0" else COLORES_6P
+    orden_periodos = list(colores_periodo.keys())
+
+    tabla_coste = tabla_excesos_reactiva[["Mes"]].copy()
+
+    for p in orden_periodos:
+
+        # P6 no aplica penalización de reactiva
+        if p == "P6":
+            tabla_coste[p] = np.nan
+            continue
+
         if p in tabla_excesos_reactiva.columns and p in tabla_fp.columns:
 
             excesos = pd.to_numeric(tabla_excesos_reactiva[p], errors="coerce").fillna(0)
@@ -2360,9 +2440,28 @@ def calcular_tabla_coste_excesos_reactiva(tabla_excesos_reactiva, tabla_fp):
             tabla_coste[p] = excesos * precio_penalizacion
 
         else:
-            tabla_coste[p] = 0
+            tabla_coste[p] = np.nan
 
-    tabla_coste["Total"] = tabla_coste[orden_periodos].sum(axis=1)
+    # Total solo con periodos afectados, excluyendo P6
+    periodos_afectados = [p for p in orden_periodos if p != "P6"]
+
+    tabla_coste["Total"] = tabla_coste[periodos_afectados].sum(axis=1)
 
     return tabla_coste
+
+def estilo_coste_penalizacion(val):
+    if pd.isna(val):
+        return ""
+
+    try:
+        val = float(val)
+    except:
+        return ""
+
+    if val > 0:
+        return "background-color: #EA9999; color: #000000;"  # rojo suave NO OK
+    else:
+        return "background-color: #B6D7A8; color: #000000;"  # verde OK
+
+
 
