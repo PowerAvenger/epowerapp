@@ -902,47 +902,6 @@ def graficar_mensual_apilado(df_norm):
     return fig
 
 
-def tabla_mensual_periodos_old(df_norm):
-
-    df_plot = (
-        df_norm
-        .assign(
-            mes=lambda d: d["fecha_hora"].dt.to_period("M").dt.to_timestamp()
-        )
-        .groupby(["mes", "periodo"], as_index=False)["consumo_neto_kWh"]
-        .sum()
-    )
-
-    colores_periodo = COLORES_3P if st.session_state.atr_dfnorm == "2.0" else COLORES_6P
-    orden_periodos = list(colores_periodo.keys())
-
-    df_plot["periodo"] = pd.Categorical(
-        df_plot["periodo"],
-        categories=orden_periodos,
-        ordered=True
-    )
-
-    tabla = (
-        df_plot
-        .pivot_table(
-            index="mes",
-            columns="periodo",
-            values="consumo_neto_kWh",
-            aggfunc="sum",
-            fill_value=0,
-            observed=False
-        )
-        .reset_index()
-    )
-
-    tabla["Total"] = tabla[orden_periodos].sum(axis=1)
-
-    tabla["Mes"] = tabla["mes"].dt.strftime("%b %Y")
-
-    tabla = tabla[["Mes"] + orden_periodos + ["Total"]]
-
-    return tabla
-
 def tabla_mensual_periodos(df_norm, columna_valor="consumo_neto_kWh"):
 
     if columna_valor not in df_norm.columns:
@@ -2462,6 +2421,1115 @@ def estilo_coste_penalizacion(val):
         return "background-color: #EA9999; color: #000000;"  # rojo suave NO OK
     else:
         return "background-color: #B6D7A8; color: #000000;"  # verde OK
+    
 
+
+# ============================================================
+# TABLA DE POTENCIA MEDIA QH POR MES Y PERIODO
+# ============================================================
+
+def calcular_tabla_potencia_media_qh(df_norm, columna_valor="consumo_neto_kWh"):
+
+    if columna_valor not in df_norm.columns:
+        return None
+    
+    if st.session_state.frec == 'QH':
+        multiplicador = 4
+    else:
+        multiplicador = 1
+
+    df_plot = (
+        df_norm
+        .assign(
+            mes=lambda d: d["fecha_hora"].dt.to_period("M").dt.to_timestamp(),
+            potencia_qh_kw=lambda d: d[columna_valor] * multiplicador
+        )
+        .groupby(["mes", "periodo"], as_index=False)["potencia_qh_kw"]
+        .mean()
+    )
+
+    colores_periodo = COLORES_3P if st.session_state.atr_dfnorm == "2.0" else COLORES_6P
+    orden_periodos = list(colores_periodo.keys())
+
+    df_plot["periodo"] = pd.Categorical(
+        df_plot["periodo"],
+        categories=orden_periodos,
+        ordered=True
+    )
+
+    tabla = (
+        df_plot
+        .pivot_table(
+            index="mes",
+            columns="periodo",
+            values="potencia_qh_kw",
+            aggfunc="mean",
+            fill_value=0,
+            observed=False
+        )
+        .reset_index()
+    )
+
+    # Asegurar columnas P1...P6/P1...P3
+    for p in orden_periodos:
+        if p not in tabla.columns:
+            tabla[p] = 0
+
+    # Total mensual: media real de todos los QH del mes, no suma de periodos
+    total_mes = (
+        df_norm
+        .assign(
+            mes=lambda d: d["fecha_hora"].dt.to_period("M").dt.to_timestamp(),
+            potencia_qh_kw=lambda d: d[columna_valor] * 4
+        )
+        .groupby("mes", as_index=False)["potencia_qh_kw"]
+        .mean()
+        .rename(columns={"potencia_qh_kw": "Total"})
+    )
+
+    tabla = tabla.merge(total_mes, on="mes", how="left")
+
+    tabla["Mes"] = tabla["mes"].dt.strftime("%b %Y")
+
+    tabla = tabla[["Mes"] + orden_periodos + ["Total"]]
+
+    return tabla
+
+
+import numpy as np
+
+def calcular_tabla_coef_k(tabla_mensual_fp, fp_objetivo):
+    tabla = tabla_mensual_fp.copy()
+
+    if tabla is None or tabla.empty:
+        return None
+
+    if "Mes" not in tabla.columns:
+        return None
+
+    # Detectar columnas de periodos
+    columnas_periodo = [
+        c for c in tabla.columns
+        if str(c).startswith("P")
+    ]
+
+    # Mantener también Total si existe
+    columnas_calculo = columnas_periodo.copy()
+    if "Total" in tabla.columns:
+        columnas_calculo.append("Total")
+
+    # Función para calcular K celda a celda
+    def calcular_k(fp_actual):
+        try:
+            fp_actual = float(fp_actual)
+        except:
+            return 0
+
+        if pd.isna(fp_actual) or fp_actual <= 0:
+            return 0
+
+        # Limitar por seguridad entre 0 y 1
+        fp_actual = min(max(fp_actual, 0), 1)
+        fp_obj = min(max(float(fp_objetivo), 0), 1)
+
+        # Si ya cumple objetivo, no compensamos
+        if fp_actual >= fp_obj:
+            return 0
+
+        tg_actual = np.tan(np.arccos(fp_actual))
+        tg_obj = np.tan(np.arccos(fp_obj))
+
+        k = tg_actual - tg_obj
+
+        return max(k, 0)
+
+    # Aplicar cálculo a P1...P6 y Total
+    for col in columnas_calculo:
+        tabla[col] = tabla[col].apply(calcular_k)
+
+    return tabla
+
+def calcular_tabla_q_condensadores(df_potmed_qh, df_coef_k):
+    """
+    Calcula la potencia reactiva capacitiva necesaria por mes y periodo:
+
+        Qc = Pdem * K
+
+    df_potmed_qh: tabla de potencia media demandada en kW
+    df_coef_k: tabla de coeficientes K
+
+    Devuelve kVAr por mes y periodo.
+    """
+
+    if df_potmed_qh is None or df_coef_k is None:
+        return None
+
+    if df_potmed_qh.empty or df_coef_k.empty:
+        return None
+
+    periodos = [
+        c for c in df_potmed_qh.columns
+        if c.startswith("P") and c in df_coef_k.columns
+    ]
+
+    tabla = df_potmed_qh[["Mes"]].copy()
+
+    for p in periodos:
+        pot = pd.to_numeric(df_potmed_qh[p], errors="coerce").fillna(0)
+        k = pd.to_numeric(df_coef_k[p], errors="coerce").fillna(0)
+
+        tabla[p] = pot * k
+
+    # Para dimensionar batería, no sumaría periodos.
+    # Me quedaría con el máximo requerimiento mensual.
+    tabla["Total"] = tabla[periodos].max(axis=1)
+
+    return tabla
+
+
+
+def graficar_compensacion(tabla_mensual_consumos, df_reactiva, q_min=None, q_max=None):
+    # --------------------------------------------------------
+    # Datos anuales medios para el gráfico conceptual
+    # --------------------------------------------------------
+    consumo_total_anual = tabla_mensual_consumos["Total"].sum()
+    reactiva_total_anual = df_reactiva["Total"].sum()
+
+    fp_actual_anual = consumo_total_anual / np.sqrt(
+        consumo_total_anual**2 + reactiva_total_anual**2
+    )
+
+    # Potencia media anual demandada (kW)
+    p_med_anual = (st.session_state.df_norm["consumo_neto_kWh"] * 4).mean()
+
+    fp_actual_anual = np.clip(fp_actual_anual, 0.01, 0.99)
+
+    fp_obj_min = min(st.session_state.fp_obj_min, st.session_state.fp_obj_max)
+    fp_obj_max = max(st.session_state.fp_obj_min, st.session_state.fp_obj_max)
+
+    # --------------------------------------------------------
+    # Curva de compensación anual media
+    # --------------------------------------------------------
+    x_ini = min(fp_actual_anual, fp_obj_min) - 0.01
+    x_fin = max(fp_obj_max, 0.999)
+
+    x_ini = max(0.80, x_ini)
+    x_fin = min(0.999, x_fin)
+
+    fp_curve = np.linspace(fp_actual_anual, x_fin, 200)
+
+    q_curve = p_med_anual * (
+        np.tan(np.arccos(fp_actual_anual)) -
+        np.tan(np.arccos(fp_curve))
+    )
+
+    q_curve = np.maximum(q_curve, 0)
+
+    # --------------------------------------------------------
+    # Valores anuales medios, por si no se pasan q_min/q_max
+    # --------------------------------------------------------
+    q_obj_min_anual = p_med_anual * (
+        np.tan(np.arccos(fp_actual_anual)) -
+        np.tan(np.arccos(fp_obj_min))
+    )
+
+    q_obj_max_anual = p_med_anual * (
+        np.tan(np.arccos(fp_actual_anual)) -
+        np.tan(np.arccos(fp_obj_max))
+    )
+
+    q_obj_min_anual = max(q_obj_min_anual, 0)
+    q_obj_max_anual = max(q_obj_max_anual, 0)
+
+    # Si no se pasan q_min/q_max, usamos los anuales medios
+    if q_min is None:
+        q_min = q_obj_min_anual
+
+    if q_max is None:
+        q_max = q_obj_max_anual
+
+    q_min = max(float(q_min), 0)
+    q_max = max(float(q_max), 0)
+
+    # --------------------------------------------------------
+    # Rango de ejes con margen visual
+    # --------------------------------------------------------
+    margen_x = 0.01
+
+    x_axis_min = max(0.80, min(fp_actual_anual, fp_obj_min, fp_obj_max) - margen_x)
+    x_axis_max = min(1.01, max(fp_actual_anual, fp_obj_min, fp_obj_max) + margen_x)
+
+    y_max = max(
+        q_max,
+        q_min,
+        q_curve.max() if len(q_curve) > 0 else 0
+    )
+
+    if y_max <= 0:
+        y_max = 1
+
+    y_axis_max = y_max * 1.20
+
+    # --------------------------------------------------------
+    # Gráfico
+    # --------------------------------------------------------
+    fig = go.Figure()
+
+    # Curva anual media
+    fig.add_trace(go.Scatter(
+        x=fp_curve,
+        y=q_curve,
+        mode="lines",
+        name="Referencia anual media",
+        hovertemplate=(
+            "cos φ objetivo: %{x:.3f}<br>"
+            "Qc anual media: %{y:.1f} kVAr"
+            "<extra></extra>"
+        )
+    ))
+
+    # Estado actual
+    fig.add_trace(go.Scatter(
+        x=[fp_actual_anual],
+        y=[0],
+        mode="markers+text",
+        name="Estado actual",
+        text=[f"Actual<br>{fp_actual_anual:.3f}"],
+        textposition="top center",
+        hovertemplate=(
+            "Estado actual<br>"
+            "cos φ: %{x:.3f}<br>"
+            "Qc: %{y:.1f} kVAr"
+            "<extra></extra>"
+        )
+    ))
+
+    # Objetivo mínimo
+    fig.add_trace(go.Scatter(
+        x=[fp_obj_min],
+        y=[q_min],
+        mode="markers+text",
+        name="Objetivo mínimo",
+        text=[f"Q min<br>{q_min:.1f} kVAr"],
+        textposition="top right",
+        hovertemplate=(
+            "Objetivo mínimo<br>"
+            "cos φ objetivo: %{x:.3f}<br>"
+            "Qc: %{y:.1f} kVAr"
+            "<extra></extra>"
+        )
+    ))
+
+    # Objetivo máximo
+    fig.add_trace(go.Scatter(
+        x=[fp_obj_max],
+        y=[q_max],
+        mode="markers+text",
+        name="Objetivo máximo",
+        text=[f"Q max<br>{q_max:.1f} kVAr"],
+        textposition="top right",
+        hovertemplate=(
+            "Objetivo máximo<br>"
+            "cos φ objetivo: %{x:.3f}<br>"
+            "Qc: %{y:.1f} kVAr"
+            "<extra></extra>"
+        )
+    ))
+
+    # --------------------------------------------------------
+    # Líneas auxiliares objetivo mínimo
+    # --------------------------------------------------------
+    fig.add_shape(
+        type="line",
+        x0=fp_obj_min,
+        y0=0,
+        x1=fp_obj_min,
+        y1=q_min,
+        line=dict(dash="dot", width=1)
+    )
+
+    fig.add_shape(
+        type="line",
+        x0=x_axis_min,
+        y0=q_min,
+        x1=fp_obj_min,
+        y1=q_min,
+        line=dict(dash="dot", width=1)
+    )
+
+    # --------------------------------------------------------
+    # Líneas auxiliares objetivo máximo
+    # --------------------------------------------------------
+    fig.add_shape(
+        type="line",
+        x0=fp_obj_max,
+        y0=0,
+        x1=fp_obj_max,
+        y1=q_max,
+        line=dict(dash="dot", width=1)
+    )
+
+    fig.add_shape(
+        type="line",
+        x0=x_axis_min,
+        y0=q_max,
+        x1=fp_obj_max,
+        y1=q_max,
+        line=dict(dash="dot", width=1)
+    )
+
+    # --------------------------------------------------------
+    # Layout
+    # --------------------------------------------------------
+    fig.update_layout(
+        title="Compensación de reactiva: estado actual y objetivos",
+        xaxis_title="cos φ objetivo",
+        yaxis_title="Qc necesaria (kVAr)",
+        title_x=0.5,
+        hovermode="closest",
+        margin=dict(l=70, r=120, t=80, b=70),
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=1,
+            xanchor="left",
+            x=1.02
+        )
+    )
+
+    fig.update_xaxes(
+        range=[x_axis_min, x_axis_max],
+        tickformat=".2f",
+        showspikes=True,
+        spikemode="across",
+        spikesnap="cursor"
+    )
+
+    fig.update_yaxes(
+        range=[0, y_axis_max],
+        showspikes=True,
+        spikemode="across",
+        spikesnap="cursor"
+    )
+
+    return fig
+
+def calcular_curva_q_dimensionamiento(
+    df_fp,
+    df_potmed_qh,
+    fp_ini=0.900,
+    fp_fin=1.000,
+    paso=0.001
+):
+    """
+    Itera distintos cosphi objetivo y calcula el Q máximo necesario
+    usando el mismo método que calcular_tabla_q_condensadores.
+
+    Devuelve un DataFrame con:
+    - fp_obj
+    - q_max
+    """
+    #fp_ini = max(0.900, fp_actual_aprox)
+    fps = np.arange(fp_ini, fp_fin + paso, paso)
+
+    resultados = []
+
+    for fp_obj in fps:
+        fp_obj = min(fp_obj, 0.999999)  # evitar problemas exactos con arccos(1)
+
+        df_coef_k_iter = calcular_tabla_coef_k(df_fp, fp_obj)
+
+        df_q_iter = calcular_tabla_q_condensadores(
+            df_potmed_qh,
+            df_coef_k_iter
+        )
+
+        cols_periodos = [
+            c for c in df_q_iter.columns
+            if c.startswith("P")
+        ]
+
+        q_max_iter = df_q_iter[cols_periodos].max().max()
+
+        resultados.append({
+            "fp_obj": fp_obj,
+            "q_max": q_max_iter
+        })
+
+    df_curva_q = pd.DataFrame(resultados)
+
+    return df_curva_q
+
+def graficar_compensacion_dimensionamiento(df_curva_q, q_min, fp_min_rec, q_min_rec, q_sel, fp_ini):
+
+    fp_obj_min = min(st.session_state.fp_obj_min, st.session_state.fp_obj_sel)
+    fp_obj_sel = max(st.session_state.fp_obj_min, st.session_state.fp_obj_sel)
+
+    # Estado actual aproximado: primer punto con Q = 0 o mínimo de curva
+    df_no_cero = df_curva_q[df_curva_q["q_max"] > 0]
+
+    if not df_no_cero.empty:
+        fp_actual_aprox = df_no_cero["fp_obj"].min()
+    else:
+        fp_actual_aprox = df_curva_q["fp_obj"].min()
+
+    fp_actual_aprox = fp_ini
+    margen_x = 0.01
+    x_min = max(0.89, df_curva_q["fp_obj"].min() - margen_x)
+    x_max = min(1.01, df_curva_q["fp_obj"].max() + margen_x)
+
+    y_max = max(df_curva_q["q_max"].max(), q_min, q_sel)
+
+    if y_max <= 0:
+        y_max = 1
+
+    fig = go.Figure()
+
+    def add_area_entre_q(fig, df_curva_q, q_low, q_high, color, name):
+        """
+        Sombrea el área entre dos niveles de Q siguiendo la curva.
+        """
+
+        if q_low is None or q_high is None:
+            return fig
+
+        q_low = float(q_low)
+        q_high = float(q_high)
+
+        if q_high <= q_low:
+            return fig
+
+        df_aux = df_curva_q.copy().sort_values("q_max")
+
+        q_min_curva = df_aux["q_max"].min()
+        q_max_curva = df_aux["q_max"].max()
+
+        q_low_clip = np.clip(q_low, q_min_curva, q_max_curva)
+        q_high_clip = np.clip(q_high, q_min_curva, q_max_curva)
+
+        fp_low = np.interp(q_low_clip, df_aux["q_max"], df_aux["fp_obj"])
+        fp_high = np.interp(q_high_clip, df_aux["q_max"], df_aux["fp_obj"])
+
+        df_seg = df_curva_q[
+            (df_curva_q["fp_obj"] >= fp_low) &
+            (df_curva_q["fp_obj"] <= fp_high)
+        ].copy()
+
+        # Añadimos extremos interpolados para que el área cierre bien
+        df_extremos = pd.DataFrame({
+            "fp_obj": [fp_low, fp_high],
+            "q_max": [q_low_clip, q_high_clip]
+        })
+
+        df_seg = (
+            pd.concat([df_extremos, df_seg], ignore_index=True)
+            .drop_duplicates(subset=["fp_obj"])
+            .sort_values("fp_obj")
+        )
+
+        x_area = (
+            [fp_low]
+            + df_seg["fp_obj"].tolist()
+            + [fp_high, fp_high, fp_low]
+        )
+
+        y_area = (
+            [q_low_clip]
+            + df_seg["q_max"].tolist()
+            + [q_low_clip, 0, 0]
+        )
+
+        fig.add_trace(go.Scatter(
+            x=x_area,
+            y=y_area,
+            fill="toself",
+            mode="none",
+            name=name,
+            fillcolor=color,
+            opacity=0.25,
+            hoverinfo="skip",
+            showlegend=True
+        ))
+
+        return fig
+
+    # curva de dimensionamiento FP/Q
+    fig.add_trace(go.Scatter(
+        x=df_curva_q["fp_obj"],
+        y=df_curva_q["q_max"],
+        mode="lines",
+        name="Curva de dimensionamiento",
+        hovertemplate=(
+            "cos φ objetivo: %{x:.3f}<br>"
+            "Q compensación: %{y:.1f} kVAr"
+            "<extra></extra>"
+        )
+    ))
+
+    # marcador inicial
+    fig.add_trace(go.Scatter(
+        x=[fp_actual_aprox],
+        y=[0],
+        mode="markers+text",
+        name="Situación actual",
+        text=[f"Q Actual<br>{fp_actual_aprox:.3f}"],
+        textposition="top left",
+        textfont=dict(
+            size=16,
+            color="red"
+        ),
+        marker=dict(
+            size=14,
+            #line=dict(width=2),
+            color = 'red'
+        ),
+        hovertemplate=(
+            "Estado actual aproximado<br>"
+            "cos φ: %{x:.3f}<br>"
+            "Q: %{y:.1f} kVAr"
+            "<extra></extra>"
+        )
+    ))
+
+    # marcador fp minimo = 0,95
+    fig.add_trace(go.Scatter(
+        x=[fp_obj_min],
+        y=[q_min],
+        mode="markers+text",
+        name="Objetivo mínimo",
+        text=[f"Q min<br>{q_min:.1f} kVAr"],
+        textposition="top left",
+        textfont=dict(
+            size=16,
+            color="yellow"
+        ),
+        marker=dict(
+            size=14,
+            #line=dict(width=2),
+            color = 'yellow'
+        ),
+        hovertemplate=(
+            "Objetivo mínimo<br>"
+            "cos φ objetivo: %{x:.3f}<br>"
+            "Q compensación: %{y:.1f} kVAr"
+            "<extra></extra>"
+        )
+    ))
+
+    # marcador fp minimo = 0,95 + MARGEN
+    fig.add_trace(go.Scatter(
+        x=[fp_min_rec],
+        y=[q_min_rec],
+        mode="markers+text",
+        name="Objetivo mínimo recomendado",
+        text=[f"Q min rec<br>{q_min_rec:.1f} kVAr"],
+        textposition="top left",
+        textfont=dict(
+            size=16,
+            color="orange"
+        ),
+        marker=dict(
+            size=14,
+            #line=dict(width=2),
+            color = 'orange'
+        ),
+        hovertemplate=(
+            "Objetivo mínimo recomendado<br>"
+            "cos φ objetivo: %{x:.3f}<br>"
+            "Q compensación: %{y:.1f} kVAr"
+            "<extra></extra>"
+        )
+    ))
+
+    # marcador fp seleccionable
+    fig.add_trace(go.Scatter(
+        x=[fp_obj_sel],
+        y=[q_sel],
+        mode="markers+text",
+        name="Objetivo seleccionado",
+        text=[f"Q sel<br>{q_sel:.1f} kVAr"],
+        textposition="top left",
+        textfont=dict(
+            size=16,
+            color="lightgreen"
+        ),
+        marker=dict(
+            size=14,
+            color="lightgreen",
+            #line=dict(width=2)
+        ),
+        hovertemplate=(
+            "Objetivo seleccionado<br>"
+            "cos φ objetivo: %{x:.3f}<br>"
+            "Q compensación: %{y:.1f} kVAr"
+            "<extra></extra>"
+        )
+    ))
+
+    # Líneas auxiliares mínimo
+    fig.add_shape(
+        type="line",
+        x0=fp_obj_min,
+        y0=0,
+        x1=fp_obj_min,
+        y1=q_min,
+        line=dict(dash="dot", width=1, color ='grey')
+    )
+
+    fig.add_shape(
+        type="line",
+        x0=x_min,
+        y0=q_min,
+        x1=fp_obj_min,
+        y1=q_min,
+        line=dict(dash="dot", width=1, color = 'grey')
+    )
+
+    # Líneas auxiliares mínimo recomendado
+    fig.add_shape(
+        type="line",
+        x0=fp_min_rec,
+        y0=0,
+        x1=fp_min_rec,
+        y1=q_min_rec,
+        line=dict(dash="dot", width=1, color ='grey')
+    )
+
+    fig.add_shape(
+        type="line",
+        x0=x_min,
+        y0=q_min_rec,
+        x1=fp_min_rec,
+        y1=q_min_rec,
+        line=dict(dash="dot", width=1, color = 'grey')
+    )
+
+    # Líneas auxiliares selección
+    fig.add_shape(
+        type="line",
+        x0=fp_obj_sel,
+        y0=0,
+        x1=fp_obj_sel,
+        y1=q_sel,
+        line=dict(dash="dot", width=1, color = 'grey')
+    )
+
+    fig.add_shape(
+        type="line",
+        x0=x_min,
+        y0=q_sel,
+        x1=fp_obj_sel,
+        y1=q_sel,
+        line=dict(dash="dot", width=1, color = 'grey')
+    )
+
+    fig.update_layout(
+        title="Compensación kVAr necesaria",
+        xaxis_title="cos φ objetivo",
+        yaxis_title="Q compensación (kVAr)",
+        title_x=0.5,
+        hovermode="closest",
+        margin=dict(l=0, r=0, t=30, b=0),
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=1,
+            xanchor="left",
+            x=1.02
+        ),
+        autosize=False,
+        height=1000
+    )
+
+    fig = add_area_entre_q(
+        fig,
+        df_curva_q,
+        q_low=q_min,
+        q_high=q_min_rec,
+        color="orange",
+        name="Margen recomendado"
+    )
+
+    fig = add_area_entre_q(
+        fig,
+        df_curva_q,
+        q_low=q_min_rec,
+        q_high=q_sel,
+        color="lightgreen",
+        name="Margen hasta objetivo seleccionado"
+    )
+        
+    fig = aplicar_estilo(fig)
+    fig.update_layout(
+        height=600,
+        autosize=False
+    )
+
+    return fig
+
+
+
+from dateutil.relativedelta import relativedelta
+from datetime import timedelta
+def calcular_comparacion():
+    """
+    Calcula la comparativa anual de consumo entre un periodo base seleccionado
+    y el mismo periodo desplazado +1 año.
+
+    Devuelve un diccionario con:
+    - ok: bool
+    - mensaje: str
+    - df_pivot: DataFrame
+    - resumen_html: str
+    - fig_total: Figure o None
+    - fig_mensual: Figure o None
+    - fechas: dict con fechas útiles para el frontend
+    """
+
+    fig_mensual = None
+    fig_total = None
+    resumen_html = ""
+    df_pivot = pd.DataFrame()
+
+    # =====================================================
+    # 1. FECHAS GLOBALES
+    # =====================================================
+    fecha_ini_global, fecha_fin_global = st.session_state.rango_curvadecarga
+    fecha_ini_global = pd.to_datetime(fecha_ini_global).date()
+    fecha_fin_global = pd.to_datetime(fecha_fin_global).date()
+
+    # Fecha máxima seleccionable para el periodo base:
+    # la curva debe tener datos disponibles un año después
+    fecha_max_comparable = fecha_fin_global - relativedelta(years=1)
+
+    resultado = {
+        "ok": False,
+        "mensaje": "",
+        "df_pivot": df_pivot,
+        "resumen_html": resumen_html,
+        "fig_total": fig_total,
+        "fig_mensual": fig_mensual,
+        "fechas": {
+            "fecha_ini_global": fecha_ini_global,
+            "fecha_fin_global": fecha_fin_global,
+            "fecha_max_comparable": fecha_max_comparable,
+            "rango_valido": None,
+            "fecha_delta": None,
+        },
+        "debug": {}
+    }
+
+    print("fecha_ini_global:", fecha_ini_global)
+    print("fecha_fin_global:", fecha_fin_global)
+    print("fecha_max_comparable:", fecha_max_comparable)
+
+    # =====================================================
+    # 2. VALIDACIÓN DE DATOS SUFICIENTES
+    # =====================================================
+    if fecha_max_comparable < fecha_ini_global:
+        resultado["mensaje"] = "No hay datos suficientes para realizar una comparativa anual (+1 año)."
+        return resultado
+
+    # =====================================================
+    # 3. RANGO COMPARABLE DISPONIBLE
+    # =====================================================
+    fecha_delta = (
+        pd.to_datetime(fecha_max_comparable)
+        - relativedelta(years=1)
+        + timedelta(days=1)
+    ).date()
+
+    if fecha_delta < fecha_ini_global:
+        fecha_delta = fecha_ini_global
+
+    rango_valido = (fecha_delta, fecha_max_comparable)
+
+    resultado["fechas"]["rango_valido"] = rango_valido
+    resultado["fechas"]["fecha_delta"] = fecha_delta
+
+    print(f"rango_valido: {rango_valido}")
+
+    # =====================================================
+    # 4. INICIALIZACIÓN / SANEADO DEL RANGO EN SESSION_STATE
+    # =====================================================
+    if "rango_fechas_comparativa" not in st.session_state:
+        st.session_state.rango_fechas_comparativa = rango_valido
+
+    else:
+        rango_actual = st.session_state.rango_fechas_comparativa
+
+        if not isinstance(rango_actual, (list, tuple)) or len(rango_actual) != 2:
+            st.session_state.rango_fechas_comparativa = rango_valido
+
+        else:
+            f_ini, f_fin = rango_actual
+            f_ini = pd.to_datetime(f_ini).date()
+            f_fin = pd.to_datetime(f_fin).date()
+
+            # Recortar a límites válidos
+            f_ini = max(f_ini, fecha_ini_global)
+            f_fin = min(f_fin, fecha_max_comparable)
+
+            # Si tras recortar queda inválido, reset
+            if f_ini > f_fin:
+                st.session_state.rango_fechas_comparativa = rango_valido
+            else:
+                st.session_state.rango_fechas_comparativa = (f_ini, f_fin)
+
+    print(f"Rango fechas comparativa: {st.session_state.rango_fechas_comparativa}")
+
+    # =====================================================
+    # 5. RECUPERAR FECHAS SELECCIONADAS
+    # =====================================================
+    rango = st.session_state.get("rango_fechas_comparativa")
+
+    if rango is None or len(rango) != 2:
+        resultado["mensaje"] = "No se ha seleccionado un rango válido."
+        return resultado
+
+    fecha_inicio, fecha_fin = rango
+
+    inicio = pd.to_datetime(fecha_inicio)
+    fin = pd.to_datetime(fecha_fin)
+
+    # =====================================================
+    # 6. GENERAR PERIODO +1 AÑO
+    # =====================================================
+    inicio_1y = inicio + relativedelta(years=1)
+    fin_1y = fin + relativedelta(years=1)
+
+    resultado["debug"] = {
+        "inicio": inicio,
+        "fin": fin,
+        "inicio_1y": inicio_1y,
+        "fin_1y": fin_1y,
+    }
+
+    # =====================================================
+    # 7. CHECK DATOS DISPONIBLES
+    # =====================================================
+    fecha_max_df = st.session_state.df_norm_h["fecha_hora"].max()
+
+    if fin_1y > fecha_max_df:
+        resultado["mensaje"] = "No hay datos completos para el periodo comparativo (+1 año)."
+        return resultado
+
+    # =====================================================
+    # 8. FILTRADO
+    # =====================================================
+    df_base = st.session_state.df_norm_h[
+        (st.session_state.df_norm_h["fecha_hora"] >= inicio) &
+        (st.session_state.df_norm_h["fecha_hora"] < fin + pd.Timedelta(days=1))
+    ].copy()
+
+    df_comp = st.session_state.df_norm_h[
+        (st.session_state.df_norm_h["fecha_hora"] >= inicio_1y) &
+        (st.session_state.df_norm_h["fecha_hora"] < fin_1y + pd.Timedelta(days=1))
+    ].copy()
+
+    if df_base.empty:
+        resultado["mensaje"] = "El periodo base seleccionado no tiene datos."
+        return resultado
+
+    if df_comp.empty:
+        resultado["mensaje"] = "El periodo comparativo (+1 año) no tiene datos."
+        return resultado
+
+    # =====================================================
+    # 9. ETIQUETADO
+    # =====================================================
+    df_base["periodo_comp"] = "Base"
+    df_comp["periodo_comp"] = "+1 año"
+
+    df_total = pd.concat([df_base, df_comp], ignore_index=True)
+
+    # =====================================================
+    # 10. COLUMNAS TEMPORALES
+    # =====================================================
+    df_total["mes_nom"] = df_total["fecha_hora"].dt.strftime("%b")
+    df_total["mes_num"] = df_total["fecha_hora"].dt.month
+    df_total["mes_label"] = df_total["fecha_hora"].dt.strftime("%b %Y")
+    df_total["año"] = df_total["fecha_hora"].dt.year
+
+    mes_inicio = inicio.month
+    df_total["mes_orden"] = (df_total["mes_num"] - mes_inicio) % 12
+
+    # =====================================================
+    # 11. AGREGACIÓN MENSUAL
+    # =====================================================
+    df_mensual = (
+        df_total
+        .groupby(
+            ["periodo_comp", "mes_num", "mes_nom", "mes_orden"],
+            as_index=False
+        )["consumo_neto_kWh"]
+        .sum()
+    )
+
+    # =====================================================
+    # 12. PIVOT
+    # =====================================================
+    df_pivot = df_mensual.pivot(
+        index=["mes_num", "mes_nom", "mes_orden"],
+        columns="periodo_comp",
+        values="consumo_neto_kWh"
+    ).reset_index()
+
+    # Asegurar columnas por si falta alguna
+    for col in ["Base", "+1 año"]:
+        if col not in df_pivot.columns:
+            df_pivot[col] = 0
+
+    # =====================================================
+    # 13. DIFERENCIALES
+    # =====================================================
+    df_pivot["Δ"] = df_pivot["+1 año"] - df_pivot["Base"]
+
+    df_pivot["Δ %"] = np.where(
+        df_pivot["Base"] != 0,
+        df_pivot["Δ"] / df_pivot["Base"] * 100,
+        0
+    )
+
+    fila_total = {
+        "Mes": "TOTAL",
+        "Base": df_pivot["Base"].sum(),
+        "+1 año": df_pivot["+1 año"].sum()
+    }
+
+    fila_total["Δ"] = fila_total["+1 año"] - fila_total["Base"]
+
+    fila_total["Δ %"] = (
+        fila_total["Δ"] / fila_total["Base"] * 100
+        if fila_total["Base"] != 0
+        else 0
+    )
+
+    # =====================================================
+    # 14. ORDEN Y FORMATO DE TABLA
+    # =====================================================
+    df_pivot = df_pivot.sort_values("mes_orden")
+
+    df_pivot["Mes"] = df_pivot["mes_nom"] + f" ({inicio.year}/{inicio_1y.year})"
+
+    df_pivot = df_pivot.drop(columns=["mes_num", "mes_orden"])
+    df_pivot = df_pivot[["Mes", "Base", "+1 año", "Δ", "Δ %"]]
+
+    df_pivot = pd.concat(
+        [df_pivot, pd.DataFrame([fila_total])],
+        ignore_index=True
+    )
+
+    # =====================================================
+    # 15. RESUMEN HTML
+    # =====================================================
+    delta = fila_total["Δ"]
+    delta_pct = fila_total["Δ %"]
+
+    if delta > 0:
+        texto_tipo = "incremento"
+    elif delta < 0:
+        texto_tipo = "decremento"
+    else:
+        texto_tipo = "variación nula"
+
+    def formato_es(valor, decimales=0):
+        return f"{valor:,.{decimales}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+    delta_str = formato_es(delta, 0)
+    delta_pct_str = formato_es(delta_pct, 2)
+
+    resumen_html = f"""
+    <div style="font-size:28px; text-align:center; color:white;">
+        El <b>{texto_tipo}</b> del consumo en el periodo seleccionado ha sido de:
+        <br>
+        <span style="font-size:36px; font-weight:bold;">
+            <span style="color:yellow;">{delta_str}</span> kWh
+        </span> 
+        (<span style="font-size:36px; font-weight:bold;">
+            <span style="color:yellow;">{delta_pct_str}</span> %
+        </span>)
+    </div>
+    """
+
+    # =====================================================
+    # 16. GRÁFICOS
+    # =====================================================
+    color_base = "#1f77b4"
+    color_comp = "#ff7f0e"
+
+    df_plot = df_pivot[df_pivot["Mes"] != "TOTAL"]
+
+    fig_mensual = px.bar(
+        df_plot,
+        x="Mes",
+        y=["Base", "+1 año"],
+        barmode="group",
+    )
+
+    fig_mensual.for_each_trace(
+        lambda t: t.update(marker_color=color_base)
+        if t.name == "Base"
+        else t.update(marker_color=color_comp)
+    )
+
+    fig_mensual.update_layout(
+        title=dict(
+            text="Comparativa MENSUAL del periodo (kWh)",
+            x=0.5,
+            xanchor="center"
+        ),
+        legend_title_text="Periodo",
+        xaxis_title="Mes",
+        yaxis_title="kWh",
+        bargap=0.25,
+        bargroupgap=0.1
+    )
+
+    df_total_plot = df_pivot[df_pivot["Mes"] == "TOTAL"]
+
+    fig_total = px.bar(
+        df_total_plot,
+        x=["TOTAL"],
+        y=["Base", "+1 año"],
+        barmode="group",
+    )
+
+    fig_total.for_each_trace(
+        lambda t: t.update(marker_color=color_base)
+        if t.name == "Base"
+        else t.update(marker_color=color_comp)
+    )
+
+    fig_total.update_traces(
+        texttemplate="%{y:,.0f}",
+        textposition="inside",
+        textfont_size=20
+    )
+
+    fig_total.update_layout(
+        title=dict(
+            text="Comparativa TOTAL del periodo (kWh)",
+            x=0.5,
+            xanchor="center"
+        ),
+        showlegend=True,
+        xaxis_title="",
+        yaxis_title="kWh",
+        bargap=0.4,
+        bargroupgap=0.1
+    )
+
+    # =====================================================
+    # 17. RETURN FINAL
+    # =====================================================
+    resultado["ok"] = True
+    resultado["mensaje"] = ""
+    resultado["df_pivot"] = df_pivot
+    resultado["resumen_html"] = resumen_html
+    resultado["fig_total"] = fig_total
+    resultado["fig_mensual"] = fig_mensual
+
+    return resultado
 
 

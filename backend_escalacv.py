@@ -536,6 +536,7 @@ def diarios(datos, fecha_ini, fecha_fin, datos_comparar):
     )
     
     graf_ecv_diario = aplicar_estilo(graf_ecv_diario)
+    graf_ecv_diario.update_layout(height= 600)
 
     return datos_dia, graf_ecv_diario
 
@@ -573,22 +574,12 @@ def mensuales(datos_dia):
         }).reset_index()   
 
         datos_mes['media'] = datos_mes['value'].expanding().mean()
-        
-
-
     
     datos_mes['value'] = datos_mes['value'].round(2)
     datos_mes[['mes','año']] = datos_mes[['mes','año']].astype(int)
-    #datos_mes['media'] = datos_mes['value'].expanding().mean()
     
-
     media_mensual=round(datos_dia['value'].mean(),2)
     
-    
-
-
-    
-
     # Unir con tus datos por mes (asumiendo que sólo falta alguno)
     datos_mes = pd.merge(meses_completos, datos_mes, on=['mes', 'mes_nombre'], how='left')
 
@@ -601,9 +592,6 @@ def mensuales(datos_dia):
     datos_mes['mes_nombre'] = pd.Categorical(datos_mes['mes_nombre'], categories = orden_meses, ordered = True)
     datos_mes = datos_mes.sort_values(by='mes_nombre')
 
-    
-     
-   
     df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes()
     datos_mes['escala']=pd.cut(datos_mes['value'],bins=df_limites['rango'],labels=etiquetas,right=False)
     datos_mes['color']=datos_mes['escala'].map(colores)
@@ -728,10 +716,12 @@ def mensuales(datos_dia):
             tickmode="linear",            # Escala lineal
             tick0=0,                      # Comenzar en 0
             dtick=tick_y                      # Incrementos de 20
-        ),   
+        ),
+           
     )
     
     graf_ecv_mensual = aplicar_estilo(graf_ecv_mensual)
+    
 
     return graf_ecv_mensual
 

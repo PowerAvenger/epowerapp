@@ -385,7 +385,7 @@ with tab1:
 #PANTALLA DE FUTUROS--------------------------------------------------
 with tab2:
     
-    col3, col4 = st.columns([0.2, 0.8])
+    col3, col4 = st.columns([0.18, 0.82])
     with col3:
         with st.container(border = True):
             st.info('Aquí tienes el valor medio de :blue[OMIP] en €/MWh a partir de los siguientes trimestres, así como la fecha del último registro.', icon = "ℹ️")

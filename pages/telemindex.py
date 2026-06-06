@@ -3,17 +3,18 @@ import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
 import datetime
-
-from backend_telemindex import (filtrar_datos, añadir_fnee, calcular_precios_atr,
-                                graficar_precios_medios_horarios, graficar_queso_componentes,
-                                tabla_precios, tabla_costes, tabla_pyc, tabla_margen,
-                                evol_mensual, 
-                                construir_df_curva_sheets, añadir_costes_curva,
-                                check_medias,
-                                analizar_dependencia_omie, graficar_elasticidad_lineal) 
+from backend_telemindex import (
+    filtrar_datos, añadir_fnee, calcular_precios_atr,
+    graficar_precios_medios_horarios, graficar_queso_componentes,
+    tabla_precios, tabla_costes, tabla_pyc, tabla_margen,
+    evol_mensual, graficar_diferencial_precios_mensuales, tabla_evol_mes_por_años,
+    construir_df_curva_sheets, añadir_costes_curva,
+    check_medias,
+    analizar_dependencia_omie, graficar_elasticidad_lineal,
+    
+) 
 from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, aplicar_estilo
 from backend_curvadecarga import graficar_media_horaria, graficar_queso_periodos
-
 from utilidades import generar_menu, init_app, init_app_index, persist_widget
 
 
@@ -35,6 +36,9 @@ if 'opcion_comparativa' not in st.session_state:
 #para lo del análisis de elasticidad y tal
 if 'peaje_analisis' not in st.session_state:
     st.session_state.peaje_analisis = '2.0'
+
+if 'mes_select_evol' not in st.session_state:
+    st.session_state.mes_select_evol = 'enero'
 
 
 #inicializamos variables de sesión
@@ -334,6 +338,9 @@ if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None an
 
 df_precios_mensuales, graf_mensual = evol_mensual(st.session_state.df_sheets, colores_precios)
 
+print('precios mensuales')
+print(df_precios_mensuales)
+
 
 
 #ELEMENTOS DE LA BARRA LATERAL ---------------------------------------------------------------------------------------
@@ -398,11 +405,10 @@ with st.sidebar.container(border=True):
 
 # ZONA PRINCIPAL DE GRÁFICOS++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-tab1, tab2 = st.tabs(['Principal', 'Comparativa'])
+tab1, tab2, tab3 = st.tabs(['Principal', 'Evol', 'Comparativa'])
 
 with tab1:
     
-
         col1, col2 = st.columns([.7,.3])
 
         #COLUMNA PRINCIPAL
@@ -454,9 +460,7 @@ with tab1:
                 with col12:
                     st.write(graf61)
                 
-            # gráfico de evolución de los precios medios mensuales
-            st.subheader("Evolución de los precios medios de indexado", divider='rainbow')
-            st.plotly_chart(graf_mensual)
+            
 
             df_res, fig = analizar_dependencia_omie(st.session_state.df_sheets, st.session_state.peaje_analisis)
 
@@ -477,10 +481,8 @@ with tab1:
 
         with col2:
             if media_atr_curva is not None:
-                st.subheader("Perfil de consumo", divider='rainbow')
-                #st.session_state.opcion_tipodia = "Todos"
-                #graf_medias_horarias=graficar_media_horaria(st.session_state.df_norm)
-
+                st.subheader("Perfil de consumo (kWh) vs coste (€)", divider='rainbow')
+                
                 df_coste = st.session_state.df_curva_sheets.copy()
                 df_coste_h = (
                     df_coste
@@ -546,7 +548,49 @@ with tab1:
                 df_tabla_margen_fmt = formatear_columnas_tabla(df_tabla_margen, columnas_cent_eur_kwh=cols_precios, incluir_unidades=False)
                 st.dataframe(df_tabla_margen_fmt, use_container_width=True )
 
+
 with tab2:
+    # gráfico de evolución de los precios medios mensuales
+    st.subheader("Evolución de los precios medios de indexado", divider='rainbow')
+    st.plotly_chart(graf_mensual)
+
+    df_delta, fig_delta = graficar_diferencial_precios_mensuales(
+        df_mensual=df_precios_mensuales,
+        anio_base=2025,
+        anio_comp=2026,
+        convertir_a_cent_kwh=True
+    )
+    c1, c2 = st.columns(2)
+    with c1:
+        st.plotly_chart(fig_delta, use_container_width=True)
+    with c2:
+        MESES_ORDEN = [
+            "enero", "febrero", "marzo", "abril",
+            "mayo", "junio", "julio", "agosto",
+            "septiembre", "octubre", "noviembre", "diciembre"
+        ]
+        df_mes_años = tabla_evol_mes_por_años(df_precios_mensuales, MESES_ORDEN)
+        #st.subheader("Comparativa mensual (precios en c€/kWh)", divider='rainbow')
+        st.subheader(f"Comparativa mensual de precios (c€/kWh) - {st.session_state.mes_select_evol}", divider='rainbow')
+        st.selectbox("Selecciona mes", MESES_ORDEN, key = 'mes_select_evol')
+        st.dataframe(
+        df_mes_años.style.format({
+            "SPOT": "{:.2f}",
+            "Precio 2.0": "{:.2f}",
+            "Precio 3.0": "{:.2f}",
+            "Precio 6.1": "{:.2f}",
+            "Ratio 2.0 / SPOT": "{:.2f}",
+            "Ratio 3.0 / SPOT": "{:.2f}",
+            "Ratio 6.1 / SPOT": "{:.2f}",
+        }),
+        use_container_width=True,
+        hide_index=True
+    )
+        
+
+
+
+with tab3:
     #if 'df_curva_sheets' not in st.session_state or st.session_state.df_curva_sheets is None:
     if 'df_curva_sheets' not in st.session_state:
         st.warning('Introduce una curva de carga')

@@ -174,7 +174,6 @@ with tab1:
             #st.plotly_chart(graf_ecv_diario)
         with col2:
             st.subheader('Datos en €/MWh',divider='rainbow')
-            #st.metric(f'Precio medio diario {st.session_state.año_seleccionado}', value=valor_medio_diario)
             st.metric(f'Precio mínimo diario ( {fecha_min_diario_total})', value=valor_minimo_diario_total)
             st.metric(f'Precio máximo diario ({fecha_max_diario_total})', value=valor_maximo_diario_total)
 

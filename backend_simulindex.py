@@ -6,6 +6,9 @@ from datetime import datetime
 from backend_comun import obtener_df_resumen, aplicar_estilo
 import pandas as pd
 import numpy as np
+import statsmodels.api as sm
+
+
 
 
 #valores de peajes y cargos usados en la simulación en €/kWh
@@ -325,8 +328,7 @@ def obtener_hist_mensual(df_in):
 
 
 
-import statsmodels.api as sm
-import numpy as np
+
 
 # GRÁFICO PRINCIPAL DE PRECIOS DE INDEXADO A PARTIR DE OMIE
 def obtener_graf_hist(df_hist, omip, colores_precios, añadir_hist):
@@ -541,7 +543,7 @@ def obtener_spot_diario():
 # GRÁFICO CON FACETS (POR MES O POR TRIMESTRE) PARA VISUALIZAR LA EVOLUCIÓN DE OMIP
 def obtener_grafico_omip(df):
     #df puede ser df_FTB mensual o trimestral
-    graf=px.line(df,
+    fig=px.line(df,
         x='Fecha',
         y='Precio',
         facet_col='Entrega',
@@ -553,7 +555,8 @@ def obtener_grafico_omip(df):
     #graf.update_yaxes(matches=None)
     #graf.update_yaxes(range=[0, 100])
     
-    graf.update_layout(
+    fig.update_layout(
+        title="",
         xaxis=dict(
             rangeslider=dict(
                 visible=True,
@@ -570,10 +573,12 @@ def obtener_grafico_omip(df):
         ),
     )
         
-    for ann in graf.layout.annotations:
+    for ann in fig.layout.annotations:
         ann.font.size = 16
     
-    return graf
+    fig = aplicar_estilo(fig)
+    
+    return fig
 
 
 
@@ -2130,7 +2135,7 @@ def graficar_omip_suavizado_vs_omie_real(
 
     return fig
 
-#@st.cache_data()
+@st.cache_data()
 def graficar_omip_vs_omie_previsto_ajustado_1y(
     df_evol,
     ventana_dias=15,
@@ -2444,5 +2449,6 @@ def graficar_omip_vs_omie_previsto_ajustado_1y(
             zerolinecolor="gray"
         )
     )
+    fig = aplicar_estilo(fig)
 
     return fig, df_plot

@@ -66,7 +66,8 @@ def aplicar_estilo(fig):
         ),
 
         hoverlabel=dict(
-            font_size=ESTILO_GRAF["hover_size"]
+            font_size=ESTILO_GRAF["hover_size"],
+            
         ),
 
         legend=dict(

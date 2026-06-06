@@ -110,10 +110,7 @@ def init_app_index():
 
         # esto lo hacemos para que el sheets inicial tenga las columnas coste_ y precio_ para evol mensual por defecto
         if 'precios_calculados' not in st.session_state:
-
-            st.session_state.df_sheets = calcular_precios_atr(
-                st.session_state.df_sheets
-            )
+            st.session_state.df_sheets = calcular_precios_atr(st.session_state.df_sheets)
             st.session_state.precios_calculados = True
 
         print('df sheets NUEVO COMBO CSV Y SHEETS OLD')

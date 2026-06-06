@@ -12,9 +12,11 @@ from backend_curvadecarga import (
     graficar_heatmap_dia_hora,
     calcular_patron_horario_boxplot, detectar_consumos_atipicos_horarios,
     resumir_atipicos_por_dia, calcular_kpis_atipicos, mostrar_kpis_atipicos, graficar_top_dias_revisables, graficar_heatmap_alertas, calcular_patron_horario_boxplot, obtener_top_horas_revisables,
-    calcular_tabla_excesos_reactiva, calcular_tabla_factor_potencia, estilo_factor_potencia, calcular_tabla_precio_penalizacion_reactiva, calcular_tabla_coste_excesos_reactiva, estilo_coste_penalizacion
-    )
-from backend_comun import formatear_tabla_consumos, formatear_tabla_euros
+    calcular_tabla_excesos_reactiva, calcular_tabla_factor_potencia, estilo_factor_potencia, calcular_tabla_precio_penalizacion_reactiva, calcular_tabla_coste_excesos_reactiva, estilo_coste_penalizacion,
+    calcular_tabla_potencia_media_qh,calcular_tabla_coef_k, calcular_tabla_q_condensadores,
+    calcular_comparacion,)
+from backend_comun import formatear_tabla_consumos, formatear_columnas_tabla
+
 
         
 from utilidades import generar_menu
@@ -61,8 +63,15 @@ if "df_norm_h" not in st.session_state:
 if "df_in" not in st.session_state:
     st.session_state.df_in = None
 if 'frec' not in st.session_state:
-    st.session_state.frec = 'QH'      
-
+    st.session_state.frec = 'QH'
+if 'fp_obj_min' not in st.session_state:
+    st.session_state.fp_obj_min = 0.95  
+if 'fp_obj_max' not in st.session_state:
+    st.session_state.fp_obj_max = 1.00
+if 'fp_obj_sel' not in st.session_state:
+    st.session_state.fp_obj_sel = 0.98  
+if 'margen_comp_min' not in st.session_state:       
+    st.session_state.margen_comp_min = 30 #en %
   
 
 if normalizar and uploaded:    
@@ -567,311 +576,101 @@ if st.session_state.get("df_norm") is not None:
                 st.plotly_chart(graf_con_gen, use_container_width=True)
         
 
-        #c1,c2,c3 = st.columns(3)   
-        #with c1:
-            
+        
+    # ===================================================================================================================================================================================================
+    # COMPARATIVAS
+    # ===================================================================================================================================================================================================        
     
+    #df_pivot, resumen_html, fig_total, fig_mensual, fecha_ini_global, fecha_fin_global, fecha_max_comparable = calcular_comparacion()
+    res = calcular_comparacion()
+
+    fechas = res["fechas"]
+
+    fecha_ini_global = fechas["fecha_ini_global"]
+    fecha_fin_global = fechas["fecha_fin_global"]
+    fecha_max_comparable = fechas["fecha_max_comparable"]
+    rango_valido = fechas["rango_valido"]
+
+    df_pivot = res['df_pivot']
+    resumen_html = res["resumen_html"]
+    fig_total = res["fig_total"]
+    fig_mensual = res["fig_mensual"]
+
     with tab4:
         c1, c2, c3, c4 = st.columns(4)
         with c1:
-            #fecha de inicio y final de la curva de carga
-            fecha_ini_global, fecha_fin_global = st.session_state.rango_curvadecarga
-            fecha_ini_global = pd.to_datetime(fecha_ini_global).date()
-            fecha_fin_global = pd.to_datetime(fecha_fin_global).date()
-            #fecha máxima a comparar (es la final de la curva menos un año)
-            fecha_max_comparable = fecha_fin_global - relativedelta(years=1)
-
-            # 🔴 VALIDACIÓN CLAVE: debe haber al menos un día de más aparte del año
-            #if fecha_max_comparable <= fecha_ini_global:
-            if fecha_max_comparable < fecha_ini_global:    
-                st.warning("No hay datos suficientes para realizar una comparativa anual (+1 año).")
-                #st.stop()
+            st.subheader('Introduce rango de fechas a comparar')
+            st.info(
+                f"Rango disponible de la curva: "
+                f"{fecha_ini_global.strftime('%d.%m.%Y')} → {fecha_fin_global.strftime('%d.%m.%Y')}"
+            )
+            if rango_valido is not None:
+                st.success(
+                    f"Rango comparable seleccionable: "
+                    f"{rango_valido[0].strftime('%d.%m.%Y')} → {rango_valido[1].strftime('%d.%m.%Y')}"
+                )
             else:
-                # propuesta de rango inicial:
-                # si hay 1 año disponible, proponemos 1 año;
-                # si no, proponemos todo el tramo comparable disponible
-                fecha_delta = (pd.to_datetime(fecha_max_comparable) - relativedelta(years=1) + timedelta(days=1)).date()
-                if fecha_delta < fecha_ini_global:
-                    fecha_delta = fecha_ini_global
+                st.warning(res["mensaje"])
+                #st.stop() 
+            
 
-                rango_valido = (fecha_delta, fecha_max_comparable)
-
-
-                #inicialización del rango de fechas
-                #if "rango_fechas_comparativa" not in st.session_state:
-                #    fecha_fin_dt = pd.to_datetime(fecha_max_comparable)
-                #    fecha_delta = (fecha_fin_dt - relativedelta(years=1) + timedelta(days=1)).date()
-                    #st.session_state.rango_fechas_comparativa = (fecha_delta, fecha_fin_global)
-                #    st.session_state.rango_fechas_comparativa = (fecha_delta, fecha_max_comparable)
-                
-                # inicialización / saneado del valor guardado en sesión
-                if "rango_fechas_comparativa" not in st.session_state:
-                    st.session_state.rango_fechas_comparativa = rango_valido
-                else:
-                    rango_actual = st.session_state.rango_fechas_comparativa
-
-                    if not isinstance(rango_actual, (list, tuple)) or len(rango_actual) != 2:
-                        st.session_state.rango_fechas_comparativa = rango_valido
-                    else:
-                        f_ini, f_fin = rango_actual
-                        f_ini = pd.to_datetime(f_ini).date()
-                        f_fin = pd.to_datetime(f_fin).date()
-
-                        # recortar a límites válidos
-                        f_ini = max(f_ini, fecha_ini_global)
-                        f_fin = min(f_fin, fecha_max_comparable)
-
-                        # si tras recortar queda inválido, reset
-                        if f_ini > f_fin:
-                            st.session_state.rango_fechas_comparativa = rango_valido
-                        else:
-                            st.session_state.rango_fechas_comparativa = (f_ini, f_fin)
-
-                st.date_input("Selecciona periodo base", min_value=fecha_ini_global, max_value=fecha_max_comparable, key="rango_fechas_comparativa", format="DD.MM.YYYY")
-
-                # =========================
-                # 🔹 4. RECUPERAR FECHAS
-                # =========================
-                rango = st.session_state.get("rango_fechas_comparativa")
-
-                if rango is None or len(rango) != 2:
-                    st.stop()
-
-                fecha_inicio, fecha_fin = rango
-
-                inicio = pd.to_datetime(fecha_inicio)
-                fin = pd.to_datetime(fecha_fin)
-
-                # =========================
-                # 🔹 5. GENERAR +1 AÑO
-                # =========================
-                inicio_1y = inicio + relativedelta(years=1)
-                fin_1y = fin + relativedelta(years=1)
-
-                # =========================
-                # 🔹 6. CHECK DATOS DISPONIBLES
-                # =========================
-                fecha_max_df = st.session_state.df_norm_h["fecha_hora"].max()
-
-                if fin_1y > fecha_max_df:
-                    st.warning("No hay datos completos para el periodo comparativo (+1 año)")
-                    st.stop()
-                
-                # =========================
-                # 🔹 7. FILTRADO
-                # =========================
-                df_base = st.session_state.df_norm_h[
-                    (st.session_state.df_norm_h["fecha_hora"] >= inicio) &
-                    (st.session_state.df_norm_h["fecha_hora"] < fin + pd.Timedelta(days=1))
-                ].copy()
-
-                df_comp = st.session_state.df_norm_h[
-                    (st.session_state.df_norm_h["fecha_hora"] >= inicio_1y) &
-                    (st.session_state.df_norm_h["fecha_hora"] < fin_1y + pd.Timedelta(days=1))
-                ].copy()
-                # =========================
-                # 🔹 8. ETIQUETADO
-                # =========================
-                df_base["periodo_comp"] = "Base"
-                df_comp["periodo_comp"] = "+1 año"
-
-                df_total = pd.concat([df_base, df_comp])
-
-                # =========================
-                # 🔹 9. COLUMNAS TEMPORALES
-                # =========================
-                df_total["mes_nom"] = df_total["fecha_hora"].dt.strftime("%b")
-                df_total["mes_num"] = df_total["fecha_hora"].dt.month
-                df_total["mes_label"] = df_total["fecha_hora"].dt.strftime("%b %Y")
-                df_total["año"] = df_total["fecha_hora"].dt.year
-
-                # 🔥 clave
-                mes_inicio = inicio.month
-                df_total["mes_orden"] = (df_total["mes_num"] - mes_inicio) % 12
-
-                # =========================
-                # 🔹 10. AGREGACIÓN MENSUAL
-                # =========================
-                df_mensual = (
-                    df_total
-                    .groupby(["periodo_comp", "mes_num", "mes_nom", "mes_orden"], as_index=False)["consumo_neto_kWh"]
-                    .sum()
+        if rango_valido is not None:
+            with c1:
+                with st.form('Seleccionar'):    
+                    st.date_input("Selecciona periodo base", min_value=fecha_ini_global, max_value=fecha_max_comparable, key="rango_fechas_comparativa", format="DD.MM.YYYY")
+                    st.form_submit_button('Actualizar periodo de comparación')
+            with c2:
+                st.subheader('Tabla de resultados')
+                #df_pivot_fmt = formatear_resumen_mixto(df_pivot)
+                df_pivot_fmt = formatear_columnas_tabla(
+                    df_pivot,
+                    columnas_kwh=["Base", "+1 año", "Δ"],
+                    columnas_pct=["Δ %"],
+                    incluir_unidades=False
                 )
+                st.dataframe(df_pivot_fmt, use_container_width=True, hide_index=True)
+                st.markdown(resumen_html, unsafe_allow_html=True)    
 
-                # =========================
-                # 🔹 11. PIVOT
-                # =========================
-                df_pivot = df_mensual.pivot(
-                    index=["mes_num", "mes_nom", "mes_orden"],
-                    columns="periodo_comp",
-                    values="consumo_neto_kWh"
-                ).reset_index()
-
-                
-                # =========================
-                # 🔹 12. DIFERENCIALES
-                # =========================
-                if "Base" in df_pivot.columns and "+1 año" in df_pivot.columns:
-                    df_pivot["Δ"] = df_pivot["+1 año"] - df_pivot["Base"]
-                    df_pivot["Δ %"] = df_pivot["Δ"] / df_pivot["Base"] * 100
-
-                fila_total = {
-                    "Mes": "TOTAL",
-                    "Base": df_pivot["Base"].sum(),
-                    "+1 año": df_pivot["+1 año"].sum()
-                }
-
-                fila_total["Δ"] = fila_total["+1 año"] - fila_total["Base"]
-                fila_total["Δ %"] = fila_total["Δ"] / fila_total["Base"] * 100
-
-                # =========================
-                # 🔹 13. ORDEN
-                # =========================
-                #df_pivot = df_pivot.sort_values("mes_num")
-                df_pivot = df_pivot.sort_values("mes_orden")
-
-                df_pivot["Mes"] = df_pivot["mes_nom"] + f" ({inicio.year}/{inicio_1y.year})"
-
-                # =========================
-                # 🔹 14. FORMATO VISUAL
-                # =========================
-                df_pivot = df_pivot.drop(columns=["mes_num", "mes_orden"])
-                #df_pivot = df_pivot.rename(columns={"mes_nom": "Mes"})
-                df_pivot = df_pivot[["Mes", "Base", "+1 año", "Δ", "Δ %"]]
-
-                # añadir TOTAL
-                df_pivot = pd.concat([df_pivot, pd.DataFrame([fila_total])], ignore_index=True)
-
-
-
-                # =========================
-                # 🔹 15. MOSTRAR
-                # =========================
-                st.dataframe(df_pivot, use_container_width=True, hide_index=True)
-
-                delta = fila_total["Δ"]
-                delta_pct = fila_total["Δ %"]
-
-                # decidir texto
-                if delta > 0:
-                    texto_tipo = "incremento"
-                elif delta < 0:
-                    texto_tipo = "decremento"
-                else:
-                    texto_tipo = "variación nula"
-
-                # formateo español (punto miles, coma decimal)
-                def formato_es(valor, decimales=0):
-                    return f"{valor:,.{decimales}f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
-                delta_str = formato_es(delta, 0)
-                delta_pct_str = formato_es(delta_pct, 2)
-
-                # construir texto
-                resumen = f"El {texto_tipo} del consumo en el periodo seleccionado ha sido de {delta_str} kWh ({delta_pct_str}%)."
-
-                # 🔥 TEXTO FINAL (número amarillo, unidad blanca, mismo tamaño)
-                resumen_html = f"""
-                <div style="font-size:28px; text-align:center; color:white;">
-                    El <b>{texto_tipo}</b> del consumo en el periodo seleccionado ha sido de 
-                    <span style="font-size:36px; font-weight:bold;">
-                        <span style="color:yellow;">{delta_str}</span> kWh
-                    </span> 
-                    (<span style="font-size:36px; font-weight:bold;">
-                        <span style="color:yellow;">{delta_pct_str}</span> %
-                    </span>).
-                </div>
-                """
-
-                st.markdown(resumen_html, unsafe_allow_html=True)
-
-                #st.markdown(resumen)
-
-                
-
-                color_base = "#1f77b4"
-                color_comp = "#ff7f0e"
-
-                df_plot = df_pivot[df_pivot["Mes"] != "TOTAL"]
-
-                fig_mensual = px.bar(
-                    df_plot,
-                    x="Mes",
-                    y=["Base", "+1 año"],
-                    barmode="group",
-                    #title="Comparativa mensual de consumo (kWh)"
-                )
-
-                # asignar colores correctamente
-                fig_mensual.for_each_trace(
-                    lambda t: t.update(marker_color=color_base) if t.name == "Base"
-                    else t.update(marker_color=color_comp)
-                )
-
-                fig_mensual.update_layout(
-                    title=dict(
-                        text="Comparativa MENSUAL del periodo (kWh)",
-                        x=0.5,
-                        xanchor="center"
-                    ),
-                                                                                # 🔥 centrado
-                    legend_title_text="Periodo",
-                    xaxis_title="Mes",
-                    yaxis_title="kWh",
-                    bargap=0.25,                    # 🔥 separación entre grupos
-                    bargroupgap=0.1                 # 🔥 separación dentro del grupo
-                )
-
-                st.plotly_chart(fig_mensual, use_container_width=True)
-
-                df_total_plot = df_pivot[df_pivot["Mes"] == "TOTAL"]
-
-                fig_total = px.bar(
-                    df_total_plot,
-                    x=["TOTAL"],
-                    y=["Base", "+1 año"],
-                    barmode="group",
-                    #title="Comparativa total del periodo (kWh)"
-                )
-
-                fig_total.for_each_trace(
-                    lambda t: t.update(marker_color=color_base) if t.name == "Base"
-                    else t.update(marker_color=color_comp)
-                )
-
-                # 🔥 añadir valores encima de cada barra
-                fig_total.update_traces(
-                    texttemplate="%{y:,.0f}",
-                    textposition="inside",
-                    textfont_size=20
-                )
-
-                fig_total.update_layout(
-                    title=dict(
-                        text="Comparativa TOTAL del periodo (kWh)",
-                        x=0.5,
-                        xanchor="center"
-                    ),                      # 🔥 centrado
-                    showlegend=True,
-                    xaxis_title="",
-                    yaxis_title="kWh",
-                    bargap=0.4,             # 🔥 más separación visual
-                    bargroupgap=0.1
-                )
-
-                st.plotly_chart(fig_total, use_container_width=True)
+            with c3:
+                if fig_total is not None:
+                    st.plotly_chart(fig_total, use_container_width=True)
+            with c4:
+                if fig_mensual is not None:
+                    st.plotly_chart(fig_mensual, use_container_width=True)
 
     
 
+    # ======================================================================================================================================================
+    # REACTIVA
+    # ======================================================================================================================================================
     with tab5:
-        tabla_mensual_reactiva = tabla_mensual_periodos(st.session_state.df_norm_h, columna_valor='reactiva_kVArh')
-        df_tabla_fmt_react = formatear_tabla_consumos(tabla_mensual_reactiva, columna_mes="Mes", incluir_unidades=False)    
-        tabla_excesos_reactiva = calcular_tabla_excesos_reactiva(tabla_mensual_consumos, tabla_mensual_reactiva, porcentaje_limite=0.33)
-        df_tabla_fmt_exc_react = formatear_tabla_consumos(tabla_excesos_reactiva, columna_mes="Mes", incluir_unidades=False)   
-        tabla_mensual_fp = calcular_tabla_factor_potencia(tabla_mensual_consumos, tabla_mensual_reactiva)
+        df_reactiva = tabla_mensual_periodos(st.session_state.df_norm_h, columna_valor='reactiva_kVArh')
+        df_excesos_reactiva = calcular_tabla_excesos_reactiva(tabla_mensual_consumos, df_reactiva, porcentaje_limite=0.33)
+        df_fp = calcular_tabla_factor_potencia(tabla_mensual_consumos, df_reactiva)
+        df_coste_excesos_reactiva = calcular_tabla_coste_excesos_reactiva(df_excesos_reactiva, df_fp)
+        df_potmed_qh = calcular_tabla_potencia_media_qh(st.session_state.df_norm, columna_valor="consumo_neto_kWh")
+        df_coef_k_min = calcular_tabla_coef_k(df_fp, st.session_state.fp_obj_min)
+        df_coef_k_sel = calcular_tabla_coef_k(df_fp, st.session_state.fp_obj_sel)
+        df_q_condensadores_min = calcular_tabla_q_condensadores(df_potmed_qh, df_coef_k_min)
+        df_q_condensadores_sel = calcular_tabla_q_condensadores(df_potmed_qh, df_coef_k_sel)
+
+        total_penalizacion_reactiva = df_coste_excesos_reactiva["Total"].sum()
+
+        print('tabla mensual de reactiva')
+        print(df_reactiva)
+
+        df_potmed_qh_fmt = formatear_tabla_consumos(df_potmed_qh, columna_mes="Mes", incluir_unidades=False)
+        df_reactiva_fmt = formatear_tabla_consumos(df_reactiva, columna_mes="Mes", incluir_unidades=False)    
+        df_excesos_react_fmt = formatear_tabla_consumos(df_excesos_reactiva, columna_mes="Mes", incluir_unidades=False)
+        df_q_condensadores_min_fmt = formatear_tabla_consumos(df_q_condensadores_min, columna_mes="Mes", incluir_unidades=False)
+        df_q_condensadores_sel_fmt = formatear_tabla_consumos(df_q_condensadores_sel, columna_mes="Mes", incluir_unidades=False)
+
+        cols_periodos = [c for c in df_q_condensadores_min.columns if c.startswith("P")]
+        q_min = (df_q_condensadores_min[cols_periodos].max().max())
+        q_sel = (df_q_condensadores_sel[cols_periodos].max().max())
         
         #aplicamos colores a la tabla mensual de FPs
-        df_fp_fmt = tabla_mensual_fp.copy()
+        df_fp_fmt = df_fp.copy()
         cols_fp = [c for c in df_fp_fmt.columns if c != "Mes"]
         styler_fp = (
             df_fp_fmt
@@ -889,38 +688,34 @@ if st.session_state.get("df_norm") is not None:
                 )
         
         #calculamos penalizaciones y formateamos
-        tabla_coste_excesos_reactiva = calcular_tabla_coste_excesos_reactiva(tabla_excesos_reactiva, tabla_mensual_fp)
-        #df_coste_excesos_reactiva_fmt = formatear_tabla_euros(tabla_coste_excesos_reactiva, columna_mes="Mes", incluir_unidades=False)
-        df_coste_exc_fmt = tabla_coste_excesos_reactiva.copy()
-        cols_coste = [c for c in df_coste_exc_fmt.columns if c != "Mes"]
+        df_coste_excesos_reactiva_fmt = df_coste_excesos_reactiva.copy()
+        cols_coste = [c for c in df_coste_excesos_reactiva_fmt.columns if c != "Mes"]
         for col in cols_coste:
-            df_coste_exc_fmt[col] = (
-                df_coste_exc_fmt[col]
+            df_coste_excesos_reactiva_fmt[col] = (
+                df_coste_excesos_reactiva_fmt[col]
                 #.replace("None", np.nan)
                 .replace(["None", "nan", "NaN", ""], np.nan)
                 #.replace(None, np.nan)
             )
-            df_coste_exc_fmt[col] = pd.to_numeric(df_coste_exc_fmt[col], errors="coerce")
+            df_coste_excesos_reactiva_fmt[col] = pd.to_numeric(df_coste_excesos_reactiva_fmt[col], errors="coerce")
         # 2) Convertimos NaN a "" SOLO para visualización
-        df_coste_exc_fmt[cols_coste] = df_coste_exc_fmt[cols_coste].astype(object)
-        df_coste_exc_fmt[cols_coste] = df_coste_exc_fmt[cols_coste].where(
-            pd.notna(df_coste_exc_fmt[cols_coste]),
+        df_coste_excesos_reactiva_fmt[cols_coste] = df_coste_excesos_reactiva_fmt[cols_coste].astype(object)
+        df_coste_excesos_reactiva_fmt[cols_coste] = df_coste_excesos_reactiva_fmt[cols_coste].where(
+            pd.notna(df_coste_excesos_reactiva_fmt[cols_coste]),
             ""
         )
         # 3) Formato visual
         def formato_coste_celda(x):
             if x == "" or pd.isna(x):
                 return ""
-
             try:
                 x = float(x)
             except:
                 return ""
-
             return f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
         
         styler_coste_exc = (
-            df_coste_exc_fmt
+            df_coste_excesos_reactiva_fmt
             .style
             .applymap(estilo_coste_penalizacion, subset=cols_coste)
             .format({
@@ -932,26 +727,125 @@ if st.session_state.get("df_norm") is not None:
             )
         )
 
-        total_penalizacion_reactiva = tabla_coste_excesos_reactiva["Total"].sum()
+        from backend_curvadecarga import calcular_curva_q_dimensionamiento, graficar_compensacion_dimensionamiento
+        cols_periodos = [c for c in df_fp.columns if c.startswith("P")]
+        fp_min = df_fp[cols_periodos].min().min()
+        cols_total = [c for c in df_fp.columns if c.startswith("T")]
+        fp_med = round(df_fp[cols_total].mean() ,2)
 
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.subheader('Tabla de consumos mensuales (kWh)')
-            st.dataframe(tabla_mensual_consumos_fmt, use_container_width=True, hide_index=True)
-            st.subheader('Tabla de FP Factor de Potencia')
-            st.dataframe(styler_fp, use_container_width=True, hide_index=True)
-        with c2:
-            st.subheader('Tabla de reactiva mensual (kVArh)')
-            st.dataframe(df_tabla_fmt_react, use_container_width=True, hide_index=True)
-            st.subheader('Tabla de penalización (€) por excesos de REACTIVA')
-            st.dataframe(styler_coste_exc, use_container_width=True, hide_index=True)
-        with c3:
-            st.subheader('Tabla de excesos de REACTIVA (kVArh)')
-            st.dataframe(df_tabla_fmt_exc_react, use_container_width=True, hide_index=True)
-            st.metric(
-                "Penalización reactiva (€)",
-                f"{total_penalizacion_reactiva:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-            )
+        q_min_margen = q_min * (1 + st.session_state.margen_comp_min/100)
+        
+
+        df_curva_q = calcular_curva_q_dimensionamiento(df_fp=df_fp, df_potmed_qh=df_potmed_qh, fp_ini=fp_min, fp_fin=1.000, paso=0.001)
+        # Calcular el cos φ alcanzable con esa potencia recomendada
+        #df_posible = df_curva_q[df_curva_q["q_max"] <= q_min_margen]
+
+        #if not df_posible.empty:
+        #    fp_alcanzable_margen = df_posible["fp_obj"].max()
+        #else:
+        #    fp_alcanzable_margen = df_curva_q["fp_obj"].min()
+
+        # Calcular fp alcanzable con la potencia recomendada con margen
+        df_curva_aux = (
+            df_curva_q[["fp_obj", "q_max"]]
+            .dropna()
+            .sort_values("q_max")
+        )
+
+        q_min_curva = df_curva_aux["q_max"].min()
+        q_max_curva = df_curva_aux["q_max"].max()
+
+        q_min_margen_clip = np.clip(q_min_margen, q_min_curva, q_max_curva)
+
+        fp_min_margen = np.interp(
+            q_min_margen_clip,
+            df_curva_aux["q_max"],
+            df_curva_aux["fp_obj"]
+        )    
+        
+        fig_compensacion = graficar_compensacion_dimensionamiento(df_curva_q=df_curva_q, q_min=q_min, fp_min_rec=fp_min_margen, q_min_rec=q_min_margen, q_sel=q_sel, fp_ini = fp_min)
+
+
+        with st.container():
+            c1, c2 = st.columns([.4,.6])
+            with c1:
+                st.subheader('RESUMEN COMPENSACIÓN')
+                c31,c32,c33=st.columns(3)
+                with c31:
+                    st.metric(f':red[Penalización reactiva (€)]', f"{total_penalizacion_reactiva:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+                with c32:
+                    st.metric('Factor de potencia mínimo', fp_min)
+                with c33:
+                    st.metric('Factor de potencia medio', fp_med)
+                c31,c32,c33=st.columns(3)
+                with c31:
+                    st.number_input(f'Introduce el cos φ objetivo MÍNIMO', min_value=0.95, max_value=1.00, key = 'fp_obj_min', disabled=True)
+                    st.metric(f':yellow[Potencia mínima de compensación (kVAr)]', f"{q_min:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), help='Potencia MÍNIMA en condensadores para compensar. Recomendable añadir un margen')
+                with c32:
+                    st.number_input('Introduce un margen en %', min_value=30, max_value=50, key = 'margen_comp_min')
+                    
+                    st.metric(f':orange[Potencia mínima recomendada (kVAr)]', f"{q_min_margen:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), delta=round(fp_min_margen,3), help='Potencia MÍNIMA RECOMENDADA en condensadores para compensar.')                              
+
+                with c33:
+                    fp_min_value = max(st.session_state.fp_obj_min+0.01,fp_min)
+                    st.number_input('Introduce el cosdephi objetivo DESEADO', min_value=fp_min_value, max_value=1.00, key = 'fp_obj_sel')
+                    with st.container(border=True):
+                        st.metric(f':green[Potencia de condensadores (kVAr)]', f"{q_sel:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), )
+            with c2:
+                st.plotly_chart(fig_compensacion, use_container_width=True)
+        
+        alto_df_fmt = 460
+        with st.container():
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.subheader('Tabla de FP Factor de Potencia')
+                st.dataframe(styler_fp, use_container_width=True, hide_index=True, height=alto_df_fmt)
+            with c2:
+                st.subheader('Tabla de penalización (€) por excesos de REACTIVA')
+                st.dataframe(styler_coste_exc, use_container_width=True, hide_index=True, height=alto_df_fmt) 
+
+        with st.container():
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.subheader('Tabla de consumos mensuales (kWh)')
+                st.dataframe(tabla_mensual_consumos_fmt, use_container_width=True, hide_index=True, height=alto_df_fmt)
+            with c2:
+                st.subheader('Tabla de reactiva mensual (kVArh)')
+                st.dataframe(df_reactiva_fmt, use_container_width=True, hide_index=True, height=alto_df_fmt)
+            with c3:
+                st.subheader('Tabla de excesos de REACTIVA (kVArh)')
+                st.dataframe(df_excesos_react_fmt, use_container_width=True, hide_index=True, height=alto_df_fmt)
+                
+        with st.container():    
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.subheader('Tabla de Coeficientes K MÍNIMO')
+                st.dataframe(df_coef_k_min, use_container_width=True, hide_index=True, height=alto_df_fmt)
+
+            with c2:
+                st.subheader('Tabla de Potencia medida demandada (kW)')
+                st.dataframe(df_potmed_qh_fmt, use_container_width=True, hide_index=True, height=alto_df_fmt)
+
+            with c3:
+                st.subheader('Tabla de Q (kVAr) COMPENSACIÓN A REALIZAR')
+                st.dataframe(df_q_condensadores_min_fmt, use_container_width=True, hide_index=True, height=alto_df_fmt)
+
+        with st.container():
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.subheader('Tabla de Coeficientes K SELECCIONADO')
+                st.dataframe(df_coef_k_sel, use_container_width=True, hide_index=True, height=alto_df_fmt)
+
+            with c2:
+                st.subheader('Tabla de Potencia medida demandada (kW)')
+                st.dataframe(df_potmed_qh_fmt, use_container_width=True, hide_index=True, height=alto_df_fmt)
+
+            with c3:
+                st.subheader('Tabla de Q (kVAr) COMPENSACIÓN A REALIZAR')
+                st.dataframe(df_q_condensadores_sel_fmt, use_container_width=True, hide_index=True, height=alto_df_fmt)
+
+       
+
 
 
 

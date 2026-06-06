@@ -823,10 +823,127 @@ def tabla_margen(df):
     )
 
         
-def evol_mensual (df, colores_precios):
+def evol_mensual(df, colores_precios):
 
-    #dffm = aplicar_margen(df)
-    dffm = df
+    dffm = df.copy()
+
+    orden_meses = [
+        "enero", "febrero", "marzo", "abril", "mayo", "junio",
+        "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"
+    ]
+
+    mes_a_num = {
+        "enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
+        "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
+        "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12
+    }
+
+    dffm["mes_nombre"] = pd.Categorical(
+        dffm["mes_nombre"],
+        categories=orden_meses,
+        ordered=True
+    )
+
+    df_precios_mensuales = dffm.pivot_table(
+        values=["spot", "precio_2.0", "precio_3.0", "precio_6.1"],
+        index=["año", "mes_nombre"],
+        aggfunc="mean"
+    ).reset_index()
+
+    # Crear columna fecha
+    df_precios_mensuales["mes_num"] = df_precios_mensuales["mes_nombre"].map(mes_a_num)
+
+    df_precios_mensuales["fecha"] = pd.to_datetime(
+        df_precios_mensuales["año"].astype(str)
+        + "-"
+        + df_precios_mensuales["mes_num"].astype(str)
+        + "-01"
+    )
+
+    # Pasar de €/MWh a c€/kWh
+    columnas_precio = ["spot", "precio_2.0", "precio_3.0", "precio_6.1"]
+
+    for col in columnas_precio:
+        df_precios_mensuales[col] = df_precios_mensuales[col] / 10
+        df_precios_mensuales[col] = df_precios_mensuales[col].round(2)
+
+    # Colores
+    colores_precios = {
+        "Peaje 2.0": "goldenrod",
+        "Peaje 3.0": "darkred",
+        "Peaje 6.1": "#1C83E1"
+    }
+
+    # =====================================================
+    # GRÁFICO MIXTO: SPOT BARRA + PRECIOS LÍNEAS
+    # =====================================================
+    fig = go.Figure()
+
+    # SPOT en barras verdes estrechas
+    fig.add_trace(
+        go.Bar(
+            x=df_precios_mensuales["fecha"],
+            y=df_precios_mensuales["spot"],
+            name="SPOT",
+            marker_color="green",
+            width=1000 * 60 * 60 * 24 * 8,  # aprox. 8 días en milisegundos
+            opacity=0.65,
+            hovertemplate="SPOT: %{y:.2f} c€/kWh<extra></extra>"
+        )
+    )
+
+    # Líneas de precios finales
+    series_lineas = {
+        "Peaje 2.0": "precio_2.0",
+        "Peaje 3.0": "precio_3.0",
+        "Peaje 6.1": "precio_6.1"
+    }
+
+    for nombre, col in series_lineas.items():
+        fig.add_trace(
+            go.Scatter(
+                x=df_precios_mensuales["fecha"],
+                y=df_precios_mensuales[col],
+                #mode="lines+markers",
+                mode="lines",
+                name=nombre,
+                line=dict(
+                    color=colores_precios[nombre],
+                    width=3
+                ),
+                marker=dict(size=7),
+                hovertemplate=f"{nombre}: " + "%{y:.2f} c€/kWh<extra></extra>"
+            )
+        )
+
+    fig.update_yaxes(
+        rangemode="tozero",
+        showgrid=True,
+        title_text="Precio medio c€/kWh"
+    )
+
+    fig.update_xaxes(
+        showgrid=True,
+        dtick="M1",
+        tickformat="%b%y",
+        title_text="Mes"
+    )
+
+    fig.update_layout(
+        title="",
+        hovermode="x unified",
+        barmode="overlay",
+        legend_title_text="",
+        bargap=0.65
+    )
+
+    fig = aplicar_estilo(fig)
+
+    return df_precios_mensuales, fig
+
+def evol_mensual_old (df, colores_precios):
+
+    dffm = df.copy()
 
     orden_meses = [
         "enero", "febrero", "marzo", "abril", "mayo", "junio",
@@ -847,7 +964,8 @@ def evol_mensual (df, colores_precios):
     )
     
     df_precios_mensuales = dffm.pivot_table(
-        values = ['precio_2.0', 'precio_3.0', 'precio_6.1'],
+        #values = ['precio_2.0', 'precio_3.0', 'precio_6.1'],
+        values = ['spot','precio_2.0', 'precio_3.0', 'precio_6.1'],
         index = ['año','mes_nombre'],
         aggfunc = 'mean'
     ).reset_index()
@@ -862,7 +980,7 @@ def evol_mensual (df, colores_precios):
     df_melted = df_precios_mensuales.melt(
         #id_vars=['año','mes_nombre'],
         id_vars=['fecha'],
-        value_vars=['precio_2.0','precio_3.0','precio_6.1'],
+        value_vars=['spot', 'precio_2.0','precio_3.0','precio_6.1'],
         var_name='Tarifa',
         value_name='Precio medio'
     )
@@ -877,20 +995,15 @@ def evol_mensual (df, colores_precios):
 
     colores_precios = {'Peaje 2.0': 'goldenrod', 'Peaje 3.0': 'darkred', 'Peaje 6.1': '#1C83E1'}
 
-    graf_mensual = px.line(df_melted, #df_precios_mensuales,
-        #x=[df_precios_mensuales["año"], df_precios_mensuales["mes_nombre"]],
-        #x = 'año_mes',
-        #x=['año','mes_nombre'],
+    graf_mensual = px.line(
+        df_melted, 
         x='fecha',
-        #y=['precio_2.0','precio_3.0','precio_6.1'],
         y='Precio medio',
         color='Tarifa',
-        #height=600,
-        #title=f'Telemindex {st.session_state.año_seleccionado}: Precios medios horarios de indexado según tarifas de acceso',
-        #labels={'value':'c€/kWh','variable':'Precios según ATR'},
         color_discrete_map=colores_precios,
         
     )
+
     graf_mensual.update_yaxes(
         rangemode="tozero",
         showgrid = True,
@@ -1219,3 +1332,323 @@ def graficar_elasticidad_lineal(df_res, atr="2.0", spot_ref=None, n_puntos=101):
     fig = aplicar_estilo(fig)
 
     return fig
+
+
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+
+
+def graficar_diferencial_precios_mensuales(
+    df_mensual,
+    anio_base,
+    anio_comp,
+    convertir_a_cent_kwh=True
+):
+    """
+    Compara dos años a nivel mensual y genera un gráfico de diferenciales:
+
+    Δ SPOT
+    Δ Precio 2.0
+    Δ Precio 3.0
+    Δ Precio 6.1
+
+    El gráfico muestra diferenciales absolutos en c€/kWh.
+    En hover muestra valores base, valores comparados, Δ absoluto, Δ % y elasticidad.
+
+    Parámetros
+    ----------
+    df_mensual : DataFrame
+        Debe contener al menos:
+        año, mes_num, spot, precio_2.0, precio_3.0, precio_6.1
+
+    anio_base : int
+        Año contra el que se compara. Ejemplo: 2025
+
+    anio_comp : int
+        Año comparado. Ejemplo: 2026
+
+    convertir_a_cent_kwh : bool
+        True si los precios vienen en €/MWh.
+        False si ya vienen en c€/kWh.
+
+    Returns
+    -------
+    df_delta : DataFrame
+        Tabla con diferenciales absolutos, porcentuales y elasticidades.
+
+    fig_delta : plotly.graph_objects.Figure
+        Gráfico de barras agrupadas.
+    """
+
+    df = df_mensual.copy()
+
+    columnas = ["spot", "precio_2.0", "precio_3.0", "precio_6.1"]
+
+    nombres = {
+        "spot": "SPOT",
+        "precio_2.0": "Precio 2.0",
+        "precio_3.0": "Precio 3.0",
+        "precio_6.1": "Precio 6.1"
+    }
+
+    colores = {
+        "spot": "green",
+        "precio_2.0": "goldenrod",
+        "precio_3.0": "darkred",
+        "precio_6.1": "#1C83E1"
+    }
+
+    num_a_mes = {
+        1: "Ene",
+        2: "Feb",
+        3: "Mar",
+        4: "Abr",
+        5: "May",
+        6: "Jun",
+        7: "Jul",
+        8: "Ago",
+        9: "Sep",
+        10: "Oct",
+        11: "Nov",
+        12: "Dic"
+    }
+
+    # Asegurar mes_num si no viniera creado
+    if "mes_num" not in df.columns:
+        mes_a_num = {
+            "enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
+            "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
+            "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12
+        }
+
+        df["mes_num"] = df["mes_nombre"].map(mes_a_num)
+
+    # Pasar de €/MWh a c€/kWh
+    if convertir_a_cent_kwh:
+        for col in columnas:
+            df[col] = df[col] / 1
+        
+
+    df_base = df[df["año"] == anio_base][["mes_num"] + columnas].copy()
+    df_comp = df[df["año"] == anio_comp][["mes_num"] + columnas].copy()
+
+    if df_base.empty:
+        raise ValueError(f"No hay datos para el año base {anio_base}.")
+
+    if df_comp.empty:
+        raise ValueError(f"No hay datos para el año comparado {anio_comp}.")
+
+    df_delta = df_comp.merge(
+        df_base,
+        on="mes_num",
+        how="inner",
+        suffixes=("_comp", "_base")
+    )
+
+    df_delta = df_delta.sort_values("mes_num")
+    df_delta["Mes"] = df_delta["mes_num"].map(num_a_mes)
+
+    meses_orden = ["Ene", "Feb", "Mar", "Abr", "May", "Jun",
+               "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
+
+    
+
+    #df_delta = df_delta.sort_values("Mes")
+
+    # =====================================================
+    # DIFERENCIALES ABSOLUTOS Y PORCENTUALES
+    # =====================================================
+    for col in columnas:
+        delta_abs = df_delta[f"{col}_comp"] - df_delta[f"{col}_base"]
+        delta_pct = np.where(
+            df_delta[f"{col}_base"] != 0,
+            delta_abs / df_delta[f"{col}_base"] * 100,
+            np.nan
+        )
+        df_delta[f"{col}_delta"] = delta_abs.round(2)
+        df_delta[f"{col}_delta_pct"] = pd.Series(delta_pct, index=df_delta.index).round(2)
+
+        delta_log_pct = np.where(
+            (df_delta[f"{col}_base"] > 0) & (df_delta[f"{col}_comp"] > 0),
+            np.log(df_delta[f"{col}_comp"] / df_delta[f"{col}_base"]) * 100,
+            np.nan
+        )
+        df_delta[f"{col}_delta_log_pct"] = pd.Series(delta_log_pct, index=df_delta.index).round(2)
+
+    # =====================================================
+    # ELASTICIDADES VS SPOT
+    # =====================================================
+    for col in ["precio_2.0", "precio_3.0", "precio_6.1"]:
+        df_delta[f"{col}_elasticidad"] = np.where(
+            df_delta["spot_delta_pct"] != 0,
+            df_delta[f"{col}_delta_pct"] / df_delta["spot_delta_pct"],
+            np.nan
+        )
+
+    # =====================================================
+    # GRÁFICO
+    # =====================================================
+    fig_delta = go.Figure()
+
+    for col in columnas:
+
+        if col == "spot":
+            customdata = np.stack(
+                [
+                    df_delta[f"{col}_base"],       # 0
+                    df_delta[f"{col}_comp"],       # 1
+                    df_delta[f"{col}_delta"],      # 2 abs c€/kWh
+                    df_delta[f"{col}_delta_pct"],  # 3 %
+                ],
+                axis=-1
+            )
+
+            hovertemplate = (
+                f"<b>{nombres[col]}</b><br>"
+                f"{anio_base}: %{{customdata[0]:.2f}} c€/kWh<br>"
+                f"{anio_comp}: %{{customdata[1]:.2f}} c€/kWh<br>"
+                "Δ absoluto: %{customdata[2]:+.2f} c€/kWh<br>"
+                "Δ porcentual: %{customdata[3]:+.2f} %"
+                "<extra></extra>"
+            )
+
+        else:
+            customdata = np.stack(
+                [
+                    df_delta[f"{col}_base"],          # 0
+                    df_delta[f"{col}_comp"],          # 1
+                    df_delta[f"{col}_delta"],         # 2 abs c€/kWh
+                    df_delta[f"{col}_delta_pct"],     # 3 %
+                    df_delta[f"{col}_elasticidad"],   # 4
+                ],
+                axis=-1
+            )
+
+            hovertemplate = (
+                f"<b>{nombres[col]}</b><br>"
+                f"{anio_base}: %{{customdata[0]:.2f}} c€/kWh<br>"
+                f"{anio_comp}: %{{customdata[1]:.2f}} c€/kWh<br>"
+                "Δ absoluto: %{customdata[2]:+.2f} c€/kWh<br>"
+                "Δ porcentual: %{customdata[3]:+.2f} %<br>"
+                "Elasticidad vs SPOT: %{customdata[4]:.2f}"
+                "<extra></extra>"
+            )
+
+        fig_delta.add_trace(
+            go.Bar(
+                #x=df_delta["Mes"],
+                x=df_delta["mes_num"],
+                #y=df_delta[f"{col}_delta"],
+                #y=df_delta[f"{col}_delta_pct"],
+                y=df_delta[f"{col}_delta_log_pct"],
+                name=nombres[col],
+                marker_color=colores[col],
+                width=0.08,
+                customdata=customdata,
+                hovertemplate=hovertemplate
+            )
+        )
+
+    fig_delta.add_hline(
+        y=0,
+        line_dash="dash",
+        line_color="gray",
+        line_width=1
+    )
+
+    fig_delta.update_layout(
+        title=dict(
+            text=f"Diferencial mensual de precios (%): {anio_comp} vs {anio_base}",
+            x=0.5,
+            xanchor="center"
+        ),
+        xaxis_title="Mes",
+        yaxis_title="Diferencial en %",
+        barmode="group",
+        bargap=0.55,
+        bargroupgap=1,
+        hovermode="x unified",
+        legend_title_text="",
+        
+    )
+
+    fig_delta.update_yaxes(
+        showgrid=True,
+        zeroline=True,
+        zerolinewidth=1,
+        zerolinecolor="gray"
+    )
+
+    fig_delta.update_xaxes(
+        tickmode="array",
+        tickvals=list(range(1, 13)),
+        ticktext=["Ene", "Feb", "Mar", "Abr", "May", "Jun",
+                "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"],
+        range=[0.5, 12.5]
+    )
+
+    fig_delta=aplicar_estilo(fig_delta)
+    fig_delta.update_layout(height=600)
+
+    return df_delta, fig_delta
+
+
+def tabla_evol_mes_por_años(df_mensual, meses_orden):
+    df = df_mensual.copy()
+
+    #columnas_precio = ["spot", "precio_2.0", "precio_3.0", "precio_6.1"]
+
+    NUM_A_MES = {
+        1: "enero",
+        2: "febrero",
+        3: "marzo",
+        4: "abril",
+        5: "mayo",
+        6: "junio",
+        7: "julio",
+        8: "agosto",
+        9: "septiembre",
+        10: "octubre",
+        11: "noviembre",
+        12: "diciembre"
+    }
+
+    if "mes_num" not in df.columns:
+        mes_a_num = {
+            "enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
+            "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
+            "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12
+        }
+        df["mes_num"] = df["mes_nombre"].str.lower().map(mes_a_num)
+
+    df["Mes"] = df["mes_num"].map(NUM_A_MES)
+
+
+    print(st.session_state.mes_select_evol)
+
+    mes_num_sel = meses_orden.index(st.session_state.mes_select_evol) + 1
+
+    df_tabla = (
+        df[df["mes_num"] == mes_num_sel]
+        .sort_values("año")
+        [["año", "spot", "precio_2.0", "precio_3.0", "precio_6.1"]]
+        .rename(columns={
+            "año": "Año",
+            "spot": "SPOT",
+            "precio_2.0": "Precio 2.0",
+            "precio_3.0": "Precio 3.0",
+            "precio_6.1": "Precio 6.1"
+        })
+    )
+
+    df_tabla["Ratio 2.0 / SPOT"] = df_tabla["Precio 2.0"] / df_tabla["SPOT"]
+    df_tabla["Ratio 3.0 / SPOT"] = df_tabla["Precio 3.0"] / df_tabla["SPOT"]
+    df_tabla["Ratio 6.1 / SPOT"] = df_tabla["Precio 6.1"] / df_tabla["SPOT"]
+
+    
+
+    
+
+    return df_tabla
+
