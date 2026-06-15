@@ -91,7 +91,88 @@ def obtener_historicos_meff():
     
     return df_historicos_FTB, ultimo_registro
 
+def obtener_meff_anual(df_FTB):
 
+    # =========================
+    # FILTRADO ANUAL
+    # =========================
+    df_FTB_anual = (
+        df_FTB[df_FTB['Cod.'].str.startswith('FTBCC', na=False)]
+        .iloc[:, [0, 1, 5, 7, 14]]
+        .copy()
+    )
+
+    # Asegurar formatos
+    df_FTB_anual['Entrega'] = pd.to_numeric(df_FTB_anual['Entrega'], errors='coerce').astype('Int64')
+    df_FTB_anual['Fecha'] = pd.to_datetime(df_FTB_anual['Fecha'])
+    df_FTB_anual['Precio'] = pd.to_numeric(df_FTB_anual['Precio'], errors='coerce')
+
+    df_FTB_anual = df_FTB_anual.dropna(subset=['Entrega'])
+
+    # =========================
+    # AÑO ACTUAL
+    # =========================
+    current_year = datetime.now().year
+    anio_actual = current_year
+
+    # =========================
+    # FUTUROS REALES
+    # =========================
+    anios_futuros = (
+        df_FTB_anual.loc[df_FTB_anual['Entrega'] > current_year, 'Entrega']
+        .drop_duplicates()
+        .sort_values()
+        .tolist()
+    )[:4]
+
+    df_FTB_anual_simulindex = df_FTB_anual[
+        df_FTB_anual['Entrega'].isin(anios_futuros)
+    ].copy()
+
+    # =========================
+    # HISTÓRICO HASTA AÑO ACTUAL
+    # =========================
+    lista_anios_hist = (
+        df_FTB_anual.loc[df_FTB_anual['Entrega'] <= current_year, 'Entrega']
+        .drop_duplicates()
+        .sort_values()
+        .tolist()
+    )
+
+    # =========================
+    # VALORES EXPORTADOS
+    # =========================
+    fecha_ultimo_omip = (
+        df_FTB_anual_simulindex['Fecha'].max().strftime('%d.%m.%Y')
+        if not df_FTB_anual_simulindex.empty else None
+    )
+
+    media_omip_simulindex = (
+        round(df_FTB_anual_simulindex['Precio'].mean(), 2)
+        if not df_FTB_anual_simulindex.empty else None
+    )
+
+    # =========================
+    # ÚLTIMO PRECIO POR AÑO
+    # =========================
+    df_FTB_anual = df_FTB_anual.sort_values(['Entrega', 'Fecha'])
+
+    df_ultimos_precios_anual = (
+        df_FTB_anual
+        .groupby('Entrega')
+        .last()[['Precio']]
+        .reset_index()
+    )
+
+    return (
+        df_FTB_anual,
+        df_FTB_anual_simulindex,
+        fecha_ultimo_omip,
+        media_omip_simulindex,
+        lista_anios_hist,
+        anio_actual,
+        df_ultimos_precios_anual
+    )
 
 def obtener_meff_trimestral(df_FTB):
     #filtramos por Periodo 'Trimestral'
@@ -540,7 +621,7 @@ def obtener_spot_diario():
 
 
 
-# GRÁFICO CON FACETS (POR MES O POR TRIMESTRE) PARA VISUALIZAR LA EVOLUCIÓN DE OMIP
+# GRÁFICO COMÚN CON FACETS (POR MES, TRIMESTRE o AÑO) PARA VISUALIZAR LA EVOLUCIÓN DE OMIP
 def obtener_grafico_omip(df):
     #df puede ser df_FTB mensual o trimestral
     fig=px.line(df,
@@ -571,10 +652,19 @@ def obtener_grafico_omip(df):
                 #visible=True
             )
         ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="center",
+            x=0.5,
+            font=dict(size=14)
+        ),
     )
         
     for ann in fig.layout.annotations:
         ann.font.size = 16
+
     
     fig = aplicar_estilo(fig)
     
@@ -974,13 +1064,18 @@ def graficar_2026(df_2026, precio_medio_2026):
     fig.update_layout(
 
         title=dict(
-            text="Curva híbrida OMIE-OMIP 2026",
+            text="PREVISIÓN OMIE 2026: Curva híbrida OMIE-OMIP",
             x=0.5,
             xanchor="center",
             font=dict(size=20)
         ),
 
         legend=dict(
+            orientation="h",
+            x=0.5,
+            xanchor="center",
+            y=1.05,
+            yanchor="bottom",
             font=dict(size=14)
         ),
 
@@ -1169,7 +1264,6 @@ def construir_media_prevista_2026_diaria(
     return df_media
 
 # GRAFICAMOS SEGÚN DF ANTERIOR
-@st.cache_data()
 def graficar_media_prevista_2026(df_media_2026):
 
     df = df_media_2026.copy()
@@ -1188,8 +1282,9 @@ def graficar_media_prevista_2026(df_media_2026):
         line=dict(
             color="darkorange",
             width=2,
-            dash="dot"
+            #dash="dot"
         ),
+        showlegend=True,
         hovertemplate=
             "<b>Media prevista 2026</b><br>"
             "%{x|%d/%m/%Y}<br>"
@@ -1197,14 +1292,14 @@ def graficar_media_prevista_2026(df_media_2026):
             "<extra></extra>"
     )
 
-    fig.add_hline(
-        y=ultima_media,
-        line_dash="dot",
-        line_color="white",
-        annotation_text=f"Última media ≈ {ultima_media:.1f} €/MWh",
-        annotation_position="top right",
-        annotation_font_size=18
-    )
+    #fig.add_hline(
+    #    y=ultima_media,
+    #    line_dash="dot",
+    #    line_color="white",
+    #    annotation_text=f"Última media ≈ {ultima_media:.1f} €/MWh",
+    #    annotation_position="top right",
+    #    annotation_font_size=18
+    #)
 
     fig.update_layout(
         title=dict(
@@ -1230,6 +1325,11 @@ def graficar_media_prevista_2026(df_media_2026):
         ),
 
         legend=dict(
+            orientation="h",
+            x=0.5,
+            xanchor="center",
+            y=1.05,
+            yanchor="bottom",
             font=dict(size=14)
         ),
 
@@ -1348,7 +1448,7 @@ def construir_curva_omip_mensual_12m(df_ftb_m, df_ftb_q, fecha_ref):
     return df_curva
 
 
-@st.cache_data()
+#@st.cache_data()
 def graficar_curva_omip_mensual_12m(df_omip, precio_medio=None):
   
 
@@ -1364,6 +1464,7 @@ def graficar_curva_omip_mensual_12m(df_omip, precio_medio=None):
         text=[f"{v:.1f}" for v in df_omip["precio"]],
         textposition="top center",
         textfont=dict(size=14, color="white"),
+        showlegend=True,
         customdata=df_omip["tipo"],
         hovertemplate=
             "<b>%{customdata}</b><br>" +
@@ -1393,6 +1494,11 @@ def graficar_curva_omip_mensual_12m(df_omip, precio_medio=None):
         ),
 
         legend=dict(
+            orientation="h",
+            x=0.5,
+            xanchor="center",
+            y=1.05,
+            yanchor="bottom",
             font=dict(size=14)
         ),
 
@@ -1529,6 +1635,7 @@ def construir_evolucion_media_omip(df_ftb_m, df_ftb_q, fecha_ref, fecha_inicio="
 
     return df_evol
 
+# FUNCIÓN QUE NOS DEVUELVE VALORES DE OMIE REALES ROLLING 12 MESES DESDE EL MÍSMO DÍA DE INICIO
 @st.cache_data()
 def añadir_omie_real_12m_posterior(
     df_evol,
@@ -1641,13 +1748,346 @@ def añadir_omie_real_12m_posterior(
 
     return df_out
 
+#FUNCIÓN QUE NOS DEVUELVE EL VALOR DE OMIE ROLLING 12 MESES ALINEADO CON OMIP MES + 1
+# FUNCIÓN QUE NOS DEVUELVE EL VALOR DE OMIE ROLLING 12 MESES
+# ALINEADO CON OMIP MES + 1
+@st.cache_data()
+def añadir_omie_real_12m_alineado_omip(
+    df_evol,
+    df_spot_diario,
+    col_fecha_evol="Fecha",
+    col_fecha_spot="fecha",
+    col_spot="spot",
+    meses=12,
+    exigir_ventana_completa=True
+):
+    import pandas as pd
+    import numpy as np
 
+    df_out = df_evol.copy()
+    df_spot = df_spot_diario.copy()
 
+    # Fechas y numéricos
+    df_out[col_fecha_evol] = pd.to_datetime(
+        df_out[col_fecha_evol],
+        errors="coerce",
+        dayfirst=True
+    ).dt.normalize()
 
+    df_spot[col_fecha_spot] = pd.to_datetime(
+        df_spot[col_fecha_spot],
+        errors="coerce",
+        dayfirst=True
+    ).dt.normalize()
+
+    df_spot[col_spot] = pd.to_numeric(
+        df_spot[col_spot],
+        errors="coerce"
+    )
+
+    # Limpiar spot diario
+    df_spot = (
+        df_spot
+        .dropna(subset=[col_fecha_spot, col_spot])
+        .copy()
+    )
+
+    # Por si df_spot_diario no viene diario, agrupamos por fecha
+    df_spot = (
+        df_spot
+        .groupby(col_fecha_spot, as_index=False)[col_spot]
+        .mean()
+        .sort_values(col_fecha_spot)
+    )
+
+    fecha_min_spot = df_spot[col_fecha_spot].min()
+    fecha_max_spot = df_spot[col_fecha_spot].max()
+
+    resultados = []
+
+    for fecha_ref in df_out[col_fecha_evol]:
+
+        if pd.isna(fecha_ref):
+            resultados.append({
+                col_fecha_evol: fecha_ref,
+                "omie_real_12m_alineado_omip": np.nan,
+                "fecha_ini_omie_alineado": pd.NaT,
+                "fecha_fin_omie_alineado": pd.NaT,
+                "dias_usados_omie_alineado": 0,
+                "dias_esperados_omie_alineado": np.nan,
+                "ventana_completa_omie_alineado": False
+            })
+            continue
+
+        # Ventana alineada con OMIP rolling 12m:
+        # para cualquier día de enero-24 -> febrero-24 a enero-25
+        fecha_ini = (fecha_ref + pd.DateOffset(months=1)).replace(day=1)
+        fecha_fin = fecha_ini + pd.DateOffset(months=meses) - pd.Timedelta(days=1)
+
+        df_ventana = df_spot[
+            (df_spot[col_fecha_spot] >= fecha_ini) &
+            (df_spot[col_fecha_spot] <= fecha_fin)
+        ].copy()
+
+        dias_esperados = (fecha_fin - fecha_ini).days + 1
+        dias_usados = df_ventana[col_fecha_spot].nunique()
+
+        ventana_completa = (
+            pd.notna(fecha_min_spot)
+            and pd.notna(fecha_max_spot)
+            and fecha_ini >= fecha_min_spot
+            and fecha_fin <= fecha_max_spot
+            and dias_usados == dias_esperados
+        )
+
+        if exigir_ventana_completa:
+            if ventana_completa:
+                omie_real_12m_alineado = df_ventana[col_spot].mean()
+            else:
+                omie_real_12m_alineado = np.nan
+        else:
+            if len(df_ventana) > 0:
+                omie_real_12m_alineado = df_ventana[col_spot].mean()
+            else:
+                omie_real_12m_alineado = np.nan
+
+        resultados.append({
+            col_fecha_evol: fecha_ref,
+            "omie_real_12m_alineado_omip": omie_real_12m_alineado,
+            "fecha_ini_omie_alineado": fecha_ini,
+            "fecha_fin_omie_alineado": fecha_fin,
+            "dias_usados_omie_alineado": dias_usados,
+            "dias_esperados_omie_alineado": dias_esperados,
+            "ventana_completa_omie_alineado": ventana_completa
+        })
+
+    df_real = pd.DataFrame(resultados)
+
+    df_out = df_out.merge(
+        df_real,
+        on=col_fecha_evol,
+        how="left"
+    )
+
+    if not df_out.empty:
+        df_out["omie_real_12m_alineado_omip"] = (
+            df_out["omie_real_12m_alineado_omip"].round(2)
+        )
+
+    return df_out
 
 
 @st.cache_data()
-def graficar_evolucion_media_omip(df_evol):
+def graficar_evolucion_media_omip(
+    df_evol,
+    col_omie="omie_real_12m",
+    col_ventana_completa="ventana_completa",
+    nombre_omie="OMIE real 12M posterior",
+    titulo="OMIP forward 12M vs OMIE real posterior 12M"
+):
+    
+    df_plot = df_evol.copy()
+
+    # =====================================================
+    # 0. Preparación de datos
+    # =====================================================
+    df_plot["Fecha"] = pd.to_datetime(
+        df_plot["Fecha"],
+        errors="coerce",
+        dayfirst=True
+    )
+
+    df_plot["media_forward_12m"] = pd.to_numeric(
+        df_plot["media_forward_12m"],
+        errors="coerce"
+    )
+
+    df_plot = df_plot.dropna(subset=["Fecha"]).sort_values("Fecha")
+
+    tiene_omie_real = col_omie in df_plot.columns
+
+    # =====================================================
+    # 1. Cálculo de desvíos OMIE - OMIP
+    # =====================================================
+    if tiene_omie_real:
+
+        df_plot[col_omie] = pd.to_numeric(
+            df_plot[col_omie],
+            errors="coerce"
+        )
+
+        if col_ventana_completa in df_plot.columns:
+            mask_omie_real_valido = (
+                (df_plot[col_ventana_completa] == True) &
+                df_plot[col_omie].notna()
+            )
+        else:
+            mask_omie_real_valido = df_plot[col_omie].notna()
+
+        df_plot["desvio_omip_omie"] = np.where(
+            mask_omie_real_valido,
+            df_plot[col_omie] - df_plot["media_forward_12m"],
+            np.nan
+        )
+
+        df_plot["desvio_omip_omie"] = df_plot["desvio_omip_omie"].round(2)
+
+        df_plot["desvio_pct"] = np.where(
+            mask_omie_real_valido &
+            df_plot["media_forward_12m"].notna() &
+            (df_plot["media_forward_12m"] != 0),
+            df_plot["desvio_omip_omie"] / df_plot["media_forward_12m"] * 100,
+            np.nan
+        )
+
+        df_plot["desvio_pct"] = df_plot["desvio_pct"].round(2)
+
+    # Última media OMIP, por si quieres reactivar la hline
+    if df_plot["media_forward_12m"].notna().any():
+        ultima_media = df_plot["media_forward_12m"].dropna().iloc[-1]
+    else:
+        ultima_media = np.nan
+
+    fig = go.Figure()
+
+    # =====================================================
+    # 2. Hover OMIP
+    # =====================================================
+    if tiene_omie_real:
+
+        def construir_hover(row):
+            fecha_txt = row["Fecha"].strftime("%d/%m/%Y") if pd.notna(row["Fecha"]) else ""
+
+            texto = (
+                f"<b>{fecha_txt}</b><br><br>"
+                f"OMIP forward 12M: {row['media_forward_12m']:.2f} €/MWh<br>"
+            )
+
+            if pd.notna(row.get(col_omie)) and pd.notna(row.get("desvio_omip_omie")):
+                texto += (
+                    f"{nombre_omie}: {row[col_omie]:.2f} €/MWh<br>"
+                    f"Diferencial OMIE - OMIP: {row['desvio_omip_omie']:+.2f} €/MWh<br>"
+                    f"Diferencial OMIE - OMIP: {row['desvio_pct']:+.2f}%"
+                )
+            else:
+                texto += (
+                    f"{nombre_omie}: N/D<br>"
+                    "Diferencial OMIE - OMIP: N/D<br>"
+                    "Diferencial OMIE - OMIP: N/D"
+                )
+
+            return texto
+
+        df_plot["hover_omip"] = df_plot.apply(construir_hover, axis=1)
+
+    else:
+
+        def construir_hover_sin_real(row):
+            fecha_txt = row["Fecha"].strftime("%d/%m/%Y") if pd.notna(row["Fecha"]) else ""
+
+            return (
+                f"<b>{fecha_txt}</b><br><br>"
+                f"OMIP forward 12M: {row['media_forward_12m']:.2f} €/MWh"
+            )
+
+        df_plot["hover_omip"] = df_plot.apply(construir_hover_sin_real, axis=1)
+
+    # =====================================================
+    # 3. Línea OMIP forward 12M
+    # =====================================================
+    fig.add_scatter(
+        x=df_plot["Fecha"],
+        y=df_plot["media_forward_12m"],
+        mode="lines",
+        name="Media OMIP forward 12M",
+        line=dict(
+            color="darkorange",
+            width=1
+        ),
+        text=df_plot["hover_omip"],
+        hovertemplate="%{text}<extra></extra>"
+    )
+
+    # =====================================================
+    # 4. Línea OMIE real 12M
+    # =====================================================
+    if tiene_omie_real:
+
+        if col_ventana_completa in df_plot.columns:
+            df_real = df_plot[
+                (df_plot[col_ventana_completa] == True) &
+                df_plot[col_omie].notna()
+            ].copy()
+        else:
+            df_real = df_plot.dropna(subset=[col_omie]).copy()
+
+        if not df_real.empty:
+            fig.add_scatter(
+                x=df_real["Fecha"],
+                y=df_real[col_omie],
+                mode="lines",
+                name=nombre_omie,
+                line=dict(
+                    color="lightgreen",
+                    width=2
+                ),
+                hoverinfo="skip",
+                hovertemplate=None
+            )
+
+    # =====================================================
+    # 5. Línea horizontal última media OMIP
+    # =====================================================
+    # if pd.notna(ultima_media):
+    #     fig.add_hline(
+    #         y=ultima_media,
+    #         line_dash="dot",
+    #         line_color="white",
+    #         annotation_text=f"Última media OMIP ≈ {ultima_media:.1f} €/MWh",
+    #         annotation_position="top right",
+    #         annotation_font_size=18
+    #     )
+
+    # =====================================================
+    # 6. Layout
+    # =====================================================
+    fig.update_layout(
+        title=dict(
+            text=titulo,
+            x=0.5,
+            xanchor="center",
+            font=dict(size=20)
+        ),
+        yaxis=dict(
+            title="€/MWh",
+            range=[0, None],
+            title_font=dict(size=14),
+            tickfont=dict(size=14)
+        ),
+        xaxis=dict(
+            title="Fecha de cotización",
+            tickfont=dict(size=14)
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="center",
+            x=0.5,
+            font=dict(size=14)
+        ),
+        template="plotly_dark",
+        hovermode="x",
+        height=500
+    )
+
+    fig = aplicar_estilo(fig)
+
+    return fig
+
+
+@st.cache_data()
+def graficar_evolucion_media_omip_old(df_evol):
 
     df_plot = df_evol.copy().sort_values("Fecha")
 
@@ -1797,14 +2237,14 @@ def graficar_evolucion_media_omip(df_evol):
     # =====================================================
     # 5. Línea horizontal de última media OMIP
     # =====================================================
-    fig.add_hline(
-        y=ultima_media,
-        line_dash="dot",
-        line_color="white",
-        annotation_text=f"Última media OMIP ≈ {ultima_media:.1f} €/MWh",
-        annotation_position="top right",
-        annotation_font_size=18
-    )
+    #fig.add_hline(
+    #    y=ultima_media,
+    #    line_dash="dot",
+    #    line_color="white",
+    #    annotation_text=f"Última media OMIP ≈ {ultima_media:.1f} €/MWh",
+    #    annotation_position="top right",
+    #    annotation_font_size=18
+    #)
 
     # =====================================================
     # 6. Layout

@@ -40,6 +40,9 @@ if 'peaje_analisis' not in st.session_state:
 if 'mes_select_evol' not in st.session_state:
     st.session_state.mes_select_evol = 'enero'
 
+if 'precios_mensuales' not in st.session_state:
+    st.session_state.precios_mensuales = None
+
 
 #inicializamos variables de sesión
 generar_menu()
@@ -335,8 +338,10 @@ if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None an
 
     #fig_heat = aplicar_estilo(fig_heat)
 
-
-df_precios_mensuales, graf_mensual = evol_mensual(st.session_state.df_sheets, colores_precios)
+print('df curva sheets')
+print(df_curva_sheets)
+#df_precios_mensuales, graf_mensual = evol_mensual(st.session_state.df_sheets, colores_precios)
+df_precios_mensuales, graf_mensual = evol_mensual(st.session_state.df_curva_sheets, colores_precios)
 
 print('precios mensuales')
 print(df_precios_mensuales)
@@ -353,7 +358,9 @@ st.sidebar.info(
 
 st.sidebar.subheader('Opciones')
 with st.sidebar.container(border=True):
-    st.sidebar.radio("Seleccionar rango temporal", ['Por años', 'Por meses', 'Selecciona un rango de fechas'], key = "rango_temporal")
+    #st.sidebar.radio("Seleccionar rango temporal", ['Por años', 'Por meses', 'Selecciona un rango de fechas'], key = "rango_temporal")
+    persist_widget(st.sidebar.radio,"Seleccionar rango temporal", ['Por años', 'Por meses', 'Selecciona un rango de fechas'], key = "rango_temporal")
+    #persist_widget(st.number_input, "Desvíos apantallados (€/MWh)", min_value=0.0, max_value=20.0, step=0.1, key="desvios_apant", default=1)
 
     if st.session_state.rango_temporal == 'Por años':
         st.sidebar.selectbox('Seleccione el año', options = [2026, 2025, 2024], key = 'año_seleccionado') 

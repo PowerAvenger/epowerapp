@@ -312,7 +312,6 @@ def tabla_precios_medios_horarios(df):
     ).reset_index()
 
 # GRAFICO PRINCIPAL CON LAS BARRAS DE OMIE Y SSAA Y LAS LINEAS DE PRECIO FINAL. HORARIAS
-# GRAFICO PRINCIPAL CON LAS BARRAS DE OMIE Y SSAA Y LAS LINEAS DE PRECIO FINAL. HORARIAS
 def graficar_precios_medios_horarios(df_filtrado, colores_precios):
 
     pt2 = tabla_precios_medios_horarios(df_filtrado)
@@ -490,68 +489,6 @@ def graficar_precios_medios_horarios(df_filtrado, colores_precios):
 
     return graf_pt1
 
-# GRAFICO PRINCIPAL CON LAS BARRAS DE OMIE Y SSAA Y LAS LINEAS DE PRECIO FINAL. HORARIAS
-def graficar_precios_medios_horarios_old(df_filtrado, colores_precios):
-    #pt2 = pt1(df_filtrado)[0]
-    pt2 = tabla_precios_medios_horarios(df_filtrado)
-    #print('pt2')
-    #print(pt2)
-    
-    graf_pt1=px.line(pt2,x='hora',y=['precio_2.0','precio_3.0','precio_6.1'],
-        height=600,
-        labels={'value':'€/MWh','variable':'Precios según ATR'},
-        color_discrete_map=colores_precios,
-    )
-    graf_pt1.update_traces(line=dict(width=4))
-   
-    graf_pt1.update_layout(
-        margin=dict(t=100),
-        #title_font_size=16,
-        #title={'x':.5,'xanchor':'center'},
-        xaxis=dict(
-              tickmode='array',
-              tickvals=pt2['hora']
-        ),
-        #barmode = 'stack'
-        barmode = 'relative'
-    )
-    graf_pt1 = graf_pt1.add_bar(y = pt2['spot'], name = 'spot', marker_color = 'green', width = 0.5)
-    #graf_pt1 = graf_pt1.add_bar(y = pt2['ssaa'], name = 'ssaa', marker_color = 'lightgreen', width = 0.5)
-    graf_pt1 = graf_pt1.add_bar(y = pt2['ssaa'], name = 'ssaa', marker_color = '#5f259f', width = 0.5)
-
-        # ---- LÍNEA CURVA PERSONALIZADA ----
-    if ("df_curva_sheets" in st.session_state and st.session_state.df_curva_sheets is not None and "coste_total" in st.session_state.df_curva_sheets.columns):
-        dfc = st.session_state.df_curva_sheets.copy()
-
-        # consumo en MWh
-        dfc["consumo_MWh"] = dfc["consumo_neto_kWh"] / 1000
-
-        # precio medio ponderado horario real en €/MWh
-        curva = (
-            dfc.groupby("hora")
-            .apply(lambda g: g["coste_total"].sum() / g["consumo_MWh"].sum())
-            .reset_index(name="precio_medio_horario")
-        )
-
-        #curva = curva_sin_margen.copy()
-        #curva['precio_medio_horario']+=st.session_state.margen_telemindex
-
-        # ---- Color dinámico según ATR seleccionado ----
-        atr = st.session_state.atr_dfnorm           # "2.0", "3.0" o "6.1"
-        clave_color = f"precio_{atr}"               # "precio_2.0", ...
-        color_curva = colores_precios[clave_color]  # color correcto    
-
-        graf_pt1.add_scatter(
-            x=curva["hora"],
-            y=curva["precio_medio_horario"],
-            mode="lines",
-            name=f'precio_{atr}_curva',
-            line=dict(color=color_curva, width=6, dash="dot")
-        )
-
-        graf_pt1 = aplicar_estilo(graf_pt1)
-
-    return graf_pt1
 
 
 def construir_pie_atr_generico(df, atr, color_scale, titulo):
@@ -844,6 +781,241 @@ def evol_mensual(df, colores_precios):
         ordered=True
     )
 
+    # =====================================================
+    # 0. COMPROBAR SI HAY CURVA CARGADA
+    # =====================================================
+    hay_curva_sheets = (
+        "df_curva_sheets" in st.session_state
+        and st.session_state.df_curva_sheets is not None
+        and not st.session_state.df_curva_sheets.empty
+    )
+
+    # =====================================================
+    # 1. PRECIOS MEDIOS MENSUALES SIN PONDERAR
+    # =====================================================
+    df_precios_mensuales = dffm.pivot_table(
+        values=["spot", "precio_2.0", "precio_3.0", "precio_6.1"],
+        index=["año", "mes_nombre"],
+        aggfunc="mean"
+    ).reset_index()
+
+    # =====================================================
+    # 2. PRECIO CURVA: COSTE TOTAL / CONSUMO
+    #    Solo si existe curva cargada
+    # =====================================================
+    if hay_curva_sheets:
+
+        cols_necesarias = [
+            "año",
+            "mes_nombre",
+            "consumo_neto_kWh",
+            "coste_total"
+        ]
+
+        if all(col in dffm.columns for col in cols_necesarias):
+
+            df_curva = (
+                dffm
+                .groupby(["año", "mes_nombre"], observed=False)
+                .agg(
+                    consumo_neto_kWh=("consumo_neto_kWh", "sum"),
+                    coste_total=("coste_total", "sum")
+                )
+                .reset_index()
+            )
+
+            df_curva["precio_curva"] = np.where(
+                df_curva["consumo_neto_kWh"] > 0,
+                df_curva["coste_total"] / df_curva["consumo_neto_kWh"] * 1000,
+                np.nan
+            )
+
+            df_precios_mensuales = df_precios_mensuales.merge(
+                df_curva[["año", "mes_nombre", "precio_curva", "consumo_neto_kWh","coste_total",]],
+                on=["año", "mes_nombre"],
+                how="left"
+            )
+
+    # =====================================================
+    # 3. CREAR COLUMNA FECHA
+    # =====================================================
+    df_precios_mensuales["mes_num"] = (
+        df_precios_mensuales["mes_nombre"]
+        .astype(str)
+        .map(mes_a_num)
+    )
+
+    df_precios_mensuales["año"] = pd.to_numeric(
+        df_precios_mensuales["año"],
+        errors="coerce"
+    ).astype("Int64")
+
+    df_precios_mensuales["mes_num"] = pd.to_numeric(
+        df_precios_mensuales["mes_num"],
+        errors="coerce"
+    ).astype("Int64")
+
+    df_precios_mensuales["fecha"] = pd.to_datetime(
+        dict(
+            year=df_precios_mensuales["año"],
+            month=df_precios_mensuales["mes_num"],
+            day=1
+        ),
+        errors="coerce"
+    )
+
+    # =====================================================
+    # 4. PASAR DE €/MWh A c€/kWh
+    # =====================================================
+    columnas_precio = [
+        "spot",
+        "precio_2.0",
+        "precio_3.0",
+        "precio_6.1"
+    ]
+
+    if hay_curva_sheets and "precio_curva" in df_precios_mensuales.columns:
+        columnas_precio.append("precio_curva")
+
+    for col in columnas_precio:
+        if col in df_precios_mensuales.columns:
+            df_precios_mensuales[col] = df_precios_mensuales[col] / 10
+            df_precios_mensuales[col] = df_precios_mensuales[col].round(2)
+
+    # =====================================================
+    # 5. ATR ACTUAL
+    # =====================================================
+    atr_actual = st.session_state.get("atr_dfnorm", None)
+    print (f'atr actual: {atr_actual}')
+
+    # =====================================================
+    # 6. COLORES
+    # =====================================================
+    colores_precios = {
+        "Peaje 2.0": "goldenrod",
+        "Peaje 3.0": "darkred",
+        "Peaje 6.1": "#1C83E1",
+        "Precio curva": "white"
+    }
+
+    # =====================================================
+    # 7. GRÁFICO MIXTO: SPOT BARRA + PRECIOS LÍNEAS
+    # =====================================================
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Bar(
+            x=df_precios_mensuales["fecha"],
+            y=df_precios_mensuales["spot"],
+            name="SPOT",
+            marker_color="green",
+            width=1000 * 60 * 60 * 24 * 8,
+            opacity=0.65,
+            hovertemplate="SPOT: %{y:.2f} c€/kWh<extra></extra>"
+        )
+    )
+
+    series_lineas = {
+        "Peaje 2.0": "precio_2.0",
+        "Peaje 3.0": "precio_3.0",
+        "Peaje 6.1": "precio_6.1"
+    }
+
+    for nombre, col in series_lineas.items():
+        fig.add_trace(
+            go.Scatter(
+                x=df_precios_mensuales["fecha"],
+                y=df_precios_mensuales[col],
+                mode="lines",
+                name=nombre,
+                line=dict(
+                    color=colores_precios[nombre],
+                    width=3
+                ),
+                marker=dict(size=7),
+                hovertemplate=f"{nombre}: " + "%{y:.2f} c€/kWh<extra></extra>"
+            )
+        )
+
+    # =====================================================
+    # 8. PRECIO CURVA
+    #    Solo se pinta si hay curva cargada
+    # =====================================================
+    if hay_curva_sheets and "precio_curva" in df_precios_mensuales.columns:
+
+        nombre_curva = (
+            f"Curva {atr_actual}"
+            if atr_actual is not None
+            else "Precio curva"
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=df_precios_mensuales["fecha"],
+                y=df_precios_mensuales["precio_curva"],
+                mode="lines+markers",
+                name=nombre_curva,
+                line=dict(
+                    color=colores_precios["Precio curva"],
+                    width=4,
+                    dash="dot"
+                ),
+                marker=dict(size=8),
+                hovertemplate=(
+                    nombre_curva + ": %{y:.2f} c€/kWh"
+                    "<extra></extra>"
+                )
+            )
+        )
+
+        st.session_state.precios_mensuales = df_precios_mensuales
+
+    fig.update_yaxes(
+        rangemode="tozero",
+        showgrid=True,
+        title_text="Precio medio c€/kWh"
+    )
+
+    fig.update_xaxes(
+        showgrid=True,
+        dtick="M1",
+        tickformat="%b%y",
+        title_text="Mes"
+    )
+
+    fig.update_layout(
+        title="",
+        hovermode="x unified",
+        barmode="overlay",
+        legend_title_text="",
+        bargap=0.65
+    )
+
+    fig = aplicar_estilo(fig)
+
+    return df_precios_mensuales, fig
+
+def evol_mensual_old(df, colores_precios):
+
+    dffm = df.copy()
+
+    orden_meses = [
+        "enero", "febrero", "marzo", "abril", "mayo", "junio",
+        "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"
+    ]
+
+    mes_a_num = {
+        "enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
+        "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
+        "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12
+    }
+
+    dffm["mes_nombre"] = pd.Categorical(
+        dffm["mes_nombre"],
+        categories=orden_meses,
+        ordered=True
+    )
+
     df_precios_mensuales = dffm.pivot_table(
         values=["spot", "precio_2.0", "precio_3.0", "precio_6.1"],
         index=["año", "mes_nombre"],
@@ -941,87 +1113,6 @@ def evol_mensual(df, colores_precios):
 
     return df_precios_mensuales, fig
 
-def evol_mensual_old (df, colores_precios):
-
-    dffm = df.copy()
-
-    orden_meses = [
-        "enero", "febrero", "marzo", "abril", "mayo", "junio",
-        "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"
-    ]
-
-    mes_a_num = {
-        "enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
-        "mayo": 5, "junio": 6, "julio":7, "agosto":8,
-        "septiembre":9, "octubre":10, "noviembre":11, "diciembre":12
-    }
-
-    # Asegúrate de que los nombres de meses estén ordenados
-    dffm["mes_nombre"] = pd.Categorical(
-        dffm["mes_nombre"],
-        categories=orden_meses,
-        ordered=True
-    )
-    
-    df_precios_mensuales = dffm.pivot_table(
-        #values = ['precio_2.0', 'precio_3.0', 'precio_6.1'],
-        values = ['spot','precio_2.0', 'precio_3.0', 'precio_6.1'],
-        index = ['año','mes_nombre'],
-        aggfunc = 'mean'
-    ).reset_index()
-
-    # Crear columna fecha
-    df_precios_mensuales["mes_num"] = df_precios_mensuales["mes_nombre"].map(mes_a_num)
-    df_precios_mensuales["fecha"] = pd.to_datetime(
-        df_precios_mensuales["año"].astype(str) + "-" + df_precios_mensuales["mes_num"].astype(str) + "-01"
-    )
-
-    # Convertir a formato largo
-    df_melted = df_precios_mensuales.melt(
-        #id_vars=['año','mes_nombre'],
-        id_vars=['fecha'],
-        value_vars=['spot', 'precio_2.0','precio_3.0','precio_6.1'],
-        var_name='Tarifa',
-        value_name='Precio medio'
-    )
-
-    # Limpiar etiquetas
-    df_melted["Tarifa"] = df_melted["Tarifa"].str.replace("precio_", "Peaje ")
-    df_melted['Precio medio'] /= 10
-    df_melted['Precio medio'] = df_melted['Precio medio'].round(1)
-
-    print('df medias mensuales')
-    print(df_melted)
-
-    colores_precios = {'Peaje 2.0': 'goldenrod', 'Peaje 3.0': 'darkred', 'Peaje 6.1': '#1C83E1'}
-
-    graf_mensual = px.line(
-        df_melted, 
-        x='fecha',
-        y='Precio medio',
-        color='Tarifa',
-        color_discrete_map=colores_precios,
-        
-    )
-
-    graf_mensual.update_yaxes(
-        rangemode="tozero",
-        showgrid = True,
-        title_text ='Precio medio c€/kWh'
-        )
-    
-    graf_mensual.update_xaxes(
-        showgrid = True,
-        dtick = 'M1', 
-        tickformat="%b%y",  # formato tipo Jan25
-        title_text ='Mes'
-        )
-    
-    # 🔥 Activar modo de hover unificado por eje X
-    graf_mensual.update_layout(hovermode="x unified")
-    
-
-    return df_precios_mensuales, graf_mensual
 
 
 def construir_df_curva_sheets(df_filtrado):
@@ -1180,47 +1271,6 @@ def analizar_dependencia_omie(df_sheets, atr="2.0"):
 
 
 
-
-def graficar_elasticidad_lineal_old(df_res):
-
-    fig = go.Figure()
-
-    # rango en eje X (variación OMIE)
-    x_vals = [0, 1]  # 1 = 100% cambio relativo
-
-    for _, row in df_res.iterrows():
-
-        año = int(row["año"])
-        elasticidad = row["elasticidad"]
-
-        y_vals = [0, elasticidad]
-
-        fig.add_trace(go.Scatter(
-            x=x_vals,
-            y=y_vals,
-            mode='lines+markers+text',
-            name=str(año),
-            text=[None, f"{año}"],
-            textposition="top right",
-            textfont=dict(size=20)  #
-        ))
-
-    fig.update_layout(
-        title="Relación SPOT → Precio final (elasticidad)",
-        xaxis_title="Variación relativa SPOT (%)",
-        yaxis_title="Variación relativa Precio Final (%)",
-        title_x=0.5,
-        showlegend=False,
-        width=700,
-        #height=500
-    )
-    fig = aplicar_estilo(fig)
-
-    fig.update_layout(margin=dict(r=80))
-    fig.update_xaxes(range=[0, 1.2])
-    fig.update_yaxes(range=[0, 1.0])
-
-    return fig
 
 def graficar_elasticidad_lineal(df_res, atr="2.0", spot_ref=None, n_puntos=101):
 

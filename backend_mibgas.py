@@ -6,7 +6,7 @@ import requests
 import glob
 import numpy as np
 from datetime import datetime,date
-
+from backend_comun import aplicar_estilo
 # Definimos los colores manualmente
 colores = {
     2024: "lightblue",
@@ -25,6 +25,121 @@ def filtrar_por_producto(df, producto):
     #df_f['año_entrega'] = df_f['fecha_entrega'].dt.year
     return df_f
 
+def graficar_futuros_mibgas(df_mg, tipo="Q"):
+    """
+    tipo="Q" -> futuros trimestrales
+    tipo="Y" -> futuros anuales
+    """
+
+    df_mg = df_mg.copy()
+
+    # Asegurar fechas
+    df_mg["Trading day"] = pd.to_datetime(df_mg["Trading day"])
+    df_mg["fecha_entrega"] = pd.to_datetime(df_mg["fecha_entrega"])
+
+    # =====================================================
+    # 1. Crear etiqueta de producto según tipo
+    # =====================================================
+    if tipo == "Q":
+        col_periodo = "trimestre"
+
+        df_mg[col_periodo] = (
+            "Q"
+            + df_mg["fecha_entrega"].dt.quarter.astype(str)
+            + "-"
+            + df_mg["fecha_entrega"].dt.year.astype(str)
+        )
+
+        def _key(lbl):
+            q, y = lbl.split("-")
+            return (int(y), int(q[1]))
+
+        titulo = "Evolución de MIBGAS para los próximos trimestres"
+        nombre_leyenda = "Trimestre"
+
+    elif tipo == "Y":
+        col_periodo = "año"
+
+        df_mg[col_periodo] = (
+            "Y-"
+            + df_mg["fecha_entrega"].dt.year.astype(str)
+        )
+
+        def _key(lbl):
+            return int(lbl.split("-")[1])
+
+        titulo = "Evolución de MIBGAS para los próximos años"
+        nombre_leyenda = "Año"
+
+    else:
+        raise ValueError("tipo debe ser 'Q' o 'Y'")
+
+    # =====================================================
+    # 2. Ordenar y quedarnos con los últimos 4 periodos
+    # =====================================================
+    labels = sorted(df_mg[col_periodo].dropna().unique(), key=_key)
+    labels = labels[-4:]
+
+    df_win = df_mg[df_mg[col_periodo].isin(labels)].copy()
+
+    cat = pd.api.types.CategoricalDtype(categories=labels, ordered=True)
+    df_win[col_periodo] = df_win[col_periodo].astype(cat)
+
+    df_win = df_win.sort_values(["Trading day", col_periodo])
+
+    # =====================================================
+    # 3. Pivotar
+    # =====================================================
+    df_pivot = (
+        df_win
+        .pivot(index="Trading day", columns=col_periodo, values="precio_gas")
+        .reset_index()
+    )
+
+    # =====================================================
+    # 4. Colores
+    # =====================================================
+    palette = px.colors.sequential.Blues[3:7]
+
+    color_map = {
+        labels[i]: palette[i]
+        for i in range(len(labels))
+    }
+
+    # =====================================================
+    # 5. Gráfico
+    # =====================================================
+    fig = px.line(
+        df_pivot,
+        x="Trading day",
+        y=df_pivot.columns[1:],
+        labels={
+            "value": "€/MWh",
+            "variable": nombre_leyenda
+        },
+        color_discrete_map=color_map,
+        title=titulo,
+    )
+
+    fig.update_layout(
+        hovermode="x unified",
+        title_font_size=28,
+        title={
+            "x": 0.5,
+            "xanchor": "center"
+        },
+        hoverlabel=dict(font_size=18)
+    )
+
+    fig.update_xaxes(
+        hoverformat="%Y-%m-%d"
+    )
+
+    fig.update_traces(
+        hovertemplate="%{fullData.name}: %{y:.2f} €/MWh<extra></extra>"
+    )
+
+    return fig
 
 def graficar_qs(df_mg_q):
     #df_mg_q['Trading day'] = pd.to_datetime(df_mg_q['Trading day'])
@@ -88,10 +203,11 @@ def graficar_qs(df_mg_q):
     
     return fig
 
-
-
 def graficar_da_corrido(df):
-    
+
+    df = df.copy()
+
+    df["fecha_entrega"] = pd.to_datetime(df["fecha_entrega"])
 
     fig = px.line(
         df,
@@ -99,28 +215,124 @@ def graficar_da_corrido(df):
         y="precio_gas",
         color="año_entrega",
         color_discrete_map=colores,
-        title="Evolución del precio del gas por año",
-        
+        title="Evolución del precio de MIBGAS D+1 por año",
     )
 
     fig.update_layout(
-        title_font_size=28, 
-        title={'x':0.5, 'xanchor':'center'},
+        title_font_size=28,
+        title={"x": 0.5, "xanchor": "center"},
         xaxis_title="Fecha",
         yaxis_title="Precio gas (€/MWh)",
-    
-        
+
         xaxis=dict(
-            showgrid=True,  # Mostrar la cuadrícula horizontal
-            gridwidth=1,     # Ancho de las líneas de cuadrícula
-            tickmode='linear',
-            dtick="M1",  
+            showgrid=True,
+            gridwidth=1,
+            tickmode="linear",
+            dtick="M1",
         ),
+
+        hoverlabel=dict(
+            font_size=18,
+            # bgcolor="rgba(255,255,255,0.75)",  # opcional si quieres transparencia
+        )
     )
+
+    fig.update_traces(
+        hovertemplate=(
+            "<b>%{x|%d/%m/%Y}</b><br>"
+            "MIBGAS D+1: %{y:.2f} €/MWh"
+            "<extra></extra>"
+        )
+    )
+
+    fig = aplicar_estilo(fig)
 
     return fig
 
 def graficar_da_comparado(df):
+
+    df = df.copy()
+
+    df["fecha_entrega"] = pd.to_datetime(df["fecha_entrega"])
+
+    # Clave interna para ordenar: 01-01, 01-02, ..., 12-31
+    df["mmdd"] = df["fecha_entrega"].dt.strftime("%m-%d")
+
+    # Etiqueta visible día-mes
+    if "fecha_corta" not in df.columns:
+        df["fecha_corta"] = df["fecha_entrega"].dt.strftime("%d-%m")
+
+    # Orden cronológico real por mes-día
+    orden_mmdd = sorted(
+        df["mmdd"].unique(),
+        key=lambda s: (int(s[:2]), int(s[3:]))
+    )
+
+    # Mapa mmdd -> fecha_corta
+    mapa_fechas = (
+        df.drop_duplicates("mmdd")
+          .set_index("mmdd")["fecha_corta"]
+          .to_dict()
+    )
+
+    orden_fechas = [mapa_fechas[v] for v in orden_mmdd]
+
+    # Esta será la X visible y también la cabecera del hover
+    df["dia_mes"] = df["mmdd"].map(mapa_fechas)
+
+    fig = px.line(
+        df,
+        x="dia_mes",
+        y="precio_gas",
+        color="año_entrega",
+        color_discrete_map=colores,
+        category_orders={"dia_mes": orden_fechas},
+        title="Comparación anual del precio del gas (2024 al 2026)",
+    )
+
+    # Etiquetas del eje X cada 15 días
+    tickvals = orden_fechas[::15]
+
+    fig.update_xaxes(
+        tickmode="array",
+        tickvals=tickvals,
+        ticktext=tickvals,
+        tickangle=0,
+        type="category"
+    )
+
+    fig.update_layout(
+        title_font_size=28,
+        title={"x": 0.5, "xanchor": "center"},
+        xaxis_title="Día del año",
+        yaxis_title="Precio gas (€/MWh)",
+        hovermode="x unified",
+        hoverlabel=dict(
+            font_size=18,
+        )
+    )
+
+    # En el hover saldrán todos los años juntos para ese día-mes
+    fig.update_traces(
+        hovertemplate="%{fullData.name}: %{y:.2f} €/MWh<extra></extra>"
+    )
+
+    # Líneas verticales al inicio de cada mes
+    cortes_mes = [mapa_fechas[v] for v in orden_mmdd if v.endswith("-01")]
+
+    for dia_mes in cortes_mes:
+        fig.add_vline(
+            x=dia_mes,
+            line_width=1,
+            line_dash="dot",
+            line_color="rgba(200,200,200,0.2)"
+        )
+
+    fig = aplicar_estilo(fig)
+
+    return fig
+
+def graficar_da_comparado_old(df):
 
     df = df.copy()
 
@@ -314,7 +526,234 @@ def construir_df_mensual(df):
     return df_mensual
 
 
-def graf_simul_spot(df, df_validacion, mibgas):
+def graf_simul_spot(df, df_validacion, mibgas, omie_media_2026=None, gas_media_2026=None):
+
+    fig = px.scatter(
+        df,
+        x="precio_gas",
+        y="spot",
+        height=800,
+        width=1500,
+        title="Simulación del precio medio SPOT a partir de MIBGAS - Año 2026 (€/MWh)",
+        custom_data=["mes_año"],
+    )
+
+    fig.update_traces(
+        name="Valores mensuales",
+        showlegend=True,
+        marker=dict(symbol="square", color="orange"),
+        hovertemplate=(
+            "<b>Valores mensuales</b><br>"
+            "Mes = %{customdata[0]}<br>"
+            "MIBGAS = %{x:.1f} €/MWh<br>"
+            "OMIE = %{y:.1f} €/MWh"
+            "<extra></extra>"
+        ),
+    )
+
+    # =====================================================
+    # CURVA HINGE
+    # =====================================================
+    x0 = 31.0
+
+    x_val = df_validacion["precio_gas"].to_numpy(float)
+    y_val = df_validacion["omie"].to_numpy(float)
+
+    # Nivel base: media OMIE cuando gas <= x0
+    base = x_val <= x0
+    c_hinge = float(y_val[base].mean())
+
+    # Ajuste derecha: y = c + a*(x-x0)^2 + b*(x-x0)
+    mask = x_val > x0
+    x_r = x_val[mask] - x0
+    y_r = y_val[mask]
+
+    X = np.column_stack([x_r**2, x_r])
+    a_h, b_h = np.linalg.lstsq(X, y_r - c_hinge, rcond=None)[0]
+    a_h, b_h = float(a_h), float(b_h)
+
+    def hinge(x):
+        x = np.asarray(x, dtype=float)
+
+        m_left = 0.6
+        y = c_hinge + m_left * (x - x0)
+
+        idx = x > x0
+        y[idx] = c_hinge + a_h * (x[idx] - x0) ** 2 + b_h * (x[idx] - x0)
+
+        return y
+
+    # Curva hinge en el rango del histórico
+    x_fit = np.linspace(df["precio_gas"].min(), df["precio_gas"].max(), 300)
+    y_fit = hinge(x_fit)
+
+    # =====================================================
+    # VALORES ANUALES REALES
+    # =====================================================
+    fig.add_scatter(
+        x=df_validacion["precio_gas"],
+        y=df_validacion["omie"],
+        mode="markers",
+        marker=dict(
+            symbol="circle",
+            size=12,
+            color="royalblue",
+            line=dict(width=2, color="cyan")
+        ),
+        name="Valores anuales",
+        hovertemplate=(
+            "<b>Valores anuales</b><br>"
+            "Año %{customdata}<br>"
+            "MIBGAS = %{x:.1f} €/MWh<br>"
+            "OMIE = %{y:.1f} €/MWh"
+            "<extra></extra>"
+        ),
+        customdata=df_validacion["año"]
+    )
+
+    # =====================================================
+    # PUNTO REAL 2026 YTD: GAS MEDIO 2026 / OMIE MEDIO 2026
+    # =====================================================
+    if omie_media_2026 is not None and gas_media_2026 is not None:
+
+        fig.add_trace(go.Scatter(
+            x=[gas_media_2026],
+            y=[omie_media_2026],
+            mode="markers+text",
+            name="Media 2026",
+            marker=dict(
+                symbol="diamond",
+                size=18,
+                color="yellow",
+                line=dict(width=3, color="white")
+            ),
+            text=["Media 2026"],
+            textposition="top center",
+            hovertemplate=(
+                "<b>Media real 2026</b><br>"
+                "MIBGAS medio 2026 = %{x:.2f} €/MWh<br>"
+                "OMIE medio 2026 = %{y:.2f} €/MWh"
+                "<extra></extra>"
+            )
+        ))
+
+    # =====================================================
+    # CURVA DE AJUSTE
+    # =====================================================
+    fig.add_trace(go.Scatter(
+        x=x_fit,
+        y=y_fit,
+        mode="lines",
+        name="Ajuste suave",
+        line=dict(color="lime", width=2, dash="dot"),
+        hoverinfo="skip"
+    ))
+
+    # =====================================================
+    # PUNTO PREVISTO HINGE EN MIBGAS
+    # =====================================================
+    omie_hinge = float(hinge([mibgas])[0])
+
+    fig.add_trace(go.Scatter(
+        x=[mibgas],
+        y=[omie_hinge],
+        mode="markers",
+        name="Simulación OMIE",
+        marker=dict(
+            color="rgba(255,255,255,0)",
+            size=20,
+            line=dict(width=5, color="lightgreen")
+        ),
+        hovertemplate=(
+            "<b>Simulación OMIE</b><br>"
+            "MIBGAS = %{x:.1f} €/MWh<br>"
+            "OMIE = %{y:.1f} €/MWh"
+            "<extra></extra>"
+        )
+    ))
+
+    # Línea vertical simulación OMIE
+    fig.add_shape(
+        type="line",
+        x0=mibgas,
+        y0=0,
+        x1=mibgas,
+        y1=omie_hinge,
+        line=dict(color="lightgreen", width=1, dash="dash"),
+    )
+
+    # =====================================================
+    # SIMULACIÓN INVERSA: OMIE OBJETIVO -> GAS NECESARIO
+    # =====================================================
+    omie_obj = st.session_state.get("precio_omie_previsto", None)
+    mibgas_obj = None
+
+    if omie_obj:
+
+        x_search = np.linspace(0, 120, 2000)
+        y_search = hinge(x_search)
+
+        idx = np.argmin(np.abs(y_search - omie_obj))
+        mibgas_obj = float(x_search[idx])
+
+        fig.add_trace(go.Scatter(
+            x=[mibgas_obj],
+            y=[omie_obj],
+            mode="markers",
+            name="Simulación GAS",
+            marker=dict(
+                color="rgba(255,255,255,0)",
+                size=22,
+                line=dict(width=5, color="magenta")
+            ),
+            hovertemplate=(
+                "<b>Simulación GAS</b><br>"
+                "OMIE = %{y:.1f} €/MWh<br>"
+                "MIBGAS = %{x:.1f} €/MWh"
+                "<extra></extra>"
+            )
+        ))
+
+        xmin = min(df["precio_gas"].min(), df_validacion["precio_gas"].min())
+
+        fig.add_shape(
+            type="line",
+            x0=xmin,
+            y0=omie_obj,
+            x1=mibgas_obj,
+            y1=omie_obj,
+            line=dict(color="magenta", width=1, dash="dash"),
+        )
+
+    # =====================================================
+    # LAYOUT
+    # =====================================================
+    fig.update_layout(
+        title_font_size=28,
+        title={"x": 0.5, "xanchor": "center"},
+        xaxis_title="Precio MIBGAS (€/MWh)",
+        yaxis_title="Precio OMIE (€/MWh)",
+        xaxis=dict(
+            title_font=dict(size=20),
+            tickfont=dict(size=18)
+        ),
+        yaxis=dict(
+            title_font=dict(size=20),
+            tickfont=dict(size=18)
+        ),
+        legend=dict(
+            font=dict(size=18)
+        ),
+        hoverlabel=dict(font_size=18)
+    )
+
+    if mibgas_obj is not None:
+        mibgas_obj = round(mibgas_obj, 2)
+
+    return fig, round(omie_hinge, 2), mibgas_obj
+
+
+def graf_simul_spot_old(df, df_validacion, mibgas):
     fig = px.scatter(
         df,
         x="precio_gas",
@@ -493,6 +932,26 @@ def graf_simul_spot(df, df_validacion, mibgas):
     
 
     return fig, round(omie_hinge, 2), mibgas_obj
+
+
+@st.cache_data
+def obtener_spot_diario():
+    
+    df = st.session_state.df_sheets.copy()
+    df["fecha"] = pd.to_datetime(df["fecha"])
+    df = df.set_index("fecha")
+
+    df_spot_diario = (
+        df[["spot"]]
+        .resample("D")
+        .mean()
+        .sort_index()
+        .reset_index()
+    )
+
+    df_spot_diario["spot"] = df_spot_diario["spot"].round(2)
+
+    return df_spot_diario
     
 
 

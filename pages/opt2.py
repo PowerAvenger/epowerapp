@@ -18,6 +18,8 @@ generar_menu()
 
 if 'mantener_potencia' not in st.session_state:
     st.session_state.mantener_potencia = "Mantener" 
+if 'forzar_maximetros' not in st.session_state:
+    st.session_state.forzar_maximetros = False
 
 pot_con_ini = {
     'P1' : 50,
@@ -88,6 +90,8 @@ p6 = float(st.session_state.df_pot.loc["P6", "Potencia (kW)"])
 # modo1 = False -> tipos 1/2/3: curva de carga
 modo1 = p6 <= 50
 
+if st.session_state.forzar_maximetros:
+    modo1 =p6
 
 st.sidebar.radio(
     "Selecciona potencia P6",
@@ -111,6 +115,8 @@ habilitar_opt = False
 habilitar_ver = False
 tarifa = st.session_state.atr_dfnorm
 
+
+
 #if modo1 and tarifa == "Ninguno":
 if modo1 and tarifa:
     tarifa = st.sidebar.selectbox(
@@ -120,11 +126,22 @@ if modo1 and tarifa:
         key="tarifa_maximetros"
     )
 
+if p6>50:
+        
+    st.sidebar.checkbox(
+        "Forzar optimización por maxímetro aunque P6 > 50 kW",
+        value=False,
+        help="Activa esta opción si quieres aplicar el método de maxímetro incluso en suministros con P6 superior a 50 kW.",
+        key='forzar_maximetros'
+    )    
+
 if modo1:
     # P6 <= 50 → maxímetros
 
     st.sidebar.write(f'El peaje del suministro es **:orange[{tarifa}]**')
     st.sidebar.info('Modo P6 ≤ 50: optimización mediante maxímetros')
+    if st.session_state.forzar_maximetros:
+        st.sidebar.warning('¡¡Estás optimizando mediante maxímetros con P6 >50kW!!')
 
     archivo_max = st.sidebar.file_uploader(
         "Sube tabla de maxímetros",

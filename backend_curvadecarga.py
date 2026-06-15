@@ -3532,4 +3532,573 @@ def calcular_comparacion():
 
     return resultado
 
+def calcular_comparacion_costes(precios_mensuales, rango_base=None):
+
+    df = precios_mensuales.copy()
+
+    # =====================================================
+    # 0. VALIDACIONES BÁSICAS
+    # =====================================================
+    cols_necesarias = [
+        "año",
+        "mes_nombre",
+        "mes_num",
+        "fecha",
+        "consumo_neto_kWh",
+        "coste_total"
+    ]
+
+    faltan = [c for c in cols_necesarias if c not in df.columns]
+
+    if faltan:
+        return {
+            "ok": False,
+            "mensaje": f"Faltan columnas para comparar costes: {faltan}",
+            "df_costes": pd.DataFrame(),
+            "df_efectos": pd.DataFrame(),
+            "resumen_html_costes": "",
+            "fig_coste_total": None,
+            "fig_efectos": None,
+            "fig_precio_medio": None,
+        }
+
+    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+    df["año"] = pd.to_numeric(df["año"], errors="coerce").astype("Int64")
+    df["mes_num"] = pd.to_numeric(df["mes_num"], errors="coerce").astype("Int64")
+
+    df["consumo_neto_kWh"] = pd.to_numeric(
+        df["consumo_neto_kWh"],
+        errors="coerce"
+    )
+
+    df["coste_total"] = pd.to_numeric(
+        df["coste_total"],
+        errors="coerce"
+    )
+
+    df = df.dropna(
+        subset=[
+            "fecha",
+            "año",
+            "mes_num",
+            "consumo_neto_kWh",
+            "coste_total"
+        ]
+    )
+
+    if df.empty:
+        return {
+            "ok": False,
+            "mensaje": "No hay datos mensuales válidos para comparar costes.",
+            "df_costes": pd.DataFrame(),
+            "df_efectos": pd.DataFrame(),
+            "resumen_html_costes": "",
+            "fig_coste_total": None,
+            "fig_efectos": None,
+            "fig_precio_medio": None,
+        }
+
+    # =====================================================
+    # 1. FILTRAR PERIODO BASE
+    # =====================================================
+    if rango_base is not None:
+
+        if isinstance(rango_base, tuple) or isinstance(rango_base, list):
+            fecha_ini_base = pd.to_datetime(rango_base[0])
+            fecha_fin_base = pd.to_datetime(rango_base[1])
+        else:
+            fecha_ini_base = pd.to_datetime(rango_base)
+            fecha_fin_base = pd.to_datetime(rango_base)
+
+        # Llevamos el rango a meses completos
+        fecha_ini_mes = fecha_ini_base.replace(day=1)
+        fecha_fin_mes = fecha_fin_base.replace(day=1)
+
+        df_base = df[
+            (df["fecha"] >= fecha_ini_mes)
+            & (df["fecha"] <= fecha_fin_mes)
+        ].copy()
+
+    else:
+        df_base = df.copy()
+
+    if df_base.empty:
+        return {
+            "ok": False,
+            "mensaje": "No hay meses base dentro del rango seleccionado.",
+            "df_costes": pd.DataFrame(),
+            "df_efectos": pd.DataFrame(),
+            "resumen_html_costes": "",
+            "fig_coste_total": None,
+            "fig_efectos": None,
+            "fig_precio_medio": None,
+        }
+
+    # =====================================================
+    # 2. CREAR CLAVE DE COMPARACIÓN +1 AÑO
+    # =====================================================
+    df_base = df_base.copy()
+    df_base["año_comp"] = df_base["año"] + 1
+
+    df_comp = df.copy()
+
+    df_comp = df_comp.rename(
+        columns={
+            "año": "año_comp",
+            "consumo_neto_kWh": "consumo_comp",
+            "coste_total": "coste_comp",
+            "fecha": "fecha_comp",
+            "mes_nombre": "mes_nombre_comp"
+        }
+    )
+
+    df_base = df_base.rename(
+        columns={
+            "año": "año_base",
+            "consumo_neto_kWh": "consumo_base",
+            "coste_total": "coste_base",
+            "fecha": "fecha_base"
+        }
+    )
+
+    df_cmp = df_base.merge(
+        df_comp[
+            [
+                "año_comp",
+                "mes_num",
+                "mes_nombre_comp",
+                "fecha_comp",
+                "consumo_comp",
+                "coste_comp"
+            ]
+        ],
+        on=["año_comp", "mes_num"],
+        how="inner"
+    )
+
+    if df_cmp.empty:
+        return {
+            "ok": False,
+            "mensaje": "No hay meses comparables con +1 año para el rango seleccionado.",
+            "df_costes": pd.DataFrame(),
+            "df_efectos": pd.DataFrame(),
+            "resumen_html_costes": "",
+            "fig_coste_total": None,
+            "fig_efectos": None,
+            "fig_precio_medio": None,
+        }
+
+    # =====================================================
+    # 3. CÁLCULOS DE PRECIO MEDIO E IMPACTOS
+    # =====================================================
+    df_cmp["precio_base_eur_kwh"] = np.where(
+        df_cmp["consumo_base"] > 0,
+        df_cmp["coste_base"] / df_cmp["consumo_base"],
+        np.nan
+    )
+
+    df_cmp["precio_comp_eur_kwh"] = np.where(
+        df_cmp["consumo_comp"] > 0,
+        df_cmp["coste_comp"] / df_cmp["consumo_comp"],
+        np.nan
+    )
+
+    df_cmp["precio_base_cent_kwh"] = df_cmp["precio_base_eur_kwh"] * 100
+    df_cmp["precio_comp_cent_kwh"] = df_cmp["precio_comp_eur_kwh"] * 100
+
+    # Escenario: consumo base con precio del año siguiente
+    df_cmp["coste_simulado_precio_comp"] = (
+        df_cmp["consumo_base"] * df_cmp["precio_comp_eur_kwh"]
+    )
+
+    df_cmp["variacion_coste"] = (
+        df_cmp["coste_comp"] - df_cmp["coste_base"]
+    )
+
+    df_cmp["variacion_coste_pct"] = np.where(
+        df_cmp["coste_base"] != 0,
+        df_cmp["variacion_coste"] / df_cmp["coste_base"] * 100,
+        np.nan
+    )
+
+    df_cmp["efecto_precio"] = (
+        df_cmp["coste_simulado_precio_comp"] - df_cmp["coste_base"]
+    )
+
+    df_cmp["efecto_consumo"] = (
+        df_cmp["coste_comp"] - df_cmp["coste_simulado_precio_comp"]
+    )
+
+    df_cmp["check"] = (
+        df_cmp["efecto_precio"]
+        + df_cmp["efecto_consumo"]
+        - df_cmp["variacion_coste"]
+    )
+
+    df_cmp["mes_label"] = (
+        df_cmp["mes_nombre"].astype(str).str[:3].str.capitalize()
+        + " "
+        + df_cmp["año_base"].astype(str)
+        + " → "
+        + df_cmp["año_comp"].astype(str)
+    )
+
+    # =====================================================
+    # 4. TABLAS DE SALIDA
+    # =====================================================
+    df_costes = df_cmp[
+        [
+            "mes_label",
+            "consumo_base",
+            "consumo_comp",
+            "coste_base",
+            "coste_comp",
+            "variacion_coste",
+            "variacion_coste_pct",
+            "precio_base_cent_kwh",
+            "precio_comp_cent_kwh"
+        ]
+    ].copy()
+
+    df_costes = df_costes.rename(
+        columns={
+            "mes_label": "Mes",
+            "consumo_base": "Consumo base",
+            "consumo_comp": "+1 año",
+            "coste_base": "Coste base",
+            "coste_comp": "Coste +1 año",
+            "variacion_coste": "Δ coste",
+            "variacion_coste_pct": "Δ coste %",
+            "precio_base_cent_kwh": "Precio base",
+            "precio_comp_cent_kwh": "Precio +1 año"
+        }
+    )
+
+    df_efectos = df_cmp[
+        [
+            "mes_label",
+            "variacion_coste",
+            "efecto_precio",
+            "efecto_consumo",
+            "coste_simulado_precio_comp"
+        ]
+    ].copy()
+
+    df_efectos = df_efectos.rename(
+        columns={
+            "mes_label": "Mes",
+            "variacion_coste": "Δ coste real",
+            "efecto_precio": "Efecto precio",
+            "efecto_consumo": "Efecto consumo",
+            "coste_simulado_precio_comp": "Coste con consumo base y precio +1 año"
+        }
+    )
+
+    # =====================================================
+    # 5. RESUMEN TOTAL
+    # =====================================================
+    consumo_base_total = df_cmp["consumo_base"].sum()
+    consumo_comp_total = df_cmp["consumo_comp"].sum()
+
+    coste_base_total = df_cmp["coste_base"].sum()
+    coste_comp_total = df_cmp["coste_comp"].sum()
+
+    precio_base_total = (
+        coste_base_total / consumo_base_total * 100
+        if consumo_base_total > 0 else np.nan
+    )
+
+    precio_comp_total = (
+        coste_comp_total / consumo_comp_total * 100
+        if consumo_comp_total > 0 else np.nan
+    )
+
+    coste_simulado_total = (
+        consumo_base_total * coste_comp_total / consumo_comp_total
+        if consumo_comp_total > 0 else np.nan
+    )
+
+    variacion_total = coste_comp_total - coste_base_total
+    efecto_precio_total = coste_simulado_total - coste_base_total
+    efecto_consumo_total = coste_comp_total - coste_simulado_total
+
+    def formato_numero_es(valor, decimales=2):
+        if pd.isna(valor):
+            return "-"
+        return f"{valor:,.{decimales}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+    def generar_resumen_html_costes(
+        coste_base_total,
+        coste_comp_total,
+        consumo_base_total,
+        consumo_comp_total,
+        precio_base_total,
+        precio_comp_total,
+        coste_simulado_total,
+        efecto_precio_total,
+        efecto_consumo_total
+    ):
+
+        variacion_total = coste_comp_total - coste_base_total
+        variacion_consumo = consumo_comp_total - consumo_base_total
+        variacion_precio = precio_comp_total - precio_base_total
+
+        def signo(x):
+            return "+" if x > 0 else ""
+
+        html = (
+            '<div style="'
+            'padding:1rem 1.1rem;'
+            'border-radius:0.75rem;'
+            'background-color:rgba(240,242,246,0.08);'
+            'border-left:5px solid #1C83E1;'
+            'font-size:0.95rem;'
+            'line-height:1.55;'
+            '">'
+
+            '<div style="font-weight:700;font-size:1.05rem;margin-bottom:0.75rem;">'
+            'Comparativa de coste de energía'
+            '</div>'
+
+            '<p>'
+            'El coste de energía pasó de '
+            f'<b>{formato_numero_es(coste_base_total, 2)} €</b> a '
+            f'<b>{formato_numero_es(coste_comp_total, 2)} €</b>, '
+            'con una variación de '
+            f'<b>{signo(variacion_total)}{formato_numero_es(variacion_total, 2)} €</b>.'
+            '</p>'
+
+            '<p>'
+            'El consumo pasó de '
+            f'<b>{formato_numero_es(consumo_base_total, 0)} kWh</b> a '
+            f'<b>{formato_numero_es(consumo_comp_total, 0)} kWh</b>, '
+            'con una variación de '
+            f'<b>{signo(variacion_consumo)}{formato_numero_es(variacion_consumo, 0)} kWh</b>.'
+            '</p>'
+
+            '<p>'
+            'El precio medio pasó de '
+            f'<b>{formato_numero_es(precio_base_total, 2)} c€/kWh</b> a '
+            f'<b>{formato_numero_es(precio_comp_total, 2)} c€/kWh</b>, '
+            'con una variación de '
+            f'<b>{signo(variacion_precio)}{formato_numero_es(variacion_precio, 2)} c€/kWh</b>.'
+            '</p>'
+
+            '<p>'
+            'A igualdad de consumo base, aplicando el precio medio del año siguiente, '
+            'el coste habría sido de '
+            f'<b>{formato_numero_es(coste_simulado_total, 2)} €</b>.'
+            '</p>'
+
+            '<div style="'
+            'margin-top:0.8rem;'
+            'padding-top:0.8rem;'
+            'border-top:1px solid rgba(255,255,255,0.18);'
+            '">'
+
+            '<b>Efecto precio:</b> '
+            f'<span style="font-weight:700;">{signo(efecto_precio_total)}{formato_numero_es(efecto_precio_total, 2)} €</span>'
+            '<br>'
+
+            '<b>Efecto consumo:</b> '
+            f'<span style="font-weight:700;">{signo(efecto_consumo_total)}{formato_numero_es(efecto_consumo_total, 2)} €</span>'
+
+            '</div>'
+            '</div>'
+        )
+
+        return html
+    
+    resumen_html_costes = generar_resumen_html_costes(
+        coste_base_total=coste_base_total,
+        coste_comp_total=coste_comp_total,
+        consumo_base_total=consumo_base_total,
+        consumo_comp_total=consumo_comp_total,
+        precio_base_total=precio_base_total,
+        precio_comp_total=precio_comp_total,
+        coste_simulado_total=coste_simulado_total,
+        efecto_precio_total=efecto_precio_total,
+        efecto_consumo_total=efecto_consumo_total
+    )
+
+    # =====================================================
+    # 6. GRÁFICO COSTE BASE VS +1 AÑO
+    # =====================================================
+
+    color_base = "#1f77b4"
+    color_comp = "#ff7f0e"
+
+    fig_coste_total = go.Figure()
+
+    fig_coste_total.add_trace(
+        go.Bar(
+            x=df_cmp["mes_label"],
+            y=df_cmp["coste_base"],
+            name="Coste base",
+            marker_color = color_base,
+            hovertemplate="Coste base: %{y:.2f} €<extra></extra>"
+        )
+    )
+
+    fig_coste_total.add_trace(
+        go.Bar(
+            x=df_cmp["mes_label"],
+            y=df_cmp["coste_comp"],
+            name="Coste +1 año",
+            marker_color = color_comp,
+            hovertemplate="Coste +1 año: %{y:.2f} €<extra></extra>"
+        )
+    )
+
+    fig_coste_total.update_layout(
+        title="Comparativa mensual de COSTES (€)",
+        barmode="group",
+        hovermode="x unified",
+        legend_title_text=""
+    )
+
+    fig_coste_total.update_yaxes(
+        title_text="Coste energía (€)",
+        rangemode="tozero",
+        showgrid=True
+    )
+
+    fig_coste_total.update_xaxes(
+        title_text="Mes",
+        showgrid=True
+    )
+
+    fig_coste_total = aplicar_estilo(fig_coste_total)
+
+    # =====================================================
+    # 7. GRÁFICO EFECTO PRECIO / CONSUMO
+    # =====================================================
+
+    color_efecto_precio = "#2ca02c"   # verde
+    color_efecto_consumo = "#9467bd"  # morado
+    color_delta_real = "#ff9896"      # rosa/salmón para línea
+    color_efecto_precio = "#800020"
+    color_delta_real = "yellow"  
+
+    fig_efectos = go.Figure()
+
+    fig_efectos.add_trace(
+        go.Bar(
+            x=df_cmp["mes_label"],
+            y=df_cmp["efecto_precio"],
+            marker_color = color_efecto_precio,
+            name="Efecto precio",
+            hovertemplate="Efecto precio: %{y:.2f} €<extra></extra>"
+        )
+    )
+
+    fig_efectos.add_trace(
+        go.Bar(
+            x=df_cmp["mes_label"],
+            y=df_cmp["efecto_consumo"],
+            marker_color = color_efecto_consumo,
+            name="Efecto consumo",
+            hovertemplate="Efecto consumo: %{y:.2f} €<extra></extra>"
+        )
+    )
+
+    fig_efectos.add_trace(
+        go.Scatter(
+            x=df_cmp["mes_label"],
+            y=df_cmp["variacion_coste"],
+            mode="lines+markers",
+            name="Δ coste real",
+            marker_color = color_delta_real,
+            line=dict(width=4),
+            marker=dict(size=8),
+            hovertemplate="Δ coste real: %{y:.2f} €<extra></extra>"
+        )
+    )
+
+    fig_efectos.add_hline(
+        y=0,
+        line_dash="dot",
+        line_color="gray"
+    )
+
+    fig_efectos.update_layout(
+        title="Efecto PRECIO/CONSUMO",
+        barmode="relative",
+        hovermode="x unified",
+        legend_title_text=""
+    )
+
+    fig_efectos.update_yaxes(
+        title_text="Impacto económico (€)",
+        showgrid=True
+    )
+
+    fig_efectos.update_xaxes(
+        title_text="Mes",
+        showgrid=True
+    )
+
+    fig_efectos = aplicar_estilo(fig_efectos)
+
+    # =====================================================
+    # 8. GRÁFICO PRECIO MEDIO
+    # =====================================================
+    fig_precio_medio = go.Figure()
+
+    fig_precio_medio.add_trace(
+        go.Scatter(
+            x=df_cmp["mes_label"],
+            y=df_cmp["precio_base_cent_kwh"],
+            mode="lines+markers",
+            name="Precio base",
+            marker_color = color_base,
+            line=dict(width=3),
+            marker=dict(size=7),
+            hovertemplate="Precio base: %{y:.2f} c€/kWh<extra></extra>"
+        )
+    )
+
+    fig_precio_medio.add_trace(
+        go.Scatter(
+            x=df_cmp["mes_label"],
+            y=df_cmp["precio_comp_cent_kwh"],
+            mode="lines+markers",
+            name="Precio +1 año",
+            marker_color = color_comp,
+            line=dict(width=3),
+            marker=dict(size=7),
+            hovertemplate="Precio +1 año: %{y:.2f} c€/kWh<extra></extra>"
+        )
+    )
+
+    fig_precio_medio.update_layout(
+        title="Comparativa mensual de PRECIOS (c€/kWh)",
+        hovermode="x unified",
+        legend_title_text=""
+    )
+
+    fig_precio_medio.update_yaxes(
+        title_text="Precio medio c€/kWh",
+        rangemode="tozero",
+        showgrid=True
+    )
+
+    fig_precio_medio.update_xaxes(
+        title_text="Mes",
+        showgrid=True
+    )
+
+    fig_precio_medio = aplicar_estilo(fig_precio_medio)
+
+    return {
+        "ok": True,
+        "mensaje": "",
+        "df_costes": df_costes,
+        "df_efectos": df_efectos,
+        "resumen_html_costes": resumen_html_costes,
+        "fig_coste_total": fig_coste_total,
+        "fig_efectos": fig_efectos,
+        "fig_precio_medio": fig_precio_medio,
+    }
+
 

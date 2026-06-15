@@ -14,7 +14,8 @@ from backend_curvadecarga import (
     resumir_atipicos_por_dia, calcular_kpis_atipicos, mostrar_kpis_atipicos, graficar_top_dias_revisables, graficar_heatmap_alertas, calcular_patron_horario_boxplot, obtener_top_horas_revisables,
     calcular_tabla_excesos_reactiva, calcular_tabla_factor_potencia, estilo_factor_potencia, calcular_tabla_precio_penalizacion_reactiva, calcular_tabla_coste_excesos_reactiva, estilo_coste_penalizacion,
     calcular_tabla_potencia_media_qh,calcular_tabla_coef_k, calcular_tabla_q_condensadores,
-    calcular_comparacion,)
+    calcular_comparacion, calcular_comparacion_costes
+    )
 from backend_comun import formatear_tabla_consumos, formatear_columnas_tabla
 
 
@@ -581,7 +582,7 @@ if st.session_state.get("df_norm") is not None:
     # COMPARATIVAS
     # ===================================================================================================================================================================================================        
     
-    #df_pivot, resumen_html, fig_total, fig_mensual, fecha_ini_global, fecha_fin_global, fecha_max_comparable = calcular_comparacion()
+    
     res = calcular_comparacion()
 
     fechas = res["fechas"]
@@ -597,48 +598,149 @@ if st.session_state.get("df_norm") is not None:
     fig_mensual = res["fig_mensual"]
 
     with tab4:
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.subheader('Introduce rango de fechas a comparar')
-            st.info(
-                f"Rango disponible de la curva: "
-                f"{fecha_ini_global.strftime('%d.%m.%Y')} → {fecha_fin_global.strftime('%d.%m.%Y')}"
-            )
-            if rango_valido is not None:
-                st.success(
-                    f"Rango comparable seleccionable: "
-                    f"{rango_valido[0].strftime('%d.%m.%Y')} → {rango_valido[1].strftime('%d.%m.%Y')}"
-                )
-            else:
-                st.warning(res["mensaje"])
-                #st.stop() 
-            
-
-        if rango_valido is not None:
+        with st.container():
+            c1, c2, c3, c4 = st.columns(4)
             with c1:
-                with st.form('Seleccionar'):    
-                    st.date_input("Selecciona periodo base", min_value=fecha_ini_global, max_value=fecha_max_comparable, key="rango_fechas_comparativa", format="DD.MM.YYYY")
-                    st.form_submit_button('Actualizar periodo de comparación')
-            with c2:
-                st.subheader('Tabla de resultados')
-                #df_pivot_fmt = formatear_resumen_mixto(df_pivot)
-                df_pivot_fmt = formatear_columnas_tabla(
-                    df_pivot,
-                    columnas_kwh=["Base", "+1 año", "Δ"],
-                    columnas_pct=["Δ %"],
-                    incluir_unidades=False
+                st.subheader('Introduce rango de fechas a comparar')
+                st.info(
+                    f"Rango disponible de la curva: "
+                    f"{fecha_ini_global.strftime('%d.%m.%Y')} → {fecha_fin_global.strftime('%d.%m.%Y')}"
                 )
-                st.dataframe(df_pivot_fmt, use_container_width=True, hide_index=True)
-                st.markdown(resumen_html, unsafe_allow_html=True)    
+                if rango_valido is not None:
+                    st.success(
+                        f"Rango comparable seleccionable: "
+                        f"{rango_valido[0].strftime('%d.%m.%Y')} → {rango_valido[1].strftime('%d.%m.%Y')}"
+                    )
+                else:
+                    st.warning(res["mensaje"])
+                    #st.stop() 
+                
 
-            with c3:
-                if fig_total is not None:
-                    st.plotly_chart(fig_total, use_container_width=True)
-            with c4:
-                if fig_mensual is not None:
-                    st.plotly_chart(fig_mensual, use_container_width=True)
+            if rango_valido is not None:
+            
+                    with c1:
+                        with st.form('Seleccionar'):    
+                            st.date_input("Selecciona periodo base", min_value=fecha_ini_global, max_value=fecha_max_comparable, key="rango_fechas_comparativa", format="DD.MM.YYYY")
+                            st.form_submit_button('Actualizar periodo de comparación')
+                    with c2:
+                        st.subheader('Tabla de resultados')
+                        #df_pivot_fmt = formatear_resumen_mixto(df_pivot)
+                        df_pivot_fmt = formatear_columnas_tabla(
+                            df_pivot,
+                            columnas_kwh=["Base", "+1 año", "Δ"],
+                            columnas_pct=["Δ %"],
+                            incluir_unidades=False
+                        )
+                        st.dataframe(df_pivot_fmt, use_container_width=True, hide_index=True)
+                        st.markdown(resumen_html, unsafe_allow_html=True)    
 
-    
+                    with c3:
+                        if fig_total is not None:
+                            st.plotly_chart(fig_total, use_container_width=True)
+                    with c4:
+                        if fig_mensual is not None:
+                            st.plotly_chart(fig_mensual, use_container_width=True)
+        
+        with st.container():
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                precios_mensuales = st.session_state.get("precios_mensuales", None)
+                if precios_mensuales is None: 
+                    st.warning('Accede a Telemindex para obtender datos de indexado de la curva introducida')
+                else:
+                    st.success('Disponibles datos de indexado para la curva introducida')
+
+        if precios_mensuales is not None and rango_valido is not None:
+
+            res_costes = calcular_comparacion_costes(
+                precios_mensuales=precios_mensuales,
+                rango_base=st.session_state.get("rango_fechas_comparativa", None)
+            )
+
+            if not res_costes["ok"]:
+                st.warning(res_costes["mensaje"])
+
+            else:
+                df_costes = res_costes["df_costes"]
+                df_efectos = res_costes["df_efectos"]
+
+                with st.container():
+
+                    #st.markdown("---")
+                    st.header("Comparativa de costes de energía", divider='rainbow')
+
+                    c1, c2, c3, c4 = st.columns(4)
+
+                    with c1:
+                        #st.markdown("##### Resumen económico")
+                        st.subheader('Resumen económico')
+                        st.markdown(
+                            res_costes["resumen_html_costes"],
+                            unsafe_allow_html=True
+                        )
+                        st.markdown("##### Tabla de costes")
+
+                        df_costes_fmt = formatear_columnas_tabla(
+                            df_costes,
+                            columnas_kwh=["Consumo base", "+1 año"],
+                            columnas_euros=["Coste base", "Coste +1 año", "Δ coste"],
+                            columnas_pct=["Δ coste %"],
+                            incluir_unidades=False
+                        )
+
+                        st.dataframe(
+                            df_costes_fmt,
+                            use_container_width=True,
+                            hide_index=True
+                        )
+
+                    with c2:
+                        if res_costes["fig_coste_total"] is not None:
+                            st.plotly_chart(
+                                res_costes["fig_coste_total"],
+                                use_container_width=True
+                            )
+
+                    with c3:
+                        if res_costes["fig_efectos"] is not None:
+                            st.plotly_chart(
+                                res_costes["fig_efectos"],
+                                use_container_width=True
+                            )
+
+                    with c4:
+                        if res_costes["fig_precio_medio"] is not None:
+                            st.plotly_chart(
+                                res_costes["fig_precio_medio"],
+                                use_container_width=True
+                            )
+
+                with st.container():
+
+                    c1, c2, c3, c4 = st.columns(4)
+
+                    with c1:
+                        st.markdown("##### Descomposición de la variación")
+
+                        df_efectos_fmt = formatear_columnas_tabla(
+                            df_efectos,
+                            columnas_euros=[
+                                "Δ coste real",
+                                "Efecto precio",
+                                "Efecto consumo",
+                                "Coste con consumo base y precio +1 año"
+                            ],
+                            incluir_unidades=False
+                        )
+
+                        st.dataframe(
+                            df_efectos_fmt,
+                            use_container_width=True,
+                            hide_index=True
+                        )
+
+                    #with c2:
+                        
 
     # ======================================================================================================================================================
     # REACTIVA

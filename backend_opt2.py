@@ -1,3 +1,4 @@
+
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -396,9 +397,11 @@ def detectar_entrada_potencia(df):
     cols_curva = {"mes_nom", "periodo", "potencia"}
 
     if cols_maximetros.issubset(cols):
+        print('fichero de maximetros')
         return "maximetros"
 
     if cols_curva.issubset(cols):
+        print('fichero de curva')
         return "curva"
 
     raise ValueError(
