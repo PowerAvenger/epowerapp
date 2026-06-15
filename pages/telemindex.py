@@ -338,10 +338,12 @@ if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None an
 
     #fig_heat = aplicar_estilo(fig_heat)
 
-print('df curva sheets')
-print(df_curva_sheets)
-#df_precios_mensuales, graf_mensual = evol_mensual(st.session_state.df_sheets, colores_precios)
-df_precios_mensuales, graf_mensual = evol_mensual(st.session_state.df_curva_sheets, colores_precios)
+#print('df curva sheets')
+#print(df_curva_sheets) 
+if st.session_state.df_curva_sheets is None:
+    df_precios_mensuales, graf_mensual = evol_mensual(st.session_state.df_sheets, colores_precios)
+else:
+    df_precios_mensuales, graf_mensual = evol_mensual(st.session_state.df_curva_sheets, colores_precios)
 
 print('precios mensuales')
 print(df_precios_mensuales)
