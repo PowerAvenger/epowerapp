@@ -490,7 +490,8 @@ with tab1:
 
         with col2:
             if media_atr_curva is not None:
-                st.subheader("Perfil de consumo (kWh) vs coste (€)", divider='rainbow')
+                apuntamiento_spot_fmt = f"{apuntamiento_spot:.2f}".replace(".", ",")
+                st.subheader(f"Perfil de consumo (kWh) vs coste (€) - Ap: :orange[{apuntamiento_spot_fmt}]", divider='rainbow')
                 
                 df_coste = st.session_state.df_curva_sheets.copy()
                 df_coste_h = (
