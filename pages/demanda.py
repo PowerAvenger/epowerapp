@@ -54,7 +54,8 @@ df_dem_real = pd.concat(lista_dfs, ignore_index=True)
 
 
 # Descargamos la demanda prevista REE
-id_dem_prevista = 460
+#id_dem_prevista = 460 #ATENCIÓN, INCLUYE AUTOCONSUMO A PARTIR DEL 11/12/2026
+id_dem_prevista = 2563 # PREVISION DEMANDA REAL PENINSULAR A MERCADO (SOLO DEMANDA)
 fecha_mañana = (fecha_hoy + timedelta(days=1))
 fecha_mañana_api=fecha_mañana.strftime('%Y-%m-%d')
 #fecha_final = fecha_mañana + timedelta(days=15)
@@ -90,14 +91,16 @@ df_demand['media_mensual'] = df_demand.groupby(['año', 'mes'])['GW'].expanding(
 df_real_año_hoy = df_demand[(df_demand['año'] == año_hoy) & (df_demand['short_name'] == 'Demanda real')]
 ultimo_real = df_real_año_hoy.sort_values('dia').iloc[-1]
 # Previsión 2026
-df_prev_año_hoy = df_demand[(df_demand['año'] == año_hoy) & (df_demand['short_name'] == 'Previsión diaria')]
+df_prev_año_hoy = df_demand[(df_demand['año'] == año_hoy) & (df_demand['short_name'] == 'Previsión diaria peninsular de demanda en el mercado')]
 # Crear punto puente
 punto_puente = ultimo_real.copy()
-punto_puente['short_name'] = 'Previsión diaria'
+#punto_puente['short_name'] = 'Previsión diaria'
+punto_puente['short_name'] = 'Previsión diaria peninsular de demanda en el mercado'
+
 # Insertar al inicio de la previsión
 df_prev_año_hoy = pd.concat([punto_puente.to_frame().T, df_prev_año_hoy], ignore_index=True)
 # Reemplazar en df_demand
-df_demand = pd.concat([df_demand[~((df_demand['año'] == año_hoy) & (df_demand['short_name'] == 'Previsión diaria'))], df_prev_año_hoy], ignore_index=True)
+df_demand = pd.concat([df_demand[~((df_demand['año'] == año_hoy) & (df_demand['short_name'] == 'Previsión diaria peninsular de demanda en el mercado'))], df_prev_año_hoy], ignore_index=True)
 # Añadir columna para saber si el año es bisiesto
 df_demand['datetime'] = pd.to_datetime(df_demand['datetime'],errors='coerce')
 df_demand['bisiesto'] = df_demand['datetime'].dt.is_leap_year
@@ -133,7 +136,7 @@ horas_mes = dias_mes * 24
 demanda_real_GWh = (df_mes_real['GW'] * 24).sum()
 
 # Previsión diaria → última disponible en 2026
-idx_prev = (df_año_hoy[df_año_hoy['short_name'] == 'Previsión diaria']['datetime'].idxmax())
+idx_prev = (df_año_hoy[df_año_hoy['short_name'] == 'Previsión diaria peninsular de demanda en el mercado']['datetime'].idxmax())
 media_prevista_GW = df_año_hoy.loc[idx_prev, 'media_mensual']
 demanda_prevista_GWh = media_prevista_GW * horas_mes
 

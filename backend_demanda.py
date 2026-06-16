@@ -46,7 +46,8 @@ def graficar_media_diaria(df_demand, años_visibles, mes_nombre_actual, año_act
         line_dash='short_name',
         line_dash_map={
             'Demanda real': 'solid',
-            'Previsión diaria': 'dot'
+            'Previsión diaria': 'dot',
+            'Previsión diaria peninsular de demanda en el mercado':'dot',
             },
     )
 
