@@ -884,7 +884,8 @@ with tab6:
             # 🔁 Reemplazar directamente
             st.session_state.df_ofertas_fijas_simul_trim = df_new_trim.copy()
 
-        if st.session_state.df_ofertas_fijas_simul_trim is not None: 
+        #if st.session_state.df_ofertas_fijas_simul_trim is not None: 
+        if st.session_state.get("df_ofertas_fijas_simul_trim") is not None:
             df_ofertas_trim_view = formatear_df_resumen(st.session_state.df_ofertas_fijas_simul_trim)
 
             st.markdown("Ofertas fijas cargadas")
@@ -910,17 +911,18 @@ with tab6:
             resultados_trim = []
 
             # Ofertas fijas
-            for _, row in st.session_state.df_ofertas_fijas_simul_trim.iterrows():
-                coste_total = (consumos_trim * row[periodos]).sum()
-                energia_total = consumos_trim.sum()
-                precio_medio = coste_total / energia_total
+            if st.session_state.get("df_ofertas_fijas_simul_trim") is not None:
+                for _, row in st.session_state.df_ofertas_fijas_simul_trim.iterrows():
+                    coste_total = (consumos_trim * row[periodos]).sum()
+                    energia_total = consumos_trim.sum()
+                    precio_medio = coste_total / energia_total
 
-                resultados_trim.append({
-                    "Oferta": row["oferta"],
-                    "Tipo": "Fijo",
-                    "Coste anual (€)": coste_total,
-                    "Precio medio (€/kWh)": precio_medio
-                })
+                    resultados_trim.append({
+                        "Oferta": row["oferta"],
+                        "Tipo": "Fijo",
+                        "Coste anual (€)": coste_total,
+                        "Precio medio (€/kWh)": precio_medio
+                    })
 
             # Indexado
             for esc in escenarios_trim:

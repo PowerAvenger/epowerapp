@@ -159,6 +159,10 @@ if st.session_state.componente == 'SPOT+SSAA':
 if 'dos_colores' in st.session_state and st.session_state.dos_colores:
     st.sidebar.toggle('Peso componentes', key = 'peso_comp')
 
+if st.sidebar.button('Actualizar datos'):
+    from backend_escalacv import leer_json
+    leer_json.clear()
+    
 
     
 # VISUALIZACIÓN ÁREA PRINCIPAL---------------------------------------------------------------------------------------------------------
