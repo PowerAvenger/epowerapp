@@ -1257,8 +1257,114 @@ def graficar_con_gen(df, colores_energia=None):
 
 
 
-
 def graficar_media_horaria(tipo_dia, ymax=None, ordenar=False):
+    
+    df = st.session_state.df_norm_h.copy()
+
+    df["fecha_hora"] = pd.to_datetime(df["fecha_hora"])
+
+    # Filtrar según opción
+    if tipo_dia == "L-V":
+        df_sel = df[df["tipo_dia"] == "L-V"].copy()
+        add_title = "LUNES A VIERNES"
+
+    elif tipo_dia == "FS":
+        df_sel = df[df["tipo_dia"] == "FS"].copy()
+        add_title = "FIN DE SEMANA"
+
+    else:
+        df_sel = df.copy()
+        add_title = "TOTAL"
+
+    # =====================================================
+    # Si df_norm_h ya es horario, NO resampleamos
+    # =====================================================
+    df_sel["hora"] = df_sel["fecha_hora"].dt.hour
+
+    df_horas = (
+        df_sel.groupby("hora", as_index=False)["consumo_neto_kWh"]
+        .mean()
+        .rename(columns={"consumo_neto_kWh": "media_kWh"})
+    )
+
+    # Nos aseguramos de que estén las 24 horas
+    df_horas = (
+        df_horas.set_index("hora")
+        .reindex(range(24))
+        .reset_index()
+    )
+
+    # =====================================================
+    # ORDENACIÓN OPCIONAL
+    # =====================================================
+    if ordenar:
+        df_horas = df_horas.sort_values("media_kWh", ascending=False)
+        df_horas["hora_cat"] = df_horas["hora"].astype(str)
+        x_col = "hora_cat"
+        title = "Hora del día (ordenada por consumo)"
+    else:
+        x_col = "hora"
+        title = f"Perfil medio horario: <span style='color:orange'>{add_title}</span>"
+
+    # =====================================================
+    # Gráfico
+    # =====================================================
+    fig = px.bar(
+        df_horas,
+        x=x_col,
+        y="media_kWh",
+        labels={
+            "hora": "Hora del día",
+            "hora_cat": "Hora del día",
+            "media_kWh": "Consumo medio (kWh)"
+        },
+        color="media_kWh",
+        color_continuous_scale="Blues"
+    )
+
+    if ymax is None:
+        ymax = df_horas["media_kWh"].max() * 1.05
+
+    fig.update_layout(
+        title=dict(
+            text=title,
+            x=0.5,
+            xanchor="center"
+        ),
+        yaxis_title="kWh medios",
+        coloraxis_showscale=False,
+        yaxis=dict(
+            range=[0, ymax]
+        ),
+        separators=",."
+    )
+
+    if ordenar:
+        fig.update_xaxes(
+            type="category",
+            categoryorder="array",
+            categoryarray=df_horas["hora_cat"].tolist()
+        )
+    else:
+        fig.update_xaxes(
+            dtick=1,
+            tickmode="linear",
+            tick0=0
+        )
+
+    fig.update_traces(
+        hovertemplate=(
+            "<b>Hora:</b> %{x}:00<br>"
+            "<b>Consumo medio:</b> %{y:.2f} kWh"
+            "<extra></extra>"
+        )
+    )
+
+    fig = aplicar_estilo(fig)
+
+    return fig
+
+def graficar_media_horaria_old(tipo_dia, ymax=None, ordenar=False):
     
     df = st.session_state.df_norm_h.copy()
     # Filtrar según opción
@@ -1345,6 +1451,108 @@ def graficar_media_horaria(tipo_dia, ymax=None, ordenar=False):
     return fig
 
 def graficar_media_horaria_combinada():
+    
+    df = st.session_state.df_norm_h.copy()
+
+    # Aseguramos fecha_hora como datetime
+    df["fecha_hora"] = pd.to_datetime(df["fecha_hora"])
+
+    # Si df_norm_h ya está corregido a horario, solo sacamos la hora
+    df["hora"] = df["fecha_hora"].dt.hour
+
+    # =====================================================
+    # Perfil medio L-V / FS
+    # =====================================================
+    df_tipo = (
+        df.groupby(["tipo_dia", "hora"], as_index=False)["consumo_neto_kWh"]
+        .mean()
+        .rename(columns={"consumo_neto_kWh": "media_kWh"})
+    )
+
+    df_tipo = df_tipo.rename(columns={"tipo_dia": "perfil"})
+
+    # =====================================================
+    # Perfil TOTAL
+    # =====================================================
+    df_total = (
+        df.groupby("hora", as_index=False)["consumo_neto_kWh"]
+        .mean()
+        .rename(columns={"consumo_neto_kWh": "media_kWh"})
+    )
+
+    df_total["perfil"] = "TOTAL"
+
+    # =====================================================
+    # Unimos
+    # =====================================================
+    df_plot = pd.concat([df_tipo, df_total], ignore_index=True)
+
+    # Orden de perfiles
+    orden_perfiles = ["L-V", "FS", "TOTAL"]
+
+    df_plot["perfil"] = pd.Categorical(
+        df_plot["perfil"],
+        categories=orden_perfiles,
+        ordered=True
+    )
+
+    df_plot = df_plot.sort_values(["perfil", "hora"])
+
+    ymax = df_plot["media_kWh"].max() * 1.05
+    ymin = 0
+
+    # =====================================================
+    # Gráfico
+    # =====================================================
+    fig = px.line(
+        df_plot,
+        x="hora",
+        y="media_kWh",
+        color="perfil",
+        category_orders={"perfil": orden_perfiles},
+        labels={
+            "hora": "Hora del día",
+            "media_kWh": "Consumo medio (kWh)",
+            "perfil": "Tipo de día"
+        },
+        title="Perfil medio horario: L-V vs Fin de Semana",
+        color_discrete_map={
+            "L-V": "#6a0dad",
+            "FS": "#2e8b57",
+            "TOTAL": "#999999"
+        }
+    )
+
+    fig.update_traces(line=dict(width=3))
+
+    # Si quieres que TOTAL salga oculto por defecto:
+    fig.for_each_trace(
+        lambda t: t.update(
+            visible="legendonly" if t.name == "TOTAL" else True
+        )
+    )
+
+    fig.update_layout(
+        xaxis=dict(
+            dtick=1,
+            title="Hora del día"
+        ),
+        yaxis=dict(
+            title="kWh medios",
+            range=[ymin, ymax]
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="center",
+            x=0.5
+        )
+    )
+
+    return fig, ymax
+
+def graficar_media_horaria_combinada_old():
     
     df = st.session_state.df_norm_h.copy()
 
