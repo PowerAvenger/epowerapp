@@ -162,6 +162,7 @@ if 'dos_colores' in st.session_state and st.session_state.dos_colores:
 if st.sidebar.button('Actualizar datos'):
     from backend_escalacv import leer_json
     leer_json.clear()
+    st.rerun()
     
 
     
