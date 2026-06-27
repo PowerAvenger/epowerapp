@@ -130,7 +130,18 @@ valor_maximo_horario = round(datos_horarios['value'].max(),2)
 fecha_min_horario = datos_horarios.loc[datos_horarios['value'].idxmin(), 'fecha']
 fecha_max_horario = datos_horarios.loc[datos_horarios['value'].idxmax(), 'fecha']
 
-medias_horarias_filtrado, graf_medias_horarias = medias_horarias(datos_año_filtrado)
+meses_lista = ['todos', 'ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']
+mes_sel = st.session_state.get("mes_seleccionado_esc", "todos")
+if mes_sel == "todos":
+    datos_mes_filtrado = datos_año_filtrado.copy()
+else:
+    mes_num_sel = meses_lista.index(mes_sel)  # ene = 1, feb = 2, ..., dic = 12
+    datos_mes_filtrado = datos_año_filtrado[
+        datos_año_filtrado["mes"] == mes_num_sel
+    ].copy()
+
+#medias_horarias_filtrado, graf_medias_horarias = medias_horarias(datos_año_filtrado)
+medias_horarias_filtrado, graf_medias_horarias = medias_horarias(datos_mes_filtrado)
 
 #st.write(ultimo_registro) 
 #   fecha_descarga=pasar_fecha()
@@ -141,7 +152,7 @@ años_comp = [
     a for a in años_lista
     if a != st.session_state.año_seleccionado_esc
 ]
-meses_lista = ['todos', 'ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']
+
 
 
 # ELEMENTOS DE LA BARRA LATERAL DE OPCIONES-----------------------------------------------------------------------------------------------

@@ -27,6 +27,9 @@ if not st.session_state.get('usuario_autenticado', False) and not st.session_sta
 
 generar_menu()
 
+if 'zona_periodos_cdc' not in st.session_state:
+    st.session_state.zona_periodos = 'peninsula'
+
 # ===============================
 #  Interfaz SIDEBAR
 # ===============================
@@ -49,6 +52,22 @@ with st.sidebar:
                     ("2.0", "3.0", "6.1", "6.2", "6.3", "6.4"),
                     index=0
                 )
+        #st.selectbox("Selecciona zona", options=["peninsula", "canarias", "baleares", "ceuta", "melilla"], index=0, key = 'zona_periodos', help="Se usa para asignar los periodos horarios según zona cuando la curva no trae columna de periodo.")
+        opciones_zona_periodos = ["peninsula", "baleares", "canarias", "ceuta", "melilla"]
+        st.selectbox(
+            "Selecciona zona de periodos horarios",
+            options=opciones_zona_periodos,
+            index=0,
+            key="zona_periodos_cdc",
+            format_func=lambda x: {
+                "peninsula": "Península",
+                "baleares": "Baleares",
+                "canarias": "Canarias",
+                "ceuta": "Ceuta",
+                "melilla": "Melilla",
+            }[x]
+        )
+        
     normalizar = st.button('Normalizar curva de carga', type='primary', use_container_width=True)
         
     zona_mensajes = st.sidebar.empty()

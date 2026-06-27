@@ -583,7 +583,21 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
         flag_periodos_en_origen = False
         try:
             # Puedes definir esta ruta al inicio del script
-            periodos_path = "utils/periodos_horarios.xlsx"
+            #periodos_path = "utils/periodos_horarios.xlsx"
+            mapa_periodos_path = {
+                "peninsula": "utils/periodos_horarios.xlsx",
+                "canarias": "utils/periodos_horarios_canarias.xlsx",
+                "baleares": "utils/periodos_horarios_baleares.xlsx",
+                "ceuta": "utils/periodos_horarios_ceuta.xlsx",
+                "melilla": "utils/periodos_horarios_melilla.xlsx",
+            }
+            zona_periodos_cdc = st.session_state.get("zona_periodos_cdc", "peninsula")
+            #periodos_path = mapa_periodos_path[st.session_state.zona_periodos_cdc]
+            periodos_path = mapa_periodos_path.get(
+                zona_periodos_cdc,
+                "utils/periodos_horarios.xlsx"
+            )
+            print(f'RUTA PERIODOS: {periodos_path}')
             df_periodos = pd.read_excel(periodos_path, dtype={"año": int, "mes": int, "dia": int, "hora": int, "dh_3p": str, "dh_6p": str})
 
             
@@ -681,7 +695,6 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
     print(df_norm)
 
 
-    #return df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, atr_dfnorm, freq
     return df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, freq
 
 # ================================================================================

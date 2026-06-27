@@ -4,7 +4,7 @@ import plotly.express as px
 import pandas as pd
 import datetime
 from backend_telemindex import (
-    filtrar_datos, añadir_fnee, calcular_precios_atr,
+    filtrar_datos, añadir_fnee, #calcular_precios_atr,
     graficar_precios_medios_horarios, graficar_queso_componentes,
     tabla_precios, tabla_costes, tabla_pyc, tabla_margen,
     evol_mensual, graficar_diferencial_precios_mensuales, tabla_evol_mes_por_años,
@@ -13,7 +13,7 @@ from backend_telemindex import (
     analizar_dependencia_omie, graficar_elasticidad_lineal,
     
 ) 
-from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, aplicar_estilo
+from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, aplicar_estilo, aplicar_dh6p_zona, NOMBRE_ZONA_PERIODOS, calcular_precios_atr
 from backend_curvadecarga import graficar_media_horaria, graficar_queso_periodos
 from utilidades import generar_menu, init_app, init_app_index, persist_widget
 
@@ -385,7 +385,22 @@ with st.sidebar.container(border=True):
             st.session_state.texto_precios = (f"Rango seleccionado: {inicio.strftime('%d/%m/%Y')} → {fin.strftime('%d/%m/%Y')}")
             st.form_submit_button('Actualizar cálculos')
 
-    
+    #st.selectbox("Selecciona zona de periodos horarios", options=["Península", "Baleares", "Canarias", "Ceuta", "Melilla"], index=0, key="zona_periodos_index")
+    opciones_zona_periodos = ["peninsula", "baleares", "canarias", "ceuta", "melilla"]
+
+    st.selectbox(
+        "Selecciona zona de periodos horarios",
+        options=opciones_zona_periodos,
+        index=0,
+        key="zona_periodos_index",
+        format_func=lambda x: {
+            "peninsula": "Península",
+            "baleares": "Baleares",
+            "canarias": "Canarias",
+            "ceuta": "Ceuta",
+            "melilla": "Melilla",
+        }[x]
+    )
 st.sidebar.subheader('Parámetros de fórmula')
     
 with st.sidebar.container(border=True):
@@ -422,7 +437,8 @@ with tab1:
 
         #COLUMNA PRINCIPAL
         with col1:
-            st.subheader(f'Resumen de precios finales de INDEXADO. **:orange[{st.session_state.texto_precios}]**', divider = 'rainbow')
+            zona_txt = NOMBRE_ZONA_PERIODOS.get(st.session_state.get("zona_periodos_index", "peninsula"), "PENÍNSULA")
+            st.subheader(f'Resumen de precios finales de INDEXADO - Zona :blue[{zona_txt}]. **:orange[{st.session_state.texto_precios}]**', divider = 'rainbow') 
             
             with st.container():
                 col5, col6, col7, col8, col9 = st.columns(5)

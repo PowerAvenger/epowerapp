@@ -5,9 +5,249 @@ from google.oauth2.service_account import Credentials
 import streamlit as st
 
 
+NOMBRE_ZONA_PERIODOS = {
+    "peninsula": "PENÍNSULA",
+    "baleares": "BALEARES",
+    "canarias": "CANARIAS",
+    "ceuta": "CEUTA",
+    "melilla": "MELILLA",
+}
 
+@st.cache_data
+def cargar_componentes_regulados(path_componentes="utils/004 LUZ componentes regulados.xlsx"):
+    """
+    Carga las tablas reguladas necesarias para recalcular PPCC, pérdidas BOE y PyC energía.
+    """
 
+    tablas = pd.read_excel(
+        path_componentes,
+        sheet_name=None,
+        engine="openpyxl"
+    )
 
+    df_ppcc = tablas["PPCC"].copy()
+    df_perdidas_boe = tablas["PERDIDAS"].copy()
+    df_pycs_energia = tablas["PYC_E"].copy()
+
+    # Normalizamos fechas
+    for df_tabla in [df_ppcc, df_pycs_energia]:
+        df_tabla["fecha_inicio"] = pd.to_datetime(df_tabla["fecha_inicio"]).dt.date
+        df_tabla["fecha_final"] = pd.to_datetime(df_tabla["fecha_final"]).dt.date
+
+    return df_ppcc, df_perdidas_boe, df_pycs_energia
+
+def recalcular_componentes_regulados(df):
+    """
+    Recalcula los componentes regulados que dependen del periodo horario.
+
+    Está pensada para usarse después de aplicar la zona de periodos:
+        1. aplicar_dh6p_zona()
+        2. recalcular_componentes_regulados_index()
+        3. calcular_precios_atr()
+
+    Recalcula:
+        - ppcc_2.0, ppcc_3.0, ppcc_6.1
+        - perd_2.0_boe, perd_3.0_boe, perd_6.1_boe
+        - perd_2.0, perd_3.0, perd_6.1
+        - pyc_2.0, pyc_3.0, pyc_6.1
+
+    Aunque dh_3p sea común a todas las zonas, recalculamos también 2.0
+    para mantener coherencia con las tablas reguladas.
+    """
+
+    df = df.copy()
+
+    df_ppcc, df_perdidas_boe, df_pycs_energia = cargar_componentes_regulados()
+
+    # =====================================================
+    # 0. NORMALIZACIÓN BÁSICA
+    # =====================================================
+    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce").dt.date
+
+    df["dh_3p"] = df["dh_3p"].astype(str)
+    df["dh_6p"] = df["dh_6p"].astype(str)
+
+    # Aseguramos coef_k
+    if "coef_k" not in df.columns:
+        raise ValueError("No encuentro la columna 'coef_k' en el DataFrame.")
+
+    df["coef_k"] = pd.to_numeric(df["coef_k"], errors="coerce")
+
+    # =====================================================
+    # 1. RECALCULAR PPCC
+    # =====================================================
+    for col in ["ppcc_2.0", "ppcc_3.0", "ppcc_6.1"]:
+        df[col] = None
+
+    for _, row in df_ppcc.iterrows():
+
+        mask_2p = (
+            (df["fecha"] >= row["fecha_inicio"])
+            & (df["fecha"] <= row["fecha_final"])
+            & (df["dh_3p"] == str(row["periodo"]))
+        )
+
+        mask_6p = (
+            (df["fecha"] >= row["fecha_inicio"])
+            & (df["fecha"] <= row["fecha_final"])
+            & (df["dh_6p"] == str(row["periodo"]))
+        )
+
+        df.loc[mask_2p, "ppcc_2.0"] = row["2.0TD"]
+        df.loc[mask_6p, "ppcc_3.0"] = row["3.0TD"]
+        df.loc[mask_6p, "ppcc_6.1"] = row["6.1TD"]
+
+    df[["ppcc_2.0", "ppcc_3.0", "ppcc_6.1"]] = (
+        df[["ppcc_2.0", "ppcc_3.0", "ppcc_6.1"]]
+        .apply(pd.to_numeric, errors="coerce")
+        * 1000
+    ).round(2)
+
+    # =====================================================
+    # 2. RECALCULAR PÉRDIDAS BOE
+    # =====================================================
+    mapa_perd_20 = df_perdidas_boe.set_index("periodo")["2.0TD"]
+    mapa_perd_30 = df_perdidas_boe.set_index("periodo")["3.0TD"]
+    mapa_perd_61 = df_perdidas_boe.set_index("periodo")["6.1TD"]
+
+    df["perd_2.0_boe"] = df["dh_3p"].map(mapa_perd_20)
+    df["perd_3.0_boe"] = df["dh_6p"].map(mapa_perd_30)
+    df["perd_6.1_boe"] = df["dh_6p"].map(mapa_perd_61)
+
+    df["perd_2.0_boe"] = pd.to_numeric(df["perd_2.0_boe"], errors="coerce")
+    df["perd_3.0_boe"] = pd.to_numeric(df["perd_3.0_boe"], errors="coerce")
+    df["perd_6.1_boe"] = pd.to_numeric(df["perd_6.1_boe"], errors="coerce")
+
+    # =====================================================
+    # 3. RECALCULAR PÉRDIDAS CON COEF_K
+    # =====================================================
+    df["perd_2.0"] = df["perd_2.0_boe"] * df["coef_k"]
+    df["perd_3.0"] = df["perd_3.0_boe"] * df["coef_k"]
+    df["perd_6.1"] = df["perd_6.1_boe"] * df["coef_k"]
+
+    # =====================================================
+    # 4. RECALCULAR PYC ENERGÍA
+    # =====================================================
+    for col in ["pyc_2.0", "pyc_3.0", "pyc_6.1"]:
+        df[col] = None
+
+    for _, row in df_pycs_energia.iterrows():
+
+        mask_2p = (
+            (df["fecha"] >= row["fecha_inicio"])
+            & (df["fecha"] <= row["fecha_final"])
+            & (df["dh_3p"] == str(row["periodo"]))
+        )
+
+        mask_6p = (
+            (df["fecha"] >= row["fecha_inicio"])
+            & (df["fecha"] <= row["fecha_final"])
+            & (df["dh_6p"] == str(row["periodo"]))
+        )
+
+        df.loc[mask_2p, "pyc_2.0"] = row["2.0TD"]
+        df.loc[mask_6p, "pyc_3.0"] = row["3.0TD"]
+        df.loc[mask_6p, "pyc_6.1"] = row["6.1TD"]
+
+    df[["pyc_2.0", "pyc_3.0", "pyc_6.1"]] = (
+        df[["pyc_2.0", "pyc_3.0", "pyc_6.1"]]
+        .apply(pd.to_numeric, errors="coerce")
+        * 1000
+    )
+
+    # =====================================================
+    # 5. COMPROBACIÓN BÁSICA
+    # =====================================================
+    cols_check = [
+        "ppcc_2.0", "ppcc_3.0", "ppcc_6.1",
+        "perd_2.0_boe", "perd_3.0_boe", "perd_6.1_boe",
+        "perd_2.0", "perd_3.0", "perd_6.1",
+        "pyc_2.0", "pyc_3.0", "pyc_6.1",
+    ]
+
+    nulos = df[cols_check].isna().sum()
+    nulos = nulos[nulos > 0]
+
+    if len(nulos) > 0:
+        print("Aviso: hay nulos tras recalcular componentes regulados:")
+        print(nulos)
+
+    return df
+
+def calcular_precios_atr(df):
+    
+    tm_rate = 0.015
+    cf = st.session_state.get("cf_pct", 0.0) / 100
+    margen = st.session_state.get("margen_telemindex", 0.0)
+    df = df.copy()
+
+    for atr in ["2.0", "3.0", "6.1"]:
+
+        base = (
+            df["spot"]
+            + df["ssaa"]
+            + df[f"ppcc_{atr}"]
+            + df["osom"]
+        )
+
+        # ajuste manual por diferencia de los SSAA id esios con los C2
+        base += 0.0
+
+        # componente fijo antes de pérdidas
+        base += st.session_state.get("desvios_apant", 0.0)
+
+        # FNEE en pérdidas
+        if st.session_state.get("cfg_fnee", False) and st.session_state.get("cfg_fnee_pos") == "perdidas":
+            base += df["fnee"]
+
+        # duplicamos base: una para coste y otra para precio
+        base_coste = base.copy()
+        base_precio = base.copy()
+
+        # margen en pérdidas: solo entra en precio
+        if st.session_state.get("cfg_margen_pos") == "perdidas":
+            df[f"margen_{atr}"] = margen * (1 + df[f"perd_{atr}"]) * (1 + tm_rate) * (1 + cf)
+            base_precio += margen
+
+        # pérdidas
+        base_coste *= (1 + df[f"perd_{atr}"])
+        base_precio *= (1 + df[f"perd_{atr}"])
+
+        # margen en tm: solo entra en precio
+        if st.session_state.get("cfg_margen_pos") == "tm":
+            df[f"margen_{atr}"] = margen * (1 + tm_rate) * (1 + cf)
+            base_precio += margen
+
+        # FNEE en tm
+        if st.session_state.get("cfg_fnee", False) and st.session_state.get("cfg_fnee_pos") == "tm":
+            base_coste += df["fnee"]
+            base_precio += df["fnee"]
+
+        # tm
+        base_coste *= (1 + tm_rate)
+        base_precio *= (1 + tm_rate)
+
+        # cf
+        base_coste *= (1 + cf)
+        base_precio *= (1 + cf)
+
+        # FNEE en neto
+        if st.session_state.get("cfg_fnee", False) and st.session_state.get("cfg_fnee_pos") == "neto":
+            base_coste += df["fnee"]
+            base_precio += df["fnee"]
+
+        # margen en neto: solo entra en precio
+        if st.session_state.get("cfg_margen_pos") == "neto":
+            df[f"margen_{atr}"] = margen
+            base_precio += margen
+
+        # coste sin margen
+        df[f"coste_{atr}"] = base_coste
+
+        # precio final con margen y pyc
+        df[f"precio_{atr}"] = base_precio + df[f"pyc_{atr}"]
+
+    return df
 
 
 colores_precios = {'precio_2.0': 'goldenrod', 'precio_3.0': 'darkred', 'precio_6.1': '#1C83E1', 'precio_curva': 'limegreen'}
@@ -673,4 +913,72 @@ def formatear_df_resultados(df):
 
     return styler
 
+@st.cache_data
+def cargar_periodos_zona(zona):
+    """
+    Carga el fichero de periodos horarios correspondiente a la zona.
+    La hora debe estar en formato 0-23.
+    """
 
+    mapa_periodos_path = {
+        "peninsula": "utils/periodos_horarios.xlsx",
+        "baleares": "utils/periodos_horarios_baleares.xlsx",
+        "canarias": "utils/periodos_horarios_canarias.xlsx",
+        "ceuta": "utils/periodos_horarios_ceuta.xlsx",
+        "melilla": "utils/periodos_horarios_melilla.xlsx",
+    }
+
+    if zona not in mapa_periodos_path:
+        raise ValueError(f"Zona de periodos no reconocida: {zona}")
+
+    periodos_path = mapa_periodos_path[zona]
+
+    df_periodos = pd.read_excel(
+        periodos_path,
+        dtype={
+            "año": int,
+            "mes": int,
+            "dia": int,
+            "hora": int,
+            "dh_6p": str,
+        }
+    )
+
+    return df_periodos[["año", "mes", "dia", "hora", "dh_6p"]]
+
+def aplicar_dh6p_zona(df, zona):
+    """
+    Sustituye la columna dh_6p de un DataFrame por la correspondiente
+    a la zona seleccionada.
+
+    Para península no modifica nada.
+    """
+
+    df = df.copy()
+
+    if zona == "peninsula":
+        return df
+
+    df_periodos = cargar_periodos_zona(zona).rename(
+        columns={"dh_6p": "dh_6p_zona"}
+    )
+
+    claves = ["año", "mes", "dia", "hora"]
+
+    # Aseguramos tipos para que el merge no falle por int/str/float
+    for col in claves:
+        df[col] = df[col].astype(int)
+        df_periodos[col] = df_periodos[col].astype(int)
+
+    df = df.merge(
+        df_periodos,
+        on=claves,
+        how="left"
+    )
+
+    # Sustituimos solo cuando haya valor encontrado
+    df["dh_6p"] = df["dh_6p_zona"].fillna(df["dh_6p"])
+
+    df = df.drop(columns=["dh_6p_zona"])
+
+    return df

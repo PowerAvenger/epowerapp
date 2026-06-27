@@ -440,6 +440,7 @@ with tab3:
     with c1:
         st.info(f'Aquí tienes la previsión OMIE 2026 en base a los valores medios mensuales :green[OMIE] y los valores medios de :orange[OMIP] a fecha {fecha_ultimo_omip_mensual}.', icon = "ℹ️")
         st.write(graf_2026)
+        st.info(f'Aquí tienes la evolución de **:violet[OMIE PREVISTO]** 2026 en base a históricos y futuros combinados, desde el 01.01.2026 hasta el {fecha_ultimo_omip_mensual}.', icon = "ℹ️")
         st.write(fig_media_2026)
     with c2:
         st.info(f'Aquí tienes la previsión :orange[OMIP] 12 MESES en base a los futuros mensuales y trimestrales a fecha {fecha_ultimo_omip_mensual}.', icon = "ℹ️")

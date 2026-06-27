@@ -1,9 +1,9 @@
 import streamlit as st
 import datetime
 import pandas as pd
-from backend_comun import autenticar_google_sheets, carga_total_sheets, cargar_componentes_csv
+from backend_comun import autenticar_google_sheets, carga_total_sheets, cargar_componentes_csv, calcular_precios_atr
 from backend_escalacv import leer_json
-from backend_telemindex import COMPONENTES_SSAA_FORMULA, construir_df_rad3_manual, calcular_precios_atr, añadir_fnee
+from backend_telemindex import COMPONENTES_SSAA_FORMULA, construir_df_rad3_manual, añadir_fnee
 
 
 def generar_menu():
@@ -38,7 +38,269 @@ def init_app():
     if 'client' not in st.session_state:
         st.session_state.client = autenticar_google_sheets()
 
+
+
+from backend_comun import aplicar_dh6p_zona, recalcular_componentes_regulados
+
+def actualizar_df_index_por_zona(forzar=False):
+    """
+    Recalcula st.session_state.df_sheets desde la base limpia
+    aplicando la zona de periodos seleccionada.
+
+    Flujo:
+    1. Parte siempre de df_sheets_base_index
+    2. Sustituye dh_6p según zona
+    3. Recalcula PPCC, pérdidas y PyC
+    4. Recalcula precios finales
+    """
+
+    zona = st.session_state.get("zona_periodos_index", "peninsula")
+
+    if "df_sheets_base_index" not in st.session_state:
+        return
+
+    zona_ya_aplicada = st.session_state.get("zona_periodos_index_aplicada")
+
+    if (
+        not forzar
+        and zona_ya_aplicada == zona
+        and "df_sheets" in st.session_state
+    ):
+        return
+
+    print(f"Recalculando indexados para zona: {zona}")
+
+    # 1. Partimos siempre de la base limpia
+    df_index = st.session_state.df_sheets_base_index.copy()
+
+    # 2. Aplicamos dh_6p de la zona
+    df_index = aplicar_dh6p_zona(df_index, zona)
+
+    # 3. Recalculamos componentes regulados que dependen de dh_6p
+    df_index = recalcular_componentes_regulados(df_index)
+
+    # 4. Eliminamos precios/costes antiguos por seguridad
+    cols_drop = [
+        c for c in df_index.columns
+        if c.startswith("coste_") or c.startswith("precio_")
+    ]
+
+    df_index = df_index.drop(columns=cols_drop, errors="ignore")
+
+    # 5. Recalculamos precios finales
+    df_index = calcular_precios_atr(df_index)
+
+    # 6. Guardamos resultado activo
+    st.session_state.df_sheets = df_index
+    st.session_state.zona_periodos_index_aplicada = zona
+    st.session_state.precios_calculados = True
+
+    print(f"Zona aplicada correctamente: {zona}")
+
+def actualizar_df_index_por_zona_old(forzar=False):
+    """
+    Recalcula st.session_state.df_sheets desde df_sheets_base_index
+    aplicando la zona seleccionada.
+
+    Si cambia la zona, recalcula siempre.
+    """
+
+    zona = st.session_state.get("zona_periodos_index", "peninsula")
+
+    st.session_state.zona_periodos_index = zona
+
+    if "df_sheets_base_index" not in st.session_state:
+        return
+
+    zona_ya_aplicada = st.session_state.get("zona_periodos_index_aplicada")
+
+    # Si no ha cambiado la zona y no forzamos, no recalculamos
+    if not forzar and zona_ya_aplicada == zona and "df_sheets" in st.session_state:
+        return
+
+    df_index = st.session_state.df_sheets_base_index.copy()
+
+    print(f"Recalculando df_sheets para zona: {zona}")
+
+    df_index = aplicar_dh6p_zona(df_index, zona)
+
+    # Por seguridad, eliminamos columnas coste/precio previas si existieran
+    cols_drop = [
+        c for c in df_index.columns
+        if c.startswith("coste_") or c.startswith("precio_")
+    ]
+
+    df_index = df_index.drop(columns=cols_drop, errors="ignore")
+
+    df_index = calcular_precios_atr(df_index)
+
+    st.session_state.df_sheets = df_index
+    st.session_state.zona_periodos_index_aplicada = zona
+    st.session_state.precios_calculados = True
+
+    print(f"Zona aplicada correctamente: {zona}")
+
+
+
 def init_app_index():
+    # Para TELEMINDEX Y SIMULINDEX
+
+    # =====================================================
+    # 0. ESTADOS GENERALES
+    # =====================================================
+    if "zona_periodos_index" not in st.session_state:
+        st.session_state.zona_periodos_index = "peninsula"
+
+    if "zona_periodos_index_aplicada" not in st.session_state:
+        st.session_state.zona_periodos_index_aplicada = None
+
+    if "rango_temporal" not in st.session_state:
+        st.session_state.rango_temporal = "Selecciona un rango de fechas"
+
+    if "año_seleccionado" not in st.session_state:
+        st.session_state.año_seleccionado = 2026
+
+    if "mes_seleccionado" not in st.session_state:
+        st.session_state.mes_seleccionado = "enero"
+
+    # =====================================================
+    # 1. CARGA SHEETS OLD
+    # =====================================================
+    if "ultima_fecha_sheets" not in st.session_state or "df_sheets_old" not in st.session_state:
+        carga_total_sheets()
+        st.session_state.df_sheets_old["fecha"] = pd.to_datetime(
+            st.session_state.df_sheets_old["fecha"]
+        ).dt.date
+
+    # =====================================================
+    # 2. CARGA CSV COMPONENTES + COMBO CON SHEETS OLD
+    # =====================================================
+    if "df_sheets_base_index" not in st.session_state:
+
+        if "csv_componentes" not in st.session_state:
+            import time
+            t0 = time.perf_counter()
+
+            st.session_state.csv_componentes = cargar_componentes_csv()
+
+            t1 = time.perf_counter()
+            print(f"Tiempo carga csv_componentes: {t1 - t0:.3f} s")
+
+        df_csv = st.session_state.csv_componentes.copy()
+
+        # ¡¡¡ ATENCIÓN: EL COMPONENTE DSV VIENE COMO PROMEDIO QH, Y NO COMO SUMA!!!
+        # df_csv["dsv"] = df_csv["dsv"] * 4
+
+        df_csv["ssaa"] = df_csv[COMPONENTES_SSAA_FORMULA].sum(axis=1)
+
+        fecha_corte = df_csv["fecha"].max()
+
+        # Guardar para usar en la app
+        st.session_state.ultima_fecha_csv = fecha_corte
+
+        df_old = st.session_state.df_sheets_old.copy()
+        df_old = df_old[df_old["fecha"] > fecha_corte]
+
+        df_sheets_nuevo = pd.concat(
+            [df_csv, df_old],
+            ignore_index=True
+        )
+
+        # =====================================================
+        # 3. RELLENO MANUAL RAD3 POST C2
+        # =====================================================
+        mask = df_sheets_nuevo["fecha"] > fecha_corte
+
+        df_manual = construir_df_rad3_manual()
+
+        df_sheets_nuevo = df_sheets_nuevo.merge(
+            df_manual,
+            on=["año", "hora"],
+            how="left",
+            suffixes=("", "_manual")
+        )
+
+        df_sheets_nuevo.loc[mask, "rad3"] = df_sheets_nuevo.loc[mask, "rad3_manual"]
+
+        df_sheets_nuevo = df_sheets_nuevo.drop(columns=["rad3_manual"])
+
+        # =====================================================
+        # 4. LIMPIEZA COLUMNAS SOBRANTES
+        # =====================================================
+        cols_drop = [
+            c for c in df_sheets_nuevo.columns
+            if c.startswith("coste_") or c.startswith("precio_")
+        ]
+
+        cols_drop += ["otros"]
+
+        df_sheets_nuevo = df_sheets_nuevo.drop(
+            columns=cols_drop,
+            errors="ignore"
+        )
+
+        # =====================================================
+        # 5. BASE LIMPIA INDEXADOS
+        # =====================================================
+        # Esta base mantiene los dh_6p originales de península.
+        # Nunca se debe machacar con Canarias/Baleares/Ceuta/Melilla.
+        st.session_state.df_sheets_base_index = df_sheets_nuevo.copy()
+        st.session_state.df_sheets_base_index = añadir_fnee(
+            st.session_state.df_sheets_base_index
+        )
+
+        print("df_sheets_base_index creado")
+        print(st.session_state.df_sheets_base_index.columns)
+
+    # =====================================================
+    # 6. INICIALIZACIÓN DE ESTADOS DE COMPONENTES/FÓRMULA
+    # =====================================================
+    for key, default in {
+        "desvios_apant": 1.0,
+        # "cfg_srad": True,
+        "margen_telemindex": 1.0,
+        "cfg_margen_pos": "tm",
+        "cfg_fnee": True,
+        "cfg_fnee_pos": "perdidas",
+        "cf_pct": 0.8,
+    }.items():
+        if key not in st.session_state:
+            st.session_state[key] = default
+
+    # =====================================================
+    # 7. APLICAR ZONA Y CALCULAR PRECIOS
+    # =====================================================
+    actualizar_df_index_por_zona()
+
+    # =====================================================
+    # 8. ESTADO DÍAS SELECCIONADOS
+    # =====================================================
+    if "dias_seleccionados" not in st.session_state:
+
+        if "ultima_fecha_sheets" not in st.session_state:
+            ultima_fecha = datetime.date(2026, 1, 1)
+        else:
+            ultima_fecha = st.session_state.ultima_fecha_sheets
+
+        if isinstance(ultima_fecha, datetime.datetime):
+            ultima_fecha = ultima_fecha.date()
+
+        inicio_rango = ultima_fecha
+        st.session_state.dias_seleccionados = (inicio_rango, ultima_fecha)
+
+    # =====================================================
+    # 9. TEXTO PRECIOS
+    # =====================================================
+    if "texto_precios" not in st.session_state:
+
+        if "ultima_fecha_sheets" not in st.session_state:
+            ultima_fecha = datetime.date(2026, 1, 1)
+        else:
+            ultima_fecha = st.session_state.ultima_fecha_sheets
+
+        st.session_state.texto_precios = f"Día seleccionado: {ultima_fecha}"
+
+def init_app_index_old():
     # Para TELEMINDEX Y SIMULINDEX
     if 'rango_temporal' not in st.session_state:
         st.session_state.rango_temporal = 'Selecciona un rango de fechas'   
@@ -133,6 +395,9 @@ def init_app_index():
         else:
             ultima_fecha = st.session_state.ultima_fecha_sheets
         st.session_state.texto_precios = f'Día seleccionado: {ultima_fecha}'
+    
+    if "zona_periodos_index" not in st.session_state:
+        st.session_state.zona_periodos_index = "peninsula"
 
 
 def init_app_json_escalacv():

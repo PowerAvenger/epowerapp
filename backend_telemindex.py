@@ -226,7 +226,7 @@ def añadir_fnee(df):
 
 
 
-def calcular_precios_atr(df):
+def calcular_precios_atr_yanoseusaqui(df):
     
     tm_rate = 0.015
     cf = st.session_state.get("cf_pct", 0.0) / 100

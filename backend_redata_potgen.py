@@ -398,7 +398,8 @@ def gen_evol(df_out_equiparado):
     #recibimos un df con valores diarios de todos los años. Depende del toogle, 
     df_in = df_out_equiparado.copy()
     if not st.session_state.tec_seleccionadas:
-        return pd.DataFrame(columns=['año', 'tecnologia', 'FC', '%_mix_gen', 'gen_GWh_dia'])
+        #return pd.DataFrame(columns=['año', 'tecnologia', 'FC', '%_mix_gen', 'gen_GWh_dia'])
+        return pd.DataFrame(columns=['año', 'tecnologia', 'FC', '%_mix_gen', 'gen_GWh'])
     
     df_out = df_in[df_in['tecnologia'].isin(st.session_state.tec_seleccionadas)]
         
@@ -475,8 +476,8 @@ def gen_evol(df_out_equiparado):
     #df_out_evol = df_out_evol.rename(columns ={'gen_GWh_dia': 'gen_GWh'})
     df_out_evol['%_mix_gen'] = df_out_evol['%_mix_gen']*100
     
-    #print ('df_out_evol')
-    #print (df_out_evol)
+    print ('df_out_evol')
+    print (df_out_evol)
 
     return df_out_evol
 

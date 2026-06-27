@@ -9,7 +9,9 @@ import numpy as np
 import statsmodels.api as sm
 
 
-
+color_media_futuro = "#EB2C6C"
+color_media_futuro = "#85C8D4"
+color_media_futuro = "#CC8DF0"
 
 #valores de peajes y cargos usados en la simulación en €/kWh
 pyc_2026 = {
@@ -1051,14 +1053,19 @@ def graficar_2026(df_2026, precio_medio_2026):
             "<extra></extra>"
     )
     fig.data[-1].marker.color = ["rgba(0,0,0,0)"] + ["darkorange"]*(len(df_fut))
+
     # MEDIA ANUAL
+    
+    
+
     fig.add_hline(
         y=precio_medio_2026,
         line_dash="dot",
-        line_color="white",
+        line_color=color_media_futuro,
         annotation_text=f"Media ≈ {precio_medio_2026:.1f} €/MWh",
         annotation_position="top right",
-        annotation_font_size=18
+        annotation_font_size=20,
+        annotation_font_color=color_media_futuro
     )
 
     fig.update_layout(
@@ -1280,7 +1287,8 @@ def graficar_media_prevista_2026(df_media_2026):
         mode="lines",
         name="Media prevista 2026",
         line=dict(
-            color="darkorange",
+            #color="darkorange",
+            color = color_media_futuro, 
             width=2,
             #dash="dot"
         ),

@@ -891,7 +891,232 @@ def evolucion_mensual(df):
     
     
 # DATOS HORARIOS PARA UN DÍA SELECCIONADO+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# DATOS HORARIOS PARA UN DÍA SELECCIONADO+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 def horarios(datos):
+    # datos_horarios = datos[datos['año'] == st.session_state.get('año_seleccionado_esc', 2025)]
+    datos_horarios = datos.copy()
+    # datos_horarios['fecha'] = pd.to_datetime(datos_horarios['fecha'], format='%d/%m/%Y')
+
+    df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes()
+
+    datos_horarios['escala'] = pd.cut(
+        datos_horarios['value'],
+        bins=df_limites['rango'],
+        labels=etiquetas,
+        right=True
+    )
+
+    lista_escala = datos_horarios['escala'].unique()
+    datos_horarios['color'] = datos_horarios['escala'].map(colores)
+
+    escala_horaria = [
+        '≤0', 'muy bajo', 'bajo', 'medio', 'alto',
+        'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2'
+    ]
+
+    escala_ordenada_hora = sorted(
+        escala_horaria,
+        key=lambda x: valor_asignado_a_rango[x],
+        reverse=True
+    )
+
+    datos_horarios['escala'] = pd.Categorical(
+        datos_horarios['escala'],
+        categories=escala_ordenada_hora,
+        ordered=True
+    )
+
+    # -----------------------------------------------------
+    # FILTRAMOS DÍA
+    # -----------------------------------------------------
+    fecha_max = datos_horarios['fecha'].max()
+
+    if st.session_state.dia_seleccionado_esc > fecha_max:
+        datos_horarios_filtrado = datos_horarios[
+            datos_horarios['fecha'] == fecha_max
+        ].copy()
+    else:
+        datos_horarios_filtrado = datos_horarios[
+            datos_horarios['fecha'] == st.session_state.dia_seleccionado_esc
+        ].copy()
+
+    # -----------------------------------------------------
+    # VARIABLES DE CONTROL
+    # -----------------------------------------------------
+    componente = st.session_state.get('componente', 'SPOT')
+    dos_colores = st.session_state.get('dos_colores', False)
+
+    # -----------------------------------------------------
+    # HOVER PERSONALIZADO
+    # -----------------------------------------------------
+    def fmt_hover(x):
+        if pd.isna(x):
+            return "-"
+        return f"{x:.2f}".replace(".", ",")
+
+    # Fecha-hora para hover
+    if 'fecha_hora' in datos_horarios_filtrado.columns:
+        datos_horarios_filtrado['fecha_hora_hover'] = (
+            pd.to_datetime(datos_horarios_filtrado['fecha_hora'])
+            .dt.strftime('%d/%m/%Y %H:%M')
+        )
+    else:
+        datos_horarios_filtrado['fecha_hora_hover'] = (
+            pd.to_datetime(datos_horarios_filtrado['fecha']).dt.strftime('%d/%m/%Y')
+            + ' '
+            + datos_horarios_filtrado['hora'].astype(int).astype(str).str.zfill(2)
+            + ':00'
+        )
+
+    # SPOT para hover
+    if 'value_spot' in datos_horarios_filtrado.columns:
+        datos_horarios_filtrado['spot_hover'] = (
+            datos_horarios_filtrado['value_spot'].apply(fmt_hover)
+        )
+    else:
+        datos_horarios_filtrado['spot_hover'] = (
+            datos_horarios_filtrado['value'].apply(fmt_hover)
+        )
+
+    # SSAA para hover
+    if 'value_ssaa' in datos_horarios_filtrado.columns:
+        datos_horarios_filtrado['ssaa_hover'] = (
+            datos_horarios_filtrado['value_ssaa'].apply(fmt_hover)
+        )
+    else:
+        datos_horarios_filtrado['ssaa_hover'] = "-"
+
+    # -----------------------------------------------------
+    # CASO SPOT + SSAA EN DOS COLORES
+    # -----------------------------------------------------
+    if componente == 'SPOT+SSAA' and dos_colores:
+        datos_horarios_filtrado = datos_horarios_filtrado.melt(
+            id_vars=[
+                'fecha',
+                'hora',
+                'fecha_hora_hover',
+                'spot_hover',
+                'ssaa_hover'
+            ],
+            value_vars=['value_spot', 'value_ssaa'],
+            var_name='componente',
+            value_name='value_melt'
+        )
+
+        datos_horarios_filtrado = datos_horarios_filtrado.rename(
+            columns={'value_melt': 'value'}
+        )
+
+    # -----------------------------------------------------
+    # TÍTULO Y ESCALA Y
+    # -----------------------------------------------------
+    if componente in ['SPOT']:
+        title = (
+            f'Perfil horario del SPOT. Día '
+            f'{st.session_state.dia_seleccionado_esc.strftime("%d/%m/%Y")}'
+        )
+        tick_y = 20
+
+    elif componente in ['SPOT+SSAA']:
+        title = (
+            f'Perfil horario del SPOT+SSAA. Día '
+            f'{st.session_state.dia_seleccionado_esc.strftime("%d/%m/%Y")}'
+        )
+        tick_y = 20
+
+    else:
+        title = (
+            f'Perfil horario de los SSAA. Día '
+            f'{st.session_state.dia_seleccionado_esc.strftime("%d/%m/%Y")}'
+        )
+        tick_y = 4
+
+    # -----------------------------------------------------
+    # GRÁFICO DE VALORES HORARIOS POR DÍA FILTRADO
+    # -----------------------------------------------------
+    if componente == 'SPOT+SSAA' and dos_colores:
+        graf_horaria_dia = px.bar(
+            datos_horarios_filtrado,
+            x='hora',
+            y='value',
+            title=title,
+            labels={
+                'value': '€/MWh',
+                'escala': 'escala_cv',
+                'componente': 'Componente'
+            },
+            color='componente',
+            color_discrete_map={
+                'value_spot': 'green',
+                'value_ssaa': 'lightgreen'
+            },
+            custom_data=[
+                'fecha_hora_hover',
+                'spot_hover',
+                'ssaa_hover'
+            ]
+        )
+
+    else:
+        graf_horaria_dia = px.bar(
+            datos_horarios_filtrado,
+            x='hora',
+            y='value',
+            title=title,
+            labels={
+                'value': '€/MWh',
+                'escala': 'escala_cv'
+            },
+            color='escala',
+            color_discrete_map=colores,
+            category_orders={
+                'escala': escala_ordenada_hora
+            },
+            custom_data=[
+                'fecha_hora_hover',
+                'spot_hover',
+                'ssaa_hover'
+            ]
+        )
+
+    # -----------------------------------------------------
+    # HOVER FINAL
+    # -----------------------------------------------------
+    graf_horaria_dia.update_traces(
+        hovertemplate=
+            "<b>%{customdata[0]}</b><br><br>"
+            "SPOT: %{customdata[1]} €/MWh<br>"
+            "SSAA: %{customdata[2]} €/MWh"
+            "<extra></extra>"
+    )
+
+    # -----------------------------------------------------
+    # LAYOUT
+    # -----------------------------------------------------
+    min_horarios = datos_horarios['value'].min()
+    max_horarios = datos_horarios['value'].max()
+
+    graf_horaria_dia.update_layout(
+        yaxis=dict(
+            autorange=True,
+            tickmode="linear",
+            dtick=tick_y
+        ),
+        title=dict(
+            font=dict(
+                size=20,
+            ),
+            x=0.5,
+            xanchor="center"
+        ),
+        bargap=.5
+    )
+
+    graf_horaria_dia = aplicar_estilo(graf_horaria_dia)
+
+    return datos_horarios, graf_horaria_dia, datos_horarios_filtrado
+
+def horarios_old(datos):
     #datos_horarios = datos[datos['año'] == st.session_state.get('año_seleccionado_esc', 2025)] #.copy()
     datos_horarios = datos.copy()
     #datos_horarios['fecha'] = pd.to_datetime(datos_horarios['fecha'], format='%d/%m/%Y')
@@ -986,13 +1211,245 @@ def horarios(datos):
             xanchor="center"
         ),
         bargap = .5
-    )        
+    )      
+    graf_horaria_dia=aplicar_estilo(graf_horaria_dia)  
 
     return datos_horarios, graf_horaria_dia, datos_horarios_filtrado
     
     
-# DATOS HORARIOS PARA UN DÍA SELECCIONADO+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# DATOS HORARIOS PARA UN MES SELECCIONADO+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
 def medias_horarias(datos):
+    # datos_horarios = datos[datos['año'] == st.session_state.get('año_seleccionado_esc', 2025)]
+    datos_horarios = datos.copy()
+
+    componente = st.session_state.get('componente', 'SPOT')
+    dos_colores = st.session_state.get('dos_colores', False)
+
+    # --- 1. Calcular medias horarias ---
+    if componente in ['SPOT+SSAA'] and dos_colores:
+        datos_horarios = (
+            datos_horarios
+            .groupby('hora', as_index=False)[['value', 'value_spot', 'value_ssaa']]
+            .mean()
+        )
+    else:
+        datos_horarios = (
+            datos_horarios
+            .groupby('hora', as_index=False)['value']
+            .mean()
+        )
+
+    # --- 2. Escalas de color ---
+    df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes()
+
+    datos_horarios['escala'] = pd.cut(
+        datos_horarios['value'],
+        bins=df_limites['rango'],
+        labels=etiquetas,
+        right=True
+    )
+
+    datos_horarios['color'] = datos_horarios['escala'].map(colores)
+
+    escala_horaria = [
+        'muy bajo', 'bajo', 'medio', 'alto', 'muy alto',
+        'chungo', 'xtrem', 'defcon3', 'defcon2'
+    ]
+
+    escala_ordenada_hora = sorted(
+        escala_horaria,
+        key=lambda x: valor_asignado_a_rango[x],
+        reverse=True
+    )
+
+    datos_horarios['escala'] = pd.Categorical(
+        datos_horarios['escala'],
+        categories=escala_ordenada_hora,
+        ordered=True
+    )
+
+    datos_horarios_filtrado = datos_horarios.copy()
+
+    """
+    Esto es para la curva de precios medios horarios del año seleccionado.
+    Si estamos en SPOT+SSAA con dos colores, pasamos de formato ancho:
+        hora | value | value_spot | value_ssaa
+    a formato largo:
+        hora | componente | value
+    """
+
+    if componente in ['SPOT+SSAA'] and dos_colores:
+
+        # Guardamos primero las columnas originales para hover combinado
+        df_hover = datos_horarios_filtrado[
+            ['hora', 'value_spot', 'value_ssaa']
+        ].copy()
+
+        df_hover = df_hover.rename(columns={
+            'value_spot': 'SPOT',
+            'value_ssaa': 'SSAA'
+        })
+
+        # Formato largo para pintar barras por componente
+        datos_horarios_filtrado = datos_horarios_filtrado.melt(
+            id_vars='hora',
+            value_vars=['value_spot', 'value_ssaa'],
+            var_name='componente',
+            value_name='value_melt'
+        )
+
+        datos_horarios_filtrado = datos_horarios_filtrado.rename(columns={
+            'value_melt': 'value'
+        })
+
+        # Nombres bonitos para leyenda, color y hover
+        datos_horarios_filtrado['componente'] = datos_horarios_filtrado['componente'].replace({
+            'value_spot': 'SPOT',
+            'value_ssaa': 'SSAA'
+        })
+
+        # Añadimos a cada barra los dos valores: SPOT y SSAA
+        datos_horarios_filtrado = datos_horarios_filtrado.merge(
+            df_hover,
+            on='hora',
+            how='left'
+        )
+
+    # --- 3. Columnas auxiliares para hover ---
+    datos_horarios_filtrado['año_hover'] = st.session_state.get(
+        'año_seleccionado_esc',
+        ''
+    )
+
+    datos_horarios_filtrado['mes_hover'] = st.session_state.get(
+        'mes_seleccionado_esc',
+        ''
+    )
+
+    # --- 4. Título y escala Y ---
+    componente = st.session_state.get('componente', 'SPOT')
+
+    if componente in ['SPOT']:
+        title = (
+            f"Perfil horario medio del SPOT. "
+            f"Año {st.session_state.año_seleccionado_esc} - "
+            f"Mes: {st.session_state.mes_seleccionado_esc}"
+        )
+        tick_y = 20
+
+    elif componente in ['SPOT+SSAA']:
+        title = (
+            f"Perfil horario medio del SPOT+SSAA. "
+            f"Año {st.session_state.año_seleccionado_esc} - "
+            f"Mes: {st.session_state.mes_seleccionado_esc}"
+        )
+        tick_y = 20
+
+    else:
+        title = (
+            f"Perfil horario medio de los SSAA. "
+            f"Año {st.session_state.año_seleccionado_esc} - "
+            f"Mes: {st.session_state.mes_seleccionado_esc}"
+        )
+        tick_y = 4
+
+    # --- 5. Gráfico ---
+    if componente == 'SPOT+SSAA' and dos_colores:
+
+        graf_horaria_dia = px.bar(
+            datos_horarios_filtrado,
+            x='hora',
+            y='value',
+            title=title,
+            labels={
+                'value': '€/MWh',
+                'componente': 'Componente'
+            },
+            color='componente',
+            color_discrete_map={
+                'SPOT': 'green',
+                'SSAA': 'lightgreen'
+            },
+            custom_data=[
+                'año_hover',
+                'mes_hover',
+                'hora',
+                'SPOT',
+                'SSAA'
+            ]
+        )
+
+        graf_horaria_dia.update_traces(
+            hovertemplate=(
+                "<b>Año: %{customdata[0]} | "
+                "Mes: %{customdata[1]} | "
+                "Hora: %{customdata[2]}</b><br><br>"
+                "SPOT: %{customdata[3]:.2f} €/MWh<br>"
+                "SSAA: %{customdata[4]:.2f} €/MWh"
+                "<extra></extra>"
+            )
+        )
+
+    else:
+
+        graf_horaria_dia = px.bar(
+            datos_horarios_filtrado,
+            x='hora',
+            y='value',
+            title=title,
+            labels={
+                'value': '€/MWh',
+                'escala': 'escala_cv'
+            },
+            color='escala',
+            color_discrete_map=colores,
+            category_orders={
+                'escala': escala_ordenada_hora
+            },
+            custom_data=[
+                'año_hover',
+                'mes_hover',
+                'hora',
+                'value'
+            ]
+        )
+
+        graf_horaria_dia.update_traces(
+            hovertemplate=(
+                "<b>Año: %{customdata[0]} | "
+                "Mes: %{customdata[1]} | "
+                "Hora: %{customdata[2]}</b><br><br>"
+                "Valor: %{customdata[3]:.2f} €/MWh"
+                "<extra></extra>"
+            )
+        )
+
+    # --- 6. Layout ---
+    min_horarios = datos_horarios['value'].min()
+    max_horarios = datos_horarios['value'].max()
+
+    graf_horaria_dia.update_layout(
+        yaxis=dict(
+            autorange=True,
+            tickmode="linear",
+            dtick=tick_y
+        ),
+        title=dict(
+            font=dict(
+                size=20,
+            ),
+            x=0.5,
+            xanchor="center"
+        ),
+        bargap=.5
+    )
+
+    graf_horaria_dia = aplicar_estilo(graf_horaria_dia)
+
+    return datos_horarios_filtrado, graf_horaria_dia
+
+def medias_horarias_old(datos):
     #datos_horarios = datos[datos['año'] == st.session_state.get('año_seleccionado_esc', 2025)] #.copy()
     datos_horarios=datos.copy()
 
@@ -1057,13 +1514,13 @@ def medias_horarias(datos):
     # GRAFICO DE VALORES HORARIOS POR DIA FILTRADO----------------------------------------------
     componente = st.session_state.get('componente', 'SPOT')
     if componente in ['SPOT']:
-        title = f'Perfil horario medio del SPOT. Año {st.session_state.año_seleccionado_esc}'
+        title = f'Perfil horario medio del SPOT. Año {st.session_state.año_seleccionado_esc} - Mes: {st.session_state.mes_seleccionado_esc}'
         tick_y = 20
     elif componente in ['SPOT+SSAA']:
-        title = f'Perfil horario medio del SPOT+SSAA. Año {st.session_state.año_seleccionado_esc}'
+        title = f'Perfil horario medio del SPOT+SSAA. Año {st.session_state.año_seleccionado_esc} - Mes: {st.session_state.mes_seleccionado_esc}'
         tick_y = 20
     else:
-        title = f'Perfil horario medio de los SSAA. Día Año {st.session_state.año_seleccionado_esc}'
+        title = f'Perfil horario medio de los SSAA. Día Año {st.session_state.año_seleccionado_esc} - Mes: {st.session_state.mes_seleccionado_esc}'
         tick_y = 4
 
     if componente == 'SPOT+SSAA' and dos_colores:
@@ -1117,7 +1574,9 @@ def medias_horarias(datos):
         ),
         
         bargap = .5
-    )        
+    )
+
+    graf_horaria_dia = aplicar_estilo(graf_horaria_dia)        
 
     return datos_horarios_filtrado, graf_horaria_dia
     
