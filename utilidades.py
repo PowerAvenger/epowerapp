@@ -97,49 +97,6 @@ def actualizar_df_index_por_zona(forzar=False):
 
     print(f"Zona aplicada correctamente: {zona}")
 
-def actualizar_df_index_por_zona_old(forzar=False):
-    """
-    Recalcula st.session_state.df_sheets desde df_sheets_base_index
-    aplicando la zona seleccionada.
-
-    Si cambia la zona, recalcula siempre.
-    """
-
-    zona = st.session_state.get("zona_periodos_index", "peninsula")
-
-    st.session_state.zona_periodos_index = zona
-
-    if "df_sheets_base_index" not in st.session_state:
-        return
-
-    zona_ya_aplicada = st.session_state.get("zona_periodos_index_aplicada")
-
-    # Si no ha cambiado la zona y no forzamos, no recalculamos
-    if not forzar and zona_ya_aplicada == zona and "df_sheets" in st.session_state:
-        return
-
-    df_index = st.session_state.df_sheets_base_index.copy()
-
-    print(f"Recalculando df_sheets para zona: {zona}")
-
-    df_index = aplicar_dh6p_zona(df_index, zona)
-
-    # Por seguridad, eliminamos columnas coste/precio previas si existieran
-    cols_drop = [
-        c for c in df_index.columns
-        if c.startswith("coste_") or c.startswith("precio_")
-    ]
-
-    df_index = df_index.drop(columns=cols_drop, errors="ignore")
-
-    df_index = calcular_precios_atr(df_index)
-
-    st.session_state.df_sheets = df_index
-    st.session_state.zona_periodos_index_aplicada = zona
-    st.session_state.precios_calculados = True
-
-    print(f"Zona aplicada correctamente: {zona}")
-
 
 
 def init_app_index():
@@ -256,13 +213,13 @@ def init_app_index():
     # 6. INICIALIZACIÓN DE ESTADOS DE COMPONENTES/FÓRMULA
     # =====================================================
     for key, default in {
-        "desvios_apant": 1.0,
+        "desvios_apant": 0.0,
         # "cfg_srad": True,
-        "margen_telemindex": 1.0,
+        "margen_telemindex": 0.0,
         "cfg_margen_pos": "tm",
         "cfg_fnee": True,
         "cfg_fnee_pos": "perdidas",
-        "cf_pct": 0.8,
+        "cf_pct": 0.0,
     }.items():
         if key not in st.session_state:
             st.session_state[key] = default

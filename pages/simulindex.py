@@ -445,6 +445,7 @@ with tab3:
     with c2:
         st.info(f'Aquí tienes la previsión :orange[OMIP] 12 MESES en base a los futuros mensuales y trimestrales a fecha {fecha_ultimo_omip_mensual}.', icon = "ℹ️")
         st.write(graf_año_movil)
+        st.info(f'Evolución de :orange[OMIP] 12 MESES en base a los futuros mensuales y trimestrales. Comparativa con :green[OMIE]. Última fecha de datos disponible: {fecha_ultimo_omip_mensual}.', icon = "ℹ️")
         st.plotly_chart(fig_media_forward, use_container_width=True)
         st.plotly_chart(fig_omip_suav_vs_omie, use_container_width=True)
         st.plotly_chart(fig_omie_omip_ajuste, use_container_width=True)

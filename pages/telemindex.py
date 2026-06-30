@@ -1,6 +1,7 @@
 import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
+
 import pandas as pd
 import datetime
 from backend_telemindex import (
@@ -8,6 +9,7 @@ from backend_telemindex import (
     graficar_precios_medios_horarios, graficar_queso_componentes,
     tabla_precios, tabla_costes, tabla_pyc, tabla_margen,
     evol_mensual, graficar_diferencial_precios_mensuales, tabla_evol_mes_por_años,
+    evol_diario,
     construir_df_curva_sheets, añadir_costes_curva,
     check_medias,
     analizar_dependencia_omie, graficar_elasticidad_lineal,
@@ -348,7 +350,7 @@ else:
 print('precios mensuales')
 print(df_precios_mensuales)
 
-
+df_precios_diarios, graf_precios_diarios = evol_diario(st.session_state.df_sheets)
 
 #ELEMENTOS DE LA BARRA LATERAL ---------------------------------------------------------------------------------------
 zona_mensajes.info(
@@ -577,8 +579,12 @@ with tab1:
 
 with tab2:
     # gráfico de evolución de los precios medios mensuales
-    st.subheader("Evolución de los precios medios de indexado", divider='rainbow')
+    st.subheader("Comparativa anual de los precios medios de indexado, por peaje de acceso (media acumulada)", divider='rainbow')
+    st.plotly_chart(graf_precios_diarios, use_container_width=True)
+    st.subheader("Evolución de los precios medios de indexado, por meses", divider='rainbow')
     st.plotly_chart(graf_mensual)
+    
+    
 
     df_delta, fig_delta = graficar_diferencial_precios_mensuales(
         df_mensual=df_precios_mensuales,
@@ -589,6 +595,7 @@ with tab2:
     c1, c2 = st.columns(2)
     with c1:
         st.plotly_chart(fig_delta, use_container_width=True)
+        
     with c2:
         MESES_ORDEN = [
             "enero", "febrero", "marzo", "abril",

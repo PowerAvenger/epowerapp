@@ -1,6 +1,7 @@
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import statsmodels.api as sm
 import streamlit as st
 import numpy as np
@@ -762,6 +763,7 @@ def tabla_margen(df):
         
 def evol_mensual(df, colores_precios):
 
+
     dffm = df.copy()
 
     orden_meses = [
@@ -995,123 +997,1933 @@ def evol_mensual(df, colores_precios):
 
     return df_precios_mensuales, fig
 
-def evol_mensual_old(df, colores_precios):
 
-    dffm = df.copy()
+from plotly.subplots import make_subplots
+import plotly.graph_objects as go
+import pandas as pd
+import numpy as np
 
-    orden_meses = [
-        "enero", "febrero", "marzo", "abril", "mayo", "junio",
-        "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"
-    ]
 
-    mes_a_num = {
-        "enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
-        "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
-        "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12
+def evol_diario(df):
+
+    dffd = df.copy()
+
+    # =====================================================
+    # 0. ASEGURAR FECHA
+    # =====================================================
+    if "fecha" not in dffd.columns:
+        if "datetime" in dffd.columns:
+            dffd["fecha"] = pd.to_datetime(dffd["datetime"]).dt.floor("D")
+        elif "fecha_hora" in dffd.columns:
+            dffd["fecha"] = pd.to_datetime(dffd["fecha_hora"]).dt.floor("D")
+        else:
+            raise ValueError(
+                "No encuentro columna 'fecha', 'datetime' ni 'fecha_hora'."
+            )
+    else:
+        dffd["fecha"] = pd.to_datetime(dffd["fecha"]).dt.floor("D")
+
+    if "año" not in dffd.columns:
+        dffd["año"] = dffd["fecha"].dt.year
+
+    dffd["año"] = pd.to_numeric(
+        dffd["año"],
+        errors="coerce"
+    ).astype("Int64")
+
+    # =====================================================
+    # 1. COLUMNAS PRECIO
+    # =====================================================
+    columnas_precio = ["precio_2.0", "precio_3.0", "precio_6.1"]
+
+    titulos_panel = {
+        "precio_2.0": "Precio final peaje 2.0",
+        "precio_3.0": "Precio final peaje 3.0",
+        "precio_6.1": "Precio final peaje 6.1"
     }
-
-    dffm["mes_nombre"] = pd.Categorical(
-        dffm["mes_nombre"],
-        categories=orden_meses,
-        ordered=True
-    )
-
-    df_precios_mensuales = dffm.pivot_table(
-        values=["spot", "precio_2.0", "precio_3.0", "precio_6.1"],
-        index=["año", "mes_nombre"],
-        aggfunc="mean"
-    ).reset_index()
-
-    # Crear columna fecha
-    df_precios_mensuales["mes_num"] = df_precios_mensuales["mes_nombre"].map(mes_a_num)
-
-    df_precios_mensuales["fecha"] = pd.to_datetime(
-        df_precios_mensuales["año"].astype(str)
-        + "-"
-        + df_precios_mensuales["mes_num"].astype(str)
-        + "-01"
-    )
-
-    # Pasar de €/MWh a c€/kWh
-    columnas_precio = ["spot", "precio_2.0", "precio_3.0", "precio_6.1"]
 
     for col in columnas_precio:
-        df_precios_mensuales[col] = df_precios_mensuales[col] / 10
-        df_precios_mensuales[col] = df_precios_mensuales[col].round(2)
-
-    # Colores
-    colores_precios = {
-        "Peaje 2.0": "goldenrod",
-        "Peaje 3.0": "darkred",
-        "Peaje 6.1": "#1C83E1"
-    }
+        if col not in dffd.columns:
+            raise ValueError(f"No encuentro la columna {col}")
 
     # =====================================================
-    # GRÁFICO MIXTO: SPOT BARRA + PRECIOS LÍNEAS
+    # 2. MEDIA DIARIA
     # =====================================================
-    fig = go.Figure()
-
-    # SPOT en barras verdes estrechas
-    fig.add_trace(
-        go.Bar(
-            x=df_precios_mensuales["fecha"],
-            y=df_precios_mensuales["spot"],
-            name="SPOT",
-            marker_color="green",
-            width=1000 * 60 * 60 * 24 * 8,  # aprox. 8 días en milisegundos
-            opacity=0.65,
-            hovertemplate="SPOT: %{y:.2f} c€/kWh<extra></extra>"
-        )
+    df_diario = (
+        dffd
+        .groupby(["año", "fecha"], observed=False)[columnas_precio]
+        .mean()
+        .reset_index()
+        .sort_values(["año", "fecha"])
     )
 
-    # Líneas de precios finales
-    series_lineas = {
-        "Peaje 2.0": "precio_2.0",
-        "Peaje 3.0": "precio_3.0",
-        "Peaje 6.1": "precio_6.1"
+    # =====================================================
+    # 3. PASAR DE €/MWh A c€/kWh
+    # =====================================================
+    for col in columnas_precio:
+        df_diario[col] = df_diario[col] / 10
+
+    # =====================================================
+    # 4. FECHA TIPO PARA COMPARAR AÑOS
+    # =====================================================
+    # Usamos 2024 porque es bisiesto y soporta 29-feb
+    df_diario["fecha_tipo"] = pd.to_datetime(
+        "2024-" + df_diario["fecha"].dt.strftime("%m-%d"),
+        errors="coerce"
+    )
+
+    # =====================================================
+    # 5. MEDIA ACUMULADA DÍA A DÍA POR AÑO
+    # =====================================================
+    for col in columnas_precio:
+        df_diario[f"{col}_media_acum"] = (
+            df_diario
+            .groupby("año", observed=False)[col]
+            .expanding()
+            .mean()
+            .reset_index(level=0, drop=True)
+            .round(2)
+        )
+
+    # =====================================================
+    # 6. ESCALA Y COMÚN PARA LOS TRES GRÁFICOS
+    # =====================================================
+    columnas_acum = [f"{col}_media_acum" for col in columnas_precio]
+
+    y_max = df_diario[columnas_acum].max().max()
+
+    if pd.isna(y_max):
+        y_lim = 20
+    else:
+        y_lim = int(np.ceil(y_max / 5) * 5)
+
+    y_lim = max(y_lim, 20)
+    y_lim = min(y_lim, 20)
+
+    # =====================================================
+    # 7. COLORES POR AÑO BASADOS EN CADA COLOR BASE
+    # =====================================================
+    colores_años = {
+        "precio_2.0": {
+            2024: "#8A6A00",
+            2025: "goldenrod",
+            2026: "#E8D58B"
+        },
+        "precio_3.0": {
+            2024: "#5C0000",
+            2025: "darkred",
+            2026: "#C96A6A"
+        },
+        "precio_6.1": {
+            2024: "#0A4F94",
+            2025: "#1C83E1",
+            2026: "#7CB6F0"
+        }
     }
 
-    for nombre, col in series_lineas.items():
-        fig.add_trace(
-            go.Scatter(
-                x=df_precios_mensuales["fecha"],
-                y=df_precios_mensuales[col],
-                #mode="lines+markers",
-                mode="lines",
-                name=nombre,
-                line=dict(
-                    color=colores_precios[nombre],
-                    width=3
+    años_objetivo = [2024, 2025, 2026]
+    años_disponibles = sorted(
+        df_diario["año"].dropna().astype(int).unique()
+    )
+
+    años_plot = [a for a in años_objetivo if a in años_disponibles]
+
+    if not años_plot:
+        años_plot = años_disponibles
+
+    # =====================================================
+    # 8. TICKS DEL EJE X
+    # =====================================================
+    tickvals = pd.to_datetime([
+        "2024-01-01", "2024-02-01", "2024-03-01", "2024-04-01",
+        "2024-05-01", "2024-06-01", "2024-07-01", "2024-08-01",
+        "2024-09-01", "2024-10-01", "2024-11-01", "2024-12-01"
+    ])
+
+    ticktext = [
+        "01-ene", "01-feb", "01-mar", "01-abr",
+        "01-may", "01-jun", "01-jul", "01-ago",
+        "01-sep", "01-oct", "01-nov", "01-dic"
+    ]
+
+    # =====================================================
+    # 9. SUBPLOTS HORIZONTALES
+    # =====================================================
+    fig = make_subplots(
+        rows=1,
+        cols=3,
+        subplot_titles=[
+            titulos_panel["precio_2.0"],
+            titulos_panel["precio_3.0"],
+            titulos_panel["precio_6.1"]
+        ],
+        horizontal_spacing=0.06
+    )
+
+    for i, col in enumerate(columnas_precio, start=1):
+
+        col_acum = f"{col}_media_acum"
+
+        for año in años_plot:
+
+            df_plot = df_diario[
+                df_diario["año"].astype(int) == año
+            ].copy()
+
+            if df_plot.empty:
+                continue
+
+            color_linea = colores_años[col].get(año, "white")
+
+            fig.add_trace(
+                go.Scatter(
+                    x=df_plot["fecha_tipo"],
+                    y=df_plot[col_acum],
+                    mode="lines",
+                    name=str(año),
+                    showlegend=False,
+                    line=dict(
+                        color=color_linea,
+                        width=4 if año == 2026 else 2.3,
+                        dash="dot" if año == 2026 else "solid"
+                    ),
+                    hovertemplate=(
+                        "Año: " + str(año) + "<br>"
+                        "Media acumulada: %{y:.2f} c€/kWh"
+                        "<extra></extra>"
+                    )
                 ),
-                marker=dict(size=7),
-                hovertemplate=f"{nombre}: " + "%{y:.2f} c€/kWh<extra></extra>"
+                row=1,
+                col=i
             )
+
+            # =================================================
+            # ETIQUETA FINAL SOLO PARA 2024 Y 2025
+            # =================================================
+            if año in [2024, 2025]:
+
+                df_last = df_plot.dropna(subset=[col_acum]).tail(1)
+
+                if not df_last.empty:
+
+                    x_last = df_last["fecha_tipo"].iloc[0]
+                    y_last = df_last[col_acum].iloc[0]
+
+                    fig.add_annotation(
+                        x=x_last,
+                        y=y_last,
+                        text=str(año),
+                        showarrow=False,
+                        xshift=-8,
+                        yshift=10,
+                        xanchor="right",
+                        yanchor="middle",
+                        font=dict(
+                            size=18,
+                            color=color_linea
+                        ),
+                        row=1,
+                        col=i
+                    )
+
+    # =====================================================
+    # 10. FORMATOS EJES
+    # =====================================================
+    for i in range(1, 4):
+
+        fig.update_xaxes(
+            tickvals=tickvals,
+            ticktext=ticktext,
+            showgrid=True,
+            title_text="Fecha",
+            rangeslider_visible=False,
+
+            # Quita la cabecera automática tipo "May 12, 2024"
+            # en versiones antiguas de Plotly.
+            hoverformat=" ",
+
+            row=1,
+            col=i
         )
 
-    fig.update_yaxes(
-        rangemode="tozero",
-        showgrid=True,
-        title_text="Precio medio c€/kWh"
-    )
+        fig.update_yaxes(
+            title_text="c€/kWh",
+            range=[0, y_lim],
+            dtick=5,
+            showgrid=True,
+            row=1,
+            col=i
+        )
 
-    fig.update_xaxes(
-        showgrid=True,
-        dtick="M1",
-        tickformat="%b%y",
-        title_text="Mes"
-    )
+    fig.update_xaxes(rangeslider_visible=False)
 
+    # =====================================================
+    # 11. LAYOUT
+    # =====================================================
     fig.update_layout(
         title="",
         hovermode="x unified",
-        barmode="overlay",
-        legend_title_text="",
-        bargap=0.65
+        hoverlabel=dict(
+            align="left"
+        ),
+        height=450,
+        showlegend=False,
+        margin=dict(t=80, b=40, l=40, r=20)
     )
 
     fig = aplicar_estilo(fig)
 
-    return df_precios_mensuales, fig
+    # =====================================================
+    # 12. REAPLICAR AJUSTES POR SI aplicar_estilo TOCA ALGO
+    # =====================================================
+    fig.update_layout(
+        hovermode="x unified",
+        hoverlabel=dict(
+            align="left"
+        ),
+        showlegend=False,
+        margin=dict(t=80, b=40, l=40, r=20)
+    )
+
+    for i in range(1, 4):
+
+        fig.update_xaxes(
+            rangeslider_visible=False,
+            hoverformat=" ",
+            row=1,
+            col=i
+        )
+
+        fig.update_yaxes(
+            range=[0, y_lim],
+            dtick=5,
+            row=1,
+            col=i
+        )
+
+    return df_diario, fig
+
+def evol_diario_old(df):
+
+    dffd = df.copy()
+
+    # =====================================================
+    # 0. ASEGURAR FECHA
+    # =====================================================
+    if "fecha" not in dffd.columns:
+        if "datetime" in dffd.columns:
+            dffd["fecha"] = pd.to_datetime(dffd["datetime"]).dt.floor("D")
+        elif "fecha_hora" in dffd.columns:
+            dffd["fecha"] = pd.to_datetime(dffd["fecha_hora"]).dt.floor("D")
+        else:
+            raise ValueError(
+                "No encuentro columna 'fecha', 'datetime' ni 'fecha_hora'."
+            )
+    else:
+        dffd["fecha"] = pd.to_datetime(dffd["fecha"]).dt.floor("D")
+
+    if "año" not in dffd.columns:
+        dffd["año"] = dffd["fecha"].dt.year
+
+    dffd["año"] = pd.to_numeric(
+        dffd["año"],
+        errors="coerce"
+    ).astype("Int64")
+
+    # =====================================================
+    # 1. COLUMNAS PRECIO
+    # =====================================================
+    columnas_precio = ["precio_2.0", "precio_3.0", "precio_6.1"]
+
+    titulos_panel = {
+        "precio_2.0": "Precio final peaje 2.0",
+        "precio_3.0": "Precio final peaje 3.0",
+        "precio_6.1": "Precio final peaje 6.1"
+    }
+
+    for col in columnas_precio:
+        if col not in dffd.columns:
+            raise ValueError(f"No encuentro la columna {col}")
+
+    # =====================================================
+    # 2. MEDIA DIARIA
+    # =====================================================
+    df_diario = (
+        dffd
+        .groupby(["año", "fecha"], observed=False)[columnas_precio]
+        .mean()
+        .reset_index()
+        .sort_values(["año", "fecha"])
+    )
+
+    # =====================================================
+    # 3. PASAR DE €/MWh A c€/kWh
+    # =====================================================
+    for col in columnas_precio:
+        df_diario[col] = df_diario[col] / 10
+
+    # =====================================================
+    # 4. FECHA TIPO PARA COMPARAR AÑOS
+    # =====================================================
+    # Usamos 2024 porque es bisiesto y soporta 29-feb
+    df_diario["fecha_tipo"] = pd.to_datetime(
+        "2024-" + df_diario["fecha"].dt.strftime("%m-%d"),
+        errors="coerce"
+    )
+
+    # =====================================================
+    # 5. MEDIA ACUMULADA DÍA A DÍA POR AÑO
+    # =====================================================
+    for col in columnas_precio:
+        df_diario[f"{col}_media_acum"] = (
+            df_diario
+            .groupby("año", observed=False)[col]
+            .expanding()
+            .mean()
+            .reset_index(level=0, drop=True)
+            .round(2)
+        )
+
+    # =====================================================
+    # 6. COLORES POR AÑO BASADOS EN CADA COLOR BASE
+    # =====================================================
+    colores_años = {
+        "precio_2.0": {
+            2024: "#8A6A00",
+            2025: "goldenrod",
+            2026: "#E8D58B"
+        },
+        "precio_3.0": {
+            2024: "#5C0000",
+            2025: "darkred",
+            2026: "#C96A6A"
+        },
+        "precio_6.1": {
+            2024: "#0A4F94",
+            2025: "#1C83E1",
+            2026: "#7CB6F0"
+        }
+    }
+
+    años_objetivo = [2024, 2025, 2026]
+    años_disponibles = sorted(
+        df_diario["año"].dropna().astype(int).unique()
+    )
+
+    años_plot = [a for a in años_objetivo if a in años_disponibles]
+
+    if not años_plot:
+        años_plot = años_disponibles
+
+    # =====================================================
+    # 7. TICKS DEL EJE X
+    # =====================================================
+    tickvals = pd.to_datetime([
+        "2024-01-01", "2024-02-01", "2024-03-01", "2024-04-01",
+        "2024-05-01", "2024-06-01", "2024-07-01", "2024-08-01",
+        "2024-09-01", "2024-10-01", "2024-11-01", "2024-12-01"
+    ])
+
+    ticktext = [
+        "01-ene", "01-feb", "01-mar", "01-abr",
+        "01-may", "01-jun", "01-jul", "01-ago",
+        "01-sep", "01-oct", "01-nov", "01-dic"
+    ]
+
+    # =====================================================
+    # 8. SUBPLOTS HORIZONTALES
+    # =====================================================
+    fig = make_subplots(
+        rows=1,
+        cols=3,
+        subplot_titles=[
+            titulos_panel["precio_2.0"],
+            titulos_panel["precio_3.0"],
+            titulos_panel["precio_6.1"]
+        ],
+        horizontal_spacing=0.06
+    )
+
+    for i, col in enumerate(columnas_precio, start=1):
+
+        col_acum = f"{col}_media_acum"
+
+        for año in años_plot:
+
+            df_plot = df_diario[
+                df_diario["año"].astype(int) == año
+            ].copy()
+
+            if df_plot.empty:
+                continue
+
+            fig.add_trace(
+                go.Scatter(
+                    x=df_plot["fecha_tipo"],
+                    y=df_plot[col_acum],
+                    mode="lines",
+                    name=str(año),
+                    showlegend=False,
+                    line=dict(
+                        color=colores_años[col].get(año, "white"),
+                        width=4 if año == 2026 else 2.3,
+                        dash="dot" if año == 2026 else "solid"
+                    ),
+                    hovertemplate=(
+                        "Año: " + str(año) + "<br>"
+                        "Media acumulada: %{y:.2f} c€/kWh"
+                        "<extra></extra>"
+                    )
+                ),
+                row=1,
+                col=i
+            )
+
+    # =====================================================
+    # 9. FORMATOS EJES
+    # =====================================================
+    for i in range(1, 4):
+
+        fig.update_xaxes(
+            tickvals=tickvals,
+            ticktext=ticktext,
+            showgrid=True,
+            title_text="Fecha",
+            rangeslider_visible=False,
+
+            # Quita la cabecera automática tipo "May 12, 2024"
+            # en versiones antiguas de Plotly.
+            hoverformat=" ",
+
+            row=1,
+            col=i
+        )
+
+        fig.update_yaxes(
+            title_text="c€/kWh",
+            rangemode="tozero",
+            showgrid=True,
+            row=1,
+            col=i
+        )
+
+    fig.update_xaxes(rangeslider_visible=False)
+
+    # =====================================================
+    # 10. LAYOUT
+    # =====================================================
+    fig.update_layout(
+        title="",
+        hovermode="x unified",
+        hoverlabel=dict(
+            align="left"
+        ),
+        height=450,
+        showlegend=False,
+        margin=dict(t=80, b=40, l=40, r=20)
+    )
+
+    fig = aplicar_estilo(fig)
+
+    # =====================================================
+    # 11. REAPLICAR AJUSTES POR SI aplicar_estilo TOCA ALGO
+    # =====================================================
+    fig.update_layout(
+        hovermode="x unified",
+        hoverlabel=dict(
+            align="left"
+        ),
+        showlegend=False,
+        margin=dict(t=80, b=40, l=40, r=20)
+    )
+
+    for i in range(1, 4):
+        fig.update_xaxes(
+            rangeslider_visible=False,
+            hoverformat=" ",
+            row=1,
+            col=i
+        )
+
+    return df_diario, fig
+
+def evol_diario_old(df):
+
+    dffd = df.copy()
+
+    # =====================================================
+    # 0. ASEGURAR FECHA
+    # =====================================================
+    if "fecha" not in dffd.columns:
+        if "datetime" in dffd.columns:
+            dffd["fecha"] = pd.to_datetime(dffd["datetime"]).dt.floor("D")
+        elif "fecha_hora" in dffd.columns:
+            dffd["fecha"] = pd.to_datetime(dffd["fecha_hora"]).dt.floor("D")
+        else:
+            raise ValueError(
+                "No encuentro columna 'fecha', 'datetime' ni 'fecha_hora'."
+            )
+    else:
+        dffd["fecha"] = pd.to_datetime(dffd["fecha"]).dt.floor("D")
+
+    if "año" not in dffd.columns:
+        dffd["año"] = dffd["fecha"].dt.year
+
+    dffd["año"] = pd.to_numeric(dffd["año"], errors="coerce").astype("Int64")
+
+    # =====================================================
+    # 1. COLUMNAS PRECIO
+    # =====================================================
+    columnas_precio = ["precio_2.0", "precio_3.0", "precio_6.1"]
+
+    nombres_panel = {
+        "precio_2.0": "Peaje 2.0",
+        "precio_3.0": "Peaje 3.0",
+        "precio_6.1": "Peaje 6.1"
+    }
+
+    titulos_panel = {
+        "precio_2.0": "Precio final peaje 2.0",
+        "precio_3.0": "Precio final peaje 3.0",
+        "precio_6.1": "Precio final peaje 6.1"
+    }
+
+    for col in columnas_precio:
+        if col not in dffd.columns:
+            raise ValueError(f"No encuentro la columna {col}")
+
+    # =====================================================
+    # 2. MEDIA DIARIA
+    # =====================================================
+    df_diario = (
+        dffd
+        .groupby(["año", "fecha"], observed=False)[columnas_precio]
+        .mean()
+        .reset_index()
+        .sort_values(["año", "fecha"])
+    )
+
+    # =====================================================
+    # 3. PASAR DE €/MWh A c€/kWh
+    # =====================================================
+    for col in columnas_precio:
+        df_diario[col] = df_diario[col] / 10
+
+    # =====================================================
+    # 4. FECHA TIPO PARA COMPARAR AÑOS
+    # =====================================================
+    df_diario["fecha_tipo"] = pd.to_datetime(
+        "2024-" + df_diario["fecha"].dt.strftime("%m-%d"),
+        errors="coerce"
+    )
+
+    df_diario["dia_tipo_txt"] = (
+        df_diario["fecha"]
+        .dt.strftime("%d-%b")
+        .str.lower()
+    )
+
+    # =====================================================
+    # 5. MEDIA ACUMULADA DÍA A DÍA POR AÑO
+    # =====================================================
+    for col in columnas_precio:
+        df_diario[f"{col}_media_acum"] = (
+            df_diario
+            .groupby("año", observed=False)[col]
+            .expanding()
+            .mean()
+            .reset_index(level=0, drop=True)
+            .round(2)
+        )
+
+    # =====================================================
+    # 6. COLORES POR AÑO BASADOS EN CADA COLOR BASE
+    # =====================================================
+    colores_años = {
+        "precio_2.0": {
+            2024: "#8A6A00",
+            2025: "goldenrod",
+            2026: "#E8D58B"
+        },
+        "precio_3.0": {
+            2024: "#5C0000",
+            2025: "darkred",
+            2026: "#C96A6A"
+        },
+        "precio_6.1": {
+            2024: "#0A4F94",
+            2025: "#1C83E1",
+            2026: "#7CB6F0"
+        }
+    }
+
+    años_objetivo = [2024, 2025, 2026]
+    años_disponibles = sorted(df_diario["año"].dropna().astype(int).unique())
+    años_plot = [a for a in años_objetivo if a in años_disponibles]
+
+    if not años_plot:
+        años_plot = años_disponibles
+
+    # =====================================================
+    # 7. TICKS DEL EJE X
+    # =====================================================
+    tickvals = pd.to_datetime([
+        "2024-01-01", "2024-02-01", "2024-03-01", "2024-04-01",
+        "2024-05-01", "2024-06-01", "2024-07-01", "2024-08-01",
+        "2024-09-01", "2024-10-01", "2024-11-01", "2024-12-01"
+    ])
+
+    ticktext = [
+        "01-ene", "01-feb", "01-mar", "01-abr",
+        "01-may", "01-jun", "01-jul", "01-ago",
+        "01-sep", "01-oct", "01-nov", "01-dic"
+    ]
+
+    # =====================================================
+    # 8. SUBPLOTS HORIZONTALES
+    # =====================================================
+    fig = make_subplots(
+        rows=1,
+        cols=3,
+        subplot_titles=[
+            titulos_panel["precio_2.0"],
+            titulos_panel["precio_3.0"],
+            titulos_panel["precio_6.1"]
+        ],
+        horizontal_spacing=0.06
+    )
+
+    for i, col in enumerate(columnas_precio, start=1):
+
+        col_acum = f"{col}_media_acum"
+
+        for idx_año, año in enumerate(años_plot):
+
+            df_plot = df_diario[df_diario["año"].astype(int) == año].copy()
+
+            if df_plot.empty:
+                continue
+
+            # Solo la primera traza de cada panel lleva la cabecera del hover.
+            # Así evitamos repetir Peaje y Día tipo en cada año.
+            if idx_año == 0:
+                hovertemplate = (
+                    f"<b>{nombres_panel[col]}</b><br>"
+                    "Día tipo: %{customdata[0]}<br><br>"
+                    "Año: " + str(año) + "<br>"
+                    "Media acumulada: %{y:.2f} c€/kWh"
+                    "<extra></extra>"
+                )
+            else:
+                hovertemplate = (
+                    "Año: " + str(año) + "<br>"
+                    "Media acumulada: %{y:.2f} c€/kWh"
+                    "<extra></extra>"
+                )
+
+            fig.add_trace(
+                go.Scatter(
+                    x=df_plot["fecha_tipo"],
+                    y=df_plot[col_acum],
+                    mode="lines",
+                    name=str(año),
+                    legendgroup=str(año),
+                    showlegend=False,
+
+                    line=dict(
+                        color=colores_años[col].get(año, "white"),
+                        width=4 if año == 2026 else 2.3,
+                        dash="dot" if año == 2026 else "solid"
+                    ),
+
+                    customdata=np.stack(
+                        [
+                            df_plot["dia_tipo_txt"]
+                        ],
+                        axis=-1
+                    ),
+
+                    hovertemplate=hovertemplate
+                ),
+                row=1,
+                col=i
+            )
+
+    # =====================================================
+    # 8B. LEYENDA FICTICIA GENERAL PARA AÑOS
+    # =====================================================
+    # No usa colores de peaje para no parecer que pertenece solo al 2.0.
+    # Es una leyenda de estilo: normal / normal / punteado grueso.
+    leyenda_años = {
+        2024: dict(color="white", width=2.0, dash="solid"),
+        2025: dict(color="white", width=2.8, dash="solid"),
+        2026: dict(color="white", width=4.0, dash="dot")
+    }
+
+    for año, estilo in leyenda_años.items():
+        fig.add_trace(
+            go.Scatter(
+                x=[None],
+                y=[None],
+                mode="lines",
+                name=str(año),
+                line=estilo,
+                showlegend=True,
+                hoverinfo="skip"
+            )
+        )
+
+    # =====================================================
+    # 9. FORMATOS EJES
+    # =====================================================
+    for i in range(1, 4):
+
+        fig.update_xaxes(
+            tickvals=tickvals,
+            ticktext=ticktext,
+            showgrid=True,
+            title_text="Fecha",
+            rangeslider_visible=False,
+
+            # Esto vacía la primera línea automática del hover unificado
+            # tipo "May 12, 2024".
+            hoverformat=" ",
+
+            row=1,
+            col=i
+        )
+
+        fig.update_yaxes(
+            title_text="c€/kWh",
+            rangemode="tozero",
+            showgrid=True,
+            row=1,
+            col=i
+        )
+
+    fig.update_xaxes(rangeslider_visible=False)
+
+    # =====================================================
+    # 10. LAYOUT
+    # =====================================================
+    fig.update_layout(
+        title="",
+        hovermode="x unified",
+        height=450,
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.22,
+            xanchor="center",
+            x=0.5,
+            title_text="",
+            bgcolor="rgba(0,0,0,0)"
+        ),
+        margin=dict(t=125, b=40, l=40, r=20)
+    )
+
+    fig = aplicar_estilo(fig)
+
+    # =====================================================
+    # 11. REAPLICAR AJUSTES POR SI aplicar_estilo TOCA ALGO
+    # =====================================================
+    fig.update_layout(
+        hovermode="x unified",
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.22,
+            xanchor="center",
+            x=0.5,
+            title_text="",
+            bgcolor="rgba(0,0,0,0)"
+        ),
+        margin=dict(t=125, b=40, l=40, r=20)
+    )
+
+    for i in range(1, 4):
+        fig.update_xaxes(
+            rangeslider_visible=False,
+            hoverformat=" ",
+            row=1,
+            col=i
+        )
+
+    return df_diario, fig
+
+def evol_diario_old(df):
+
+    dffd = df.copy()
+
+    # =====================================================
+    # 0. ASEGURAR FECHA
+    # =====================================================
+    if "fecha" not in dffd.columns:
+        if "datetime" in dffd.columns:
+            dffd["fecha"] = pd.to_datetime(dffd["datetime"]).dt.floor("D")
+        elif "fecha_hora" in dffd.columns:
+            dffd["fecha"] = pd.to_datetime(dffd["fecha_hora"]).dt.floor("D")
+        else:
+            raise ValueError(
+                "No encuentro columna 'fecha', 'datetime' ni 'fecha_hora'."
+            )
+    else:
+        dffd["fecha"] = pd.to_datetime(dffd["fecha"]).dt.floor("D")
+
+    if "año" not in dffd.columns:
+        dffd["año"] = dffd["fecha"].dt.year
+
+    dffd["año"] = pd.to_numeric(dffd["año"], errors="coerce").astype("Int64")
+
+    # =====================================================
+    # 1. COLUMNAS PRECIO
+    # =====================================================
+    columnas_precio = ["precio_2.0", "precio_3.0", "precio_6.1"]
+
+    nombres_panel = {
+        "precio_2.0": "Peaje 2.0",
+        "precio_3.0": "Peaje 3.0",
+        "precio_6.1": "Peaje 6.1"
+    }
+
+    titulos_panel = {
+        "precio_2.0": "Precio final peaje 2.0",
+        "precio_3.0": "Precio final peaje 3.0",
+        "precio_6.1": "Precio final peaje 6.1"
+    }
+
+    for col in columnas_precio:
+        if col not in dffd.columns:
+            raise ValueError(f"No encuentro la columna {col}")
+
+    # =====================================================
+    # 2. MEDIA DIARIA
+    # =====================================================
+    df_diario = (
+        dffd
+        .groupby(["año", "fecha"], observed=False)[columnas_precio]
+        .mean()
+        .reset_index()
+        .sort_values(["año", "fecha"])
+    )
+
+    # =====================================================
+    # 3. PASAR DE €/MWh A c€/kWh
+    # =====================================================
+    for col in columnas_precio:
+        df_diario[col] = df_diario[col] / 10
+
+    # =====================================================
+    # 4. FECHA TIPO PARA COMPARAR AÑOS
+    # =====================================================
+    df_diario["fecha_tipo"] = pd.to_datetime(
+        "2024-" + df_diario["fecha"].dt.strftime("%m-%d"),
+        errors="coerce"
+    )
+
+    df_diario["dia_tipo_txt"] = df_diario["fecha"].dt.strftime("%d-%b").str.lower()
+
+    # =====================================================
+    # 5. MEDIA ACUMULADA DÍA A DÍA POR AÑO
+    # =====================================================
+    for col in columnas_precio:
+        df_diario[f"{col}_media_acum"] = (
+            df_diario
+            .groupby("año", observed=False)[col]
+            .expanding()
+            .mean()
+            .reset_index(level=0, drop=True)
+            .round(2)
+        )
+
+    # =====================================================
+    # 6. COLORES POR AÑO BASADOS EN CADA COLOR BASE
+    # =====================================================
+    colores_años = {
+        "precio_2.0": {
+            2024: "#8A6A00",
+            2025: "goldenrod",
+            2026: "#E8D58B"
+        },
+        "precio_3.0": {
+            2024: "#5C0000",
+            2025: "darkred",
+            2026: "#C96A6A"
+        },
+        "precio_6.1": {
+            2024: "#0A4F94",
+            2025: "#1C83E1",
+            2026: "#7CB6F0"
+        }
+    }
+
+    años_objetivo = [2024, 2025, 2026]
+    años_disponibles = sorted(df_diario["año"].dropna().astype(int).unique())
+    años_plot = [a for a in años_objetivo if a in años_disponibles]
+
+    if not años_plot:
+        años_plot = años_disponibles
+
+    # =====================================================
+    # 7. TICKS DEL EJE X
+    # =====================================================
+    tickvals = pd.to_datetime([
+        "2024-01-01", "2024-02-01", "2024-03-01", "2024-04-01",
+        "2024-05-01", "2024-06-01", "2024-07-01", "2024-08-01",
+        "2024-09-01", "2024-10-01", "2024-11-01", "2024-12-01"
+    ])
+
+    ticktext = [
+        "01-ene", "01-feb", "01-mar", "01-abr",
+        "01-may", "01-jun", "01-jul", "01-ago",
+        "01-sep", "01-oct", "01-nov", "01-dic"
+    ]
+
+    # =====================================================
+    # 8. SUBPLOTS HORIZONTALES
+    # =====================================================
+    fig = make_subplots(
+        rows=1,
+        cols=3,
+        subplot_titles=[
+            titulos_panel["precio_2.0"],
+            titulos_panel["precio_3.0"],
+            titulos_panel["precio_6.1"]
+        ],
+        horizontal_spacing=0.06
+    )
+
+    for i, col in enumerate(columnas_precio, start=1):
+
+        col_acum = f"{col}_media_acum"
+
+        for año in años_plot:
+
+            df_plot = df_diario[df_diario["año"].astype(int) == año].copy()
+
+            if df_plot.empty:
+                continue
+
+            fig.add_trace(
+                go.Scatter(
+                    x=df_plot["fecha_tipo"],
+                    y=df_plot[col_acum],
+                    mode="lines",
+                    name=str(año),
+                    legendgroup=str(año),
+                    showlegend=False,
+
+                    line=dict(
+                        color=colores_años[col].get(año, "white"),
+                        width=4 if año == 2026 else 2.3,
+                        dash="dot" if año == 2026 else "solid"
+                    ),
+
+                    hovertemplate=(
+                        "Año: " + str(año) + "<br>"
+                        "Media acumulada: %{y:.2f} c€/kWh"
+                        "<extra></extra>"
+                    )
+                ),
+                row=1,
+                col=i
+            )
+
+    # =====================================================
+    # 8B. LEYENDA FICTICIA GENERAL PARA AÑOS
+    # =====================================================
+    # Es una leyenda de estilo, no de color por peaje.
+    # La ponemos en blanco para que no parezca que pertenece al peaje 2.0.
+    leyenda_años = {
+        2024: dict(color="rgba(255,255,255,0.70)", width=2.3, dash="solid"),
+        2025: dict(color="rgba(255,255,255,0.95)", width=2.3, dash="solid"),
+        2026: dict(color="rgba(255,255,255,1.00)", width=4.0, dash="dot")
+    }
+
+    for año, estilo in leyenda_años.items():
+        fig.add_trace(
+            go.Scatter(
+                x=[None],
+                y=[None],
+                mode="lines",
+                name=str(año),
+                line=estilo,
+                showlegend=True,
+                hoverinfo="skip"
+            )
+        )
+
+    # =====================================================
+    # 9. FORMATOS EJES
+    # =====================================================
+    for i, col in enumerate(columnas_precio, start=1):
+
+        fig.update_xaxes(
+            tickvals=tickvals,
+            ticktext=ticktext,
+            showgrid=True,
+            title_text="Fecha",
+            rangeslider_visible=False,
+            row=1,
+            col=i
+        )
+
+        fig.update_yaxes(
+            title_text="c€/kWh",
+            rangemode="tozero",
+            showgrid=True,
+            row=1,
+            col=i
+        )
+
+    fig.update_xaxes(rangeslider_visible=False)
+
+    # =====================================================
+    # 10. LAYOUT
+    # =====================================================
+    fig.update_layout(
+        title="",
+        hovermode="x unified",
+        height=450,
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.22,
+            xanchor="center",
+            x=0.5,
+            title_text="",
+            bgcolor="rgba(0,0,0,0)"
+        ),
+        margin=dict(t=125, b=40, l=40, r=20)
+    )
+
+    # =====================================================
+    # 11. CABECERA DEL HOVER UNIFICADO
+    # =====================================================
+    # Esto sustituye la primera línea automática tipo "May 12, 2024".
+    # Si tu versión de Plotly no soporta unifiedhovertitle_text,
+    # simplemente ignora este bloque y te digo alternativa.
+    fig.update_xaxes(
+        unifiedhovertitle_text=(
+            "<b>Peaje 2.0</b><br>"
+            "Día tipo: %{x|%d-%b}"
+        ),
+        row=1,
+        col=1
+    )
+
+    fig.update_xaxes(
+        unifiedhovertitle_text=(
+            "<b>Peaje 3.0</b><br>"
+            "Día tipo: %{x|%d-%b}"
+        ),
+        row=1,
+        col=2
+    )
+
+    fig.update_xaxes(
+        unifiedhovertitle_text=(
+            "<b>Peaje 6.1</b><br>"
+            "Día tipo: %{x|%d-%b}"
+        ),
+        row=1,
+        col=3
+    )
+
+    # =====================================================
+    # 12. ESTILO GENERAL
+    # =====================================================
+    fig = aplicar_estilo(fig)
+
+    # Reaplicamos porque aplicar_estilo puede tocar layout/ejes
+    fig.update_layout(
+        hovermode="x unified",
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.22,
+            xanchor="center",
+            x=0.5,
+            title_text="",
+            bgcolor="rgba(0,0,0,0)"
+        ),
+        margin=dict(t=125, b=40, l=40, r=20)
+    )
+
+    fig.update_xaxes(rangeslider_visible=False)
+
+    fig.update_xaxes(
+        unifiedhovertitle_text=(
+            "<b>Peaje 2.0</b><br>"
+            "Día tipo: %{x|%d-%b}"
+        ),
+        row=1,
+        col=1
+    )
+
+    fig.update_xaxes(
+        unifiedhovertitle_text=(
+            "<b>Peaje 3.0</b><br>"
+            "Día tipo: %{x|%d-%b}"
+        ),
+        row=1,
+        col=2
+    )
+
+    fig.update_xaxes(
+        unifiedhovertitle_text=(
+            "<b>Peaje 6.1</b><br>"
+            "Día tipo: %{x|%d-%b}"
+        ),
+        row=1,
+        col=3
+    )
+
+    return df_diario, fig
+def evol_diario_old(df):
+
+    dffd = df.copy()
+
+    # =====================================================
+    # 0. ASEGURAR FECHA
+    # =====================================================
+    if "fecha" not in dffd.columns:
+        if "datetime" in dffd.columns:
+            dffd["fecha"] = pd.to_datetime(dffd["datetime"]).dt.floor("D")
+        elif "fecha_hora" in dffd.columns:
+            dffd["fecha"] = pd.to_datetime(dffd["fecha_hora"]).dt.floor("D")
+        else:
+            raise ValueError(
+                "No encuentro columna 'fecha', 'datetime' ni 'fecha_hora'."
+            )
+    else:
+        dffd["fecha"] = pd.to_datetime(dffd["fecha"]).dt.floor("D")
+
+    if "año" not in dffd.columns:
+        dffd["año"] = dffd["fecha"].dt.year
+
+    dffd["año"] = pd.to_numeric(dffd["año"], errors="coerce").astype("Int64")
+
+    # =====================================================
+    # 1. COLUMNAS PRECIO
+    # =====================================================
+    columnas_precio = ["precio_2.0", "precio_3.0", "precio_6.1"]
+
+    nombres_panel = {
+        "precio_2.0": "Peaje 2.0",
+        "precio_3.0": "Peaje 3.0",
+        "precio_6.1": "Peaje 6.1"
+    }
+
+    titulos_panel = {
+        "precio_2.0": "Precio final peaje 2.0",
+        "precio_3.0": "Precio final peaje 3.0",
+        "precio_6.1": "Precio final peaje 6.1"
+    }
+
+    for col in columnas_precio:
+        if col not in dffd.columns:
+            raise ValueError(f"No encuentro la columna {col}")
+
+    # =====================================================
+    # 2. MEDIA DIARIA
+    # =====================================================
+    df_diario = (
+        dffd
+        .groupby(["año", "fecha"], observed=False)[columnas_precio]
+        .mean()
+        .reset_index()
+        .sort_values(["año", "fecha"])
+    )
+
+    # =====================================================
+    # 3. PASAR DE €/MWh A c€/kWh
+    # =====================================================
+    for col in columnas_precio:
+        df_diario[col] = df_diario[col] / 10
+
+    # =====================================================
+    # 4. FECHA TIPO PARA COMPARAR AÑOS
+    # =====================================================
+    # Usamos 2024 porque es bisiesto y soporta 29-feb
+    df_diario["fecha_tipo"] = pd.to_datetime(
+        "2024-" + df_diario["fecha"].dt.strftime("%m-%d"),
+        errors="coerce"
+    )
+
+    df_diario["dia_tipo_txt"] = df_diario["fecha"].dt.strftime("%d-%b").str.lower()
+
+    # =====================================================
+    # 5. MEDIA ACUMULADA DÍA A DÍA POR AÑO
+    # =====================================================
+    for col in columnas_precio:
+        df_diario[f"{col}_media_acum"] = (
+            df_diario
+            .groupby("año", observed=False)[col]
+            .expanding()
+            .mean()
+            .reset_index(level=0, drop=True)
+            .round(2)
+        )
+
+    # =====================================================
+    # 6. COLORES POR AÑO BASADOS EN CADA COLOR BASE
+    # =====================================================
+    colores_años = {
+        "precio_2.0": {
+            2024: "#8A6A00",
+            2025: "goldenrod",
+            2026: "#E8D58B"
+        },
+        "precio_3.0": {
+            2024: "#5C0000",
+            2025: "darkred",
+            2026: "#C96A6A"
+        },
+        "precio_6.1": {
+            2024: "#0A4F94",
+            2025: "#1C83E1",
+            2026: "#7CB6F0"
+        }
+    }
+
+    años_objetivo = [2024, 2025, 2026]
+    años_disponibles = sorted(df_diario["año"].dropna().astype(int).unique())
+    años_plot = [a for a in años_objetivo if a in años_disponibles]
+
+    if not años_plot:
+        años_plot = años_disponibles
+
+    # =====================================================
+    # 7. TICKS DEL EJE X
+    # =====================================================
+    tickvals = pd.to_datetime([
+        "2024-01-01", "2024-02-01", "2024-03-01", "2024-04-01",
+        "2024-05-01", "2024-06-01", "2024-07-01", "2024-08-01",
+        "2024-09-01", "2024-10-01", "2024-11-01", "2024-12-01"
+    ])
+
+    ticktext = [
+        "01-ene", "01-feb", "01-mar", "01-abr",
+        "01-may", "01-jun", "01-jul", "01-ago",
+        "01-sep", "01-oct", "01-nov", "01-dic"
+    ]
+
+    # =====================================================
+    # 8. SUBPLOTS HORIZONTALES
+    # =====================================================
+    fig = make_subplots(
+        rows=1,
+        cols=3,
+        subplot_titles=[
+            titulos_panel["precio_2.0"],
+            titulos_panel["precio_3.0"],
+            titulos_panel["precio_6.1"]
+        ],
+        horizontal_spacing=0.06
+    )
+
+    for i, col in enumerate(columnas_precio, start=1):
+
+        col_acum = f"{col}_media_acum"
+
+        for idx_año, año in enumerate(años_plot):
+
+            df_plot = df_diario[df_diario["año"].astype(int) == año].copy()
+
+            if df_plot.empty:
+                continue
+
+            # Header solo en la primera traza de cada panel,
+            # para que no se repitan peaje y día tipo en el hover unificado.
+            if idx_año == 0:
+                hovertemplate = (
+                    f"<b>{nombres_panel[col]}</b><br>"
+                    "Día tipo: %{customdata[0]}<br><br>"
+                    "Año: " + str(año) + "<br>"
+                    "Media acumulada: %{y:.2f} c€/kWh"
+                    "<extra></extra>"
+                )
+            else:
+                hovertemplate = (
+                    "Año: " + str(año) + "<br>"
+                    "Media acumulada: %{y:.2f} c€/kWh"
+                    "<extra></extra>"
+                )
+
+            fig.add_trace(
+                go.Scatter(
+                    x=df_plot["fecha_tipo"],
+                    y=df_plot[col_acum],
+                    mode="lines",
+                    name=str(año),
+                    legendgroup=str(año),
+
+                    # Ocultamos las trazas reales en la leyenda.
+                    # Luego añadimos una leyenda ficticia general.
+                    showlegend=False,
+
+                    line=dict(
+                        color=colores_años[col].get(año, "white"),
+                        width=4 if año == 2026 else 2.3,
+                        dash="dot" if año == 2026 else "solid"
+                    ),
+
+                    customdata=np.stack(
+                        [
+                            df_plot["dia_tipo_txt"]
+                        ],
+                        axis=-1
+                    ),
+
+                    hovertemplate=hovertemplate
+                ),
+                row=1,
+                col=i
+            )
+
+    # =====================================================
+    # 8B. LEYENDA FICTICIA GENERAL PARA AÑOS
+    # =====================================================
+    leyenda_años = {
+        2024: dict(color="#6E6E6E", width=2.3, dash="solid"),
+        2025: dict(color="#B0B0B0", width=2.3, dash="solid"),
+        2026: dict(color="#FFFFFF", width=4, dash="dot")
+    }
+
+    for año, estilo in leyenda_años.items():
+        fig.add_trace(
+            go.Scatter(
+                x=[None],
+                y=[None],
+                mode="lines",
+                name=str(año),
+                line=estilo,
+                showlegend=True,
+                hoverinfo="skip"
+            )
+        )
+
+    # =====================================================
+    # 9. FORMATOS EJES
+    # =====================================================
+    for i in range(1, 4):
+
+        fig.update_xaxes(
+            tickvals=tickvals,
+            ticktext=ticktext,
+            showgrid=True,
+            title_text="Fecha",
+            rangeslider_visible=False,
+            row=1,
+            col=i
+        )
+
+        fig.update_yaxes(
+            title_text="c€/kWh",
+            rangemode="tozero",
+            showgrid=True,
+            row=1,
+            col=i
+        )
+
+    # Por si alguna plantilla activase rangeslider
+    fig.update_xaxes(rangeslider_visible=False)
+
+    # =====================================================
+    # 10. LAYOUT
+    # =====================================================
+    fig.update_layout(
+        title="",
+        hovermode="x unified",
+        height=450,
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.14,
+            xanchor="center",
+            x=0.5,
+            title_text=""
+        ),
+        margin=dict(t=95, b=40, l=40, r=20)
+    )
+
+    fig = aplicar_estilo(fig)
+
+    # Reaplicamos por si aplicar_estilo toca layout/ejes
+    fig.update_layout(
+        hovermode="x unified",
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.14,
+            xanchor="center",
+            x=0.5,
+            title_text=""
+        )
+    )
+
+    fig.update_xaxes(rangeslider_visible=False)
+
+    return df_diario, fig
+def evol_diario_old(df):
+
+    dffd = df.copy()
+
+    # =====================================================
+    # 0. ASEGURAR FECHA
+    # =====================================================
+    if "fecha" not in dffd.columns:
+        if "datetime" in dffd.columns:
+            dffd["fecha"] = pd.to_datetime(dffd["datetime"]).dt.floor("D")
+        elif "fecha_hora" in dffd.columns:
+            dffd["fecha"] = pd.to_datetime(dffd["fecha_hora"]).dt.floor("D")
+        else:
+            raise ValueError(
+                "No encuentro columna 'fecha', 'datetime' ni 'fecha_hora'."
+            )
+    else:
+        dffd["fecha"] = pd.to_datetime(dffd["fecha"]).dt.floor("D")
+
+    if "año" not in dffd.columns:
+        dffd["año"] = dffd["fecha"].dt.year
+
+    dffd["año"] = pd.to_numeric(dffd["año"], errors="coerce").astype("Int64")
+
+    # =====================================================
+    # 1. COLUMNAS PRECIO
+    # =====================================================
+    columnas_precio = ["precio_2.0", "precio_3.0", "precio_6.1"]
+
+    nombres_panel = {
+        "precio_2.0": "Peaje 2.0",
+        "precio_3.0": "Peaje 3.0",
+        "precio_6.1": "Peaje 6.1"
+    }
+
+    titulos_panel = {
+        "precio_2.0": "Precio final peaje 2.0",
+        "precio_3.0": "Precio final peaje 3.0",
+        "precio_6.1": "Precio final peaje 6.1"
+    }
+
+    for col in columnas_precio:
+        if col not in dffd.columns:
+            raise ValueError(f"No encuentro la columna {col}")
+
+    # =====================================================
+    # 2. MEDIA DIARIA
+    # =====================================================
+    df_diario = (
+        dffd
+        .groupby(["año", "fecha"], observed=False)[columnas_precio]
+        .mean()
+        .reset_index()
+        .sort_values(["año", "fecha"])
+    )
+
+    # =====================================================
+    # 3. PASAR DE €/MWh A c€/kWh
+    # =====================================================
+    for col in columnas_precio:
+        df_diario[col] = df_diario[col] / 10
+
+    # =====================================================
+    # 4. FECHA TIPO PARA COMPARAR AÑOS
+    # =====================================================
+    # Usamos 2024 porque es bisiesto y soporta 29-feb
+    df_diario["fecha_tipo"] = pd.to_datetime(
+        "2024-" + df_diario["fecha"].dt.strftime("%m-%d"),
+        errors="coerce"
+    )
+
+    df_diario["dia_tipo_txt"] = df_diario["fecha"].dt.strftime("%d-%m")
+
+    # =====================================================
+    # 5. MEDIA ACUMULADA DÍA A DÍA POR AÑO
+    # =====================================================
+    for col in columnas_precio:
+        df_diario[f"{col}_media_acum"] = (
+            df_diario
+            .groupby("año", observed=False)[col]
+            .expanding()
+            .mean()
+            .reset_index(level=0, drop=True)
+            .round(2)
+        )
+
+    # =====================================================
+    # 6. COLORES POR AÑO BASADOS EN CADA COLOR BASE
+    # =====================================================
+    colores_años = {
+        "precio_2.0": {
+            2024: "#8A6A00",
+            2025: "goldenrod",
+            2026: "#E8D58B"
+        },
+        "precio_3.0": {
+            2024: "#5C0000",
+            2025: "darkred",
+            2026: "#C96A6A"
+        },
+        "precio_6.1": {
+            2024: "#0A4F94",
+            2025: "#1C83E1",
+            2026: "#7CB6F0"
+        }
+    }
+
+    años_objetivo = [2024, 2025, 2026]
+    años_disponibles = sorted(df_diario["año"].dropna().astype(int).unique())
+    años_plot = [a for a in años_objetivo if a in años_disponibles]
+
+    if not años_plot:
+        años_plot = años_disponibles
+
+    # =====================================================
+    # 7. TICKS DEL EJE X
+    # =====================================================
+    tickvals = pd.to_datetime([
+        "2024-01-01", "2024-02-01", "2024-03-01", "2024-04-01",
+        "2024-05-01", "2024-06-01", "2024-07-01", "2024-08-01",
+        "2024-09-01", "2024-10-01", "2024-11-01", "2024-12-01"
+    ])
+
+    ticktext = [
+        "01-ene", "01-feb", "01-mar", "01-abr",
+        "01-may", "01-jun", "01-jul", "01-ago",
+        "01-sep", "01-oct", "01-nov", "01-dic"
+    ]
+
+    # =====================================================
+    # 8. SUBPLOTS HORIZONTALES
+    # =====================================================
+    fig = make_subplots(
+        rows=1,
+        cols=3,
+        subplot_titles=[
+            titulos_panel["precio_2.0"],
+            titulos_panel["precio_3.0"],
+            titulos_panel["precio_6.1"]
+        ],
+        horizontal_spacing=0.06
+    )
+
+    for i, col in enumerate(columnas_precio, start=1):
+
+        col_acum = f"{col}_media_acum"
+
+        for año in años_plot:
+
+            df_plot = df_diario[df_diario["año"].astype(int) == año].copy()
+
+            if df_plot.empty:
+                continue
+
+            fig.add_trace(
+                go.Scatter(
+                    x=df_plot["fecha_tipo"],
+                    y=df_plot[col_acum],
+                    mode="lines",
+                    name=str(año),
+                    legendgroup=str(año),
+
+                    # Solo mostramos una vez cada año en la leyenda
+                    showlegend=(i == 1),
+
+                    line=dict(
+                        color=colores_años[col].get(año, "white"),
+                        width=4 if año == 2026 else 2.3,
+                        dash="dot" if año == 2026 else "solid"
+                    ),
+
+                    hovertemplate=(
+                        f"<b>{nombres_panel[col]}</b><br>"
+                        "Año: " + str(año) + "<br>"
+                        "Día tipo: %{x|%d-%b}<br>"
+                        "Media acumulada: %{y:.2f} c€/kWh"
+                        "<extra></extra>"
+                    )
+                ),
+                row=1,
+                col=i
+            )
+
+    # =====================================================
+    # 9. FORMATOS EJES
+    # =====================================================
+    for i in range(1, 4):
+
+        fig.update_xaxes(
+            tickvals=tickvals,
+            ticktext=ticktext,
+            showgrid=True,
+            title_text="Fecha",
+            rangeslider_visible=False,
+            row=1,
+            col=i
+        )
+
+        fig.update_yaxes(
+            title_text="c€/kWh",
+            rangemode="tozero",
+            showgrid=True,
+            row=1,
+            col=i
+        )
+
+    # Por si aplicar_estilo o alguna plantilla activase rangeslider
+    fig.update_xaxes(rangeslider_visible=False)
+
+    # =====================================================
+    # 10. LAYOUT
+    # =====================================================
+    fig.update_layout(
+        title="",
+        hovermode="x unified",
+        height=450,
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.12,
+            xanchor="center",
+            x=0.5,
+            title_text=""
+        ),
+        margin=dict(t=90, b=40, l=40, r=20)
+    )
+
+    fig = aplicar_estilo(fig)
+
+    # Reaplicamos por si aplicar_estilo toca algo
+    fig.update_layout(
+        hovermode="x unified",
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.12,
+            xanchor="center",
+            x=0.5,
+            title_text=""
+        )
+    )
+
+    fig.update_xaxes(rangeslider_visible=False)
+
+    return df_diario, fig
+
+def evol_diario_old(df):
+
+    dffd = df.copy()
+
+    # =====================================================
+    # 0. ASEGURAR FECHA
+    # =====================================================
+    if "fecha" not in dffd.columns:
+        if "datetime" in dffd.columns:
+            dffd["fecha"] = pd.to_datetime(dffd["datetime"]).dt.floor("D")
+        elif "fecha_hora" in dffd.columns:
+            dffd["fecha"] = pd.to_datetime(dffd["fecha_hora"]).dt.floor("D")
+        else:
+            raise ValueError(
+                "No encuentro columna 'fecha', 'datetime' ni 'fecha_hora'."
+            )
+    else:
+        dffd["fecha"] = pd.to_datetime(dffd["fecha"]).dt.floor("D")
+
+    if "año" not in dffd.columns:
+        dffd["año"] = dffd["fecha"].dt.year
+
+    dffd["año"] = pd.to_numeric(dffd["año"], errors="coerce").astype("Int64")
+
+    # =====================================================
+    # 1. COLUMNAS PRECIO
+    # =====================================================
+    columnas_precio = ["precio_2.0", "precio_3.0", "precio_6.1"]
+    nombres_panel = {
+        "precio_2.0": "Peaje 2.0",
+        "precio_3.0": "Peaje 3.0",
+        "precio_6.1": "Peaje 6.1"
+    }
+
+    for col in columnas_precio:
+        if col not in dffd.columns:
+            raise ValueError(f"No encuentro la columna {col}")
+
+    # =====================================================
+    # 2. MEDIA DIARIA
+    # =====================================================
+    df_diario = (
+        dffd
+        .groupby(["año", "fecha"], observed=False)[columnas_precio]
+        .mean()
+        .reset_index()
+        .sort_values(["año", "fecha"])
+    )
+
+    # =====================================================
+    # 3. PASAR DE €/MWh A c€/kWh
+    # =====================================================
+    for col in columnas_precio:
+        df_diario[col] = df_diario[col] / 10
+
+    # =====================================================
+    # 4. FECHA TIPO (para comparar todos los años en mismo eje)
+    # =====================================================
+    # Usamos 2024 por ser bisiesto y soportar 29-feb
+    df_diario["fecha_tipo"] = pd.to_datetime(
+        "2024-" + df_diario["fecha"].dt.strftime("%m-%d"),
+        errors="coerce"
+    )
+
+    df_diario["dia_tipo_txt"] = df_diario["fecha"].dt.strftime("%d-%m")
+
+    # =====================================================
+    # 5. MEDIA ACUMULADA DÍA A DÍA POR AÑO
+    # =====================================================
+    for col in columnas_precio:
+        df_diario[f"{col}_media_acum"] = (
+            df_diario
+            .groupby("año", observed=False)[col]
+            .expanding()
+            .mean()
+            .reset_index(level=0, drop=True)
+            .round(2)
+        )
+
+    # =====================================================
+    # 6. COLORES POR AÑO, BASADOS EN CADA COLOR BASE
+    # =====================================================
+    colores_años = {
+        "precio_2.0": {
+            2024: "#8A6A00",
+            2025: "goldenrod",
+            2026: "#E8D58B"
+        },
+        "precio_3.0": {
+            2024: "#5C0000",
+            2025: "darkred",
+            2026: "#C96A6A"
+        },
+        "precio_6.1": {
+            2024: "#0A4F94",
+            2025: "#1C83E1",
+            2026: "#7CB6F0"
+        }
+    }
+
+    años_objetivo = [2024, 2025, 2026]
+    años_disponibles = sorted(df_diario["año"].dropna().astype(int).unique())
+    años_plot = [a for a in años_objetivo if a in años_disponibles]
+
+    if not años_plot:
+        años_plot = años_disponibles
+
+    # =====================================================
+    # 7. TICKS DEL EJE X EN FORMATO 01-ene, 01-feb...
+    # =====================================================
+    tickvals = pd.to_datetime([
+        "2024-01-01", "2024-02-01", "2024-03-01", "2024-04-01",
+        "2024-05-01", "2024-06-01", "2024-07-01", "2024-08-01",
+        "2024-09-01", "2024-10-01", "2024-11-01", "2024-12-01"
+    ])
+
+    ticktext = [
+        "01-ene", "01-feb", "01-mar", "01-abr",
+        "01-may", "01-jun", "01-jul", "01-ago",
+        "01-sep", "01-oct", "01-nov", "01-dic"
+    ]
+
+    # =====================================================
+    # 8. SUBPLOTS HORIZONTALES
+    # =====================================================
+    fig = make_subplots(
+        rows=1,
+        cols=3,
+        subplot_titles=[
+            "Precio final peaje 2.0",
+            "Precio final peaje 3.0",
+            "Precio final peaje 6.1"
+        ],
+        horizontal_spacing=0.06
+    )
+
+    for i, col in enumerate(columnas_precio, start=1):
+
+        col_acum = f"{col}_media_acum"
+
+        for año in años_plot:
+
+            df_plot = df_diario[df_diario["año"].astype(int) == año].copy()
+
+            if df_plot.empty:
+                continue
+
+            fig.add_trace(
+                go.Scatter(
+                    x=df_plot["fecha_tipo"],
+                    y=df_plot[col_acum],
+                    mode="lines",
+                    name=f"{nombres_panel[col]} - {año}",
+                    line=dict(
+                        color=colores_años[col].get(año, "white"),
+                        width=2.5
+                    ),
+                    hovertemplate=(
+                        f"<b>{nombres_panel[col]} - {año}</b><br>"
+                        "Día tipo: %{x|%d-%b}<br>"
+                        "Media acumulada: %{y:.2f} c€/kWh"
+                        "<extra></extra>"
+                    ),
+                    showlegend=False
+                ),
+                row=1,
+                col=i
+            )
+
+    # =====================================================
+    # 9. FORMATOS EJES
+    # =====================================================
+    for i in range(1, 4):
+        fig.update_xaxes(
+            tickvals=tickvals,
+            ticktext=ticktext,
+            showgrid=True,
+            title_text="Fecha",
+            rangeslider_visible=False,
+            row=1,
+            col=i
+        )
+
+        fig.update_yaxes(
+            title_text="c€/kWh",
+            rangemode="tozero",
+            showgrid=True,
+            row=1,
+            col=i
+        )
+
+    # =====================================================
+    # 10. LAYOUT
+    # =====================================================
+    fig.update_layout(
+        title="",
+        hovermode="closest",
+        height=450,
+        margin=dict(t=60, b=40, l=40, r=20)
+    )
+
+    fig = aplicar_estilo(fig)
+
+    return df_diario, fig
 
 
 
