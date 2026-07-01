@@ -8,7 +8,7 @@ from datetime import datetime
 from utilidades import generar_menu, init_app, init_app_index
 from backend_comun import carga_mibgas
 from backend_mibgas import (
-    filtrar_por_producto, graficar_qs, graficar_futuros_mibgas, graficar_da_corrido, graficar_da_comparado,
+    filtrar_por_producto, graficar_qs, graficar_futuros_mibgas, graficar_da_corrido, graficar_da_2026_acumulado, graficar_da_comparado,
     descargar_sendeco, obtener_sendeco, graficar_gas_co2,
     obtener_spot_mensual, construir_df_mensual, graf_simul_spot, obtener_spot_diario
     )
@@ -64,6 +64,7 @@ gas_media_2026 = float(gas_media_2026.iloc[0]) if not gas_media_2026.empty else 
 print("GAS media 2026:", gas_media_2026)
 
 graf_da_corrido = graficar_da_corrido(df_mg_da)
+graf_da_2026_acumulado = graficar_da_2026_acumulado(df_mg_da)
 graf_da_comparado = graficar_da_comparado(df_mg_da)
 
 
@@ -139,6 +140,7 @@ with tab1:
         with col1:
             st.write(graf_da_corrido)
             st.write(graf_da_comparado)
+            st.write(graf_da_2026_acumulado)
             
             
         with col2:
