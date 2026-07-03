@@ -9,6 +9,7 @@ from datetime import datetime,date
 from backend_comun import aplicar_estilo
 # Definimos los colores manualmente
 COLOR_MIBGAS_2026 = "#ff69b4"
+color_media_futuro = "#CC8DF0"
 
 colores = {
     2024: "lightblue",
@@ -30,6 +31,7 @@ def filtrar_por_producto(df, producto):
 
 def graficar_futuros_mibgas(df_mg, tipo="Q"):
     """
+    tipo="M" -> futuros mensuales
     tipo="Q" -> futuros trimestrales
     tipo="Y" -> futuros anuales
     """
@@ -43,7 +45,19 @@ def graficar_futuros_mibgas(df_mg, tipo="Q"):
     # =====================================================
     # 1. Crear etiqueta de producto según tipo
     # =====================================================
-    if tipo == "Q":
+    if tipo == "M":
+        col_periodo = "mes"
+
+        df_mg[col_periodo] = df_mg["fecha_entrega"].dt.strftime("%Y-%m")
+
+        def _key(lbl):
+            return pd.Period(lbl, freq="M")
+
+        titulo = "Evolución de MIBGAS para los próximos meses"
+        nombre_leyenda = "Mes"
+        num_periodos = 6
+
+    elif tipo == "Q":
         col_periodo = "trimestre"
 
         df_mg[col_periodo] = (
@@ -59,6 +73,7 @@ def graficar_futuros_mibgas(df_mg, tipo="Q"):
 
         titulo = "Evolución de MIBGAS para los próximos trimestres"
         nombre_leyenda = "Trimestre"
+        num_periodos = 4
 
     elif tipo == "Y":
         col_periodo = "año"
@@ -73,15 +88,16 @@ def graficar_futuros_mibgas(df_mg, tipo="Q"):
 
         titulo = "Evolución de MIBGAS para los próximos años"
         nombre_leyenda = "Año"
+        num_periodos = 4
 
     else:
-        raise ValueError("tipo debe ser 'Q' o 'Y'")
+        raise ValueError("tipo debe ser 'M', 'Q' o 'Y'")
 
     # =====================================================
-    # 2. Ordenar y quedarnos con los últimos 4 periodos
+    # 2. Ordenar y quedarnos con los últimos periodos
     # =====================================================
     labels = sorted(df_mg[col_periodo].dropna().unique(), key=_key)
-    labels = labels[-4:]
+    labels = labels[-num_periodos:]
 
     df_win = df_mg[df_mg[col_periodo].isin(labels)].copy()
 
@@ -102,7 +118,7 @@ def graficar_futuros_mibgas(df_mg, tipo="Q"):
     # =====================================================
     # 4. Colores
     # =====================================================
-    palette = px.colors.sequential.Blues[3:7]
+    palette = px.colors.sequential.Blues[2:8]
 
     color_map = {
         labels[i]: palette[i]
@@ -1023,6 +1039,287 @@ def graf_simul_spot_old(df, df_validacion, mibgas):
     
 
     return fig, round(omie_hinge, 2), mibgas_obj
+
+
+def obtener_mibgas_mensual(df_mg_da):
+    df = df_mg_da.copy()
+    df["fecha_entrega"] = pd.to_datetime(df["fecha_entrega"], errors="coerce")
+    df["precio_gas"] = pd.to_numeric(df["precio_gas"], errors="coerce")
+    df = df.dropna(subset=["fecha_entrega", "precio_gas"])
+
+    df_mensual = (
+        df
+        .set_index("fecha_entrega")
+        .resample("MS")["precio_gas"]
+        .mean()
+        .reset_index()
+    )
+    df_mensual["precio_gas"] = df_mensual["precio_gas"].round(2)
+    df_mensual = df_mensual.dropna(subset=["precio_gas"])
+
+    return df_mensual
+
+
+def normalizar_futuros_mibgas_mensuales(df_mg_m):
+    df = df_mg_m.copy()
+    df["Trading day"] = pd.to_datetime(df["Trading day"], errors="coerce").dt.normalize()
+    df["fecha_entrega"] = (
+        pd.to_datetime(df["fecha_entrega"], errors="coerce")
+        .dt.to_period("M")
+        .dt.to_timestamp()
+    )
+    df["precio_gas"] = pd.to_numeric(df["precio_gas"], errors="coerce")
+    return df.dropna(subset=["Trading day", "fecha_entrega", "precio_gas"])
+
+
+def normalizar_futuros_mibgas_trimestrales(df_mg_q):
+    df = df_mg_q.copy()
+    df["Trading day"] = pd.to_datetime(df["Trading day"], errors="coerce").dt.normalize()
+    df["fecha_entrega"] = pd.to_datetime(df["fecha_entrega"], errors="coerce")
+    df["inicio_trimestre"] = df["fecha_entrega"].dt.to_period("Q").dt.start_time
+    df["precio_gas"] = pd.to_numeric(df["precio_gas"], errors="coerce")
+    return df.dropna(subset=["Trading day", "inicio_trimestre", "precio_gas"])
+
+
+def _ultimo_precio_hasta(df, col_fecha, col_entrega, entrega, fecha_ref):
+    df_filtrado = (
+        df[
+            (df[col_fecha] <= fecha_ref) &
+            (df[col_entrega] == entrega)
+        ]
+        .sort_values(col_fecha)
+    )
+
+    if df_filtrado.empty:
+        return np.nan, pd.NaT
+
+    fila = df_filtrado.iloc[-1]
+    return fila["precio_gas"], fila[col_fecha]
+
+
+def _precio_futuro_mibgas_para_mes(df_m, df_q, mes_entrega, fecha_ref):
+    precio_m, fecha_m = _ultimo_precio_hasta(
+        df_m,
+        "Trading day",
+        "fecha_entrega",
+        mes_entrega,
+        fecha_ref,
+    )
+
+    if pd.notna(precio_m):
+        return precio_m, "MIBGAS mensual", fecha_m
+
+    trimestre = (mes_entrega.month - 1) // 3 + 1
+    inicio_trimestre = pd.Timestamp(
+        mes_entrega.year,
+        (trimestre - 1) * 3 + 1,
+        1,
+    )
+    precio_q, fecha_q = _ultimo_precio_hasta(
+        df_q,
+        "Trading day",
+        "inicio_trimestre",
+        inicio_trimestre,
+        fecha_ref,
+    )
+
+    if pd.notna(precio_q):
+        return precio_q, "MIBGAS trimestral", fecha_q
+
+    return np.nan, "Sin dato", pd.NaT
+
+
+def construir_curva_mibgas_2026(df_mibgas_mensual, df_mg_m, df_mg_q, fecha_ref=None, año=2026):
+    df_hist = df_mibgas_mensual.copy()
+    df_m = normalizar_futuros_mibgas_mensuales(df_mg_m)
+    df_q = normalizar_futuros_mibgas_trimestrales(df_mg_q)
+
+    if fecha_ref is None:
+        fechas_ref = pd.concat([df_m["Trading day"], df_q["Trading day"]]).dropna()
+        fecha_ref = fechas_ref.max()
+
+    fecha_ref = pd.to_datetime(fecha_ref).normalize()
+    df_hist["fecha_entrega"] = pd.to_datetime(df_hist["fecha_entrega"]).dt.to_period("M").dt.to_timestamp()
+
+    filas = []
+    for mes in range(1, 13):
+        fecha_mes = pd.Timestamp(año, mes, 1)
+        df_hist_mes = df_hist[df_hist["fecha_entrega"] == fecha_mes]
+
+        if not df_hist_mes.empty:
+            precio = df_hist_mes["precio_gas"].iloc[-1]
+            tipo = "MIBGAS D+1"
+            fecha_dato = fecha_mes
+        else:
+            precio, tipo, fecha_dato = _precio_futuro_mibgas_para_mes(df_m, df_q, fecha_mes, fecha_ref)
+
+        filas.append({
+            "fecha": fecha_mes,
+            "precio": round(float(precio), 2) if pd.notna(precio) else np.nan,
+            "tipo": tipo,
+            "fecha_dato": fecha_dato,
+        })
+
+    return pd.DataFrame(filas)
+
+
+def graficar_curva_mibgas_2026(df_curva, precio_medio=None):
+    df = df_curva.copy()
+    df_hist = df[df["tipo"] == "MIBGAS D+1"]
+    df_fut = df[df["tipo"] != "MIBGAS D+1"]
+    df_union = df_hist.tail(1)
+    df_fut_plot = pd.concat([df_union, df_fut])
+
+    fig = go.Figure()
+
+    if not df_hist.empty:
+        fig.add_scatter(
+            x=df_hist["fecha"],
+            y=df_hist["precio"],
+            mode="lines+markers+text",
+            name="MIBGAS D+1",
+            line=dict(color="seagreen", width=3),
+            marker=dict(size=10, symbol="square"),
+            text=[f"{v:.1f}" for v in df_hist["precio"]],
+            textposition="top center",
+            textfont=dict(size=14, color="white"),
+            customdata=df_hist["tipo"],
+            hovertemplate="<b>%{customdata}</b><br>%{y:.1f} €/MWh<extra></extra>"
+        )
+
+    if not df_fut_plot.empty:
+        fig.add_scatter(
+            x=df_fut_plot["fecha"],
+            y=df_fut_plot["precio"],
+            mode="lines+markers+text",
+            name="MIBGAS futuros",
+            line=dict(color="darkorange", width=3, dash="dash"),
+            marker=dict(size=10, symbol="square"),
+            text=[f"{v:.1f}" if pd.notna(v) else "" for v in df_fut_plot["precio"]],
+            textposition="top center",
+            textfont=dict(size=14, color="white"),
+            customdata=df_fut_plot["tipo"],
+            hovertemplate="<b>%{customdata}</b><br>%{x|%b %Y}<br>%{y:.1f} €/MWh<extra></extra>"
+        )
+        if not df_union.empty:
+            fig.data[-1].marker.color = ["rgba(0,0,0,0)"] + ["darkorange"] * (len(df_fut_plot) - 1)
+
+    if precio_medio is not None and pd.notna(precio_medio):
+        fig.add_hline(
+            y=precio_medio,
+            line_dash="dot",
+            line_color=color_media_futuro,
+            annotation_text=f"Media ≈ {precio_medio:.1f} €/MWh",
+            annotation_position="top right",
+            annotation_font_size=20,
+            annotation_font_color=color_media_futuro
+        )
+
+    fig.update_layout(
+        title=dict(
+            text="PREVISIÓN MIBGAS 2026: Curva híbrida D+1-futuros",
+            x=0.5,
+            xanchor="center",
+            font=dict(size=20)
+        ),
+        legend=dict(
+            orientation="h",
+            x=0.5,
+            xanchor="center",
+            y=1.05,
+            yanchor="bottom",
+            font=dict(size=14)
+        ),
+        yaxis=dict(title="€/MWh", range=[0, None]),
+        xaxis=dict(tickformat="%b %Y"),
+        hoverlabel=dict(font_size=14),
+        template="plotly_dark",
+        hovermode="x unified",
+        height=500
+    )
+    fig = aplicar_estilo(fig)
+
+    return fig
+
+
+def construir_curva_mibgas_mensual_12m(df_mg_m, df_mg_q, fecha_ref=None):
+    df_m = normalizar_futuros_mibgas_mensuales(df_mg_m)
+    df_q = normalizar_futuros_mibgas_trimestrales(df_mg_q)
+
+    if fecha_ref is None:
+        fechas_ref = pd.concat([df_m["Trading day"], df_q["Trading day"]]).dropna()
+        fecha_ref = fechas_ref.max()
+
+    fecha_ref = pd.to_datetime(fecha_ref).normalize()
+    filas = []
+
+    for i in range(1, 13):
+        fecha = fecha_ref + pd.DateOffset(months=i)
+        fecha = pd.Timestamp(fecha.year, fecha.month, 1)
+        precio, tipo, fecha_dato = _precio_futuro_mibgas_para_mes(df_m, df_q, fecha, fecha_ref)
+
+        filas.append({
+            "fecha": fecha,
+            "precio": round(float(precio), 2) if pd.notna(precio) else np.nan,
+            "tipo": tipo,
+            "fecha_dato": fecha_dato,
+        })
+
+    return pd.DataFrame(filas)
+
+
+def graficar_curva_mibgas_mensual_12m(df_mibgas, precio_medio=None):
+    fig = go.Figure()
+
+    fig.add_scatter(
+        x=df_mibgas["fecha"],
+        y=df_mibgas["precio"],
+        mode="lines+markers+text",
+        name="MIBGAS forward 12M",
+        line=dict(color="darkorange", width=3, dash="dash"),
+        marker=dict(size=10, symbol="square"),
+        text=[f"{v:.1f}" if pd.notna(v) else "" for v in df_mibgas["precio"]],
+        textposition="top center",
+        textfont=dict(size=14, color="white"),
+        customdata=df_mibgas["tipo"],
+        hovertemplate="<b>%{customdata}</b><br>%{x|%b %Y}<br>%{y:.1f} €/MWh<extra></extra>"
+    )
+
+    if precio_medio is not None and pd.notna(precio_medio):
+        fig.add_hline(
+            y=precio_medio,
+            line_dash="dot",
+            line_color="white",
+            annotation_text=f"Media ≈ {precio_medio:.1f} €/MWh",
+            annotation_position="top right",
+            annotation_font_size=18
+        )
+
+    fig.update_layout(
+        title=dict(
+            text="Curva MIBGAS año móvil",
+            x=0.5,
+            xanchor="center",
+            font=dict(size=20)
+        ),
+        legend=dict(
+            orientation="h",
+            x=0.5,
+            xanchor="center",
+            y=1.05,
+            yanchor="bottom",
+            font=dict(size=14)
+        ),
+        yaxis=dict(title="€/MWh", range=[0, None]),
+        xaxis=dict(tickformat="%b %Y"),
+        hoverlabel=dict(font_size=14),
+        template="plotly_dark",
+        hovermode="x unified",
+        height=500
+    )
+    fig = aplicar_estilo(fig)
+
+    return fig
 
 
 @st.cache_data
