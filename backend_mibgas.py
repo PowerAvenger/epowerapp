@@ -1242,6 +1242,170 @@ def graficar_curva_mibgas_2026(df_curva, precio_medio=None):
     return fig
 
 
+@st.cache_data()
+def construir_media_prevista_mibgas_2026_diaria(df_mg_da, df_mg_m, df_mg_q, año=2026):
+    df_da = df_mg_da.copy()
+    df_m = normalizar_futuros_mibgas_mensuales(df_mg_m)
+    df_q = normalizar_futuros_mibgas_trimestrales(df_mg_q)
+
+    df_da["fecha_entrega"] = pd.to_datetime(df_da["fecha_entrega"], errors="coerce").dt.normalize()
+    df_da["precio_gas"] = pd.to_numeric(df_da["precio_gas"], errors="coerce")
+    df_da = df_da.dropna(subset=["fecha_entrega", "precio_gas"])
+
+    fecha_ini = pd.Timestamp(año, 1, 1)
+    fecha_ref_max = df_da.loc[
+        df_da["fecha_entrega"].dt.year == año,
+        "fecha_entrega"
+    ].max()
+
+    fechas_ref = sorted(
+        df_da.loc[
+            (df_da["fecha_entrega"] >= fecha_ini) &
+            (df_da["fecha_entrega"] <= fecha_ref_max),
+            "fecha_entrega"
+        ].dropna().unique()
+    )
+
+    filas = []
+
+    for fecha_ref in fechas_ref:
+        fecha_ref = pd.Timestamp(fecha_ref).normalize()
+        mes_actual = fecha_ref.month
+        precios_mes = []
+
+        for mes in range(1, 13):
+            fecha_mes = pd.Timestamp(año, mes, 1)
+
+            if mes < mes_actual:
+                filtro_da = (
+                    (df_da["fecha_entrega"].dt.year == año) &
+                    (df_da["fecha_entrega"].dt.month == mes)
+                )
+                precio = df_da.loc[filtro_da, "precio_gas"].mean()
+
+            elif mes == mes_actual:
+                filtro_da = (
+                    (df_da["fecha_entrega"] >= fecha_mes) &
+                    (df_da["fecha_entrega"] <= fecha_ref)
+                )
+                precio = df_da.loc[filtro_da, "precio_gas"].mean()
+
+            else:
+                precio, _, _ = _precio_futuro_mibgas_para_mes(
+                    df_m,
+                    df_q,
+                    fecha_mes,
+                    fecha_ref,
+                )
+
+            precios_mes.append(precio)
+
+        precios_mes = pd.Series(precios_mes, dtype="float")
+
+        if precios_mes.notna().sum() == 12:
+            filas.append({
+                "fecha_cotizacion": fecha_ref,
+                "media_2026": precios_mes.mean(),
+            })
+        else:
+            print(
+                f"No se pudo calcular media MIBGAS completa para {fecha_ref.date()}: "
+                f"{precios_mes.notna().sum()}/12 meses válidos"
+            )
+
+    df_media = pd.DataFrame(filas)
+
+    if not df_media.empty:
+        df_media = df_media.sort_values("fecha_cotizacion").reset_index(drop=True)
+        df_media["media_2026"] = df_media["media_2026"].round(2)
+
+    return df_media
+
+
+def graficar_media_prevista_mibgas_2026(df_media_2026, año=2026):
+    df = df_media_2026.copy()
+
+    fig = go.Figure()
+    inicio_año = pd.Timestamp(año, 1, 1)
+    fin_año = pd.Timestamp(año, 12, 31)
+
+    if df.empty:
+        fig.update_layout(
+            title=dict(
+                text=f"Evolución diaria de la media MIBGAS prevista {año}",
+                x=0.5,
+                xanchor="center",
+                font=dict(size=20)
+            ),
+            yaxis=dict(title="€/MWh"),
+            xaxis=dict(title="Fecha de cotización", tickformat="%b-%y", range=[inicio_año, fin_año]),
+            template="plotly_dark",
+            height=500
+        )
+        fig = aplicar_estilo(fig)
+        return fig
+
+    df["fecha_cotizacion"] = pd.to_datetime(df["fecha_cotizacion"])
+    df = df.sort_values("fecha_cotizacion")
+
+    fig.add_scatter(
+        x=df["fecha_cotizacion"],
+        y=df["media_2026"],
+        mode="lines",
+        name="Media prevista 2026",
+        line=dict(
+            color=color_media_futuro,
+            width=2,
+        ),
+        showlegend=True,
+        hovertemplate=(
+            "<b>Media prevista 2026</b><br>"
+            "%{x|%d/%m/%Y}<br>"
+            "%{y:.1f} €/MWh"
+            "<extra></extra>"
+        )
+    )
+
+    fig.update_layout(
+        title=dict(
+            text=f"Evolución diaria de la media MIBGAS prevista {año}",
+            x=0.5,
+            xanchor="center",
+            font=dict(size=20)
+        ),
+        yaxis=dict(
+            title="€/MWh",
+            range=[
+                max(0, df["media_2026"].min() - 5),
+                df["media_2026"].max() + 5
+            ],
+            title_font=dict(size=14),
+            tickfont=dict(size=14)
+        ),
+        xaxis=dict(
+            title="Fecha de cotización",
+            tickformat="%b-%y",
+            range=[inicio_año, fin_año],
+            tickfont=dict(size=14)
+        ),
+        legend=dict(
+            orientation="h",
+            x=0.5,
+            xanchor="center",
+            y=1.05,
+            yanchor="bottom",
+            font=dict(size=14)
+        ),
+        hoverlabel=dict(font_size=14),
+        template="plotly_dark",
+        hovermode="x unified",
+        height=500
+    )
+    fig = aplicar_estilo(fig)
+
+    return fig
+
+
 def construir_curva_mibgas_mensual_12m(df_mg_m, df_mg_q, fecha_ref=None):
     df_m = normalizar_futuros_mibgas_mensuales(df_mg_m)
     df_q = normalizar_futuros_mibgas_trimestrales(df_mg_q)

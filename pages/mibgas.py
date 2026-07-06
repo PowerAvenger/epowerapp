@@ -12,6 +12,7 @@ from backend_mibgas import (
     descargar_sendeco, obtener_sendeco, graficar_gas_co2,
     obtener_spot_mensual, construir_df_mensual, graf_simul_spot, obtener_spot_diario,
     obtener_mibgas_mensual, construir_curva_mibgas_2026, graficar_curva_mibgas_2026,
+    construir_media_prevista_mibgas_2026_diaria, graficar_media_prevista_mibgas_2026,
     construir_curva_mibgas_mensual_12m, graficar_curva_mibgas_mensual_12m
     )
 
@@ -65,6 +66,8 @@ df_mibgas_mensual = obtener_mibgas_mensual(df_mg_da)
 df_curva_mibgas_2026 = construir_curva_mibgas_2026(df_mibgas_mensual, df_mg_m, df_mg_q)
 precio_medio_mibgas_2026 = round(df_curva_mibgas_2026["precio"].mean(), 2)
 graf_mibgas_2026 = graficar_curva_mibgas_2026(df_curva_mibgas_2026, precio_medio_mibgas_2026)
+df_media_mibgas_2026 = construir_media_prevista_mibgas_2026_diaria(df_mg_da, df_mg_m, df_mg_q)
+graf_media_mibgas_2026 = graficar_media_prevista_mibgas_2026(df_media_mibgas_2026)
 
 df_mibgas_año_movil = construir_curva_mibgas_mensual_12m(df_mg_m, df_mg_q)
 num_meses_mibgas_año_movil = df_mibgas_año_movil["precio"].notna().sum()
@@ -219,6 +222,8 @@ with tab5:
     with col1:
         st.info('Previsión MIBGAS 2026 combinando medias mensuales D+1 y futuros mensuales/trimestrales.', icon="ℹ️")
         st.write(graf_mibgas_2026)
+        st.info('Evolucion diaria de la media MIBGAS prevista 2026 en base a D+1 real y futuros combinados.')
+        st.write(graf_media_mibgas_2026)
 
     with col2:
         st.info('Curva MIBGAS 12 meses desde M+1 con futuros mensuales y fallback trimestral.', icon="ℹ️")
