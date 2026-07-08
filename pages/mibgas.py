@@ -44,7 +44,7 @@ df_mg_m = pd.concat(dfs_m, ignore_index=True)
 graf_ms = graficar_futuros_mibgas(df_mg_m, tipo="M")
 
 # FUTUROS Q TRIMESTRES
-productos_q = ['GQES_Q+1', 'GQES_Q+2', 'GQES_Q+3', 'GYES_Q+4']
+productos_q = ['GQES_Q+1', 'GQES_Q+2', 'GQES_Q+3', 'GQES_Q+4']
 dfs_q = [filtrar_por_producto(df_mibgas_base, prod) for prod in productos_q]
 df_mg_q = pd.concat(dfs_q, ignore_index=True)
 #graf_qs = graficar_qs(df_mg_q)
@@ -151,7 +151,7 @@ graf_hist, simul_spot, simul_gas = graf_simul_spot(df_mensual, df_validacion, st
 
 #LAYOUT++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-zona_mensajes = st.sidebar.empty()
+zona_mensajes.empty()
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs(['Históricos', 'Futuros', 'CO2', 'Simulador', 'Previsión anual'])
 
