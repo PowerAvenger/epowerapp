@@ -1429,7 +1429,15 @@ def construir_curva_mibgas_mensual_12m(df_mg_m, df_mg_q, fecha_ref=None):
             "fecha_dato": fecha_dato,
         })
 
-    return pd.DataFrame(filas)
+    df_curva = pd.DataFrame(filas)
+    print("DEBUG MIBGAS curva 12M")
+    print("Fecha ref:", fecha_ref)
+    print("Productos M:", sorted(df_mg_m["producto"].dropna().unique().tolist()))
+    print("Productos Q:", sorted(df_mg_q["producto"].dropna().unique().tolist()))
+    print(df_curva)
+    print("Meses con precio:", df_curva["precio"].notna().sum(), "/ 12")
+
+    return df_curva
 
 
 def graficar_curva_mibgas_mensual_12m(df_mibgas, precio_medio=None):
