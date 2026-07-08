@@ -34,7 +34,28 @@ def leer_json(file_id, widget):
 @st.cache_data
 def tablas_diario(df_in_gen, df_in_pot, horas_eqmax):
     #montamos un dataframe de entrada con los datos de gen y pot. DIARIO
-    df_out = pd.merge(df_in_gen, df_in_pot, on = ['mes_num', 'año','tecnologia'], how = 'left')
+    meses_gen = (
+        df_in_gen[['mes_num', 'año', 'tecnologia']]
+        .drop_duplicates()
+        .sort_values(['tecnologia', 'año', 'mes_num'])
+    )
+
+    df_pot_mensual = meses_gen.merge(
+        df_in_pot,
+        on=['mes_num', 'año', 'tecnologia'],
+        how='left'
+    )
+    tiene_pot_real = df_pot_mensual['pot_GW'].notna()
+    df_pot_mensual[['pot_GW', 'porc_pot']] = (
+        df_pot_mensual
+        .groupby('tecnologia')[['pot_GW', 'porc_pot']]
+        .ffill()
+    )
+    df_pot_mensual['potencia_estimada'] = (
+        ~tiene_pot_real & df_pot_mensual['pot_GW'].notna()
+    )
+
+    df_out = pd.merge(df_in_gen, df_pot_mensual, on = ['mes_num', 'año','tecnologia'], how = 'left')
     df_out = df_out.drop(columns=['fecha_y']).rename(columns = {'fecha_x': 'fecha'})
     df_out['gen_GWh'] = df_out['gen_GWh_dia'] / 24
     df_out['FC'] = df_out['gen_GWh'] / df_out['pot_GW']
@@ -669,7 +690,6 @@ def graficar_gen_diaria(df, df_omie, colores_tecnologia):
     graf=aplicar_estilo(graf)
 
     return graf
-
 
 
 

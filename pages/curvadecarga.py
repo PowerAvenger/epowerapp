@@ -92,6 +92,10 @@ if 'fp_obj_sel' not in st.session_state:
     st.session_state.fp_obj_sel = 0.98  
 if 'margen_comp_min' not in st.session_state:       
     st.session_state.margen_comp_min = 30 #en %
+if "csv_bytes_norm" not in st.session_state:
+    st.session_state.csv_bytes_norm = None
+if "csv_bytes_h" not in st.session_state:
+    st.session_state.csv_bytes_h = None
   
 
 if normalizar and uploaded:    
@@ -239,10 +243,14 @@ if normalizar and uploaded:
         
         consumototalhorario= df_norm_h['consumo_neto_kWh'].sum()
         print(f'consumo total df_norm_h: {consumototalhorario}')
+        csv_bytes_norm = df_norm.reset_index(drop=True).to_csv(index=False, sep=";", decimal=",", float_format="%.3f").encode("utf-8")
+        csv_bytes_h = df_norm_h.reset_index(drop=True).to_csv(index=False, sep=";", decimal=",", float_format="%.3f").encode("utf-8")
         
         st.session_state.df_norm = df_norm
         st.session_state.atr_dfnorm = atr_dfnorm
         st.session_state.df_norm_h = df_norm_h
+        st.session_state.csv_bytes_norm = csv_bytes_norm
+        st.session_state.csv_bytes_h = csv_bytes_h
         st.session_state.frec = frec
         st.session_state.df_in = df_in
         st.session_state.consumo_total=consumo_total
@@ -254,9 +262,6 @@ if normalizar and uploaded:
         fecha_ini = df_norm["fecha"].min()
         fecha_fin = df_norm["fecha"].max()
         st.session_state.rango_curvadecarga = (fecha_ini, fecha_fin)
-
-        print('df norm horaria')
-        print(df_norm_h)
 
     except Exception as e:
         zona_mensajes.error(f"❌ Error al normalizar: {e}")
@@ -273,23 +278,23 @@ if st.session_state.get("df_norm") is not None:
     st.sidebar.markdown(f'Peaje actualmente seleccionado: **:orange[{st.session_state.atr_dfnorm}]**')
     st.sidebar.markdown(f'Resolución temporal de la curva: **:orange[{st.session_state.frec}]**')
     # --- Descarga ---
-    csv_bytes = st.session_state.df_norm.reset_index(drop=True).to_csv(index=False, sep=";", decimal=",", float_format="%.3f").encode("utf-8")
+    csv_bytes = st.session_state.get("csv_bytes_norm")
     if not st.session_state.get('usuario_autenticado', False):
         habilitar_descarga = False
         #st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=True)
     else:
         habilitar_descarga = True
         #st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=False)
-    st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=not habilitar_descarga, use_container_width=True)
+    st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes or b"", "curva_normalizada.csv", "text/csv", disabled=not habilitar_descarga or csv_bytes is None, use_container_width=True)
     
-    csv_bytes_h = st.session_state.df_norm_h.reset_index(drop=True).to_csv(index=False, sep=";", decimal=",", float_format="%.3f").encode("utf-8")
+    csv_bytes_h = st.session_state.get("csv_bytes_h")
     if not st.session_state.get('usuario_autenticado', False):
         habilitar_descarga = False
         #st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=True)
     else:
         habilitar_descarga = True
         #st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=False)
-    st.sidebar.download_button("⬇️ Descargar CSV agrupado horario", csv_bytes_h, "curva_agrupado.csv", "text/csv", disabled=not habilitar_descarga, use_container_width=True)
+    st.sidebar.download_button("⬇️ Descargar CSV agrupado horario", csv_bytes_h or b"", "curva_agrupado.csv", "text/csv", disabled=not habilitar_descarga or csv_bytes_h is None, use_container_width=True)
 
 
     
@@ -317,7 +322,9 @@ if st.session_state.get("df_norm") is not None:
         with c2:
             # Visor del df out
             st.subheader("📊 Tabla normalizada de datos")
-            st.dataframe(st.session_state.df_norm, height=altura_df)
+            total_filas_norm = len(st.session_state.df_norm)
+            st.caption(f"Vista previa: primeras 1.000 filas de {total_filas_norm:,.0f}".replace(",", "."))
+            st.dataframe(st.session_state.df_norm.head(1000), height=altura_df)
         with c3:
             # --- Resumen registros---
             st.subheader("Resumen de datos")
@@ -371,14 +378,6 @@ if st.session_state.get("df_norm") is not None:
         #zmax_heatmap = st.session_state.df_norm_h["consumo_neto_kWh"].max()
         zmax_heatmap = st.session_state.df_norm_h["consumo_neto_kWh"].quantile(0.98)
         print (zmax_heatmap) 
-        print(st.session_state.df_norm_h["consumo_neto_kWh"].describe())
-
-        print(
-            st.session_state.df_norm_h.loc[
-                st.session_state.df_norm_h["consumo_neto_kWh"] == st.session_state.df_norm_h["consumo_neto_kWh"].max(),
-                ["fecha_hora", "fecha", "hora", "consumo_neto_kWh"]
-            ]
-        )
 
         graf_medias_horarias_total=graficar_media_horaria('Todos', ymax)
         graf_medias_horarias_lab=graficar_media_horaria('L-V',ymax)
@@ -776,9 +775,6 @@ if st.session_state.get("df_norm") is not None:
         df_q_condensadores_sel = calcular_tabla_q_condensadores(df_potmed_qh, df_coef_k_sel)
 
         total_penalizacion_reactiva = df_coste_excesos_reactiva["Total"].sum()
-
-        print('tabla mensual de reactiva')
-        print(df_reactiva)
 
         df_potmed_qh_fmt = formatear_tabla_consumos(df_potmed_qh, columna_mes="Mes", incluir_unidades=False)
         df_reactiva_fmt = formatear_tabla_consumos(df_reactiva, columna_mes="Mes", incluir_unidades=False)    
