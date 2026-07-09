@@ -11,7 +11,7 @@ from backend_mibgas import (
     filtrar_por_producto, graficar_qs, graficar_futuros_mibgas, graficar_da_corrido, graficar_da_2026_acumulado, graficar_da_comparado,
     descargar_sendeco, obtener_sendeco, graficar_gas_co2,
     obtener_spot_mensual, construir_df_mensual, graf_simul_spot, obtener_spot_diario,
-    obtener_mibgas_mensual, construir_curva_mibgas_2026, graficar_curva_mibgas_2026,
+    obtener_mibgas_mensual, graficar_mibgas_mensual_historico, construir_curva_mibgas_2026, graficar_curva_mibgas_2026,
     construir_media_prevista_mibgas_2026_diaria, graficar_media_prevista_mibgas_2026,
     construir_curva_mibgas_mensual_12m, graficar_curva_mibgas_mensual_12m
     )
@@ -63,6 +63,7 @@ df_mg_da = filtrar_por_producto(df_mibgas_base, 'GDAES_D+1')
 #print(df_mg_da)
 
 df_mibgas_mensual = obtener_mibgas_mensual(df_mg_da)
+graf_mibgas_mensual_historico = graficar_mibgas_mensual_historico(df_mibgas_mensual)
 df_curva_mibgas_2026 = construir_curva_mibgas_2026(df_mibgas_mensual, df_mg_m, df_mg_q)
 precio_medio_mibgas_2026 = round(df_curva_mibgas_2026["precio"].mean(), 2)
 graf_mibgas_2026 = graficar_curva_mibgas_2026(df_curva_mibgas_2026, precio_medio_mibgas_2026)
@@ -157,10 +158,11 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(['Históricos', 'Futuros', 'CO2', 'Simula
 
 with tab1:
     with st.container():
-        col1,col2 = st.columns([.9,.1])
+        col1,col2 = st.columns([.9,.1]) 
         with col1:
             st.write(graf_da_corrido)
             st.write(graf_da_comparado)
+            st.write(graf_mibgas_mensual_historico)
             st.write(graf_da_2026_acumulado) 
             
             

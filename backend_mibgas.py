@@ -242,6 +242,15 @@ def graficar_da_corrido(df):
         title={"x": 0.5, "xanchor": "center"},
         xaxis_title="Fecha",
         yaxis_title="Precio gas (€/MWh)",
+        legend=dict(
+            title_text="",
+            orientation="h",
+            x=0.5,
+            xanchor="center",
+            y=1.03,
+            yanchor="bottom",
+            font=dict(size=14)
+        ),
 
         xaxis=dict(
             showgrid=True,
@@ -336,10 +345,13 @@ def graficar_da_2026_acumulado(df, año=2026):
         hovermode="x unified",
         hoverlabel=dict(font_size=18),
         legend=dict(
+            title_text="",
             orientation="h",
-            y=1.02,
             x=0.5,
-            xanchor="center"
+            xanchor="center",
+            y=1.03,
+            yanchor="bottom",
+            font=dict(size=14)
         )
     )
 
@@ -416,6 +428,15 @@ def graficar_da_comparado(df):
         hovermode="x unified",
         hoverlabel=dict(
             font_size=18,
+        ),
+        legend=dict(
+            title_text="",
+            orientation="h",
+            x=0.5,
+            xanchor="center",
+            y=1.03,
+            yanchor="bottom",
+            font=dict(size=14)
         )
     )
 
@@ -1058,6 +1079,96 @@ def obtener_mibgas_mensual(df_mg_da):
     df_mensual = df_mensual.dropna(subset=["precio_gas"])
 
     return df_mensual
+
+
+def graficar_mibgas_mensual_historico(df_mibgas_mensual):
+    df = df_mibgas_mensual.copy()
+    df["fecha_entrega"] = pd.to_datetime(df["fecha_entrega"], errors="coerce")
+    df["precio_gas"] = pd.to_numeric(df["precio_gas"], errors="coerce")
+    df = df.dropna(subset=["fecha_entrega", "precio_gas"]).copy()
+
+    meses = {
+        1: "Enero",
+        2: "Febrero",
+        3: "Marzo",
+        4: "Abril",
+        5: "Mayo",
+        6: "Junio",
+        7: "Julio",
+        8: "Agosto",
+        9: "Septiembre",
+        10: "Octubre",
+        11: "Noviembre",
+        12: "Diciembre",
+    }
+    orden_meses = list(meses.values())
+
+    df["año"] = df["fecha_entrega"].dt.year
+    df["mes_num"] = df["fecha_entrega"].dt.month
+    df["mes_nombre"] = df["mes_num"].map(meses)
+    df = df.sort_values(["año", "mes_num"])
+
+    fig = go.Figure()
+
+    for año in sorted(df["año"].dropna().unique()):
+        df_año = df[df["año"] == año].copy()
+        fig.add_trace(
+            go.Bar(
+                x=df_año["mes_nombre"],
+                y=df_año["precio_gas"],
+                name=str(año),
+                marker=dict(color=colores.get(int(año), None)),
+                text=[f"{v:.2f}" for v in df_año["precio_gas"]],
+                textposition="outside",
+                textfont=dict(size=13, color="white"),
+                hovertemplate=(
+                    "%{fullData.name}: %{y:.2f} €/MWh"
+                    "<extra></extra>"
+                ),
+            )
+        )
+
+    fig.update_layout(
+        title=dict(
+            text="Precio medio mensual MIBGAS D+1",
+            x=0.5,
+            xanchor="center",
+            font=dict(size=28)
+        ),
+        xaxis=dict(
+            title="Mes",
+            categoryorder="array",
+            categoryarray=orden_meses,
+            tickfont=dict(size=14)
+        ),
+        yaxis=dict(
+            title="€/MWh",
+            range=[0, df["precio_gas"].max() * 1.18],
+            title_font=dict(size=16),
+            tickfont=dict(size=14)
+        ),
+        legend=dict(
+            title_text="",
+            orientation="h",
+            x=0.5,
+            xanchor="center",
+            y=1.03,
+            yanchor="bottom",
+            font=dict(size=14)
+        ),
+        barmode="group",
+        bargap=0.18,
+        bargroupgap=0.06,
+        barcornerradius=4,
+        hovermode="x unified",
+        hoverlabel=dict(font_size=16),
+        template="plotly_dark",
+        height=500
+    )
+
+    fig = aplicar_estilo(fig)
+
+    return fig
 
 
 def normalizar_futuros_mibgas_mensuales(df_mg_m):
