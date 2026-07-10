@@ -1605,6 +1605,347 @@ def graficar_curva_mibgas_mensual_12m(df_mibgas, precio_medio=None):
     return fig
 
 
+@st.cache_data()
+def construir_evolucion_media_mibgas_forward_12m(
+    df_mg_m,
+    df_mg_q,
+    fecha_ref=None,
+    fecha_inicio="01.01.2024"
+):
+    df_m = normalizar_futuros_mibgas_mensuales(df_mg_m)
+    df_q = normalizar_futuros_mibgas_trimestrales(df_mg_q)
+
+    fecha_inicio = pd.to_datetime(fecha_inicio, dayfirst=True).normalize()
+
+    if fecha_ref is None:
+        fechas_ref = pd.concat([df_m["Trading day"], df_q["Trading day"]]).dropna()
+        fecha_ref = fechas_ref.max()
+
+    fecha_ref = pd.to_datetime(fecha_ref, dayfirst=True).normalize()
+
+    df_m = df_m[
+        (df_m["Trading day"] >= fecha_inicio) &
+        (df_m["Trading day"] <= fecha_ref)
+    ].copy()
+    df_q = df_q[
+        (df_q["Trading day"] >= fecha_inicio) &
+        (df_q["Trading day"] <= fecha_ref)
+    ].copy()
+
+    fechas = sorted(
+        set(df_m["Trading day"].dropna().unique()).union(
+            set(df_q["Trading day"].dropna().unique())
+        )
+    )
+    fechas = [pd.Timestamp(f).normalize() for f in fechas]
+
+    filas = []
+
+    for f in fechas:
+        precios = []
+        tipos = []
+
+        for i in range(1, 13):
+            mes_forward = f + pd.DateOffset(months=i)
+            mes_forward = pd.Timestamp(
+                mes_forward.year,
+                mes_forward.month,
+                1
+            )
+
+            precio, tipo, _ = _precio_futuro_mibgas_para_mes(
+                df_m,
+                df_q,
+                mes_forward,
+                f
+            )
+
+            if pd.notna(precio):
+                precios.append(precio)
+                tipos.append(tipo)
+
+        if len(precios) == 12:
+            filas.append({
+                "Fecha": f,
+                "media_forward_12m": np.mean(precios),
+                "min_forward": np.min(precios),
+                "max_forward": np.max(precios),
+                "n_meses": len(precios),
+                "n_mensuales": tipos.count("MIBGAS mensual"),
+                "n_trimestrales": tipos.count("MIBGAS trimestral")
+            })
+
+    df_evol = pd.DataFrame(filas)
+
+    if not df_evol.empty:
+        df_evol["media_forward_12m"] = df_evol["media_forward_12m"].round(2)
+        df_evol["min_forward"] = df_evol["min_forward"].round(2)
+        df_evol["max_forward"] = df_evol["max_forward"].round(2)
+
+    return df_evol
+
+
+@st.cache_data()
+def añadir_mibgas_real_12m_alineado_forward(
+    df_evol,
+    df_mg_da,
+    col_fecha_evol="Fecha",
+    col_fecha_real="fecha_entrega",
+    col_real="precio_gas",
+    meses=12,
+    exigir_ventana_completa=True
+):
+    df_out = df_evol.copy()
+    df_real = df_mg_da.copy()
+
+    df_out[col_fecha_evol] = pd.to_datetime(
+        df_out[col_fecha_evol],
+        errors="coerce",
+        dayfirst=True
+    ).dt.normalize()
+
+    df_real[col_fecha_real] = pd.to_datetime(
+        df_real[col_fecha_real],
+        errors="coerce",
+        dayfirst=True
+    ).dt.normalize()
+
+    df_real[col_real] = pd.to_numeric(
+        df_real[col_real],
+        errors="coerce"
+    )
+
+    df_real = (
+        df_real
+        .dropna(subset=[col_fecha_real, col_real])
+        .groupby(col_fecha_real, as_index=False)[col_real]
+        .mean()
+        .sort_values(col_fecha_real)
+    )
+
+    fecha_min_real = df_real[col_fecha_real].min()
+    fecha_max_real = df_real[col_fecha_real].max()
+
+    resultados = []
+
+    for fecha_ref in df_out[col_fecha_evol]:
+        if pd.isna(fecha_ref):
+            resultados.append({
+                col_fecha_evol: fecha_ref,
+                "mibgas_real_12m_alineado": np.nan,
+                "fecha_ini_mibgas_alineado": pd.NaT,
+                "fecha_fin_mibgas_alineado": pd.NaT,
+                "dias_usados_mibgas_alineado": 0,
+                "dias_esperados_mibgas_alineado": np.nan,
+                "ventana_completa_mibgas_alineado": False
+            })
+            continue
+
+        fecha_ini = (fecha_ref + pd.DateOffset(months=1)).replace(day=1)
+        fecha_fin = fecha_ini + pd.DateOffset(months=meses) - pd.Timedelta(days=1)
+
+        df_ventana = df_real[
+            (df_real[col_fecha_real] >= fecha_ini) &
+            (df_real[col_fecha_real] <= fecha_fin)
+        ].copy()
+
+        dias_esperados = (fecha_fin - fecha_ini).days + 1
+        dias_usados = df_ventana[col_fecha_real].nunique()
+
+        ventana_completa = (
+            pd.notna(fecha_min_real)
+            and pd.notna(fecha_max_real)
+            and fecha_ini >= fecha_min_real
+            and fecha_fin <= fecha_max_real
+            and dias_usados == dias_esperados
+        )
+
+        if exigir_ventana_completa:
+            mibgas_real_12m_alineado = (
+                df_ventana[col_real].mean()
+                if ventana_completa
+                else np.nan
+            )
+        else:
+            mibgas_real_12m_alineado = (
+                df_ventana[col_real].mean()
+                if not df_ventana.empty
+                else np.nan
+            )
+
+        resultados.append({
+            col_fecha_evol: fecha_ref,
+            "mibgas_real_12m_alineado": mibgas_real_12m_alineado,
+            "fecha_ini_mibgas_alineado": fecha_ini,
+            "fecha_fin_mibgas_alineado": fecha_fin,
+            "dias_usados_mibgas_alineado": dias_usados,
+            "dias_esperados_mibgas_alineado": dias_esperados,
+            "ventana_completa_mibgas_alineado": ventana_completa
+        })
+
+    df_alineado = pd.DataFrame(resultados)
+    df_out = df_out.merge(df_alineado, on=col_fecha_evol, how="left")
+
+    if not df_out.empty:
+        df_out["mibgas_real_12m_alineado"] = (
+            df_out["mibgas_real_12m_alineado"].round(2)
+        )
+
+    return df_out
+
+
+@st.cache_data()
+def graficar_evolucion_media_mibgas_forward(
+    df_evol,
+    col_real="mibgas_real_12m_alineado",
+    col_ventana_completa="ventana_completa_mibgas_alineado",
+    nombre_real="MIBGAS real 12M alineado",
+    titulo="MIBGAS forward 12M vs MIBGAS real 12M alineado"
+):
+    df_plot = df_evol.copy()
+
+    df_plot["Fecha"] = pd.to_datetime(
+        df_plot["Fecha"],
+        errors="coerce",
+        dayfirst=True
+    )
+
+    df_plot["media_forward_12m"] = pd.to_numeric(
+        df_plot["media_forward_12m"],
+        errors="coerce"
+    )
+
+    df_plot = df_plot.dropna(subset=["Fecha"]).sort_values("Fecha")
+    tiene_real = col_real in df_plot.columns
+
+    if tiene_real:
+        df_plot[col_real] = pd.to_numeric(df_plot[col_real], errors="coerce")
+
+        if col_ventana_completa in df_plot.columns:
+            mask_real_valido = (
+                (df_plot[col_ventana_completa] == True) &
+                df_plot[col_real].notna()
+            )
+        else:
+            mask_real_valido = df_plot[col_real].notna()
+
+        df_plot["desvio_mibgas"] = np.where(
+            mask_real_valido,
+            df_plot[col_real] - df_plot["media_forward_12m"],
+            np.nan
+        )
+        df_plot["desvio_mibgas"] = df_plot["desvio_mibgas"].round(2)
+
+        df_plot["desvio_pct"] = np.where(
+            mask_real_valido &
+            df_plot["media_forward_12m"].notna() &
+            (df_plot["media_forward_12m"] != 0),
+            df_plot["desvio_mibgas"] / df_plot["media_forward_12m"] * 100,
+            np.nan
+        )
+        df_plot["desvio_pct"] = df_plot["desvio_pct"].round(2)
+
+        def construir_hover(row):
+            fecha_txt = row["Fecha"].strftime("%d/%m/%Y") if pd.notna(row["Fecha"]) else ""
+
+            texto = (
+                f"<b>{fecha_txt}</b><br><br>"
+                f"MIBGAS forward 12M: {row['media_forward_12m']:.2f} €/MWh<br>"
+            )
+
+            if pd.notna(row.get(col_real)) and pd.notna(row.get("desvio_mibgas")):
+                texto += (
+                    f"{nombre_real}: {row[col_real]:.2f} €/MWh<br>"
+                    f"Diferencial real - forward: {row['desvio_mibgas']:+.2f} €/MWh<br>"
+                    f"Diferencial real - forward: {row['desvio_pct']:+.2f}%"
+                )
+            else:
+                texto += (
+                    f"{nombre_real}: N/D<br>"
+                    "Diferencial real - forward: N/D<br>"
+                    "Diferencial real - forward: N/D"
+                )
+
+            return texto
+
+        df_plot["hover_forward"] = df_plot.apply(construir_hover, axis=1)
+    else:
+        df_plot["hover_forward"] = df_plot.apply(
+            lambda row: (
+                f"<b>{row['Fecha'].strftime('%d/%m/%Y')}</b><br><br>"
+                f"MIBGAS forward 12M: {row['media_forward_12m']:.2f} €/MWh"
+            ),
+            axis=1
+        )
+
+    fig = go.Figure()
+
+    fig.add_scatter(
+        x=df_plot["Fecha"],
+        y=df_plot["media_forward_12m"],
+        mode="lines",
+        name="Media MIBGAS forward 12M",
+        line=dict(color="darkorange", width=1),
+        text=df_plot["hover_forward"],
+        hovertemplate="%{text}<extra></extra>"
+    )
+
+    if tiene_real:
+        if col_ventana_completa in df_plot.columns:
+            df_real = df_plot[
+                (df_plot[col_ventana_completa] == True) &
+                df_plot[col_real].notna()
+            ].copy()
+        else:
+            df_real = df_plot.dropna(subset=[col_real]).copy()
+
+        if not df_real.empty:
+            fig.add_scatter(
+                x=df_real["Fecha"],
+                y=df_real[col_real],
+                mode="lines",
+                name=nombre_real,
+                line=dict(color="lightgreen", width=2),
+                hoverinfo="skip",
+                hovertemplate=None
+            )
+
+    fig.update_layout(
+        title=dict(
+            text=titulo,
+            x=0.5,
+            xanchor="center",
+            font=dict(size=20)
+        ),
+        yaxis=dict(
+            title="€/MWh",
+            range=[0, None],
+            title_font=dict(size=14),
+            tickfont=dict(size=14)
+        ),
+        xaxis=dict(
+            title="Fecha de cotizacion",
+            tickfont=dict(size=14)
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.03,
+            xanchor="center",
+            x=0.5,
+            title_text="",
+            font=dict(size=14)
+        ),
+        template="plotly_dark",
+        hovermode="x",
+        height=500
+    )
+
+    fig = aplicar_estilo(fig)
+
+    return fig
+
+
 @st.cache_data
 def obtener_spot_diario():
     

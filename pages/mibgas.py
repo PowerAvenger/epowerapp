@@ -13,7 +13,9 @@ from backend_mibgas import (
     obtener_spot_mensual, construir_df_mensual, graf_simul_spot, obtener_spot_diario,
     obtener_mibgas_mensual, graficar_mibgas_mensual_historico, construir_curva_mibgas_2026, graficar_curva_mibgas_2026,
     construir_media_prevista_mibgas_2026_diaria, graficar_media_prevista_mibgas_2026,
-    construir_curva_mibgas_mensual_12m, graficar_curva_mibgas_mensual_12m
+    construir_curva_mibgas_mensual_12m, graficar_curva_mibgas_mensual_12m,
+    construir_evolucion_media_mibgas_forward_12m, añadir_mibgas_real_12m_alineado_forward,
+    graficar_evolucion_media_mibgas_forward
     )
 
 
@@ -74,6 +76,23 @@ df_mibgas_año_movil = construir_curva_mibgas_mensual_12m(df_mg_m, df_mg_q)
 num_meses_mibgas_año_movil = df_mibgas_año_movil["precio"].notna().sum()
 precio_medio_mibgas_año_movil = round(df_mibgas_año_movil["precio"].mean(), 2)
 graf_mibgas_año_movil = graficar_curva_mibgas_mensual_12m(df_mibgas_año_movil, precio_medio_mibgas_año_movil)
+df_evol_media_mibgas_forward = construir_evolucion_media_mibgas_forward_12m(
+    df_mg_m=df_mg_m,
+    df_mg_q=df_mg_q,
+    fecha_inicio="01.01.2024"
+)
+df_evol_media_mibgas_forward = añadir_mibgas_real_12m_alineado_forward(
+    df_evol=df_evol_media_mibgas_forward,
+    df_mg_da=df_mg_da,
+    col_fecha_evol="Fecha",
+    col_fecha_real="fecha_entrega",
+    col_real="precio_gas",
+    meses=12,
+    exigir_ventana_completa=True
+)
+graf_evol_media_mibgas_forward = graficar_evolucion_media_mibgas_forward(
+    df_evol_media_mibgas_forward
+)
 
 df_medias = df_mg_da.groupby("año_entrega", as_index=False)["precio_gas"].mean()
 df_medias["precio_gas"] = df_medias["precio_gas"].round(2)
@@ -236,3 +255,5 @@ with tab5:
                 icon="⚠️"
             )
         st.write(graf_mibgas_año_movil)
+        st.info('Evolución de MIBGAS forward 12M desde M+1. Comparativa con MIBGAS D+1 real alineado.', icon="ℹ️")
+        st.plotly_chart(graf_evol_media_mibgas_forward, use_container_width=True)
