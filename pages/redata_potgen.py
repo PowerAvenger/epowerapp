@@ -207,13 +207,18 @@ graf_gen_diaria = graficar_gen_diaria(df_año_filtrado, df_omie_filtrado, colore
 
 
 with st.sidebar:
-    st.header('Infografías REData', help=' ℹ️ Todos los datos son elaborados a partir de REData / Generación / Estructura generación y Potencia instalada (sistema eléctrico nacional todas las tecnologías).')
+    st.header('⚡ Infografías REData ⚡', help=' ℹ️ Todos los datos son elaborados a partir de REData / Generación / Estructura generación y Potencia instalada (sistema eléctrico nacional todas las tecnologías).')
     #st.caption("Copyright by Jose Vidal :ok_hand:")
     #st.write("Visita mi página de [PowerAPPs](%s) con un montón de utilidades" % url_apps)
     #st.markdown(f"Visita mi página de [ePowerAPPs]({url_apps}) con un montón de utilidades. Deja tus comentarios y propuestas en mi perfil de [Linkedin]({url_linkedin}) - ¡Sígueme en [Bluesky]({url_bluesky})!")
     #st.info('Todos los datos son elaborados a partir de REData / Generación / Estructura generación y Potencia instalada (sistema eléctrico nacional todas las tecnologías).',icon="ℹ️")
     
-    st.write(f'Datos disponibles hasta el {ultima_fecha_registro.strftime("%d.%m.%Y")}')
+    st.info(f'Última fecha disponible: {ultima_fecha_registro.strftime("%d.%m.%Y")}')
+    if st.button('Actualizar datos', use_container_width=True):
+        leer_json.clear()
+        tablas_diario.clear()
+        st.rerun()
+
     st.toggle('Equiparar años anteriores al actual', key = 'dias_equiparados', value = True)
     st.selectbox('Selecciona un año (gráficos 1 a 4)', options = lista_años, key = 'año_seleccionado')
     

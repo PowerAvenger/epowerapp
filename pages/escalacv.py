@@ -9,7 +9,7 @@ from utilidades import (
 )
 
 from backend_escalacv import (
-    diarios_totales, diarios, mensuales, horarios, medias_horarias, evolucion_mensual, meses_español, 
+    leer_json, diarios_totales, diarios, mensuales, horarios, medias_horarias, evolucion_mensual, meses_español,
     obtener_df_scatter_mensual, graficar_scatter_combo, obtener_puntos_anuales, graficar_simulacion_cuadratica, graficar_bandas_ssaa,
     mapa_calor_mes, mapa_calor_mes_gradual
 )
@@ -43,6 +43,10 @@ init_app_json_escalacv()
 datos_total = st.session_state.datos_total_escalacv
 fecha_ini = st.session_state.fecha_ini_escalacv
 fecha_fin = st.session_state.fecha_fin_escalacv
+_, _, fecha_fin_spot = leer_json(
+    st.secrets['FILE_ID_SPOT'],
+    st.secrets['GOOGLE_SHEETS_CREDENTIALS']
+)
 
 # 1️⃣ Conteo total por mes
 control_mes = (
@@ -156,9 +160,13 @@ años_comp = [
 
 
 # ELEMENTOS DE LA BARRA LATERAL DE OPCIONES-----------------------------------------------------------------------------------------------
-#st.sidebar.header('', divider='rainbow')
-st.sidebar.subheader('Escala Cavero-Vidal')
+st.sidebar.header('⚡ Escala Cavero-Vidal ⚡')
 st.sidebar.markdown(f':blue-background[Sección dedicada a **Roberto Cavero García**]')
+st.sidebar.info(f'Última fecha disponible: {fecha_fin_spot.strftime("%d.%m.%Y")}')
+if st.sidebar.button('Actualizar datos', use_container_width=True):
+    leer_json.clear()
+    st.rerun()
+
 st.sidebar.selectbox('Selecciona el año a visualizar', options = años_lista, key = 'año_seleccionado_esc')
 st.sidebar.selectbox('Selecciona el año a comparar la media anual', options = años_comp, key = 'año_seleccionado_comp')
 st.sidebar.selectbox('Selecciona el mes', options = meses_lista, key = 'mes_seleccionado_esc')
@@ -170,13 +178,6 @@ if st.session_state.componente == 'SPOT+SSAA':
 if 'dos_colores' in st.session_state and st.session_state.dos_colores:
     st.sidebar.toggle('Peso componentes', key = 'peso_comp')
 
-if st.sidebar.button('Actualizar datos'):
-    from backend_escalacv import leer_json
-    leer_json.clear()
-    st.rerun()
-    
-
-    
 # VISUALIZACIÓN ÁREA PRINCIPAL---------------------------------------------------------------------------------------------------------
 
 tab1, tab2, tab3 = st.tabs(['General', 'Mapa de Calor','Simulador'])

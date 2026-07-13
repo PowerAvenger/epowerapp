@@ -194,7 +194,11 @@ if "df_ofertas_fijas_simul_trim" not in st.session_state:
 
 #BARRA LATERAL+++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-zona_mensajes.success('Cargados todos los históricos de indexado. Ya puedes consultar los datos.', icon = '👍')
+zona_mensajes.success('Cargados todos los históricos de **OMIP**. Ya puedes consultar los datos.', icon = '👍')
+st.sidebar.info(f'Última fecha disponible: {ultimo_registro.strftime("%d.%m.%Y")}')
+if st.sidebar.button('Actualizar datos', use_container_width=True):
+    obtener_historicos_meff.clear()
+    st.rerun()
 
 with st.sidebar.expander('¡Personaliza la simulación!', icon = "ℹ️"):
     st.write('Usa el deslizador para modificar el valor de :green[OMIE] estimado. No te preocupes, siempre puedes resetear al valor por defecto.')
