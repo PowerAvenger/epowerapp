@@ -38,6 +38,11 @@ if 'mibgas_simul' not in st.session_state:
     st.session_state.mibgas_simul = 40
 
 df_mibgas_base = carga_mibgas()
+ultima_fecha_mibgas = df_mibgas_base['Trading day'].max()
+st.sidebar.info(f'Última fecha disponible: {ultima_fecha_mibgas.strftime("%d.%m.%Y")}')
+if st.sidebar.button('Actualizar datos', use_container_width=True):
+    carga_mibgas.clear()
+    st.rerun()
 
 # FUTUROS M MESES
 productos_m = ['GMAES', 'GMES_M+2', 'GMES_M+3', 'GMES_M+4', 'GMES_M+5', 'GMES_M+6']
