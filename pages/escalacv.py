@@ -16,6 +16,10 @@ from backend_escalacv import (
     mapa_calor_mes, mapa_calor_mes_gradual
 )
 from backend_comun import construir_media_acumulada_prevista
+from backend_previsiones import (
+    guardar_prevision_omie_en_sesion,
+    obtener_prevision_omie_anual,
+)
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
@@ -249,6 +253,16 @@ with tab1:
             st.metric(f'Precio medio diario {st.session_state.año_seleccionado_esc}', value=valor_medio_diario)
             st.metric(f'Precio mínimo diario ( {fecha_min_diario})', value=valor_minimo_diario)
             st.metric(f'Precio máximo diario ({fecha_max_diario})', value=valor_maximo_diario)
+            if (
+                st.session_state.componente == "SPOT"
+                and st.session_state.año_seleccionado_esc == 2026
+                and not isinstance(prevision_omie_anual, dict)
+            ):
+                if st.button('Calcular previsión OMIE 2026', use_container_width=True):
+                    with st.spinner('Calculando la curva híbrida OMIE-OMIP...'):
+                        prevision = obtener_prevision_omie_anual(datos_total)
+                        guardar_prevision_omie_en_sesion(prevision)
+                    st.rerun()
 
 
     with st.container():

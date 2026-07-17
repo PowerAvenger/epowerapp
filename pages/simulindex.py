@@ -4,7 +4,7 @@ from backend_simulindex import (obtener_historicos_meff, obtener_meff_anual, obt
                                 obtener_hist_mensual, obtener_spot_mensual, obtener_spot_diario,
                                 obtener_graf_hist, obtener_grafico_omip, obtener_grafico_omip_omie,
                                 obtener_trimestres_futuros, construir_escenarios,
-                                construir_curva_2026, graficar_2026,
+                                graficar_2026,
                                 construir_curva_omip_mensual_12m, graficar_curva_omip_mensual_12m,
                                 construir_media_prevista_2026_diaria, graficar_media_prevista_2026,
                                 construir_evolucion_media_omip, añadir_omie_real_12m_posterior, graficar_evolucion_media_omip, añadir_omie_real_12m_alineado_omip,
@@ -14,6 +14,10 @@ import pandas as pd
 import plotly.express as px
 from utilidades import generar_menu, init_app, init_app_index, persist_widget
 from backend_curvadecarga import graficar_media_horaria, graficar_queso_periodos
+from backend_previsiones import (
+    guardar_prevision_omie_en_sesion,
+    obtener_prevision_omie_anual,
+)
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
@@ -262,16 +266,11 @@ if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is
 
     
 
-df_2026 = construir_curva_2026(df_spot_mensual, df_FTB_mensual, df_FTB_trimestral, fecha_ultimo_omip_trimestral)
-precio_medio_2026 = round(df_2026["precio"].mean(),2)
+prevision_omie_anual = obtener_prevision_omie_anual(df_spot_mensual)
+guardar_prevision_omie_en_sesion(prevision_omie_anual)
+df_2026 = prevision_omie_anual["curva_mensual"]
+precio_medio_2026 = prevision_omie_anual["media_anual"]
 graf_2026 = graficar_2026(df_2026, precio_medio_2026)
-st.session_state.precio_omie_previsto = precio_medio_2026
-st.session_state.prevision_omie_anual = {
-    "año": int(df_2026["fecha"].dt.year.iloc[0]),
-    "media_anual": precio_medio_2026,
-    "fecha_corte": fecha_ultimo_omip_trimestral,
-    "curva_mensual": df_2026.copy(),
-}
 
 df_año_movil = construir_curva_omip_mensual_12m(df_FTB_mensual, df_FTB_trimestral, fecha_ultimo_omip_trimestral)
 precio_medio_omip = round(df_año_movil["precio"].mean(),2)

@@ -17,6 +17,10 @@ from backend_mibgas import (
     construir_evolucion_media_mibgas_forward_12m, añadir_mibgas_real_12m_alineado_forward,
     graficar_evolucion_media_mibgas_forward
     )
+from backend_previsiones import (
+    guardar_prevision_omie_en_sesion,
+    obtener_prevision_omie_anual,
+)
 
 
 
@@ -252,6 +256,11 @@ with tab4:
                     st.metric('Valor de gas 2026 esperado', simul_gas)
         else:
             st.caption('La previsión OMIE de Simulindex no está disponible en esta sesión.')
+            if st.button('Calcular previsión OMIE 2026', use_container_width=True):
+                with st.spinner('Calculando la curva híbrida OMIE-OMIP...'):
+                    prevision_omie = obtener_prevision_omie_anual(df_spot_diario)
+                    guardar_prevision_omie_en_sesion(prevision_omie)
+                st.rerun()
 
         st.info('Punto según valores actuales OMIE/MIBGAS')
 
