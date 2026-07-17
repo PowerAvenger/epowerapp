@@ -455,8 +455,8 @@ def diarios(datos, fecha_ini, fecha_fin, datos_comparar):
                 x = datos_dia['fecha'],
                 y = datos_dia['media'],
                 mode = 'lines',
-                name = 'media',
-                line = dict(color = 'yellow', dash = 'dot')
+                name = f"Media acumulada {st.session_state.año_seleccionado_esc}",
+                line = dict(color = 'yellow', width = 2)
             )
         )
 
@@ -480,7 +480,7 @@ def diarios(datos, fecha_ini, fecha_fin, datos_comparar):
             y=datos_comp['media'],
             mode='lines',
             name=f"Media acumulada {st.session_state.año_seleccionado_comp}",
-            line=dict(color="#B0BFC7", width=2, dash='dot'),
+            line=dict(color="#B0BFC7", width=2),
             visible='legendonly'   # 👈 MISMO EFECTO que en demanda
         )
     )

@@ -673,6 +673,81 @@ def enriquecer_datetime(df):
 
     return df
 
+
+def construir_media_acumulada_prevista(
+    datos_diarios_reales,
+    curva_mensual_prevista,
+    año,
+    col_fecha_real="fecha",
+    col_valor_real="value",
+    col_fecha_prevision="fecha",
+    col_valor_prevision="precio",
+):
+    """Prolonga la media acumulada real con una previsión mensual.
+
+    Devuelve exclusivamente el tramo previsto, incluyendo como anclaje el
+    último punto real. No accede a ``st.session_state`` y no modifica los
+    dataframes recibidos.
+    """
+    columnas_salida = ["fecha", "media_acumulada_prevista", "precio_base", "tipo"]
+
+    columnas_reales = {col_fecha_real, col_valor_real}
+    columnas_prevision = {col_fecha_prevision, col_valor_prevision}
+    if not columnas_reales.issubset(datos_diarios_reales.columns):
+        return pd.DataFrame(columns=columnas_salida)
+    if not columnas_prevision.issubset(curva_mensual_prevista.columns):
+        return pd.DataFrame(columns=columnas_salida)
+
+    reales = datos_diarios_reales[[col_fecha_real, col_valor_real]].copy()
+    reales[col_fecha_real] = pd.to_datetime(reales[col_fecha_real], errors="coerce")
+    reales[col_valor_real] = pd.to_numeric(reales[col_valor_real], errors="coerce")
+    reales = reales.dropna().copy()
+    reales = reales[reales[col_fecha_real].dt.year == int(año)]
+    reales[col_fecha_real] = reales[col_fecha_real].dt.normalize()
+    reales = (
+        reales.groupby(col_fecha_real, as_index=False)[col_valor_real]
+        .mean()
+        .sort_values(col_fecha_real)
+    )
+
+    if reales.empty:
+        return pd.DataFrame(columns=columnas_salida)
+
+    ultima_fecha_real = reales[col_fecha_real].max()
+    fecha_fin = pd.Timestamp(int(año), 12, 31)
+    if ultima_fecha_real >= fecha_fin:
+        return pd.DataFrame(columns=columnas_salida)
+
+    curva = curva_mensual_prevista[[col_fecha_prevision, col_valor_prevision]].copy()
+    curva[col_fecha_prevision] = pd.to_datetime(curva[col_fecha_prevision], errors="coerce")
+    curva[col_valor_prevision] = pd.to_numeric(curva[col_valor_prevision], errors="coerce")
+    curva = curva.dropna().copy()
+    curva = curva[curva[col_fecha_prevision].dt.year == int(año)]
+    curva["periodo"] = curva[col_fecha_prevision].dt.to_period("M")
+    precios_mensuales = curva.drop_duplicates("periodo", keep="last").set_index("periodo")[col_valor_prevision]
+
+    fechas_futuras = pd.date_range(ultima_fecha_real + pd.Timedelta(days=1), fecha_fin, freq="D")
+    futuro = pd.DataFrame({"fecha": fechas_futuras})
+    futuro["periodo"] = futuro["fecha"].dt.to_period("M")
+    futuro["precio_base"] = futuro["periodo"].map(precios_mensuales)
+
+    # Una previsión incompleta no debe generar una curva engañosa.
+    if futuro["precio_base"].isna().any():
+        return pd.DataFrame(columns=columnas_salida)
+
+    reales_base = reales.rename(
+        columns={col_fecha_real: "fecha", col_valor_real: "precio_base"}
+    )[["fecha", "precio_base"]]
+    futuro_base = futuro[["fecha", "precio_base"]]
+    combinado = pd.concat([reales_base, futuro_base], ignore_index=True)
+    combinado["media_acumulada_prevista"] = combinado["precio_base"].expanding().mean()
+    combinado["tipo"] = "previsto"
+
+    tramo_previsto = combinado[combinado["fecha"] >= ultima_fecha_real].copy()
+    tramo_previsto.loc[tramo_previsto["fecha"] == ultima_fecha_real, "tipo"] = "anclaje_real"
+
+    return tramo_previsto[columnas_salida].reset_index(drop=True)
+
 # CARGAMOS CSV COMPONENTES
 def cargar_componentes_csv():
     

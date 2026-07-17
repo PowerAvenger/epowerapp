@@ -760,6 +760,53 @@ def tabla_margen(df):
         decimals=4
     )
 
+
+def tabla_apuntamiento_spot(df, decimals=3):
+    """Resume el apuntamiento horario y el ponderado por la curva de carga."""
+
+    dffm = df.copy()
+    media_spot = dffm["spot"].mean()
+
+    if pd.isna(media_spot) or media_spot == 0:
+        return pd.DataFrame()
+
+    ap_20 = dffm.groupby("dh_3p", observed=False)["spot"].mean() / media_spot
+    ap_6p = dffm.groupby("dh_6p", observed=False)["spot"].mean() / media_spot
+
+    tabla = pd.DataFrame(
+        [ap_20, ap_6p, ap_6p],
+        index=["Ap_2.0", "Ap_3.0", "Ap_6.1"],
+    ).reindex(columns=[f"P{i}" for i in range(1, 7)])
+    tabla["Media"] = 1.0
+
+    df_curva = st.session_state.get("df_curva_sheets")
+    if df_curva is not None and not df_curva.empty:
+        dfc = df_curva.copy()
+        atr = st.session_state.atr_dfnorm
+        col_periodo = "dh_3p" if atr == "2.0" else "dh_6p"
+        dfc["_spot_x_consumo"] = dfc["spot"] * dfc["consumo_neto_kWh"]
+
+        agrupado = dfc.groupby(col_periodo, observed=False)[
+            ["_spot_x_consumo", "consumo_neto_kWh"]
+        ].sum()
+        ap_curva = (
+            agrupado["_spot_x_consumo"]
+            / agrupado["consumo_neto_kWh"].replace(0, float("nan"))
+            / media_spot
+        )
+
+        consumo_total = dfc["consumo_neto_kWh"].sum()
+        ap_curva_global = (
+            dfc["_spot_x_consumo"].sum() / consumo_total / media_spot
+            if consumo_total != 0
+            else float("nan")
+        )
+
+        tabla.loc[f"Ap_{atr}_curva", ap_curva.index] = ap_curva.values
+        tabla.loc[f"Ap_{atr}_curva", "Media"] = ap_curva_global
+
+    return tabla.round(decimals).apply(pd.to_numeric, errors="coerce")
+
         
 def evol_mensual(df, colores_precios):
 

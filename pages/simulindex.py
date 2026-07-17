@@ -179,6 +179,16 @@ graf_omip_trimestral_select = obtener_grafico_omip(df_trim_sel)
 # dfs para trimestres históricos
 df_FTB_trimestral_cobertura = df_FTB_trimestral[df_FTB_trimestral['Entrega'] == st.session_state.trimestre_cobertura]
 df_FTB_mensual_cobertura = df_FTB_mensual[df_FTB_mensual['Entrega'] == st.session_state.mes_cobertura]
+trimestre_sel, año_corto_sel = st.session_state.trimestre_cobertura.split('-')
+primer_mes_trimestre = (int(trimestre_sel[1]) - 1) * 3 + 1
+meses_trimestre = range(primer_mes_trimestre, primer_mes_trimestre + 3)
+año_trimestre = 2000 + int(año_corto_sel)
+spot_trimestre = df_spot_mensual.loc[
+    (df_spot_mensual.index.year == año_trimestre)
+    & (df_spot_mensual.index.month.isin(meses_trimestre)),
+    'spot'
+].dropna()
+media_omie_trimestre = round(spot_trimestre.mean(), 2) if not spot_trimestre.empty else None
 #print('df FTB trimestral cobertura')
 #print(df_FTB_trimestral_cobertura)
 graf_omip_omie_trimestral = obtener_grafico_omip_omie(df_FTB_trimestral_cobertura, df_spot_mensual, st.session_state.trimestre_cobertura)
@@ -256,6 +266,12 @@ df_2026 = construir_curva_2026(df_spot_mensual, df_FTB_mensual, df_FTB_trimestra
 precio_medio_2026 = round(df_2026["precio"].mean(),2)
 graf_2026 = graficar_2026(df_2026, precio_medio_2026)
 st.session_state.precio_omie_previsto = precio_medio_2026
+st.session_state.prevision_omie_anual = {
+    "año": int(df_2026["fecha"].dt.year.iloc[0]),
+    "media_anual": precio_medio_2026,
+    "fecha_corte": fecha_ultimo_omip_trimestral,
+    "curva_mensual": df_2026.copy(),
+}
 
 df_año_movil = construir_curva_omip_mensual_12m(df_FTB_mensual, df_FTB_trimestral, fecha_ultimo_omip_trimestral)
 precio_medio_omip = round(df_año_movil["precio"].mean(),2)
@@ -464,6 +480,7 @@ with tab4:
         with col5:
             lista_trimestres_hist = lista_trimestres_hist[::-1]  # invierte la lista
             st.selectbox('Selecciona el trimestre', options=lista_trimestres_hist, key = 'trimestre_cobertura', index=0)
+            st.metric('OMIE medio trimestre (€/MWh)', value=media_omie_trimestre if media_omie_trimestre is not None else '—')
         with col6:
             st.plotly_chart(graf_omip_omie_trimestral)
     with st.container():

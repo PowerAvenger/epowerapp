@@ -362,8 +362,22 @@ if st.session_state.get("df_norm") is not None:
             graf_mensual = graficar_mensual_apilado(st.session_state.df_norm_h)
             st.plotly_chart(graf_mensual, use_container_width=True)
             tabla_mensual_consumos = tabla_mensual_periodos(st.session_state.df_norm_h)
+
+            # La fila de total es solo para presentacion. Conservamos la tabla
+            # mensual original para los calculos de reactiva que se hacen despues.
+            fila_total_consumos = tabla_mensual_consumos.drop(columns="Mes").sum().to_dict()
+            fila_total_consumos["Mes"] = "Total"
+            tabla_mensual_consumos_mostrar = pd.concat(
+                [tabla_mensual_consumos, pd.DataFrame([fila_total_consumos])],
+                ignore_index=True,
+            )
+
             from backend_comun import formatear_tabla_consumos
-            tabla_mensual_consumos_fmt = formatear_tabla_consumos(tabla_mensual_consumos, columna_mes="Mes", incluir_unidades=False)
+            tabla_mensual_consumos_fmt = formatear_tabla_consumos(
+                tabla_mensual_consumos_mostrar,
+                columna_mes="Mes",
+                incluir_unidades=False,
+            )
             st.dataframe(tabla_mensual_consumos_fmt, use_container_width=True, hide_index=True)
         with c3:
             graf_medias_horarias_total=graficar_media_horaria('Todos', ymax = None)

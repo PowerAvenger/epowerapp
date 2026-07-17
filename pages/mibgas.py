@@ -5,8 +5,8 @@ import pandas as pd
 
 import plotly.express as px
 from datetime import datetime
-from utilidades import generar_menu, init_app, init_app_index
-from backend_comun import carga_mibgas
+from utilidades import generar_menu, init_app
+from backend_comun import carga_mibgas, carga_total_sheets
 from backend_mibgas import (
     filtrar_por_producto, graficar_qs, graficar_futuros_mibgas, graficar_da_corrido, graficar_da_2026_acumulado, graficar_da_comparado,
     descargar_sendeco, obtener_sendeco, graficar_gas_co2,
@@ -26,13 +26,15 @@ if not st.session_state.get('usuario_autenticado', False) and not st.session_sta
 generar_menu()
 init_app()
 
+# Gas solo necesita las columnas históricas de fecha y SPOT. Evitamos
+# init_app_index(), que además carga componentes y recalcula indexados.
+if "df_sheets" not in st.session_state:
+    if "df_sheets_old" not in st.session_state:
+        carga_total_sheets()
+    st.session_state.df_sheets = st.session_state.df_sheets_old.copy()
+
 st.sidebar.header('⚡ Gas & Furious ⚡')
 zona_mensajes = st.sidebar.empty()
-if 'df_sheets' not in st.session_state:
-    zona_mensajes.warning('Cargando históricos. Espera a que estén disponibles...', icon = '⚠️')
-
-#inicializamos variables de sesión
-init_app_index()
 
 if 'mibgas_simul' not in st.session_state:
     st.session_state.mibgas_simul = 40
@@ -167,7 +169,15 @@ df_validacion = pd.DataFrame({
 })
 
 colores_precios = {'precio_gas': 'goldenrod', '': 'darkred', 'precio_6.1': '#1C83E1'}
-graf_hist, simul_spot, simul_gas = graf_simul_spot(df_mensual, df_validacion, st.session_state.mibgas_simul, omie_media_2026=omie_media_2026, gas_media_2026=gas_media_2026)
+graf_hist, simul_spot, simul_gas = graf_simul_spot(
+    df_mensual,
+    df_validacion,
+    st.session_state.mibgas_simul,
+    omie_media_2026=omie_media_2026,
+    gas_media_2026=gas_media_2026,
+    omie_previsto=st.session_state.get("precio_omie_previsto"),
+    gas_previsto=precio_medio_mibgas_2026,
+)
 
 
 
@@ -220,21 +230,49 @@ with tab4:
     col1, col2 = st.columns([.25,.75])
     with col1:
         st.success('Bienvenido a la simulación baratera del precio medio OMIE anual a partir de MIBGAS')
+
+        st.info('Puntos de simulación sobre curva')
+
+        # Fila 1: simulación directa MIBGAS -> OMIE.
         col11, col12 = st.columns(2)
         with col11:
             st.number_input('Introduce el valor previsto MIBGAS 2026', min_value=26, max_value=70, key='mibgas_simul')
-            if st.session_state.get("precio_omie_previsto", None):
-                st.metric('Valor OMIE previsto s/OMIP', st.session_state.precio_omie_previsto)
-            #from pages.escalacv import valor_medio_diario
-            #st.metric('Valor medio OMIE 2026 €/MWh', valor_medio_diario)
-            init_app_index()
-            
-            st.metric('Valor medio OMIE 2026 €/MWh', omie_media_2026)
         with col12:
             st.metric('Valor de OMIE 2026 esperado', simul_spot)
-            if simul_gas is not None:
-                st.metric('Valor de gas 2026 esperado', simul_gas)
+
+        # Fila 2: simulación inversa OMIE -> MIBGAS a partir de la curva
+        # híbrida calculada en Simulindex.
+        precio_omie_previsto = st.session_state.get("precio_omie_previsto")
+        if precio_omie_previsto is not None:
+            col21, col22 = st.columns(2)
+            with col21:
+                st.metric('Valor OMIE previsto s/OMIP', precio_omie_previsto)
+            with col22:
+                if simul_gas is not None:
+                    st.metric('Valor de gas 2026 esperado', simul_gas)
+        else:
+            st.caption('La previsión OMIE de Simulindex no está disponible en esta sesión.')
+
+        st.info('Punto según valores actuales OMIE/MIBGAS')
+
+        # Fila 3: valores medios observados en el año en curso.
+        col31, col32 = st.columns(2)
+        with col31:
+            st.metric('Valor medio OMIE 2026 €/MWh', omie_media_2026)
+        with col32:
             st.metric("Precio medio gas 2026 (€/MWh)", df_medias.loc[df_medias["año_entrega"] == 2026, "precio_str"].values[0])
+
+        st.info('Punto según valores futuros')
+
+        # Fila 4: previsiones anuales procedentes de Simulindex y MIBGAS.
+        col41, col42 = st.columns(2)
+        with col41:
+            st.metric(
+                'Valor OMIE previsto s/OMIP',
+                precio_omie_previsto if precio_omie_previsto is not None else 'No disponible'
+            )
+        with col42:
+            st.metric('Valor MIBGAS previsto (€/MWh)', precio_medio_mibgas_2026)
             
     with col2:        
         st.write(graf_hist)

@@ -1,6 +1,8 @@
 import streamlit as st
 import datetime
 from datetime import datetime
+import pandas as pd
+import plotly.graph_objects as go
 
 
 from utilidades import (
@@ -13,6 +15,7 @@ from backend_escalacv import (
     obtener_df_scatter_mensual, graficar_scatter_combo, obtener_puntos_anuales, graficar_simulacion_cuadratica, graficar_bandas_ssaa,
     mapa_calor_mes, mapa_calor_mes_gradual
 )
+from backend_comun import construir_media_acumulada_prevista
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
@@ -82,6 +85,47 @@ datos_año_comparado = datos_totales[datos_totales['año'] == st.session_state.a
 
 #datos diarios
 datos_dia, graf_ecv_diario = diarios(datos_año_filtrado, fecha_ini_año, fecha_fin_año, datos_año_comparado)
+prevision_omie_anual = st.session_state.get("prevision_omie_anual")
+if (
+    st.session_state.get("componente") == "SPOT"
+    and isinstance(prevision_omie_anual, dict)
+    and prevision_omie_anual.get("año") == st.session_state.año_seleccionado_esc
+    and isinstance(prevision_omie_anual.get("curva_mensual"), pd.DataFrame)
+):
+    df_media_acumulada_prevista = construir_media_acumulada_prevista(
+        datos_diarios_reales=datos_dia,
+        curva_mensual_prevista=prevision_omie_anual["curva_mensual"],
+        año=prevision_omie_anual["año"],
+    )
+    if not df_media_acumulada_prevista.empty:
+        graf_ecv_diario.add_trace(
+            go.Scatter(
+                x=df_media_acumulada_prevista["fecha"],
+                y=df_media_acumulada_prevista["media_acumulada_prevista"],
+                mode="lines",
+                name=f"Media acumulada prevista {prevision_omie_anual['año']}",
+                line=dict(color="yellow", width=2, dash="dot"),
+                hovertemplate=(
+                    "<b>Media acumulada prevista</b><br>"
+                    "%{x|%d-%m-%Y}<br>"
+                    "%{y:.2f} €/MWh"
+                    "<extra></extra>"
+                ),
+            )
+        )
+        ultimo_punto_previsto = df_media_acumulada_prevista.iloc[-1]
+        graf_ecv_diario.add_annotation(
+            x=ultimo_punto_previsto["fecha"],
+            y=ultimo_punto_previsto["media_acumulada_prevista"],
+            text=(
+                f"Previsión {prevision_omie_anual['año']}: "
+                f"{ultimo_punto_previsto['media_acumulada_prevista']:.2f} €/MWh"
+            ),
+            showarrow=False,
+            xanchor="right",
+            yshift=18,
+            font=dict(color="yellow", size=15),
+        )
 valor_medio_diario = round(datos_dia['value'].mean(),2)
 valor_minimo_diario = datos_dia['value'].min()
 valor_maximo_diario = datos_dia['value'].max()
