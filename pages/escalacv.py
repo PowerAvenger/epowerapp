@@ -13,7 +13,7 @@ from utilidades import (
 from backend_escalacv import (
     leer_json, diarios_totales, diarios, mensuales, horarios, medias_horarias, evolucion_mensual, meses_español,
     obtener_df_scatter_mensual, graficar_scatter_combo, obtener_puntos_anuales, graficar_simulacion_cuadratica, graficar_bandas_ssaa,
-    mapa_calor_mes, mapa_calor_mes_gradual
+    mapa_calor_mes, mapa_calor_mes_gradual, graficar_media_acumulada_periodo
 )
 from backend_comun import construir_media_acumulada_prevista
 from backend_previsiones import (
@@ -194,6 +194,11 @@ else:
 
 #medias_horarias_filtrado, graf_medias_horarias = medias_horarias(datos_año_filtrado)
 medias_horarias_filtrado, graf_medias_horarias = medias_horarias(datos_mes_filtrado)
+mes_num_acumulada = None if mes_sel == "todos" else meses_lista.index(mes_sel)
+df_media_acumulada_periodo, graf_media_acumulada_periodo = graficar_media_acumulada_periodo(
+    datos_año_filtrado,
+    mes_num=mes_num_acumulada,
+)
 
 #st.write(ultimo_registro) 
 #   fecha_descarga=pasar_fecha()
@@ -290,6 +295,26 @@ with tab1:
         col5,col6,col7=st.columns([.4,.4,.2])
         with col5:
             st.write(graf_ecv_evol_mes_años)
+        with col6:
+            st.plotly_chart(graf_media_acumulada_periodo, use_container_width=True)
+        with col7:
+            st.subheader('Datos en €/MWh', divider='rainbow')
+            st.metric(
+                'Precio medio del periodo',
+                round(df_media_acumulada_periodo['value'].mean(), 2),
+            )
+            st.metric(
+                'Precio mínimo del periodo',
+                round(df_media_acumulada_periodo['value'].min(), 2),
+            )
+            st.metric(
+                'Precio máximo del periodo',
+                round(df_media_acumulada_periodo['value'].max(), 2),
+            )
+
+    # Perfil horario del día seleccionado, desplazado al final del tab General.
+    with st.container():
+        col5,col6,col7=st.columns([.4,.4,.2])
         with col6:
             st.write(graf_horario_dia)
         with col7:
