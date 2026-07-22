@@ -87,6 +87,7 @@ def dias_en_año(año):
     return 366 if pd.Timestamp(f"{año}-12-31").is_leap_year else 365
 
 tp_coste_pvpc_kW = 0
+fraccion_anual_periodo = 0
 
 for año, tp_boe_año in tp_boe.items():
 
@@ -96,12 +97,17 @@ for año, tp_boe_año in tp_boe.items():
     if inicio_año <= fin_año:
         dias_año_periodo = (fin_año - inicio_año).days + 1
         dias_totales_año = dias_en_año(año)
+        fraccion_anual_periodo += dias_año_periodo / dias_totales_año
 
         tp_pvpc_año = tp_boe_año + tp_margen_pvpc  # €/kW·año
         tp_coste_pvpc_kW += tp_pvpc_año * dias_año_periodo / dias_totales_año
 
 
-tp_pvpc = tp_coste_pvpc_kW * 365 / dias_periodo
+tp_pvpc = (
+    tp_coste_pvpc_kW / fraccion_anual_periodo
+    if fraccion_anual_periodo
+    else 0
+)
 tp_coste_pvpc = round(tp_coste_pvpc_kW * st.session_state.pot_con,2)  #€
 
 
@@ -116,7 +122,11 @@ coste_pvpc = round((tp_coste_pvpc + te_coste_pvpc) * (1 + iee) * (1 + iva), 2)
 
 # Cálculo del FIJO a fecha último registro
 tp_margen_fijo = +round(st.session_state.tp_fijo - tp_pvpc, 2)
-tp_coste_fijo = st.session_state.tp_fijo * st.session_state.pot_con * dias_periodo / 365
+tp_coste_fijo = (
+    st.session_state.tp_fijo
+    * st.session_state.pot_con
+    * fraccion_anual_periodo
+)
 te_fijo = st.session_state.precio_ene / 100
 te_coste_fijo = round(te_fijo * consumo_periodo, 2)
 coste_fijo = float(f"{round((tp_coste_fijo + te_coste_fijo) * (1 + iee) * (1 + iva), 2):.2f}")
@@ -228,8 +238,11 @@ with st.sidebar.form('form2'):
         st.subheader('Calcular Tp BOE anual')
         precio_tp_dia_P1 = st.number_input('potencia €/kW dia P1', min_value = 0.076, max_value = 0.192, step = .001, format  ="%f")
         precio_tp_dia_P3 = st.number_input('potencia €/kW dia P3',min_value=0.002, max_value = 0.192, step = .001, format  ="%f")
-        precio_tp_año = round((precio_tp_dia_P1 + precio_tp_dia_P3) * 365, 2)
         año_boe = max(tp_boe.keys())
+        precio_tp_año = round(
+            (precio_tp_dia_P1 + precio_tp_dia_P3) * dias_en_año(año_boe),
+            2,
+        )
         tp_boe_ref = tp_boe[año_boe]
         if precio_tp_año < tp_boe_ref:
             precio_tp_año = tp_boe_ref

@@ -105,13 +105,7 @@ SRAD = {
     }
 }
 
-FNEE_TRAMOS = [
-    ("2023-01-01", 0.264),
-    ("2023-03-31", 0.498),
-    ("2024-03-24", 0.975),
-    ("2025-03-05", 1.429),
-    ("2026-03-01", 2.658),
-]
+from regulacion_fnee import FNEE_TRAMOS
 
 def filtrar_datos():
    
@@ -1043,6 +1037,123 @@ def evol_mensual(df, colores_precios):
     fig = aplicar_estilo(fig)
 
     return df_precios_mensuales, fig
+
+
+def evol_precios_diarios(df, colores_precios):
+    """Construye la evolucion diaria de SPOT y precios finales de indexado."""
+    dffd = df.copy()
+
+    if "fecha" in dffd.columns:
+        dffd["fecha"] = pd.to_datetime(dffd["fecha"], errors="coerce").dt.floor("D")
+    elif "datetime" in dffd.columns:
+        dffd["fecha"] = pd.to_datetime(dffd["datetime"], errors="coerce").dt.floor("D")
+    elif "fecha_hora" in dffd.columns:
+        dffd["fecha"] = pd.to_datetime(dffd["fecha_hora"], errors="coerce").dt.floor("D")
+    else:
+        raise ValueError("No encuentro columna 'fecha', 'datetime' ni 'fecha_hora'.")
+
+    columnas_precio = ["spot", "precio_2.0", "precio_3.0", "precio_6.1"]
+    faltantes = [col for col in columnas_precio if col not in dffd.columns]
+    if faltantes:
+        raise ValueError(f"No encuentro las columnas: {', '.join(faltantes)}")
+
+    df_diario = (
+        dffd.dropna(subset=["fecha"])
+        .groupby("fecha", as_index=False)[columnas_precio]
+        .mean()
+        .sort_values("fecha")
+    )
+
+    hay_curva = all(
+        col in dffd.columns for col in ["consumo_neto_kWh", "coste_total"]
+    )
+    if hay_curva:
+        df_curva_diario = (
+            dffd.dropna(subset=["fecha"])
+            .groupby("fecha", as_index=False)
+            .agg(
+                consumo_neto_kWh=("consumo_neto_kWh", "sum"),
+                coste_total=("coste_total", "sum"),
+            )
+        )
+        df_curva_diario["precio_curva"] = np.where(
+            df_curva_diario["consumo_neto_kWh"] > 0,
+            df_curva_diario["coste_total"]
+            / df_curva_diario["consumo_neto_kWh"]
+            * 1000,
+            np.nan,
+        )
+        df_diario = df_diario.merge(
+            df_curva_diario[["fecha", "precio_curva"]], on="fecha", how="left"
+        )
+
+    columnas_convertir = columnas_precio + (["precio_curva"] if hay_curva else [])
+    for col in columnas_convertir:
+        df_diario[col] = (df_diario[col] / 10).round(2)
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=df_diario["fecha"],
+            y=df_diario["spot"],
+            name="SPOT",
+            marker_color="green",
+            opacity=0.65,
+            hovertemplate="SPOT: %{y:.2f} c€/kWh<extra></extra>",
+        )
+    )
+
+    series_lineas = {
+        "Peaje 2.0": "precio_2.0",
+        "Peaje 3.0": "precio_3.0",
+        "Peaje 6.1": "precio_6.1",
+    }
+    colores = {
+        "Peaje 2.0": colores_precios.get("precio_2.0", "goldenrod"),
+        "Peaje 3.0": colores_precios.get("precio_3.0", "darkred"),
+        "Peaje 6.1": colores_precios.get("precio_6.1", "#1C83E1"),
+    }
+    for nombre, col in series_lineas.items():
+        fig.add_trace(
+            go.Scatter(
+                x=df_diario["fecha"],
+                y=df_diario[col],
+                mode="lines",
+                name=nombre,
+                line=dict(color=colores[nombre], width=2.5),
+                hovertemplate=f"{nombre}: " + "%{y:.2f} c€/kWh<extra></extra>",
+            )
+        )
+
+    if hay_curva:
+        atr_actual = st.session_state.get("atr_dfnorm")
+        nombre_curva = f"Curva {atr_actual}" if atr_actual else "Precio curva"
+        fig.add_trace(
+            go.Scatter(
+                x=df_diario["fecha"],
+                y=df_diario["precio_curva"],
+                mode="lines",
+                name=nombre_curva,
+                line=dict(
+                    color=colores_precios.get("precio_curva", "limegreen"),
+                    width=3,
+                    dash="dot",
+                ),
+                hovertemplate=nombre_curva + ": %{y:.2f} c€/kWh<extra></extra>",
+            )
+        )
+
+    fig.update_yaxes(rangemode="tozero", showgrid=True, title_text="Precio medio c€/kWh")
+    fig.update_xaxes(showgrid=True, tickformat="%d-%b-%y", title_text="Día")
+    fig.update_layout(
+        title="",
+        hovermode="x unified",
+        barmode="overlay",
+        legend_title_text="",
+        bargap=0.15,
+    )
+    fig = aplicar_estilo(fig)
+    return df_diario, fig
 
 
 from plotly.subplots import make_subplots

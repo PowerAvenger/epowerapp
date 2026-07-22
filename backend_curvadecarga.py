@@ -6,6 +6,7 @@ import io, re
 from unidecode import unidecode
 import plotly.graph_objects as go
 from backend_comun import aplicar_estilo, aplicar_texto_pie_porcentaje
+from formato_es import formato_numero_es
 
 
 TZ = "Europe/Madrid"
@@ -965,49 +966,15 @@ def tabla_mensual_periodos(df_norm, columna_valor="consumo_neto_kWh"):
     return tabla
 
 def formatear_tabla_mensual_es(df_tabla, col_mes="Mes"):
+    """Compatibilidad histórica con el formato mensual de Curva de carga."""
+    from formato_es import formatear_tabla_consumos
 
-    MESES_ES = {
-        1: "ene", 2: "feb", 3: "mar", 4: "abr",
-        5: "may", 6: "jun", 7: "jul", 8: "ago",
-        9: "sep", 10: "oct", 11: "nov", 12: "dic"
-    }
-
-    df_fmt = df_tabla.copy()
-
-    # Si la columna de mes es datetime, la pasamos a formato español.
-    # Si ya es texto, la dejamos tal cual.
-    if col_mes in df_fmt.columns:
-
-        if pd.api.types.is_datetime64_any_dtype(df_fmt[col_mes]):
-            df_fmt["Mes"] = (
-                df_fmt[col_mes].dt.month.map(MESES_ES).str.capitalize()
-                + " "
-                + df_fmt[col_mes].dt.year.astype(str)
-            )
-
-            # Solo eliminar col_mes si NO es ya "Mes"
-            if col_mes != "Mes":
-                df_fmt = df_fmt.drop(columns=[col_mes])
-
-        else:
-            # Si ya viene como texto tipo "Apr 2025", no tocamos el mes
-            if col_mes != "Mes":
-                df_fmt = df_fmt.rename(columns={col_mes: "Mes"})
-
-    # Formatear solo columnas numéricas / periodos
-    cols_num = [c for c in df_fmt.columns if c != "Mes"]
-
-    for col in cols_num:
-        df_fmt[col] = (
-            pd.to_numeric(df_fmt[col], errors="coerce")
-            .fillna(0)
-            .round(0)
-            .astype(int)
-            .map(lambda x: f"{x:,.0f}".replace(",", "."))
-        )
-
-    return df_fmt
-
+    df_vista = (
+        df_tabla.rename(columns={col_mes: "Mes"})
+        if col_mes != "Mes"
+        else df_tabla
+    )
+    return formatear_tabla_consumos(df_vista, columna_mes="Mes")
 
 # ====================================================================================================================
 # SECCIÓN AUTOCONSUMO
@@ -2394,7 +2361,12 @@ def obtener_top_horas_revisables(df_analisis, top_n=50):
 
     return df_top
 
-def calcular_tabla_excesos_reactiva(tabla_consumos, tabla_reactiva, porcentaje_limite=0.33):
+def calcular_tabla_excesos_reactiva(tabla_consumos, tabla_reactiva, porcentaje_limite=None):
+
+    from regulacion_reactiva import LIMITE_REACTIVA_SOBRE_ACTIVA
+
+    if porcentaje_limite is None:
+        porcentaje_limite = LIMITE_REACTIVA_SOBRE_ACTIVA
 
     if tabla_consumos is None or tabla_reactiva is None:
         return None
@@ -2482,6 +2454,8 @@ def calcular_tabla_factor_potencia(tabla_consumos, tabla_reactiva):
 
 
 def estilo_factor_potencia(val):
+    from regulacion_reactiva import COS_PHI_SIN_PENALIZACION
+
     if pd.isna(val):
         return ""
 
@@ -2490,12 +2464,19 @@ def estilo_factor_potencia(val):
     except:
         return ""
 
-    if val < 0.95:
+    if val < COS_PHI_SIN_PENALIZACION:
         return "background-color: #EA9999; color: #000000;"  # rosa Excel
     else:
         return "background-color: #B6D7A8; color: #000000;"  # verde Excel
     
 def calcular_tabla_precio_penalizacion_reactiva(tabla_fp):
+
+    from regulacion_reactiva import (
+        COS_PHI_PENALIZACION_ALTA,
+        COS_PHI_SIN_PENALIZACION,
+        PRECIO_REACTIVA_ALTA_EUR_KVARH,
+        PRECIO_REACTIVA_MEDIA_EUR_KVARH,
+    )
 
     if tabla_fp is None:
         return None
@@ -2511,14 +2492,14 @@ def calcular_tabla_precio_penalizacion_reactiva(tabla_fp):
 
             tabla_precio[p] = np.select(
                 [
-                    fp >= 0.95,
-                    (fp >= 0.80) & (fp < 0.95),
-                    fp < 0.80
+                    fp >= COS_PHI_SIN_PENALIZACION,
+                    (fp >= COS_PHI_PENALIZACION_ALTA) & (fp < COS_PHI_SIN_PENALIZACION),
+                    fp < COS_PHI_PENALIZACION_ALTA
                 ],
                 [
                     0,
-                    0.0411554,
-                    0.062332
+                    PRECIO_REACTIVA_MEDIA_EUR_KVARH,
+                    PRECIO_REACTIVA_ALTA_EUR_KVARH
                 ],
                 default=np.nan
             )
@@ -2530,6 +2511,13 @@ def calcular_tabla_precio_penalizacion_reactiva(tabla_fp):
     return tabla_precio
     
 def calcular_tabla_coste_excesos_reactiva(tabla_excesos_reactiva, tabla_fp):
+
+    from regulacion_reactiva import (
+        COS_PHI_PENALIZACION_ALTA,
+        COS_PHI_SIN_PENALIZACION,
+        PRECIO_REACTIVA_ALTA_EUR_KVARH,
+        PRECIO_REACTIVA_MEDIA_EUR_KVARH,
+    )
 
     if tabla_excesos_reactiva is None or tabla_fp is None:
         return None
@@ -2553,14 +2541,14 @@ def calcular_tabla_coste_excesos_reactiva(tabla_excesos_reactiva, tabla_fp):
 
             precio_penalizacion = np.select(
                 [
-                    fp >= 0.95,
-                    (fp >= 0.80) & (fp < 0.95),
-                    fp < 0.80
+                    fp >= COS_PHI_SIN_PENALIZACION,
+                    (fp >= COS_PHI_PENALIZACION_ALTA) & (fp < COS_PHI_SIN_PENALIZACION),
+                    fp < COS_PHI_PENALIZACION_ALTA
                 ],
                 [
                     0,
-                    0.0411554,
-                    0.062332
+                    PRECIO_REACTIVA_MEDIA_EUR_KVARH,
+                    PRECIO_REACTIVA_ALTA_EUR_KVARH
                 ],
                 default=np.nan
             )
@@ -2582,52 +2570,9 @@ def calcular_tabla_coste_excesos_reactiva(tabla_excesos_reactiva, tabla_fp):
     return tabla_coste
     
 def calcular_tabla_coste_excesos_reactiva_old(tabla_excesos_reactiva, tabla_fp):
-
-    if tabla_excesos_reactiva is None or tabla_fp is None:
-        return None
-
-    colores_periodo = COLORES_3P if st.session_state.atr_dfnorm == "2.0" else COLORES_6P
-    orden_periodos = list(colores_periodo.keys())
-
-    tabla_coste = tabla_excesos_reactiva[["Mes"]].copy()
-
-    for p in orden_periodos:
-
-        # P6 no aplica penalización de reactiva
-        if p == "P6":
-            tabla_coste[p] = np.nan
-            continue
-
-        if p in tabla_excesos_reactiva.columns and p in tabla_fp.columns:
-
-            excesos = pd.to_numeric(tabla_excesos_reactiva[p], errors="coerce").fillna(0)
-            fp = pd.to_numeric(tabla_fp[p], errors="coerce")
-
-            precio_penalizacion = np.select(
-                [
-                    fp >= 0.95,
-                    (fp >= 0.80) & (fp < 0.95),
-                    fp < 0.80
-                ],
-                [
-                    0,
-                    0.0411554,
-                    0.062332
-                ],
-                default=0
-            )
-
-            tabla_coste[p] = excesos * precio_penalizacion
-
-        else:
-            tabla_coste[p] = np.nan
-
-    # Total solo con periodos afectados, excluyendo P6
-    periodos_afectados = [p for p in orden_periodos if p != "P6"]
-
-    tabla_coste["Total"] = tabla_coste[periodos_afectados].sum(axis=1)
-
-    return tabla_coste
+    return calcular_tabla_coste_excesos_reactiva(
+        tabla_excesos_reactiva, tabla_fp
+    )
 
 def estilo_coste_penalizacion(val):
     if pd.isna(val):
@@ -3654,11 +3599,8 @@ def calcular_comparacion():
     else:
         texto_tipo = "variación nula"
 
-    def formato_es(valor, decimales=0):
-        return f"{valor:,.{decimales}f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
-    delta_str = formato_es(delta, 0)
-    delta_pct_str = formato_es(delta_pct, 2)
+    delta_str = formato_numero_es(delta, 0)
+    delta_pct_str = formato_numero_es(delta_pct, 2)
 
     resumen_html = f"""
     <div style="font-size:28px; text-align:center; color:white;">
@@ -4042,11 +3984,6 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
     variacion_total = coste_comp_total - coste_base_total
     efecto_precio_total = coste_simulado_total - coste_base_total
     efecto_consumo_total = coste_comp_total - coste_simulado_total
-
-    def formato_numero_es(valor, decimales=2):
-        if pd.isna(valor):
-            return "-"
-        return f"{valor:,.{decimales}f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
     def generar_resumen_html_costes(
         coste_base_total,

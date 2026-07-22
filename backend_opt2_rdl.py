@@ -14,6 +14,7 @@ from backend_opt2 import (
     #graficar_costes_opt,
     ajustar_potencias,
 )
+from formato_es import formato_numero_es
 
 
 GRUPOS_RDL = {
@@ -44,7 +45,7 @@ def _formato_es(x):
         return ""
     if isinstance(x, bool):
         return x
-    return f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return formato_numero_es(x, 2)
 
 
 def _aplicar_monotonia_solo_no_afectados(
