@@ -4,7 +4,7 @@ from backend_simulindex import (obtener_historicos_meff, obtener_meff_anual, obt
                                 obtener_hist_mensual, obtener_spot_mensual, obtener_spot_diario,
                                 obtener_graf_hist, obtener_grafico_omip, obtener_grafico_omip_omie,
                                 obtener_trimestres_futuros, construir_escenarios,
-                                construir_curva_2026, graficar_2026,
+                                graficar_2026,
                                 construir_curva_omip_mensual_12m, graficar_curva_omip_mensual_12m,
                                 construir_media_prevista_2026_diaria, graficar_media_prevista_2026,
                                 construir_evolucion_media_omip, añadir_omie_real_12m_posterior, graficar_evolucion_media_omip, añadir_omie_real_12m_alineado_omip,
@@ -14,6 +14,11 @@ import pandas as pd
 import plotly.express as px
 from utilidades import generar_menu, init_app, init_app_index, persist_widget
 from backend_curvadecarga import graficar_media_horaria, graficar_queso_periodos
+from formato_es import formato_cent_eur_kwh, formato_eur_mwh, formato_numero_es
+from backend_previsiones import (
+    guardar_prevision_omie_en_sesion,
+    obtener_prevision_omie_anual,
+)
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
@@ -179,6 +184,16 @@ graf_omip_trimestral_select = obtener_grafico_omip(df_trim_sel)
 # dfs para trimestres históricos
 df_FTB_trimestral_cobertura = df_FTB_trimestral[df_FTB_trimestral['Entrega'] == st.session_state.trimestre_cobertura]
 df_FTB_mensual_cobertura = df_FTB_mensual[df_FTB_mensual['Entrega'] == st.session_state.mes_cobertura]
+trimestre_sel, año_corto_sel = st.session_state.trimestre_cobertura.split('-')
+primer_mes_trimestre = (int(trimestre_sel[1]) - 1) * 3 + 1
+meses_trimestre = range(primer_mes_trimestre, primer_mes_trimestre + 3)
+año_trimestre = 2000 + int(año_corto_sel)
+spot_trimestre = df_spot_mensual.loc[
+    (df_spot_mensual.index.year == año_trimestre)
+    & (df_spot_mensual.index.month.isin(meses_trimestre)),
+    'spot'
+].dropna()
+media_omie_trimestre = round(spot_trimestre.mean(), 2) if not spot_trimestre.empty else None
 #print('df FTB trimestral cobertura')
 #print(df_FTB_trimestral_cobertura)
 graf_omip_omie_trimestral = obtener_grafico_omip_omie(df_FTB_trimestral_cobertura, df_spot_mensual, st.session_state.trimestre_cobertura)
@@ -252,10 +267,11 @@ if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is
 
     
 
-df_2026 = construir_curva_2026(df_spot_mensual, df_FTB_mensual, df_FTB_trimestral, fecha_ultimo_omip_trimestral)
-precio_medio_2026 = round(df_2026["precio"].mean(),2)
+prevision_omie_anual = obtener_prevision_omie_anual(df_spot_mensual)
+guardar_prevision_omie_en_sesion(prevision_omie_anual)
+df_2026 = prevision_omie_anual["curva_mensual"]
+precio_medio_2026 = prevision_omie_anual["media_anual"]
 graf_2026 = graficar_2026(df_2026, precio_medio_2026)
-st.session_state.precio_omie_previsto = precio_medio_2026
 
 df_año_movil = construir_curva_omip_mensual_12m(df_FTB_mensual, df_FTB_trimestral, fecha_ultimo_omip_trimestral)
 precio_medio_omip = round(df_año_movil["precio"].mean(),2)
@@ -363,48 +379,48 @@ with tab1:
             st.subheader(':blue-background[Datos de entrada]', divider = 'rainbow')
             col11, col12 = st.columns(2)
             with col11:
-                st.metric(':green[OMIE] (€/MWh)', value = st.session_state.omie_slider, help = 'Este es el valor OMIE de referencia que has utilizado como entrada')
+                st.metric(':green[OMIE] (€/MWh)', value=formato_eur_mwh(st.session_state.omie_slider, 2, False), help = 'Este es el valor OMIE de referencia que has utilizado como entrada')
             with col12:
                 if simulcurva is None:
-                    st.metric(':violet[Margen] (€/MWh)', value = st.session_state.margen_simulindex, help = 'Margen que añades para obtener un precio medio final más ajustado a tus necesidades')
+                    st.metric(':violet[Margen] (€/MWh)', value=formato_eur_mwh(st.session_state.margen_simulindex, 2, False), help = 'Margen que añades para obtener un precio medio final más ajustado a tus necesidades')
                 else:
-                    st.metric(':violet[Margen] (€/MWh)', value = margen_simul, help = 'Margen añadido en Telemidex para obtener un precio medio final más ajustado a tus necesidades')
+                    st.metric(':violet[Margen] (€/MWh)', value=formato_eur_mwh(margen_simul, 2, False), help = 'Margen añadido en Telemidex para obtener un precio medio final más ajustado a tus necesidades')
         with st.container(border = True):
             st.subheader(':red-background[Ajustes SSAA y OTROS]', divider = 'rainbow')
             col11, col12 = st.columns(2)
             with col11:
-                st.metric('SSAA media (€/MWh)', value = media_ssaa_hist, help = 'Este es el valor medio de los SSAA')
+                st.metric('SSAA media (€/MWh)', value=formato_eur_mwh(media_ssaa_hist, 2, False), help = 'Este es el valor medio de los SSAA')
  
                 st.number_input('SSAA previsto (€/MWh)', min_value=0.0, max_value=40.0, step=1.0, key = 'media_ssaa_prev')
                 
-                st.metric('Añadir SSAA (€/MWh)', value=añadir_ssaa)
-                st.metric('FNEE media (€/MWh)', value = media_fnee_hist, help = 'Este es el valor medio del FNEE')
+                st.metric('Añadir SSAA (€/MWh)', value=formato_eur_mwh(añadir_ssaa, 2, False))
+                st.metric('FNEE media (€/MWh)', value=formato_eur_mwh(media_fnee_hist, 2, False), help = 'Este es el valor medio del FNEE')
                 
                 st.number_input('FNEE previsto (€/MWh)', min_value=0.0, max_value=4.0, step=.1, key = 'media_fnee_prev')
                 
-                st.metric('Añadir FNEE (€/MWh)', value=añadir_fnee)
+                st.metric('Añadir FNEE (€/MWh)', value=formato_eur_mwh(añadir_fnee, 2, False))
             with col12:
-                st.metric('SRAD media (€/MWh)', value = media_rad3_hist, help = 'Este es el valor medio del SRAD')
+                st.metric('SRAD media (€/MWh)', value=formato_eur_mwh(media_rad3_hist, 2, False), help = 'Este es el valor medio del SRAD')
                 
                 st.number_input('SRAD previsto (€/MWh)', min_value=0.0, max_value=3.0, step=0.1, key = 'media_rad3_prev')
                 
-                st.metric('Añadir SRAD (€/MWh)', value=añadir_rad3)
+                st.metric('Añadir SRAD (€/MWh)', value=formato_eur_mwh(añadir_rad3, 2, False))
 
         with st.container(border = True):
             st.subheader(':green-background[Datos de salida]', divider = 'rainbow')
             col13, col14 = st.columns(2)
             with col13:
                 st.text('Precios base')
-                st.metric(':orange[Precio 2.0] c€/kWh', value = simul20, help = 'Este el precio 2.0 medio simulado a un año vista')
-                st.metric(':red[Precio 3.0] c€/kWh', value = simul30, help = 'Este el precio 3.0 medio simulado a un año vista')
-                st.metric(':blue[Precio 6.1] c€/kWh', value = simul61, help='Este el precio 6.1 medio simulado a un año vista')
+                st.metric(':orange[Precio 2.0] c€/kWh', value=formato_cent_eur_kwh(simul20, 2, False), help = 'Este el precio 2.0 medio simulado a un año vista')
+                st.metric(':red[Precio 3.0] c€/kWh', value=formato_cent_eur_kwh(simul30, 2, False), help = 'Este el precio 3.0 medio simulado a un año vista')
+                st.metric(':blue[Precio 6.1] c€/kWh', value=formato_cent_eur_kwh(simul61, 2, False), help='Este el precio 6.1 medio simulado a un año vista')
                 if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None and simulcurva is not None:
-                    st.metric(f':green[Precio CURVA {st.session_state.atr_dfnorm}]  c€/kWh', value = simulcurva, help='Este el precio medio ponderado simulado a un año vista')
+                    st.metric(f':green[Precio CURVA {st.session_state.atr_dfnorm}]  c€/kWh', value=formato_cent_eur_kwh(simulcurva, 2, False), help='Este el precio medio ponderado simulado a un año vista')
             with col14:
                 st.text('Precios con margen')
-                st.metric(':orange[Precio 2.0] c€/kWh', value = round(simul20_margen, 2), help = 'Este el precio 2.0 con el margen añadido')
-                st.metric(':red[Precio 3.0] c€/kWh', value = round(simul30_margen, 2), help = 'Este el precio 3.0 con el margen añadido')
-                st.metric(':blue[Precio 6.1] c€/kWh', value = round(simul61_margen, 2), help = 'Este el precio 6.1 con el margen añadido')
+                st.metric(':orange[Precio 2.0] c€/kWh', value=formato_cent_eur_kwh(simul20_margen, 2, False), help = 'Este el precio 2.0 con el margen añadido')
+                st.metric(':red[Precio 3.0] c€/kWh', value=formato_cent_eur_kwh(simul30_margen, 2, False), help = 'Este el precio 3.0 con el margen añadido')
+                st.metric(':blue[Precio 6.1] c€/kWh', value=formato_cent_eur_kwh(simul61_margen, 2, False), help = 'Este el precio 6.1 con el margen añadido')
                 #if 'df_curva_sheets' in st.session_state and st.session_state.df_curva_sheets is not None and simulcurva is not None:
                 #    st.metric(f':green[Precio CURVA {st.session_state.atr_dfnorm}]  c€/kWh', value = simulcurva_margen, help='Este el precio medio ponderado con el margen añadido')
     with col2:
@@ -464,6 +480,7 @@ with tab4:
         with col5:
             lista_trimestres_hist = lista_trimestres_hist[::-1]  # invierte la lista
             st.selectbox('Selecciona el trimestre', options=lista_trimestres_hist, key = 'trimestre_cobertura', index=0)
+            st.metric('OMIE medio trimestre (€/MWh)', value=media_omie_trimestre if media_omie_trimestre is not None else '—')
         with col6:
             st.plotly_chart(graf_omip_omie_trimestral)
     with st.container():
@@ -800,7 +817,7 @@ with tab6:
                     display:inline-block;
                     width:100%
                 ">
-                    {f"{precio_trim_sel:.2f}".replace(".", ",")}
+                    {formato_numero_es(precio_trim_sel, 2)}
                 </div>
                 """,
                 unsafe_allow_html=True

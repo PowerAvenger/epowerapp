@@ -1,83 +1,50 @@
 import streamlit as st
+
 from utilidades import generar_menu
 
 
 generar_menu()
 
-if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
-    st.switch_page('epowerapp.py')
+if (
+    not st.session_state.get("usuario_autenticado", False)
+    and not st.session_state.get("usuario_free", False)
+):
+    st.switch_page("epowerapp.py")
 
 
-col11,col12,col13,col14,col15=st.columns(5)
-with col11:
-    st.subheader('Curva de carga',divider='rainbow')
-    st.page_link("pages/curvadecarga.py", label="Curva de carga: Analiza el suministro", icon="🕒", use_container_width=True)
-    st.image('images/curvadecarga.jpg')
-with col12:
-    st.subheader('Término de potencia',divider='rainbow')
-    st.page_link("pages/opt2.py", label="Optimiza y verifica el término de potencia", icon="🎯", use_container_width=True)
-    st.image('images/optimizacion.jpg')
+MODULOS = [
+    ("Curva de carga", "pages/curvadecarga.py", "Curva de carga: Analiza el suministro", "🕒", "images/curvadecarga.jpg", None),
+    ("Lector de facturas", "pages/factura.py", "Analiza y verifica tu factura eléctrica", "🧾", "images/lector_facturas.jpg", None),
+    ("Término de potencia", "pages/opt2.py", "Optimiza y verifica el término de potencia", "🎯", "images/optimizacion.jpg", None),
+    ("Telemindex", "pages/telemindex.py", "Analiza el mercado minorista de indexado", "📈", "images/telemindex.jpg", None),
+    ("Simulindex", "pages/simulindex.py", "Simula los precios futuros de indexado", "🔮", "images/simulindex.jpg", None),
+    ("Compara fijo vs PVPC", "pages/fijovspvpc.py", "Compara a ver quién gana", "⚖️", "images/fijovspvpc.jpg", None),
+    ("Autoconsumo: Excedentes", "pages/excedentes.py", "Compara tus excedentes en fijo con el mercado regulado", "💰", "images/excedentes.jpg", None),
+    ("Escala Cavero-Vidal", "pages/escalacv.py", "OMIE a todo color", "📊", "images/escalacv.jpg", None),
+    ("Demanda y Consumo", "pages/demanda.py", "Analiza la demanda sin y con autoconsumo", "🏭", "images/demanda.jpg", None),
+    ("Infografías REData", "pages/redata_potgen.py", "Tecnologías de generación", "🔀", "images/redata.jpg", None),
+    ("Balkoning Solar FV", "pages/balkoning_solar.py", "¿El autoconsumo pisero es para todos?", "🏊‍♂️", "images/balkoning.jpg", None),
+    ("Gas & Furious", "pages/mibgas.py", "Pasado, presente y futuro del gas", "🔥", "images/gas.jpg", None),
+    ("Tecnologías Marginales", "pages/marginales.py", "Tecnologías que casan precio marginal", "⚡️", "images/marginales.jpg", None),
+    ("Optimización RDL 7/2026", "pages/opt2_rdl.py", "Sácale todo el provecho a la flexibilización de potencias", "⚡️", "images/opt rdl 7 2026.jpg", None),
+    ("SPO: Super Power OMIE", None, "Gana el MVPStarPower del año y bate a OMIP", None, "images/spo.jpg", "https://spo-epowerapp.streamlit.app/"),
+    ("Interpolados qh REE", None, "Cuando la interpolación REE apenas tiene impacto", None, "images/interpolados.jpg", "https://interpolados-epowerapp.streamlit.app/"),
+]
 
-with col13:
-    st.subheader('Telemindex',divider='rainbow')
-    st.page_link("pages/telemindex.py", label="Telemindex: Analiza el mercado minorista de indexado", icon="📈", use_container_width=True)
-    st.image('images/telemindex.jpg')
 
-with col14:
-    st.subheader('Simulindex',divider='rainbow')
-    st.page_link("pages/simulindex.py", label="Simulindex: Simula los precios futuros de indexado", icon="🔮", use_container_width=True)
-    st.image('images/simulindex.jpg')
-
-with col15:
-    st.subheader('Compara fijo vs PVPC',divider='rainbow')
-    st.page_link("pages/fijovspvpc.py", label="Fijovspvpc: Compara a ver quién gana", icon="⚖️", use_container_width=True)
-    st.image('images/fijovspvpc.jpg')
-    
-
-col21,col22,col23,col24,col25=st.columns(5)
-with col21:
-    st.subheader('Autoconsumo: Excedentes',divider='rainbow')
-    st.page_link("pages/excedentes.py", label="Compara tus excedentes en fijo con el mercado regulado", icon="💰", use_container_width=True)
-    st.image('images/excedentes.jpg')
-with col22:
-    st.subheader('Escala Cavero-Vidal',divider='rainbow')
-    st.page_link("pages/escalacv.py", label="Escala Cavero-Vidal: OMIE a todo color", icon="📊")
-    st.image('images/escalacv.jpg')
-with col23:
-    st.subheader('Demanda y Consumo',divider='rainbow')
-    st.page_link("pages/demanda.py", label="Analiza la demanda sin y con autoconsumo", icon="🏭")
-    st.image('images/demanda.jpg')
-
-with col24:
-    st.subheader('Infografías REData',divider='rainbow')
-    st.page_link('pages/redata_potgen.py', label = 'Tecnologías de generación', icon = "🔀")
-    st.image('images/redata.jpg')
-with col25:
-    st.subheader('Balkoning Solar FV',divider='rainbow')
-    st.page_link("pages/balkoning_solar.py", label="¿El autoconsumo pisero es para todos?", icon="🏊‍♂️", use_container_width=True)
-    st.image('images/balkoning.jpg')
-
-col31,col32,col33,col34,col35=st.columns(5)
-with col31:
-    st.subheader('Gas & Furious',divider='rainbow')
-    st.page_link("pages/mibgas.py", label="Pasado, presente y futuro del gas", icon="🔥", use_container_width=True)
-    st.image('images/gas.jpg')
-with col32:
-    st.subheader('Tecnologías Marginales',divider='rainbow')
-    st.page_link('pages/marginales.py', label = 'Tecnologías que casan precio marginal', icon = "⚡️")
-    st.image('images/marginales.jpg')
-with col33:
-    st.subheader('Optimización RDL 7/2026',divider='rainbow')
-    st.page_link('pages/opt2_rdl.py', label = 'Sácale todo el provecho a la flexibilización de potencias', icon = "⚡️")
-    st.image('images/opt rdl 7 2026.jpg')
-with col34:
-    url10 = "https://spo-epowerapp.streamlit.app/"
-    st.subheader('SPO: Super Power OMIE',divider='rainbow')
-    st.write("Gana el [MVPStarPower](%s) del año y bate a OMIP!" % url10)
-    st.image('images/spo.jpg')
-with col35:
-    url10 = "https://interpolados-epowerapp.streamlit.app/"
-    st.subheader('Interpolados qh REE',divider='rainbow')
-    st.write("Cuando la [interpolación](%s) REE apenas tiene impacto" % url10)
-    st.image('images/interpolados.jpg')
-
+for inicio in range(0, len(MODULOS), 5):
+    columnas = st.columns(5)
+    for columna, modulo in zip(columnas, MODULOS[inicio:inicio + 5]):
+        titulo, pagina, etiqueta, icono, imagen, url = modulo
+        with columna:
+            st.subheader(titulo, divider="rainbow")
+            if pagina:
+                st.page_link(
+                    pagina,
+                    label=etiqueta,
+                    icon=icono,
+                    use_container_width=True,
+                )
+            else:
+                st.markdown(f"[{etiqueta}]({url})")
+            st.image(imagen)

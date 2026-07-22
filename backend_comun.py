@@ -2,7 +2,6 @@ import pandas as pd
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
-import streamlit as st
 
 
 NOMBRE_ZONA_PERIODOS = {
@@ -344,238 +343,25 @@ def aplicar_texto_pie_porcentaje(fig, size=18, position="auto", color=None):
     return fig
 
 
-MESES_ES = {
-    1: "ene", 2: "feb", 3: "mar", 4: "abr",
-    5: "may", 6: "jun", 7: "jul", 8: "ago",
-    9: "sep", 10: "oct", 11: "nov", 12: "dic"
-}
-
-
-def formato_numero_es(valor, decimales=0):
-    """
-    Formatea un número en estilo español:
-    22920.5 -> 22.921
-    1234.56 -> 1.234,56
-    """
-    if pd.isna(valor):
-        return ""
-
-    try:
-        valor = float(valor)
-    except Exception:
-        return valor
-
-    texto = f"{valor:,.{decimales}f}"
-    texto = texto.replace(",", "X").replace(".", ",").replace("X", ".")
-
-    return texto
-
-
-def formato_kwh(valor, decimales=0, unidad=False):
-    texto = formato_numero_es(valor, decimales)
-
-    if texto == "":
-        return ""
-
-    return f"{texto} kWh" if unidad else texto
-
-
-def formato_mwh(valor, decimales=2, unidad=False):
-    texto = formato_numero_es(valor, decimales)
-
-    if texto == "":
-        return ""
-
-    return f"{texto} MWh" if unidad else texto
-
-
-def formato_euros(valor, decimales=2, unidad=True):
-    texto = formato_numero_es(valor, decimales)
-
-    if texto == "":
-        return ""
-
-    return f"{texto} €" if unidad else texto
-
-
-def formato_eur_mwh(valor, decimales=2, unidad=True):
-    texto = formato_numero_es(valor, decimales)
-
-    if texto == "":
-        return ""
-
-    return f"{texto} €/MWh" if unidad else texto
-
-
-def formato_eur_kwh(valor, decimales=6, unidad=True):
-    texto = formato_numero_es(valor, decimales)
-
-    if texto == "":
-        return ""
-
-    return f"{texto} €/kWh" if unidad else texto
-
-def formato_cent_eur_kwh(valor, decimales=4, unidad=True):
-    texto = formato_numero_es(valor, decimales)
-
-    if texto == "":
-        return ""
-
-    return f"{texto} €/kWh" if unidad else texto
-
-
-def formato_pct(valor, decimales=2, unidad=True):
-    texto = formato_numero_es(valor, decimales)
-
-    if texto == "":
-        return ""
-
-    return f"{texto} %" if unidad else texto
-
-
-def formato_mes_es(valor, capitalizar=True):
-    """
-    Convierte fechas o textos parseables tipo 'Apr 2025' en 'Abr 2025'.
-    """
-    fecha = pd.to_datetime(valor, errors="coerce")
-
-    if pd.isna(fecha):
-        return valor
-
-    mes = MESES_ES.get(fecha.month, "")
-
-    if capitalizar:
-        mes = mes.capitalize()
-
-    return f"{mes} {fecha.year}"
-
-def formatear_columnas_tabla(
-    df,
-    columnas_kwh=None,
-    columnas_mwh=None,
-    columnas_euros=None,
-    columnas_eur_mwh=None,
-    columnas_eur_kwh=None,
-    columnas_cent_eur_kwh=None,
-    columnas_pct=None,
-    columna_mes=None,
-    incluir_unidades=False
-):
-    """
-    Devuelve una copia del DataFrame formateada para visualización.
-    No usar el resultado para cálculos.
-    """
-
-    df_fmt = df.copy()
-
-    columnas_kwh = columnas_kwh or []
-    columnas_mwh = columnas_mwh or []
-    columnas_euros = columnas_euros or []
-    columnas_eur_mwh = columnas_eur_mwh or []
-    columnas_eur_kwh = columnas_eur_kwh or []
-    columnas_cent_eur_kwh = columnas_cent_eur_kwh or []
-    columnas_pct = columnas_pct or []
-
-    if columna_mes is not None and columna_mes in df_fmt.columns:
-        df_fmt[columna_mes] = df_fmt[columna_mes].map(formato_mes_es)
-
-    for col in columnas_kwh:
-        if col in df_fmt.columns:
-            df_fmt[col] = df_fmt[col].map(
-                lambda x: formato_kwh(x, decimales=0, unidad=incluir_unidades)
-            )
-
-    for col in columnas_mwh:
-        if col in df_fmt.columns:
-            df_fmt[col] = df_fmt[col].map(
-                lambda x: formato_mwh(x, decimales=2, unidad=incluir_unidades)
-            )
-
-    for col in columnas_euros:
-        if col in df_fmt.columns:
-            df_fmt[col] = df_fmt[col].map(
-                lambda x: formato_euros(x, decimales=2, unidad=incluir_unidades)
-            )
-
-    for col in columnas_eur_mwh:
-        if col in df_fmt.columns:
-            df_fmt[col] = df_fmt[col].map(
-                lambda x: formato_eur_mwh(x, decimales=2, unidad=incluir_unidades)
-            )
-
-    for col in columnas_eur_kwh:
-        if col in df_fmt.columns:
-            df_fmt[col] = df_fmt[col].map(
-                lambda x: formato_eur_kwh(x, decimales=6, unidad=incluir_unidades)
-            )
-    for col in columnas_cent_eur_kwh:
-        if col in df_fmt.columns:
-            df_fmt[col] = df_fmt[col].map(
-                lambda x: formato_cent_eur_kwh(x, decimales=4, unidad=incluir_unidades)
-            )
-
-    for col in columnas_pct:
-        if col in df_fmt.columns:
-            df_fmt[col] = df_fmt[col].map(
-                lambda x: formato_pct(x, decimales=2, unidad=incluir_unidades)
-            )
-
-    return df_fmt
-
-# usada para formatear consumos con columna de mes en formato Abr 2026
-def formatear_tabla_consumos(df, columna_mes=None, incluir_unidades=False):
-    columnas_kwh = [
-        c for c in df.columns
-        if c.startswith("P") or c in ["Total", "consumo_neto_kWh", "demanda_neto_kWh", "vertido_neto_kWh"]
-    ]
-
-    return formatear_columnas_tabla(
-        df,
-        columnas_kwh=columnas_kwh,
-        columna_mes=columna_mes,
-        incluir_unidades=incluir_unidades
-    )
-
-# usada para formatear tablas económicas con columna de mes en formato Abr 2026
-def formatear_tabla_euros(df, columna_mes=None, incluir_unidades=False):
-    columnas_euros = [
-        c for c in df.columns
-        if c.startswith("P") or c in ["Total", "coste", "importe"]
-    ]
-
-    return formatear_columnas_tabla(
-        df,
-        columnas_euros=columnas_euros,
-        columna_mes=columna_mes,
-        incluir_unidades=incluir_unidades
-    )
-
-# usada para formatear consumos, costes y precios medios (telemindex y simulindex p.e.)
-def formatear_resumen_mixto(df_resumen):
-    """
-    Formatea una tabla resumen con magnitudes por filas:
-    - Consumo (kWh)
-    - Coste (€)
-    - Precio medio (€/kWh)
-
-    Solo presentación.
-    """
-
-    df_t = df_resumen.T.copy()
-
-    df_t_fmt = formatear_columnas_tabla(
-        df_t,
-        columnas_kwh=["Consumo (kWh)"],
-        columnas_euros=["Coste (€)"],
-        columnas_eur_kwh=["Precio medio (€/kWh)"],
-        incluir_unidades=False,
-        decimales_kwh=0,
-        decimales_euros=2,
-        decimales_eur_kwh=6
-    )
-
-    return df_t_fmt.T
-
+# Reexportación compatible de la API canónica de presentación.
+from formato_es import (
+    MESES_ES,
+    formato_cent_eur_kwh,
+    formato_eur_kwh,
+    formato_eur_mwh,
+    formato_euros,
+    formato_fecha_es,
+    formato_kwh,
+    formato_kw,
+    formato_mes_es,
+    formato_mwh,
+    formato_numero_es,
+    formato_pct,
+    formatear_columnas_tabla,
+    formatear_resumen_mixto,
+    formatear_tabla_consumos,
+    formatear_tabla_euros,
+)
 @st.cache_resource
 def autenticar_google_sheets():
     # Rutas y configuraciones
@@ -672,6 +458,81 @@ def enriquecer_datetime(df):
     df["mes_nombre"] = df["mes"].map(map_mes)
 
     return df
+
+
+def construir_media_acumulada_prevista(
+    datos_diarios_reales,
+    curva_mensual_prevista,
+    año,
+    col_fecha_real="fecha",
+    col_valor_real="value",
+    col_fecha_prevision="fecha",
+    col_valor_prevision="precio",
+):
+    """Prolonga la media acumulada real con una previsión mensual.
+
+    Devuelve exclusivamente el tramo previsto, incluyendo como anclaje el
+    último punto real. No accede a ``st.session_state`` y no modifica los
+    dataframes recibidos.
+    """
+    columnas_salida = ["fecha", "media_acumulada_prevista", "precio_base", "tipo"]
+
+    columnas_reales = {col_fecha_real, col_valor_real}
+    columnas_prevision = {col_fecha_prevision, col_valor_prevision}
+    if not columnas_reales.issubset(datos_diarios_reales.columns):
+        return pd.DataFrame(columns=columnas_salida)
+    if not columnas_prevision.issubset(curva_mensual_prevista.columns):
+        return pd.DataFrame(columns=columnas_salida)
+
+    reales = datos_diarios_reales[[col_fecha_real, col_valor_real]].copy()
+    reales[col_fecha_real] = pd.to_datetime(reales[col_fecha_real], errors="coerce")
+    reales[col_valor_real] = pd.to_numeric(reales[col_valor_real], errors="coerce")
+    reales = reales.dropna().copy()
+    reales = reales[reales[col_fecha_real].dt.year == int(año)]
+    reales[col_fecha_real] = reales[col_fecha_real].dt.normalize()
+    reales = (
+        reales.groupby(col_fecha_real, as_index=False)[col_valor_real]
+        .mean()
+        .sort_values(col_fecha_real)
+    )
+
+    if reales.empty:
+        return pd.DataFrame(columns=columnas_salida)
+
+    ultima_fecha_real = reales[col_fecha_real].max()
+    fecha_fin = pd.Timestamp(int(año), 12, 31)
+    if ultima_fecha_real >= fecha_fin:
+        return pd.DataFrame(columns=columnas_salida)
+
+    curva = curva_mensual_prevista[[col_fecha_prevision, col_valor_prevision]].copy()
+    curva[col_fecha_prevision] = pd.to_datetime(curva[col_fecha_prevision], errors="coerce")
+    curva[col_valor_prevision] = pd.to_numeric(curva[col_valor_prevision], errors="coerce")
+    curva = curva.dropna().copy()
+    curva = curva[curva[col_fecha_prevision].dt.year == int(año)]
+    curva["periodo"] = curva[col_fecha_prevision].dt.to_period("M")
+    precios_mensuales = curva.drop_duplicates("periodo", keep="last").set_index("periodo")[col_valor_prevision]
+
+    fechas_futuras = pd.date_range(ultima_fecha_real + pd.Timedelta(days=1), fecha_fin, freq="D")
+    futuro = pd.DataFrame({"fecha": fechas_futuras})
+    futuro["periodo"] = futuro["fecha"].dt.to_period("M")
+    futuro["precio_base"] = futuro["periodo"].map(precios_mensuales)
+
+    # Una previsión incompleta no debe generar una curva engañosa.
+    if futuro["precio_base"].isna().any():
+        return pd.DataFrame(columns=columnas_salida)
+
+    reales_base = reales.rename(
+        columns={col_fecha_real: "fecha", col_valor_real: "precio_base"}
+    )[["fecha", "precio_base"]]
+    futuro_base = futuro[["fecha", "precio_base"]]
+    combinado = pd.concat([reales_base, futuro_base], ignore_index=True)
+    combinado["media_acumulada_prevista"] = combinado["precio_base"].expanding().mean()
+    combinado["tipo"] = "previsto"
+
+    tramo_previsto = combinado[combinado["fecha"] >= ultima_fecha_real].copy()
+    tramo_previsto.loc[tramo_previsto["fecha"] == ultima_fecha_real, "tipo"] = "anclaje_real"
+
+    return tramo_previsto[columnas_salida].reset_index(drop=True)
 
 # CARGAMOS CSV COMPONENTES
 def cargar_componentes_csv():
@@ -827,10 +688,7 @@ def formatear_df_resumen(df_resumen):
     if "Consumo (kWh)" in df_resumen.index:
         styler = styler.format(
             subset=pd.IndexSlice["Consumo (kWh)", :],
-            formatter=lambda x: (
-                f"{x:,.0f}".replace(",", ".")
-                if pd.notnull(x) else ""
-            )
+            formatter=lambda x: formato_kwh(x, decimales=0, unidad=False)
         )
 
     # ======================
@@ -839,10 +697,7 @@ def formatear_df_resumen(df_resumen):
     if "Precio medio (€/kWh)" in df_resumen.index:
         styler = styler.format(
             subset=pd.IndexSlice["Precio medio (€/kWh)", :],
-            formatter=lambda x: (
-                f"{x:,.6f}".replace(".", ",")
-                if pd.notnull(x) else ""
-            )
+            formatter=lambda x: formato_eur_kwh(x, decimales=6, unidad=False)
         )
 
     # ======================
@@ -851,10 +706,7 @@ def formatear_df_resumen(df_resumen):
     if "Coste (€)" in df_resumen.index:
         styler = styler.format(
             subset=pd.IndexSlice["Coste (€)", :],
-            formatter=lambda x: (
-                f"{x:,.2f} €".replace(",", ".")
-                if pd.notnull(x) else ""
-            )
+            formatter=lambda x: formato_euros(x, decimales=2, unidad=True)
         )
 
     # ======================
@@ -888,12 +740,10 @@ def formatear_df_resultados(df):
     styler = df.style
 
     styler = styler.format({
-        "Coste anual (€)": lambda x: f"{x:,.2f} €"
-            .replace(",", "X").replace(".", ",").replace("X", "."),
-        "Precio medio (€/kWh)": lambda x: f"{x:.6f}".replace(".", ","),
-        "% sobre la más barata": lambda x: f"{x:.2f} %".replace(".", ","),
-        "Δ vs más barata (€)": lambda x: f"{x:,.2f} €"
-            .replace(",", "X").replace(".", ",").replace("X", "."),
+        "Coste anual (€)": formato_euros,
+        "Precio medio (€/kWh)": lambda x: formato_eur_kwh(x, unidad=False),
+        "% sobre la más barata": formato_pct,
+        "Δ vs más barata (€)": formato_euros,
     })
 
     # Alineación

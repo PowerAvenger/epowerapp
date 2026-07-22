@@ -17,6 +17,7 @@ from backend_curvadecarga import (
     calcular_comparacion, calcular_comparacion_costes
     )
 from backend_comun import formatear_tabla_consumos, formatear_columnas_tabla
+from formato_es import formato_euros, formato_kwh, formato_numero_es
 
 
         
@@ -323,25 +324,25 @@ if st.session_state.get("df_norm") is not None:
             # Visor del df out
             st.subheader("📊 Tabla normalizada de datos")
             total_filas_norm = len(st.session_state.df_norm)
-            st.caption(f"Vista previa: primeras 1.000 filas de {total_filas_norm:,.0f}".replace(",", "."))
+            st.caption(f"Vista previa: primeras 1.000 filas de {formato_numero_es(total_filas_norm)}")
             st.dataframe(st.session_state.df_norm.head(1000), height=altura_df)
         with c3:
             # --- Resumen registros---
             st.subheader("Resumen de datos")
             c31,c32,c33 = st.columns(3)
             with c31:
-                st.metric("Número de registros", f"{len(st.session_state.df_norm):,.0f}".replace(",", "."))
+                st.metric("Número de registros", formato_numero_es(len(st.session_state.df_norm)))
                 st.metric("Fecha inicio", st.session_state.df_norm["fecha_hora"].min().strftime("%d.%m.%Y"))
                 st.metric("Fecha final", st.session_state.df_norm["fecha_hora"].max().strftime("%d.%m.%Y"))
             with c32:
                 #st.subheader("Resumen datos")
-                st.metric("Consumo total KWh", f"{st.session_state.consumo_total:,.0f}".replace(",", "."))
-                st.metric("Vertido total KWh", f"{st.session_state.vertido_total:,.0f}".replace(",", "."))
-                st.metric("Reactiva total kVArh", f"{st.session_state.reactiva_total:,.0f}".replace(",", "."))
+                st.metric("Consumo total kWh", formato_kwh(st.session_state.consumo_total))
+                st.metric("Vertido total kWh", formato_kwh(st.session_state.vertido_total))
+                st.metric("Reactiva total kVArh", formato_numero_es(st.session_state.reactiva_total))
             with c33:
                 #st.subheader("Resumen datos")
-                st.metric("Consumo neteo KWh", f"{st.session_state.consumo_neto:,.0f}".replace(",", "."))
-                st.metric("Vertido neteo KWh", f"{st.session_state.vertido_neto:,.0f}".replace(",", "."))
+                st.metric("Consumo neteo kWh", formato_kwh(st.session_state.consumo_neto))
+                st.metric("Vertido neteo kWh", formato_kwh(st.session_state.vertido_neto))
 
         c1,c2=st.columns([.7,.3])
         with c1:
@@ -362,8 +363,22 @@ if st.session_state.get("df_norm") is not None:
             graf_mensual = graficar_mensual_apilado(st.session_state.df_norm_h)
             st.plotly_chart(graf_mensual, use_container_width=True)
             tabla_mensual_consumos = tabla_mensual_periodos(st.session_state.df_norm_h)
+
+            # La fila de total es solo para presentacion. Conservamos la tabla
+            # mensual original para los calculos de reactiva que se hacen despues.
+            fila_total_consumos = tabla_mensual_consumos.drop(columns="Mes").sum().to_dict()
+            fila_total_consumos["Mes"] = "Total"
+            tabla_mensual_consumos_mostrar = pd.concat(
+                [tabla_mensual_consumos, pd.DataFrame([fila_total_consumos])],
+                ignore_index=True,
+            )
+
             from backend_comun import formatear_tabla_consumos
-            tabla_mensual_consumos_fmt = formatear_tabla_consumos(tabla_mensual_consumos, columna_mes="Mes", incluir_unidades=False)
+            tabla_mensual_consumos_fmt = formatear_tabla_consumos(
+                tabla_mensual_consumos_mostrar,
+                columna_mes="Mes",
+                incluir_unidades=False,
+            )
             st.dataframe(tabla_mensual_consumos_fmt, use_container_width=True, hide_index=True)
         with c3:
             graf_medias_horarias_total=graficar_media_horaria('Todos', ymax = None)
@@ -565,13 +580,13 @@ if st.session_state.get("df_norm") is not None:
             
                 c21, c22 = st.columns(2)
                 with c21:
-                    st.metric("Consumo total (kWh)", f"{total_consumo:,.0f}".replace(",", "."))
-                    st.metric("Demanda total (kWh)", f"{total_demanda:,.0f}".replace(",", "."))
-                    st.metric("Generación FV (kWh)", f"{total_genfv:,.0f}".replace(",", "."))
+                    st.metric("Consumo total (kWh)", formato_kwh(total_consumo))
+                    st.metric("Demanda total (kWh)", formato_kwh(total_demanda))
+                    st.metric("Generación FV (kWh)", formato_kwh(total_genfv))
                 with c22:
                     #st.metric("", "")
-                    st.metric("Autoconsumo (kWh)", f"{total_autoconsumo:,.0f}".replace(",", "."))
-                    st.metric("Vertido (kWh)", f"{total_vertido:,.0f}".replace(",", "."))
+                    st.metric("Autoconsumo (kWh)", formato_kwh(total_autoconsumo))
+                    st.metric("Vertido (kWh)", formato_kwh(total_vertido))
             with c2:
                 st.plotly_chart(graf_aprovechamiento_total)
             with c3:
@@ -765,7 +780,7 @@ if st.session_state.get("df_norm") is not None:
     # ======================================================================================================================================================
     with tab5:
         df_reactiva = tabla_mensual_periodos(st.session_state.df_norm_h, columna_valor='reactiva_kVArh')
-        df_excesos_reactiva = calcular_tabla_excesos_reactiva(tabla_mensual_consumos, df_reactiva, porcentaje_limite=0.33)
+        df_excesos_reactiva = calcular_tabla_excesos_reactiva(tabla_mensual_consumos, df_reactiva)
         df_fp = calcular_tabla_factor_potencia(tabla_mensual_consumos, df_reactiva)
         df_coste_excesos_reactiva = calcular_tabla_coste_excesos_reactiva(df_excesos_reactiva, df_fp)
         df_potmed_qh = calcular_tabla_potencia_media_qh(st.session_state.df_norm, columna_valor="consumo_neto_kWh")
@@ -829,7 +844,7 @@ if st.session_state.get("df_norm") is not None:
                 x = float(x)
             except:
                 return ""
-            return f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            return formato_numero_es(x, 2)
         
         styler_coste_exc = (
             df_coste_excesos_reactiva_fmt
@@ -889,7 +904,7 @@ if st.session_state.get("df_norm") is not None:
                 st.subheader('RESUMEN COMPENSACIÓN')
                 c31,c32,c33=st.columns(3)
                 with c31:
-                    st.metric(f':red[Penalización reactiva (€)]', f"{total_penalizacion_reactiva:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+                    st.metric(':red[Penalización reactiva (€)]', formato_euros(total_penalizacion_reactiva))
                 with c32:
                     st.metric('Factor de potencia mínimo', fp_min)
                 with c33:
@@ -897,17 +912,17 @@ if st.session_state.get("df_norm") is not None:
                 c31,c32,c33=st.columns(3)
                 with c31:
                     st.number_input(f'Introduce el cos φ objetivo MÍNIMO', min_value=0.95, max_value=1.00, key = 'fp_obj_min', disabled=True)
-                    st.metric(f':yellow[Potencia mínima de compensación (kVAr)]', f"{q_min:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), help='Potencia MÍNIMA en condensadores para compensar. Recomendable añadir un margen')
+                    st.metric(':yellow[Potencia mínima de compensación (kVAr)]', formato_numero_es(q_min, 2), help='Potencia MÍNIMA en condensadores para compensar. Recomendable añadir un margen')
                 with c32:
                     st.number_input('Introduce un margen en %', min_value=30, max_value=50, key = 'margen_comp_min')
                     
-                    st.metric(f':orange[Potencia mínima recomendada (kVAr)]', f"{q_min_margen:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), delta=round(fp_min_margen,3), help='Potencia MÍNIMA RECOMENDADA en condensadores para compensar.')                              
+                    st.metric(':orange[Potencia mínima recomendada (kVAr)]', formato_numero_es(q_min_margen, 2), delta=formato_numero_es(fp_min_margen, 3), help='Potencia MÍNIMA RECOMENDADA en condensadores para compensar.')
 
                 with c33:
                     fp_min_value = max(st.session_state.fp_obj_min+0.01,fp_min)
                     st.number_input('Introduce el cosdephi objetivo DESEADO', min_value=fp_min_value, max_value=1.00, key = 'fp_obj_sel')
                     with st.container(border=True):
-                        st.metric(f':green[Potencia de condensadores (kVAr)]', f"{q_sel:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), )
+                        st.metric(':green[Potencia de condensadores (kVAr)]', formato_numero_es(q_sel, 2))
             with c2:
                 st.plotly_chart(fig_compensacion, use_container_width=True)
         

@@ -7,6 +7,7 @@ from backend_opt2 import (leer_curva_normalizada, calcular_costes, calcular_opti
 from backend_curvadecarga import colores_periodo
 from report_generator import generar_informe
 from utils_docx import generar_docx_bytes, insertar_tabla
+from formato_es import formato_euros, formato_numero_es
 
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
@@ -368,10 +369,7 @@ if resultados is not None:
                 df = df.rename(index=nombres_filas)
 
                 # Formato español: 3.038,49 €
-                df_fmt = df.applymap(
-                    lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + " €"
-                    if pd.notna(x) else ""
-                )
+                df_fmt = df.applymap(formato_euros)
 
                 return df_fmt
     df_coste_tp_mes_fmt = formatear_tabla_costes_tp_mes(df_coste_tp_mes)
@@ -402,9 +400,13 @@ if resultados is not None:
                 with c2:
                     st.write(graf_resumen)
                 with c3:
-                    st.metric('Coste PREVISTO (€)', f'{coste_tp_potcon:,.2f}'.replace(',','X').replace('.',',').replace('X','.'))
-                    st.metric('Coste OPTIMIZADO (€)', f'{coste_tp_potopt:,.2f}'.replace(',','X').replace('.',',').replace('X','.'))
-                    st.metric('AHORRO (€)', f'{ahorro_opt:,.2f}'.replace(',','X').replace('.',',').replace('X','.'), delta=f'{ahorro_opt_porc:,.1f}%')
+                    st.metric('Coste PREVISTO (€)', formato_euros(coste_tp_potcon))
+                    st.metric('Coste OPTIMIZADO (€)', formato_euros(coste_tp_potopt))
+                    st.metric(
+                        'AHORRO (€)',
+                        formato_euros(ahorro_opt),
+                        delta=f'{formato_numero_es(ahorro_opt_porc, 1)} %',
+                    )
             st.header('Detalle de optimización por periodos', divider = 'rainbow')  
             with st.container(border=True):
                 st.plotly_chart(graf_costes_pot_periodos, use_container_width=True)
@@ -523,13 +525,10 @@ if submit_ver and st.session_state.df_norm is not None:
         df_coste = pd.concat([df_pot_mes, df_exc_mes])
         df_coste = df_coste.reset_index()
         df_coste = df_coste.rename(columns={'index': 'Tipo coste'})
-        def formato_es(x):
-            if pd.isna(x):
-                return ''
-            return f"{x:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
-        
         cols_numericas = df_coste.select_dtypes(include='number').columns
-        df_coste[cols_numericas] = df_coste[cols_numericas].applymap(formato_es)
+        df_coste[cols_numericas] = df_coste[cols_numericas].applymap(
+            lambda valor: formato_numero_es(valor, 2)
+        )
 
         fecha_inicio = st.session_state.df_norm["fecha_hora"].min().strftime("%d.%m.%Y")
         fecha_final = st.session_state.df_norm["fecha_hora"].max().strftime("%d.%m.%Y")
@@ -641,12 +640,12 @@ if submit_ver and st.session_state.df_norm is not None:
             c21,c22,c23 = st.columns(3)
             with c21:
                 total_potfra = round(df_pot_mes['Total (€)'].sum(),2)
-                st.metric('Potencia facturada €)', f"{total_potfra:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+                st.metric('Potencia facturada €)', formato_euros(total_potfra))
             with c22:
-                st.metric('Excesos facturados €)', f"{coste_excesos_potcon:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+                st.metric('Excesos facturados €)', formato_euros(coste_excesos_potcon))
             with c23:
                 total_tp_fra = round(total_potfra+coste_excesos_potcon,2)
-                st.metric('Total término de potencia €)', f"{total_tp_fra:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+                st.metric('Total término de potencia €)', formato_euros(total_tp_fra))
         with c2:
             st.plotly_chart(fig_detalle_demanda2, use_container_width=True)
 

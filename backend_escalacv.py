@@ -455,8 +455,8 @@ def diarios(datos, fecha_ini, fecha_fin, datos_comparar):
                 x = datos_dia['fecha'],
                 y = datos_dia['media'],
                 mode = 'lines',
-                name = 'media',
-                line = dict(color = 'yellow', dash = 'dot')
+                name = f"Media acumulada {st.session_state.año_seleccionado_esc}",
+                line = dict(color = 'yellow', width = 2)
             )
         )
 
@@ -480,7 +480,7 @@ def diarios(datos, fecha_ini, fecha_fin, datos_comparar):
             y=datos_comp['media'],
             mode='lines',
             name=f"Media acumulada {st.session_state.año_seleccionado_comp}",
-            line=dict(color="#B0BFC7", width=2, dash='dot'),
+            line=dict(color="#B0BFC7", width=2),
             visible='legendonly'   # 👈 MISMO EFECTO que en demanda
         )
     )
@@ -539,6 +539,169 @@ def diarios(datos, fecha_ini, fecha_fin, datos_comparar):
     graf_ecv_diario.update_layout(height= 600)
 
     return datos_dia, graf_ecv_diario
+
+
+def graficar_media_acumulada_periodo(datos, mes_num=None):
+    """Precios medios diarios y media acumulada del mes o año seleccionado."""
+    df = datos.copy()
+    df["fecha"] = pd.to_datetime(df["fecha"])
+    componente = st.session_state.get("componente", "SPOT")
+    predator_mode = componente == "SPOT+SSAA" and st.session_state.get(
+        "dos_colores", False
+    )
+
+    if mes_num is not None:
+        df = df[df["fecha"].dt.month == mes_num].copy()
+
+    df_componentes = None
+    if predator_mode:
+        df_componentes = (
+            df.groupby("fecha", as_index=False)[["value_spot", "value_ssaa"]]
+            .mean()
+            .sort_values("fecha")
+        )
+        df = df_componentes[["fecha"]].copy()
+        df["value"] = df_componentes["value_spot"] + df_componentes["value_ssaa"]
+    else:
+        df = (
+            df.groupby("fecha", as_index=False)["value"]
+            .mean()
+            .sort_values("fecha")
+        )
+    if df.empty:
+        return df, go.Figure()
+
+    df["value"] = pd.to_numeric(df["value"], errors="coerce").round(2)
+    df["media_acumulada"] = df["value"].expanding().mean()
+
+    df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes()
+    df["escala"] = pd.cut(
+        df["value"],
+        bins=df_limites["rango"],
+        labels=etiquetas,
+        right=False,
+    )
+    escalas_presentes = [escala for escala in df["escala"].dropna().unique()]
+    escala_ordenada = sorted(
+        escalas_presentes,
+        key=lambda escala: valor_asignado_a_rango[escala],
+        reverse=True,
+    )
+    df["escala"] = pd.Categorical(
+        df["escala"], categories=escala_ordenada, ordered=True
+    )
+
+    periodo = (
+        meses_español[mes_num]
+        if mes_num is not None
+        else f"año {st.session_state.año_seleccionado_esc}"
+    )
+    if predator_mode:
+        df_predator = df_componentes.melt(
+            id_vars="fecha",
+            value_vars=["value_spot", "value_ssaa"],
+            var_name="componente",
+            value_name="value",
+        )
+        df_predator["media_acumulada"] = (
+            df_predator.groupby("componente")["value"]
+            .expanding()
+            .mean()
+            .reset_index(level=0, drop=True)
+        )
+        nombres = {"value_spot": "SPOT", "value_ssaa": "SSAA"}
+        df_predator["componente_nombre"] = df_predator["componente"].map(nombres)
+        fig = px.bar(
+            df_predator,
+            x="fecha",
+            y="value",
+            color="componente_nombre",
+            color_discrete_map={"SPOT": "green", "SSAA": "lightgreen"},
+            labels={"fecha": "Fecha", "value": "€/MWh", "componente_nombre": ""},
+            title=f"{componente}: precios diarios y media acumulada · {periodo}",
+            barmode="stack",
+        )
+        for clave, nombre, color_linea in (
+            ("value_spot", "Media acumulada SPOT", "yellow"),
+            ("value_ssaa", "Media acumulada SSAA", "orange"),
+        ):
+            df_linea = df_predator[df_predator["componente"] == clave]
+            fig.add_trace(
+                go.Scatter(
+                    x=df_linea["fecha"],
+                    y=df_linea["media_acumulada"],
+                    mode="lines",
+                    name=nombre,
+                    line=dict(color=color_linea, width=3),
+                    hovertemplate=(
+                        f"<b>{nombre}</b><br>"
+                        "%{x|%d-%m-%Y}<br>"
+                        "%{y:.2f} €/MWh<extra></extra>"
+                    ),
+                )
+            )
+    else:
+        fig = px.bar(
+            df,
+            x="fecha",
+            y="value",
+            color="escala",
+            color_discrete_map=colores,
+            category_orders={"escala": escala_ordenada},
+            labels={"fecha": "Fecha", "value": "€/MWh", "escala": "Escala CV"},
+            title=f"{componente}: precios diarios y media acumulada · {periodo}",
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=df["fecha"],
+                y=df["media_acumulada"],
+                mode="lines",
+                name="Media acumulada",
+                line=dict(color="yellow", width=3),
+                hovertemplate=(
+                    "<b>Media acumulada</b><br>"
+                    "%{x|%d-%m-%Y}<br>"
+                    "%{y:.2f} €/MWh<extra></extra>"
+                ),
+            )
+        )
+    fig.update_traces(
+        marker_line_width=0,
+        hovertemplate=(
+            "<b>Fecha:</b> %{x|%d-%m-%Y}<br>"
+            "<b>Precio medio:</b> %{y:.2f} €/MWh<extra></extra>"
+        ),
+        selector=dict(type="bar"),
+    )
+    fig.update_layout(
+        height=600,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="center",
+            x=0.5,
+        ),
+    )
+    if mes_num is not None:
+        inicio_eje = pd.Timestamp(
+            st.session_state.año_seleccionado_esc, mes_num, 1
+        )
+        fin_eje = inicio_eje + pd.offsets.MonthEnd(0) + pd.Timedelta(
+            hours=23, minutes=59
+        )
+    else:
+        inicio_eje = pd.Timestamp(st.session_state.año_seleccionado_esc, 1, 1)
+        fin_eje = pd.Timestamp(
+            st.session_state.año_seleccionado_esc, 12, 31, 23, 59
+        )
+    fig.update_xaxes(
+        showgrid=True,
+        tickformat="%d %b" if mes_num else "%b",
+        range=[inicio_eje, fin_eje],
+    )
+    fig = aplicar_estilo(fig)
+    return df, fig
 
 
 # MEDIAS MENSUALES PARA UN AÑO DETERMINADO+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++

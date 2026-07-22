@@ -654,7 +654,15 @@ def construir_df_mensual(df):
     return df_mensual
 
 
-def graf_simul_spot(df, df_validacion, mibgas, omie_media_2026=None, gas_media_2026=None):
+def graf_simul_spot(
+    df,
+    df_validacion,
+    mibgas,
+    omie_media_2026=None,
+    gas_media_2026=None,
+    omie_previsto=None,
+    gas_previsto=None,
+):
 
     fig = px.scatter(
         df,
@@ -852,6 +860,31 @@ def graf_simul_spot(df, df_validacion, mibgas, omie_media_2026=None, gas_media_2
             y1=omie_obj,
             line=dict(color="magenta", width=1, dash="dash"),
         )
+
+    # =====================================================
+    # PUNTO FUTURO: PREVISIONES ANUALES OMIE / MIBGAS
+    # =====================================================
+    if omie_previsto is not None and gas_previsto is not None:
+        fig.add_trace(go.Scatter(
+            x=[gas_previsto],
+            y=[omie_previsto],
+            mode="markers+text",
+            name="Punto futuro",
+            marker=dict(
+                symbol="square",
+                size=18,
+                color="orange",
+                line=dict(width=3, color="white")
+            ),
+            text=["Punto futuro"],
+            textposition="top center",
+            hovertemplate=(
+                "<b>Punto según valores futuros</b><br>"
+                "MIBGAS previsto = %{x:.2f} €/MWh<br>"
+                "OMIE previsto = %{y:.2f} €/MWh"
+                "<extra></extra>"
+            )
+        ))
 
     # =====================================================
     # LAYOUT
