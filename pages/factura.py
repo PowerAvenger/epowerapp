@@ -1,12 +1,15 @@
 ﻿import hashlib
 
+import base64
 import re
 
 from html import escape
+from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from jinja2 import Environment, FileSystemLoader
 
 from backend_comun import aplicar_estilo
 from backend_factura import (
@@ -42,6 +45,7 @@ from regulacion_reactiva import (
     LIMITE_REACTIVA_SOBRE_ACTIVA,
     tramos_reactiva,
 )
+from regulacion_iee import obtener_referencia_iee
 
 
 generar_menu()
@@ -94,6 +98,67 @@ def _atr_indexado(atr_factura):
 def _fecha_factura(valor):
     fecha = pd.to_datetime(valor, dayfirst=True, errors="coerce")
     return None if pd.isna(fecha) else fecha.date()
+
+
+def _buscar_dato_informe(texto, patrones):
+    for patron in patrones:
+        coincidencia = re.search(patron, texto, re.IGNORECASE | re.MULTILINE)
+        if coincidencia:
+            partes = [
+                re.sub(r"\s+", " ", parte).strip(" ,-")
+                for parte in coincidencia.groups()
+                if parte and parte.strip()
+            ]
+            if partes:
+                return ", ".join(partes)
+    return ""
+
+
+def _renderizar_plantilla_informe(contexto, ruta_plantilla):
+    ruta = Path(ruta_plantilla)
+    if not ruta.is_absolute():
+        ruta = Path(__file__).resolve().parent.parent / ruta
+    entorno = Environment(loader=FileSystemLoader(str(ruta.parent)))
+    return entorno.get_template(ruta.name).render(**contexto)
+
+
+def _datos_informe_desde_factura(factura, texto):
+    """Prepara datos editables sin convertirlos en campos fiscales verificados."""
+    cliente = _buscar_dato_informe(texto, [
+        r"^Titular\s*:?\s*([^\n]+)$",
+        r"^(?:Nombre|Raz[oó]n\s+social)\s*:?\s*([^\n]+)$",
+        r"^Cliente\s*:?\s*([^\n]+)$",
+    ])
+    nif = _buscar_dato_informe(texto, [
+        r"^(?:DNI/NIF/NIE|NIF|CIF)\s*:?\s*([A-Z0-9-]+)",
+    ])
+    direccion = _buscar_dato_informe(texto, [
+        r"^Direcci.n\s*:?\s*([^\n]+)\n(\d{5}[^\n]*)$",
+        r"^Direcci.n\s*:?\s*([^\n]+)$",
+        r"^Direcci.n\s+de\s+suministro\s*:?\s*([^\n]+)$",
+    ])
+    ciclo = " – ".join(
+        valor for valor in (factura.periodo_inicio, factura.periodo_fin) if valor
+    )
+    return {
+        "factura_informe_cliente": cliente,
+        "factura_informe_nif": nif,
+        "factura_informe_direccion": direccion,
+        "factura_informe_cups": factura.cups or "",
+        "factura_informe_numero": factura.numero_factura or "",
+        "factura_informe_fecha": factura.fecha_factura or "",
+        "factura_informe_ciclo": ciclo,
+        "factura_informe_comercializadora": factura.comercializadora or "",
+        "factura_informe_atr": factura.atr or "",
+        "factura_informe_realizado_por": "",
+        "factura_informe_fecha_realizacion": (
+            pd.Timestamp.today().strftime("%d/%m/%Y")
+        ),
+        "factura_informe_objeto": (
+            "Mejorar las condiciones de contratación del suministro eléctrico "
+            "conforme a la propuesta presentada."
+        ),
+    }
 
 
 def _firma_formula_indexado():
@@ -294,6 +359,54 @@ def _coste_potencia_propuesta(factura):
     return round(coste_boe + coste_margen, 2)
 
 
+def _parametros_iee_propuesta(factura):
+    """Obtiene una base de IEE contrastada, aunque no venga desglosada."""
+    if factura.verificacion_iee:
+        verificacion = factura.verificacion_iee
+        return (
+            verificacion.base_eur,
+            verificacion.tipo_pct,
+            verificacion.minimo_eur_mwh,
+        )
+
+    fecha = _fecha_factura(factura.periodo_fin or factura.fecha_factura)
+    referencia = (
+        obtener_referencia_iee(fecha, factura.atr) if fecha else None
+    )
+    if not referencia or not factura.iee:
+        return None
+
+    bases_candidatas = []
+    if factura.verificacion_iva:
+        bases_candidatas.append(
+            factura.verificacion_iva.base_eur - factura.iee
+        )
+    bases_candidatas.append(
+        factura.suma_componentes - factura.iee - factura.iva
+    )
+    minimo_iee = (
+        factura.consumo_total_kwh
+        / 1000
+        * referencia.minimo_eur_mwh
+    )
+    for base_iee in bases_candidatas:
+        if base_iee <= 0:
+            continue
+        importe_reconstruido = round(max(
+            base_iee * referencia.tipo_pct / 100,
+            minimo_iee,
+        ), 2)
+        if importes_coinciden(
+            factura.iee, importe_reconstruido, "componentes"
+        ):
+            return (
+                base_iee,
+                referencia.tipo_pct,
+                referencia.minimo_eur_mwh,
+            )
+    return None
+
+
 def _componentes_propuesta(factura, resultado_energia):
     potencia_propuesta = _coste_potencia_propuesta(factura)
     energia_propuesta = resultado_energia["coste_indexado"]
@@ -308,15 +421,16 @@ def _componentes_propuesta(factura, resultado_energia):
         )
 
     iee_propuesta = None
-    verificacion_iee = factura.verificacion_iee
-    if diferencia_base is not None and verificacion_iee:
-        base_iee = max(verificacion_iee.base_eur + diferencia_base, 0.0)
-        iee_propuesta = base_iee * verificacion_iee.tipo_pct / 100
-        if verificacion_iee.minimo_eur_mwh is not None:
+    parametros_iee = _parametros_iee_propuesta(factura)
+    if diferencia_base is not None and parametros_iee:
+        base_factura_iee, tipo_iee, minimo_eur_mwh = parametros_iee
+        base_iee = max(base_factura_iee + diferencia_base, 0.0)
+        iee_propuesta = base_iee * tipo_iee / 100
+        if minimo_eur_mwh is not None:
             minimo_iee = (
                 factura.consumo_total_kwh
                 / 1000
-                * verificacion_iee.minimo_eur_mwh
+                * minimo_eur_mwh
             )
             iee_propuesta = max(iee_propuesta, minimo_iee)
         iee_propuesta = round(iee_propuesta, 2)
@@ -376,13 +490,17 @@ def _componentes_propuesta(factura, resultado_energia):
     return comparativa
 
 
-tab_analisis, tab_comparativa = st.tabs(["Análisis", "Propuesta"])
+tab_analisis, tab_comparativa, tab_informe = st.tabs(
+    ["Análisis", "Propuesta", "Informe"]
+)
 
 with tab_analisis:
     col_entrada, col_detalle, col_grafico = st.columns([0.26, 0.30, 0.44])
 
 factura = None
 huella = None
+resultado = None
+figura_componentes = None
 
 with col_entrada:
     st.subheader("Suelta aquí tu factura", divider="rainbow")
@@ -1711,7 +1829,8 @@ with tab_comparativa:
                     "box-shadow:0 4px 14px rgba(0,0,0,.10);'>"
                     "<div style='font-size:1.35rem;font-weight:700;line-height:1.3;'>"
                     f"{aviso_texto} "
-                    f"<span style='color:{aviso_color};font-size:1.65rem;'>"
+                    f"<span style='display:inline-block;color:{aviso_color};"
+                    "font-size:2.1rem;margin-left:.55rem;line-height:1.15;'>"
                     f"{diferencia_aviso}{porcentaje_aviso}</span></div>"
                     "<div style='display:flex;align-items:center;justify-content:center;"
                     "width:3.7rem;height:3.7rem;flex:0 0 3.7rem;"
@@ -1948,3 +2067,417 @@ with tab_comparativa:
                     )
                     figura_comparacion = aplicar_estilo(figura_comparacion)
                     st.plotly_chart(figura_comparacion, use_container_width=True)
+
+
+with tab_informe:
+    st.subheader("Informe", divider="rainbow")
+    col_informe, col_salida_informe = st.columns([0.40, 0.60])
+    contenedor_salida_informe = col_salida_informe.container()
+    with col_informe:
+        if factura is None:
+            st.info(
+                "Carga y analiza una factura para preparar los datos del informe."
+            )
+            contenedor_salida_informe.info(
+                "La vista previa aparecerá aquí cuando exista una propuesta."
+            )
+        else:
+            datos_informe = _datos_informe_desde_factura(factura, texto)
+            if st.session_state.get("_factura_informe_huella") != huella:
+                for clave, valor in datos_informe.items():
+                    st.session_state[clave] = valor
+                st.session_state["_factura_informe_huella"] = huella
+                st.session_state.pop("factura_informe_logo", None)
+            else:
+                for clave, valor in datos_informe.items():
+                    st.session_state.setdefault(clave, valor)
+
+            st.caption(
+                "Los datos detectados en la factura son editables. Revisa la "
+                "información antes de generar o entregar el informe."
+            )
+            with st.container(border=True):
+                st.markdown("#### Datos del cliente y del suministro")
+                col_cliente, col_nif = st.columns([0.68, 0.32])
+                persist_widget(
+                    col_cliente.text_input,
+                    "Cliente / Razón social",
+                    key="factura_informe_cliente",
+                    default=datos_informe["factura_informe_cliente"],
+                )
+                persist_widget(
+                    col_nif.text_input,
+                    "NIF / CIF",
+                    key="factura_informe_nif",
+                    default=datos_informe["factura_informe_nif"],
+                )
+                persist_widget(
+                    st.text_input,
+                    "Dirección",
+                    key="factura_informe_direccion",
+                    default=datos_informe["factura_informe_direccion"],
+                )
+                col_cups, col_atr = st.columns([0.68, 0.32])
+                persist_widget(
+                    col_cups.text_input,
+                    "CUPS",
+                    key="factura_informe_cups",
+                    default=datos_informe["factura_informe_cups"],
+                )
+                persist_widget(
+                    col_atr.text_input,
+                    "ATR",
+                    key="factura_informe_atr",
+                    default=datos_informe["factura_informe_atr"],
+                )
+
+            with st.container(border=True):
+                st.markdown("#### Datos de la factura")
+                col_comercializadora, col_numero = st.columns([0.58, 0.42])
+                persist_widget(
+                    col_comercializadora.text_input,
+                    "Comercializadora",
+                    key="factura_informe_comercializadora",
+                    default=datos_informe[
+                        "factura_informe_comercializadora"
+                    ],
+                )
+                persist_widget(
+                    col_numero.text_input,
+                    "Número de factura",
+                    key="factura_informe_numero",
+                    default=datos_informe["factura_informe_numero"],
+                )
+                col_fecha, col_ciclo = st.columns([0.32, 0.68])
+                persist_widget(
+                    col_fecha.text_input,
+                    "Fecha de factura",
+                    key="factura_informe_fecha",
+                    default=datos_informe["factura_informe_fecha"],
+                )
+                persist_widget(
+                    col_ciclo.text_input,
+                    "Ciclo de facturación",
+                    key="factura_informe_ciclo",
+                    default=datos_informe["factura_informe_ciclo"],
+                )
+
+            with st.container(border=True):
+                st.markdown("#### Datos del informe")
+                col_autor, col_fecha_informe = st.columns([0.60, 0.40])
+                persist_widget(
+                    col_autor.text_input,
+                    "Realizado por",
+                    key="factura_informe_realizado_por",
+                    default=datos_informe["factura_informe_realizado_por"],
+                )
+                persist_widget(
+                    col_fecha_informe.text_input,
+                    "Fecha de realización",
+                    key="factura_informe_fecha_realizacion",
+                    default=datos_informe[
+                        "factura_informe_fecha_realizacion"
+                    ],
+                )
+                persist_widget(
+                    st.text_input,
+                    "Objeto de la propuesta",
+                    key="factura_informe_objeto",
+                    default=datos_informe["factura_informe_objeto"],
+                )
+
+            with st.container(border=True):
+                st.markdown("#### Personalización")
+                logo_informe = st.file_uploader(
+                    "Logo para el informe",
+                    type=["png", "jpg", "jpeg"],
+                    accept_multiple_files=False,
+                    key="factura_informe_logo",
+                )
+                if logo_informe is not None:
+                    st.image(logo_informe, width=180)
+
+            contenedor_salida_informe.markdown("#### Resumen comercial")
+            if resultado is None:
+                contenedor_salida_informe.info(
+                    "Calcula primero la propuesta para preparar el resumen comercial."
+                )
+            else:
+                componentes_informe = _componentes_propuesta(factura, resultado)
+                total_factura_informe = componentes_informe["Factura (€)"].sum()
+                total_propuesta_informe = componentes_informe["Propuesta (€)"].sum()
+                diferencia_informe = (
+                    total_propuesta_informe - total_factura_informe
+                )
+                diferencia_pct_informe = (
+                    diferencia_informe / total_factura_informe * 100
+                    if total_factura_informe else 0.0
+                )
+                favorable_informe = diferencia_informe <= 0
+                maximo_total = max(
+                    total_factura_informe, total_propuesta_informe, 0.01
+                )
+                logo_bytes = (
+                    logo_informe.getvalue() if logo_informe is not None else b""
+                )
+                firma_resumen = hashlib.sha256()
+                firma_resumen.update(b"informe-comercial-factura-v5")
+                firma_resumen.update((huella or "").encode("utf-8"))
+                firma_resumen.update(
+                    repr((
+                        total_factura_informe,
+                        total_propuesta_informe,
+                        resultado.get("tipo", "Indexado"),
+                        st.session_state.get(
+                            "factura_modo_precio_potencia", ""
+                        ),
+                        *(
+                            st.session_state.get(clave, "")
+                            for clave in datos_informe
+                        ),
+                    )).encode("utf-8")
+                )
+                firma_resumen.update(logo_bytes)
+                firma_resumen = firma_resumen.hexdigest()
+
+                if contenedor_salida_informe.button(
+                    "Preparar informe comercial",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    logo_data = ""
+                    if logo_informe is not None:
+                        subtipo_logo = (
+                            "jpeg"
+                            if logo_informe.type == "image/jpeg"
+                            else "png"
+                        )
+                        logo_data = (
+                            f"data:image/{subtipo_logo};base64,"
+                            + base64.b64encode(logo_bytes).decode("ascii")
+                        )
+                    grafico_componentes_data = ""
+                    if figura_componentes is not None:
+                        try:
+                            grafico_png = figura_componentes.to_image(
+                                format="png",
+                                width=1100,
+                                height=520,
+                                scale=1.5,
+                            )
+                            grafico_componentes_data = (
+                                "data:image/png;base64,"
+                                + base64.b64encode(grafico_png).decode("ascii")
+                            )
+                        except Exception:
+                            contenedor_salida_informe.warning(
+                                "No se ha podido incorporar el gráfico a la "
+                                "vista previa."
+                            )
+                    filas_componentes_informe = []
+                    for _, fila in componentes_informe.iterrows():
+                        diferencia_fila = float(fila["Diferencia (€)"])
+                        porcentaje_fila = fila["Diferencia (%)"]
+                        clase_fila = (
+                            "favorable"
+                            if diferencia_fila < -0.005
+                            else "unfavorable"
+                            if diferencia_fila > 0.005
+                            else "neutral"
+                        )
+                        filas_componentes_informe.append({
+                            "componente": escape(str(fila["Componente"])),
+                            "factura": formato_euros(fila["Factura (€)"]),
+                            "propuesta": formato_euros(fila["Propuesta (€)"]),
+                            "diferencia": formato_euros(diferencia_fila),
+                            "diferencia_pct": (
+                                formato_pct(porcentaje_fila, 2)
+                                if porcentaje_fila is not None
+                                and not pd.isna(porcentaje_fila)
+                                else "—"
+                            ),
+                            "clase": clase_fila,
+                        })
+
+                    diferencias_relevantes = componentes_informe.loc[
+                        componentes_informe["Diferencia (€)"].abs() > 0.005
+                    ]
+                    if diferencias_relevantes.empty:
+                        insight_principal = (
+                            "La propuesta no modifica el coste total de los "
+                            "componentes analizados."
+                        )
+                    else:
+                        indice_principal = (
+                            diferencias_relevantes["Diferencia (€)"].idxmin()
+                            if favorable_informe
+                            else diferencias_relevantes["Diferencia (€)"].idxmax()
+                        )
+                        fila_principal = componentes_informe.loc[indice_principal]
+                        impacto_principal = float(
+                            fila_principal["Diferencia (€)"]
+                        )
+                        insight_principal = (
+                            f"El componente {fila_principal['Componente']} "
+                            + (
+                                "reduce el coste en "
+                                if impacto_principal < 0
+                                else "incrementa el coste en "
+                            )
+                            + formato_euros(abs(impacto_principal))
+                            + "."
+                        )
+
+                    filas_energia = componentes_informe.loc[
+                        componentes_informe["Componente"] == "Energía"
+                    ]
+                    if filas_energia.empty:
+                        insight_energia = (
+                            "No hay un término de energía comparable disponible."
+                        )
+                    else:
+                        fila_energia = filas_energia.iloc[0]
+                        insight_energia = (
+                            f"Pasa de "
+                            f"{formato_euros(fila_energia['Factura (€)'])} "
+                            f"a "
+                            f"{formato_euros(fila_energia['Propuesta (€)'])}, "
+                            f"con un precio medio de propuesta de "
+                            f"{formato_eur_kwh(resultado['precio_indexado'], 5)}."
+                        )
+                    filas_potencia = componentes_informe.loc[
+                        componentes_informe["Componente"] == "Potencia"
+                    ]
+                    modo_potencia = st.session_state.get(
+                        "factura_modo_precio_potencia",
+                        "Aplicar precios BOE",
+                    )
+                    if filas_potencia.empty:
+                        insight_potencia = (
+                            f"{modo_potencia}. No hay un término de potencia "
+                            "comparable disponible."
+                        )
+                    else:
+                        fila_potencia = filas_potencia.iloc[0]
+                        insight_potencia = (
+                            f"{modo_potencia}. El coste pasa de "
+                            f"{formato_euros(fila_potencia['Factura (€)'])} a "
+                            f"{formato_euros(fila_potencia['Propuesta (€)'])}."
+                        )
+                    contexto_resumen = {
+                        "logo": logo_data,
+                        "cliente": escape(
+                            st.session_state.get(
+                                "factura_informe_cliente", ""
+                            )
+                        ),
+                        "cups": escape(
+                            st.session_state.get("factura_informe_cups", "")
+                        ),
+                        "numero_factura": escape(
+                            st.session_state.get(
+                                "factura_informe_numero", ""
+                            )
+                        ),
+                        "ciclo": escape(
+                            st.session_state.get(
+                                "factura_informe_ciclo", ""
+                            )
+                        ),
+                        "realizado_por": escape(
+                            st.session_state.get(
+                                "factura_informe_realizado_por", ""
+                            )
+                        ),
+                        "fecha_realizacion": escape(
+                            st.session_state.get(
+                                "factura_informe_fecha_realizacion", ""
+                            )
+                        ),
+                        "objeto_propuesta": escape(
+                            st.session_state.get(
+                                "factura_informe_objeto", ""
+                            )
+                        ),
+                        "hero_label": (
+                            "Ahorro estimado con la propuesta"
+                            if favorable_informe
+                            else "Sobrecoste estimado de la propuesta"
+                        ),
+                        "diferencia": formato_euros(abs(diferencia_informe)),
+                        "diferencia_pct": formato_pct(
+                            abs(diferencia_pct_informe), 2
+                        ),
+                        "total_factura": formato_euros(
+                            total_factura_informe
+                        ),
+                        "total_propuesta": formato_euros(
+                            total_propuesta_informe
+                        ),
+                        "factura_width": round(
+                            total_factura_informe / maximo_total * 100, 2
+                        ),
+                        "propuesta_width": round(
+                            total_propuesta_informe / maximo_total * 100, 2
+                        ),
+                        "hero_color": (
+                            "#15803d" if favorable_informe else "#dc2626"
+                        ),
+                        "hero_border": (
+                            "#86efac" if favorable_informe else "#fca5a5"
+                        ),
+                        "hero_background": (
+                            "#f0fdf4" if favorable_informe else "#fef2f2"
+                        ),
+                        "highlight_energia": (
+                            "Propuesta de energía "
+                            f"{resultado.get('tipo', 'Indexado').lower()}."
+                        ),
+                        "highlight_potencia": (
+                            "Término de potencia: "
+                            + st.session_state.get(
+                                "factura_modo_precio_potencia",
+                                "Aplicar precios BOE",
+                            ).lower()
+                            + "."
+                        ),
+                        "highlight_periodo": (
+                            "Comparación realizada sobre el periodo y consumo "
+                            "de la factura analizada."
+                        ),
+                        "insight_principal": escape(insight_principal),
+                        "insight_energia": escape(insight_energia),
+                        "insight_potencia": escape(insight_potencia),
+                        "filas_componentes": filas_componentes_informe,
+                        "grafico_componentes": grafico_componentes_data,
+                    }
+                    html_resumen = _renderizar_plantilla_informe(
+                        contexto_resumen,
+                        "templates/informe_factura_resumen.html",
+                    )
+                    st.session_state["factura_resumen_comercial"] = {
+                        "firma": firma_resumen,
+                        "html": html_resumen,
+                    }
+
+                resumen_sesion = st.session_state.get(
+                    "factura_resumen_comercial"
+                )
+                if (
+                    resumen_sesion
+                    and resumen_sesion.get("firma") == firma_resumen
+                ):
+                    with contenedor_salida_informe.expander(
+                        "Vista previa del resumen comercial",
+                        expanded=True,
+                    ):
+                        st.components.v1.html(
+                            resumen_sesion["html"],
+                            height=900,
+                            scrolling=True,
+                        )
+                elif resumen_sesion:
+                    contenedor_salida_informe.info(
+                        "Los datos han cambiado. Prepara de nuevo el resumen "
+                        "para actualizar la vista previa."
+                    )

@@ -1,3 +1,7 @@
+import hashlib
+import pathlib
+import tempfile
+
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -5,7 +9,7 @@ import plotly.express as px
 from utilidades import generar_menu
 from backend_opt2 import (leer_curva_normalizada, calcular_costes, calcular_optimizacion, pyc_tp, tepp45, tepp123, meses, normalizar_tabla_maximetros)
 from backend_curvadecarga import colores_periodo
-from report_generator import generar_informe
+from report_generator import preparar_informe, generar_formato_informe
 from utils_docx import generar_docx_bytes, insertar_tabla
 from formato_es import formato_euros, formato_numero_es
 
@@ -347,6 +351,18 @@ elif "resultados_potencia" in st.session_state:
 # 🔹 si hay resultados → muestro
 if resultados is not None:
     df_coste_tp_mes, coste_tp_potcon, coste_tp_potopt, ahorro_opt, ahorro_opt_porc, df_potencias, graf_costes_pot_periodos, graf_pie_peso, coste_potfra_potcon, coste_excesos_potcon, coste_potfra_potopt, coste_excesos_potopt = resultados
+    df_potencias = df_potencias.copy()
+    def potencia_sin_decimales(valor):
+        if isinstance(valor, str):
+            valor = valor.replace(".", "").replace(",", ".")
+        return formato_numero_es(float(valor), 0)
+
+    for columna in ("P1", "P2", "P3", "P4", "P5", "P6"):
+        if columna not in df_potencias:
+            continue
+        df_potencias[columna] = df_potencias[columna].apply(
+            potencia_sin_decimales
+        )
 
     from backend_opt2 import graficar_comparacion_mensual, graficar_gauge_ahorro, graficar_resumen
     graf_costes_potcon = graficar_comparacion_mensual(df_coste_tp_mes)
@@ -373,6 +389,29 @@ if resultados is not None:
 
                 return df_fmt
     df_coste_tp_mes_fmt = formatear_tabla_costes_tp_mes(df_coste_tp_mes)
+    if modo1:
+        periodo_datos_informe = "Tabla de maxímetros"
+        detalle_datos_optimizacion = (
+            f"ATR/Peaje: **{tarifa}** · Datos utilizados: **tabla de maxímetros**"
+        )
+    else:
+        columna_fecha = (
+            "fecha_hora" if "fecha_hora" in df_in.columns else "fecha"
+        )
+        fechas_usadas = pd.to_datetime(
+            df_in[columna_fecha], errors="coerce"
+        ).dropna()
+        if fechas_usadas.empty:
+            rango_usado = "no disponible"
+        else:
+            rango_usado = (
+                f"{fechas_usadas.min():%d/%m/%Y} – "
+                f"{fechas_usadas.max():%d/%m/%Y}"
+            )
+        detalle_datos_optimizacion = (
+            f"ATR/Peaje: **{tarifa}** · Curva utilizada: **{rango_usado}**"
+        )
+        periodo_datos_informe = rango_usado
 
     # ===============================================================================================================================    
     # INTERFAZ STREAMLIT
@@ -388,6 +427,7 @@ if resultados is not None:
                 st.header('Resultados de la optimización del Término de Potencia para tipos 4 y 5 (=<50kW)', divider = 'rainbow')
             else:
                 st.header('Resultados de la optimización del Término de Potencia para tipos 1, 2 y 3 (>50kW)', divider = 'rainbow')
+            st.markdown(detalle_datos_optimizacion)
             with st.container(border=True):
                 c1, c2, c3 = st.columns([0.25, 0.20, 0.10])
                 with c1:
@@ -437,75 +477,137 @@ if resultados is not None:
         #with col_logo:
             logo_file = st.file_uploader("Logo (PNG/JPG)", type=["png", "jpg", "jpeg"])
 
-        # Guarda el logo en un fichero temporal si el usuario lo sube
-        logo_path = None
-        if logo_file is not None:
-            import tempfile, pathlib
-            suffix = pathlib.Path(logo_file.name).suffix
-            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                tmp.write(logo_file.read())
-                logo_path = tmp.name
+        logo_bytes = logo_file.getvalue() if logo_file is not None else b""
+        firma = hashlib.sha256()
+        firma.update(b"informe-potencia-v2")
+        firma.update(
+            repr((
+                coste_tp_potcon,
+                coste_tp_potopt,
+                ahorro_opt,
+                ahorro_opt_porc,
+                titulo,
+                subtitulo,
+                realizado_por,
+                cliente,
+                cups,
+                tarifa,
+                periodo_datos_informe,
+            )).encode("utf-8")
+        )
+        firma.update(
+            pd.util.hash_pandas_object(
+                df_potencias, index=True
+            ).values.tobytes()
+        )
+        firma.update(logo_bytes)
+        firma_informe = firma.hexdigest()
 
-        # Botón de generación
-        if st.button("🚀 Generar informe", type="primary"):
-            with st.spinner("Generando informe..."):
+        if st.button("🚀 Preparar informe", type="primary"):
+            with st.spinner("Preparando vista previa y gráficos..."):
+                logo_path = None
                 try:
-                    resultado = generar_informe(
-                        graf_costes_potcon       = graf_costes_potcon,
-                        graf_resumen             = graf_resumen,
-                        coste_tp_potcon          = coste_tp_potcon,
-                        coste_tp_potopt          = coste_tp_potopt,
-                        ahorro_opt               = ahorro_opt,
-                        ahorro_opt_porc          = ahorro_opt_porc,
-                        df_potencias             = df_potencias,
-                        graf_ahorro              = graf_ahorro,
-                        graf_costes_pot_periodos = graf_costes_pot_periodos,
-                        logo_path                = logo_path,
-                        titulo                   = titulo,
-                        subtitulo                = subtitulo,
-                        cliente                = cliente,   
-                        cups = cups,
-                        realizado_por = realizado_por,
-                        template_path            = "templates/informe.html",  # ajusta si es necesario
+                    if logo_file is not None:
+                        suffix = pathlib.Path(logo_file.name).suffix
+                        with tempfile.NamedTemporaryFile(
+                            delete=False, suffix=suffix
+                        ) as tmp:
+                            tmp.write(logo_bytes)
+                            logo_path = tmp.name
+                    preparado = preparar_informe(
+                        graf_costes_potcon=graf_costes_potcon,
+                        graf_resumen=graf_resumen,
+                        coste_tp_potcon=coste_tp_potcon,
+                        coste_tp_potopt=coste_tp_potopt,
+                        ahorro_opt=ahorro_opt,
+                        ahorro_opt_porc=ahorro_opt_porc,
+                        df_potencias=df_potencias,
+                        graf_ahorro=graf_ahorro,
+                        graf_costes_pot_periodos=graf_costes_pot_periodos,
+                        logo_path=logo_path,
+                        titulo=titulo,
+                        subtitulo=subtitulo,
+                        cliente=cliente,
+                        cups=cups,
+                        peaje=tarifa,
+                        periodo_datos=periodo_datos_informe,
+                        realizado_por=realizado_por,
+                        template_path="templates/informe.html",
                     )
-
-                    st.success("✅ Informe generado correctamente")
-
-                    # ── Botones de descarga ───────────────────────────────────
-                    col1, col2, col3 = st.columns(3)
-
-                    with col1:
-                        st.download_button(
-                            label        = "⬇️ Descargar PDF",
-                            data         = resultado["pdf"],
-                            file_name    = "informe_potencias.pdf",
-                            mime         = "application/pdf",
-                            use_container_width=True,
-                        )
-                    with col2:
-                        st.download_button(
-                            label        = "⬇️ Descargar Word",
-                            data         = resultado["docx"],
-                            file_name    = "informe_potencias.docx",
-                            mime         = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            use_container_width=True,
-                        )
-                    with col3:
-                        st.download_button(
-                            label        = "⬇️ Descargar HTML",
-                            data         = resultado["html"].encode("utf-8"),
-                            file_name    = "informe_potencias.html",
-                            mime         = "text/html",
-                            use_container_width=True,
-                        )
-
-                    # Vista previa en Streamlit (opcional)
-                    with st.expander("👁️ Vista previa HTML"):
-                        st.components.v1.html(resultado["html"], height=700, scrolling=True)
-
+                    st.session_state["opt2_informe_preparado"] = {
+                        "firma": firma_informe,
+                        "preparado": preparado,
+                        "formatos": {"html": preparado["html"]},
+                    }
                 except Exception as e:
-                    st.error(f"Error al generar el informe: {e}")
-                    raise  # elimina esta línea en producción
+                    st.error(f"Error al preparar el informe: {e}")
+                finally:
+                    if logo_path:
+                        pathlib.Path(logo_path).unlink(missing_ok=True)
+
+        informe_sesion = st.session_state.get("opt2_informe_preparado")
+        informe_vigente = (
+            informe_sesion
+            if informe_sesion
+            and informe_sesion.get("firma") == firma_informe
+            else None
+        )
+        if informe_sesion and informe_vigente is None:
+            st.info(
+                "Los datos han cambiado. Prepara de nuevo el informe para "
+                "actualizarlo."
+            )
+
+        if informe_vigente:
+            st.success("✅ Informe preparado y conservado durante esta sesión")
+            formatos = informe_vigente["formatos"]
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                if "pdf" not in formatos and st.button(
+                    "Generar PDF", use_container_width=True
+                ):
+                    with st.spinner("Generando PDF..."):
+                        formatos["pdf"] = generar_formato_informe(
+                            informe_vigente["preparado"], "pdf"
+                        )
+                if "pdf" in formatos:
+                    st.download_button(
+                        "⬇️ Descargar PDF",
+                        formatos["pdf"],
+                        "informe_potencias.pdf",
+                        "application/pdf",
+                        use_container_width=True,
+                    )
+            with col2:
+                if "docx" not in formatos and st.button(
+                    "Generar Word", use_container_width=True
+                ):
+                    with st.spinner("Generando Word..."):
+                        formatos["docx"] = generar_formato_informe(
+                            informe_vigente["preparado"], "docx"
+                        )
+                if "docx" in formatos:
+                    st.download_button(
+                        "⬇️ Descargar Word",
+                        formatos["docx"],
+                        "informe_potencias.docx",
+                        "application/vnd.openxmlformats-officedocument."
+                        "wordprocessingml.document",
+                        use_container_width=True,
+                    )
+            with col3:
+                st.download_button(
+                    "⬇️ Descargar HTML",
+                    formatos["html"].encode("utf-8"),
+                    "informe_potencias.html",
+                    "text/html",
+                    use_container_width=True,
+                )
+
+            with st.expander("👁️ Vista previa HTML"):
+                st.components.v1.html(
+                    formatos["html"], height=700, scrolling=True
+                )
 
     
 
