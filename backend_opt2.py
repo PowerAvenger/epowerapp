@@ -802,6 +802,13 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
         .round(2)
         .apply(lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
     )
+    for columna in ("P1", "P2", "P3", "P4", "P5", "P6"):
+        df_potencias[columna] = df_potencias[columna].apply(
+            lambda x: f"{float(x):,.0f}"
+            .replace(",", "X")
+            .replace(".", ",")
+            .replace("X", ".")
+        )
 
 
     #======================================================================
@@ -885,6 +892,17 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
         lambda a: a.update(text=a.text.replace("Periodo=", ""))
     )
     fig_periodos = aplicar_estilo(fig_periodos)
+    fig_periodos.update_layout(
+        legend_title_text="",
+        legend=dict(
+            orientation="h",
+            x=0.5,
+            xanchor="center",
+            y=1.08,
+            yanchor="bottom",
+        ),
+        margin=dict(l=40, r=20, t=105, b=0),
+    )
 
     
 
@@ -970,8 +988,9 @@ def graficar_gauge_ahorro(ahorro_opt, ahorro_opt_porc):
         "rgba(0, 128, 0, 0.6)",      # Dark green
         "rgba(0, 100, 0, 0.6)"       # Very dark green
     ]
+    ahorro_porc_fmt = f"{ahorro_opt_porc:.1f}".replace(".", ",")
     fig_ahorro = go.Figure(go.Indicator(
-        mode = "gauge+number",  # Agregar número y delta
+        mode = "gauge",
         value = ahorro_opt_porc,  # El valor del indicador
         domain = {'x': [0, 1], 'y': [0, 1]},
         #title = {'text': "Ahorro Obtenido (%)", 'font': {'size': 30}},
@@ -992,7 +1011,17 @@ def graficar_gauge_ahorro(ahorro_opt, ahorro_opt_porc):
             ],
         }
     ))
-    fig_ahorro.update_traces(number_suffix='%', selector=dict(type='indicator'))
+    fig_ahorro.add_annotation(
+        x=0.53,
+        y=0.17,
+        xref="paper",
+        yref="paper",
+        text=f"<b>{ahorro_porc_fmt} %</b>",
+        showarrow=False,
+        xanchor="center",
+        yanchor="middle",
+        font=dict(size=64, color="#00a651"),
+    )
     fig_ahorro.update_layout(
         height=250,
         margin=dict(l=5, r=5, t=60, b=5)

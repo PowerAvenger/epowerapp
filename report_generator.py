@@ -98,6 +98,8 @@ def build_context(
     realizado_por: str = "",
     cliente: str = "",
     cups: str = "",
+    peaje: str = "",
+    periodo_datos: str = "",
 ) -> dict:
     """
     Construye el diccionario de contexto que alimenta tanto la plantilla HTML
@@ -110,6 +112,8 @@ def build_context(
         "realizado_por": realizado_por,
         "cliente": cliente,
         "cups": cups,
+        "peaje": peaje,
+        "periodo_datos": periodo_datos,
         "logo": logo_to_base64(logo_path),
         # KPIs
         "coste_tp_potcon": fmt_eur(coste_tp_potcon),
@@ -203,6 +207,24 @@ def generate_docx(context: dict, df_potencias, figs: dict | None = None) -> byte
     date_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
     doc.add_paragraph()
 
+    # ---- Datos del informe ----
+    doc.add_heading("Datos del informe", level=2)
+    ficha = doc.add_table(rows=3, cols=4)
+    ficha.style = "Table Grid"
+    ficha.alignment = WD_TABLE_ALIGNMENT.CENTER
+    datos_ficha = [
+        ("Realizado por", context["realizado_por"], "CUPS", context["cups"]),
+        ("Fecha de realización", context["fecha"], "Peaje", context["peaje"]),
+        ("Cliente", context["cliente"], "Periodo analizado", context["periodo_datos"]),
+    ]
+    for fila, datos in enumerate(datos_ficha):
+        for columna, valor in enumerate(datos):
+            celda = ficha.cell(fila, columna)
+            celda.text = str(valor)
+            if columna in (0, 2):
+                celda.paragraphs[0].runs[0].bold = True
+    doc.add_paragraph()
+
     # ---- Resumen KPIs ----
     doc.add_heading("Resumen económico", level=2)
     kpi_table = doc.add_table(rows=2, cols=4)
@@ -256,7 +278,19 @@ def generate_docx(context: dict, df_potencias, figs: dict | None = None) -> byte
     for nombre, key in graficos_nombres:
         doc.add_paragraph(nombre).runs[0].bold = True
         fig = (figs or {}).get(key)
-        if fig is not None:
+        imagen_contexto = context.get(key, "")
+        if "base64," in imagen_contexto:
+            try:
+                datos_b64 = imagen_contexto.split("base64,", 1)[1].split('"', 1)[0]
+                doc.add_picture(
+                    io.BytesIO(base64.b64decode(datos_b64)),
+                    width=Inches(5.5),
+                )
+            except Exception:
+                doc.add_paragraph(
+                    f"[Gráfico '{nombre}' no disponible en este entorno]"
+                )
+        elif fig is not None:
             try:
                 if hasattr(fig, "to_image"):
                     png_bytes = fig.to_image(format="png", width=900, height=450, scale=1.5)
@@ -283,7 +317,74 @@ def generate_docx(context: dict, df_potencias, figs: dict | None = None) -> byte
 
 
 # ---------------------------------------------------------------------------
-# Función principal: genera los tres formatos de una vez
+# Preparación común y generación bajo demanda
+# ---------------------------------------------------------------------------
+
+def preparar_informe(
+    graf_costes_potcon,
+    graf_resumen,
+    coste_tp_potcon: float,
+    coste_tp_potopt: float,
+    ahorro_opt: float,
+    ahorro_opt_porc: float,
+    df_potencias,
+    graf_ahorro,
+    graf_costes_pot_periodos,
+    logo_path: str | None = None,
+    titulo: str = "Informe de Optimización de Potencias",
+    subtitulo: str = "",
+    realizado_por: str = "",
+    cliente: str = "",
+    cups: str = "",
+    peaje: str = "",
+    periodo_datos: str = "",
+    template_path: str = "templates/informe.html",
+) -> dict:
+    """Prepara una sola vez el contexto, los gráficos y la vista HTML."""
+    context = build_context(
+        graf_costes_potcon=graf_costes_potcon,
+        graf_resumen=graf_resumen,
+        coste_tp_potcon=coste_tp_potcon,
+        coste_tp_potopt=coste_tp_potopt,
+        ahorro_opt=ahorro_opt,
+        ahorro_opt_porc=ahorro_opt_porc,
+        df_potencias=df_potencias,
+        graf_ahorro=graf_ahorro,
+        graf_costes_pot_periodos=graf_costes_pot_periodos,
+        logo_path=logo_path,
+        titulo=titulo,
+        subtitulo=subtitulo,
+        realizado_por=realizado_por,
+        cliente=cliente,
+        cups=cups,
+        peaje=peaje,
+        periodo_datos=periodo_datos,
+    )
+    return {
+        "context": context,
+        "html": generate_html(context, template_path),
+        "df_potencias": df_potencias.copy(),
+    }
+
+
+def generar_formato_informe(preparado: dict, formato: str):
+    """Genera solo el formato solicitado reutilizando el trabajo preparado."""
+    formato = formato.lower()
+    if formato == "html":
+        return preparado["html"]
+    if formato == "pdf":
+        return generate_pdf(preparado["html"])
+    if formato == "docx":
+        return generate_docx(
+            preparado["context"],
+            preparado["df_potencias"],
+            figs=None,
+        )
+    raise ValueError(f"Formato de informe no soportado: {formato}")
+
+
+# ---------------------------------------------------------------------------
+# Función compatible: genera los tres formatos de una vez
 # ---------------------------------------------------------------------------
 
 def generar_informe(
@@ -302,6 +403,8 @@ def generar_informe(
     realizado_por: str = "",
     cliente: str = "",
     cups: str = "",
+    peaje: str = "",
+    periodo_datos: str = "",
     template_path: str = "templates/informe.html",
 ) -> dict:
     """
@@ -316,7 +419,7 @@ def generar_informe(
         st.download_button("Descargar Word", resultado["docx"], "informe.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
         st.download_button("Descargar HTML", resultado["html"].encode(), "informe.html", "text/html")
     """
-    context = build_context(
+    preparado = preparar_informe(
         graf_costes_potcon=graf_costes_potcon,
         graf_resumen=graf_resumen,
         coste_tp_potcon=coste_tp_potcon,
@@ -332,16 +435,11 @@ def generar_informe(
         realizado_por=realizado_por,
         cliente=cliente,
         cups=cups,
+        peaje=peaje,
+        periodo_datos=periodo_datos,
+        template_path=template_path,
     )
-
-    html_str  = generate_html(context, template_path)
-    pdf_bytes = generate_pdf(html_str)
-    figs = {
-        "graf_resumen":             graf_resumen,
-        "graf_costes_potcon":       graf_costes_potcon,
-        "graf_ahorro":              graf_ahorro,
-        "graf_costes_pot_periodos": graf_costes_pot_periodos,
+    return {
+        formato: generar_formato_informe(preparado, formato)
+        for formato in ("html", "pdf", "docx")
     }
-    docx_bytes = generate_docx(context, df_potencias, figs=figs)
-
-    return {"html": html_str, "pdf": pdf_bytes, "docx": docx_bytes}
