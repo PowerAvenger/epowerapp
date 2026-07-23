@@ -2221,7 +2221,7 @@ with tab_informe:
                     logo_informe.getvalue() if logo_informe is not None else b""
                 )
                 firma_resumen = hashlib.sha256()
-                firma_resumen.update(b"informe-comercial-factura-v5")
+                firma_resumen.update(b"informe-comercial-factura-v6")
                 firma_resumen.update((huella or "").encode("utf-8"))
                 firma_resumen.update(
                     repr((
@@ -2364,6 +2364,167 @@ with tab_informe:
                             f"{formato_euros(fila_potencia['Factura (€)'])} a "
                             f"{formato_euros(fila_potencia['Propuesta (€)'])}."
                         )
+
+                    detalle_energia = resultado["detalle"].copy()
+                    if "Peso consumo (%)" not in detalle_energia:
+                        detalle_energia["Peso consumo (%)"] = (
+                            detalle_energia["Consumo (kWh)"]
+                            / resultado["consumo_total"]
+                            * 100
+                        )
+                    filas_energia_tecnica = [
+                        {
+                            "periodo": escape(str(fila["Periodo"])),
+                            "consumo": formato_kwh(fila["Consumo (kWh)"]),
+                            "peso": formato_pct(
+                                fila["Peso consumo (%)"], 2
+                            ),
+                            "precio": formato_eur_kwh(
+                                fila["Precio propuesta (€/kWh)"], 6
+                            ),
+                            "coste": formato_euros(
+                                fila["Coste propuesta (€)"]
+                            ),
+                        }
+                        for _, fila in detalle_energia.iterrows()
+                    ]
+
+                    modo_potencia_informe = st.session_state.get(
+                        "factura_modo_precio_potencia",
+                        "Aplicar precios BOE",
+                    )
+                    margen_potencia = st.session_state.get(
+                        "factura_margen_potencia_personalizado", 0.0
+                    )
+                    filas_potencia_tecnica = []
+                    for item in factura.potencia_periodos:
+                        if modo_potencia_informe == "Mantener precios de factura":
+                            coste_potencia_periodo = item.coste_facturado_eur
+                        elif modo_potencia_informe == "Aplicar precios BOE":
+                            coste_potencia_periodo = item.coste_boe_eur
+                        else:
+                            coste_potencia_periodo = (
+                                item.coste_boe_eur
+                                + item.potencia_kw
+                                * item.dias
+                                * margen_potencia
+                                / 365
+                            )
+                        potencia_es = (
+                            f"{item.potencia_kw:,.2f}"
+                            .replace(",", "X")
+                            .replace(".", ",")
+                            .replace("X", ".")
+                        )
+                        filas_potencia_tecnica.append({
+                            "periodo": escape(str(item.periodo)),
+                            "potencia": f"{potencia_es} kW",
+                            "dias": str(item.dias),
+                            "factura": formato_euros(
+                                item.coste_facturado_eur
+                            ),
+                            "propuesta": formato_euros(
+                                coste_potencia_periodo
+                            ),
+                        })
+
+                    filas_impuestos_tecnica = []
+                    parametros_iee_informe = _parametros_iee_propuesta(factura)
+                    for impuesto in ("IEE", "IVA"):
+                        filas_impuesto = componentes_informe.loc[
+                            componentes_informe["Componente"] == impuesto
+                        ]
+                        if filas_impuesto.empty:
+                            continue
+                        fila_impuesto = filas_impuesto.iloc[0]
+                        if impuesto == "IEE" and parametros_iee_informe:
+                            tipo_impuesto = formato_pct(
+                                parametros_iee_informe[1], 6
+                            )
+                        elif impuesto == "IVA" and factura.verificacion_iva:
+                            tipo_impuesto = formato_pct(
+                                factura.verificacion_iva.tipo_pct, 2
+                            )
+                        else:
+                            tipo_impuesto = "No disponible"
+                        filas_impuestos_tecnica.append({
+                            "impuesto": impuesto,
+                            "tipo": tipo_impuesto,
+                            "factura": formato_euros(
+                                fila_impuesto["Factura (€)"]
+                            ),
+                            "propuesta": formato_euros(
+                                fila_impuesto["Propuesta (€)"]
+                            ),
+                        })
+
+                    parametros_formula = []
+                    if resultado.get("tipo") == "Indexado":
+                        parametros_formula = [
+                            {
+                                "nombre": "Desvíos apantallados",
+                                "valor": formato_eur_mwh(
+                                    st.session_state.get(
+                                        "desvios_apant", 0.0
+                                    ), 2
+                                ),
+                            },
+                            {
+                                "nombre": "Margen",
+                                "valor": formato_eur_mwh(
+                                    st.session_state.get(
+                                        "margen_telemindex", 0.0
+                                    ), 2
+                                ),
+                            },
+                            {
+                                "nombre": "Posición del margen",
+                                "valor": escape(str(st.session_state.get(
+                                    "cfg_margen_pos", "tm"
+                                ))),
+                            },
+                            {
+                                "nombre": "FNEE",
+                                "valor": (
+                                    "Incluido"
+                                    if st.session_state.get("cfg_fnee", True)
+                                    else "No incluido"
+                                ),
+                            },
+                            {
+                                "nombre": "Posición del FNEE",
+                                "valor": (
+                                    escape(str(st.session_state.get(
+                                        "cfg_fnee_pos", "perdidas"
+                                    )))
+                                    if st.session_state.get("cfg_fnee", True)
+                                    else "No aplica"
+                                ),
+                            },
+                            {
+                                "nombre": "Coste financiero",
+                                "valor": formato_pct(
+                                    st.session_state.get("cf_pct", 0.0), 2
+                                ),
+                            },
+                        ]
+                    else:
+                        parametros_formula = [{
+                            "nombre": "Modalidad",
+                            "valor": "Precios fijos por periodo",
+                        }]
+
+                    hipotesis_tecnicas = [
+                        "Se mantiene el consumo registrado en la factura.",
+                        "La propuesta modifica únicamente los términos "
+                        "parametrizados por el usuario.",
+                        "Los conceptos sin propuesta específica conservan el "
+                        "importe facturado.",
+                        "IEE e IVA se recalculan sobre las bases resultantes "
+                        "cuando existen datos suficientes para contrastarlos.",
+                        "No se utiliza curva de carga para ponderar el término "
+                        "de energía; se emplea el consumo facturado por periodo.",
+                    ]
                     contexto_resumen = {
                         "logo": logo_data,
                         "cliente": escape(
@@ -2450,6 +2611,19 @@ with tab_informe:
                         "insight_potencia": escape(insight_potencia),
                         "filas_componentes": filas_componentes_informe,
                         "grafico_componentes": grafico_componentes_data,
+                        "atr": escape(str(factura.atr or "")),
+                        "consumo_total": formato_kwh(
+                            resultado["consumo_total"]
+                        ),
+                        "tipo_propuesta": escape(str(
+                            resultado.get("tipo", "Indexado")
+                        )),
+                        "modo_potencia": escape(modo_potencia_informe),
+                        "filas_energia_tecnica": filas_energia_tecnica,
+                        "filas_potencia_tecnica": filas_potencia_tecnica,
+                        "filas_impuestos_tecnica": filas_impuestos_tecnica,
+                        "parametros_formula": parametros_formula,
+                        "hipotesis_tecnicas": hipotesis_tecnicas,
                     }
                     html_resumen = _renderizar_plantilla_informe(
                         contexto_resumen,
