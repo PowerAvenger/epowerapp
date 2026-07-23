@@ -107,6 +107,37 @@
     border-bottom: 1px solid #e2e8f0; font-size: 12px; font-weight: 700;
   }
   .report-chart img { display: block; width: 100%; height: auto; }
+  .technical-summary {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+    margin: 20px 0;
+  }
+  .technical-card {
+    padding: 10px; border: 1px solid #dbe3ee; border-radius: 8px;
+    background: #f8fafc;
+  }
+  .technical-card .label { display: block; margin-bottom: 4px; font-size: 9px; }
+  .technical-card .value { font-size: 12px; }
+  .technical-section { margin-top: 23px; page-break-inside: avoid; }
+  .technical-title {
+    margin: 0 0 10px; padding-left: 8px; color: #1d4ed8;
+    border-left: 4px solid #2563eb; font-size: 15px;
+  }
+  .technical-table { width: 100%; border-collapse: collapse; font-size: 10px; }
+  .technical-table th {
+    padding: 7px 8px; color: #fff; background: #64748b; text-align: right;
+  }
+  .technical-table th:first-child, .technical-table td:first-child { text-align: left; }
+  .technical-table td {
+    padding: 7px 8px; border-bottom: 1px solid #e2e8f0; text-align: right;
+  }
+  .technical-table tbody tr:nth-child(even) { background: #f8fafc; }
+  .parameter-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px;
+    padding: 11px 13px; border: 1px solid #dbe3ee; border-radius: 8px;
+    font-size: 10px;
+  }
+  .parameter { display: flex; justify-content: space-between; gap: 12px; }
+  .assumptions { margin: 8px 0 0 18px; padding: 0; font-size: 10px; line-height: 1.5; }
   @page { size: A4; margin: 0; }
 </style>
 </head>
@@ -230,6 +261,84 @@
     Los importes se calculan sobre el periodo de la factura. Esta explicación
     resume los resultados; el detalle justificativo se incorporará en el anexo
     técnico cuando se habilite el tercer nivel.
+  </footer>
+</main>
+
+<main class="page page-detail">
+  <header class="header">
+    <div>
+      <h1>Detalle justificativo</h1>
+      <div class="subtitle">Datos, parámetros e hipótesis empleados</div>
+    </div>
+    {% if logo %}<img class="logo" src="{{ logo }}" alt="Logo"/>{% endif %}
+  </header>
+
+  <section class="technical-summary">
+    <div class="technical-card"><span class="label">ATR</span><span class="value">{{ atr }}</span></div>
+    <div class="technical-card"><span class="label">Consumo analizado</span><span class="value">{{ consumo_total }}</span></div>
+    <div class="technical-card"><span class="label">Energía</span><span class="value">{{ tipo_propuesta }}</span></div>
+    <div class="technical-card"><span class="label">Potencia</span><span class="value">{{ modo_potencia }}</span></div>
+  </section>
+
+  <section class="technical-section">
+    <h2 class="technical-title">Parámetros de la propuesta de energía</h2>
+    <div class="parameter-grid">
+      {% for parametro in parametros_formula %}
+      <div class="parameter"><span class="label">{{ parametro.nombre }}</span><span class="value">{{ parametro.valor }}</span></div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="technical-section">
+    <h2 class="technical-title">Detalle del término de energía</h2>
+    <table class="technical-table">
+      <thead><tr><th>Periodo</th><th>Consumo</th><th>Peso</th><th>Precio propuesta</th><th>Coste propuesta</th></tr></thead>
+      <tbody>
+        {% for fila in filas_energia_tecnica %}
+        <tr><td>{{ fila.periodo }}</td><td>{{ fila.consumo }}</td><td>{{ fila.peso }}</td><td>{{ fila.precio }}</td><td>{{ fila.coste }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  {% if filas_potencia_tecnica %}
+  <section class="technical-section">
+    <h2 class="technical-title">Detalle del término de potencia</h2>
+    <table class="technical-table">
+      <thead><tr><th>Periodo</th><th>Potencia</th><th>Días</th><th>Factura</th><th>Propuesta</th></tr></thead>
+      <tbody>
+        {% for fila in filas_potencia_tecnica %}
+        <tr><td>{{ fila.periodo }}</td><td>{{ fila.potencia }}</td><td>{{ fila.dias }}</td><td>{{ fila.factura }}</td><td>{{ fila.propuesta }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+
+  {% if filas_impuestos_tecnica %}
+  <section class="technical-section">
+    <h2 class="technical-title">Impuestos</h2>
+    <table class="technical-table">
+      <thead><tr><th>Impuesto</th><th>Tipo aplicado</th><th>Factura</th><th>Propuesta</th></tr></thead>
+      <tbody>
+        {% for fila in filas_impuestos_tecnica %}
+        <tr><td>{{ fila.impuesto }}</td><td>{{ fila.tipo }}</td><td>{{ fila.factura }}</td><td>{{ fila.propuesta }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+
+  <section class="technical-section">
+    <h2 class="technical-title">Hipótesis y alcance</h2>
+    <ul class="assumptions">
+      {% for hipotesis in hipotesis_tecnicas %}<li>{{ hipotesis }}</li>{% endfor %}
+    </ul>
+  </section>
+
+  <footer class="note">
+    Documento generado a partir de la factura {{ numero_factura }} y de los
+    parámetros seleccionados en ePowerApp.
   </footer>
 </main>
 </body>
