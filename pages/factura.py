@@ -1,11 +1,14 @@
 ﻿import hashlib
 
+import re
+
 from html import escape
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from backend_comun import aplicar_estilo
 from backend_factura import (
     FacturaError,
     FormatoNoReconocido,
@@ -26,7 +29,14 @@ from formato_es import (
     formato_pct,
     formatear_columnas_tabla,
 )
-from utilidades import generar_menu
+from utilidades import (
+    actualizar_df_index_por_zona,
+    generar_menu,
+    init_app,
+    init_app_index,
+    mostrar_parametros_formula_indexado,
+    persist_widget,
+)
 from regulacion_reactiva import (
     FUENTE_REACTIVA,
     LIMITE_REACTIVA_SOBRE_ACTIVA,
@@ -62,11 +72,317 @@ def procesar_pdf(contenido: bytes, version_lector: int):
 
 def limpiar_factura_sesion():
     """Retira de memoria el PDF y el widget asociado."""
-    for clave in ("factura_pdf_bytes", "factura_pdf_nombre", "factura_uploader"):
+    for clave in (
+        "factura_pdf_bytes",
+        "factura_pdf_nombre",
+        "factura_uploader",
+        "factura_comparativa_indexado",
+    ):
         st.session_state.pop(clave, None)
 
 
-col_entrada, col_detalle, col_grafico = st.columns([0.26, 0.30, 0.44])
+def _atr_indexado(atr_factura):
+    """Traduce el ATR leído al nombre de columna usado por Telemindex."""
+
+    atr = (atr_factura or "").replace(" ", "").upper()
+    for candidato in ("2.0", "3.0", "6.1"):
+        if atr.startswith(candidato):
+            return candidato
+    return None
+
+
+def _fecha_factura(valor):
+    fecha = pd.to_datetime(valor, dayfirst=True, errors="coerce")
+    return None if pd.isna(fecha) else fecha.date()
+
+
+def _firma_formula_indexado():
+    return (
+        "ponderacion_periodos_v2",
+        st.session_state.get("desvios_apant", 1.0),
+        st.session_state.get("margen_telemindex", 5.0),
+        st.session_state.get("cfg_margen_pos", "tm"),
+        st.session_state.get("cfg_fnee", True),
+        st.session_state.get("cfg_fnee_pos", "perdidas"),
+        st.session_state.get("cf_pct", 0.0),
+        st.session_state.get("zona_periodos_index", "peninsula"),
+    )
+
+
+def _firma_propuesta_energia(atr):
+    modo = st.session_state.get("factura_tipo_energia", "Indexado")
+    if modo == "Fijo":
+        numero_periodos = 3 if atr == "2.0" else 6
+        return (
+            "energia_fija_v1",
+            modo,
+            *(
+                st.session_state.get(f"factura_precio_fijo_p{i}", 0.0)
+                for i in range(1, numero_periodos + 1)
+            ),
+        )
+    return ("energia_indexada_v1", modo, *_firma_formula_indexado())
+
+
+def _consumos_factura_por_periodo(factura):
+    consumos = {}
+    periodos_sin_identificar = []
+    for item in factura.energia_periodos:
+        if item.consumo_kwh <= 0:
+            continue
+        periodo = str(item.periodo or "").strip().upper()
+        if not re.fullmatch(r"P[1-6]", periodo):
+            periodos_sin_identificar.append(str(item.periodo or "Sin periodo"))
+            continue
+        consumos[periodo] = consumos.get(periodo, 0.0) + item.consumo_kwh
+
+    if periodos_sin_identificar:
+        raise ValueError(
+            "La factura contiene consumo sin periodos P1…P6 identificables: "
+            + ", ".join(periodos_sin_identificar)
+            + ". No se aplicará una ponderación aproximada."
+        )
+    if not consumos:
+        raise ValueError("No hay consumos por periodo utilizables para ponderar.")
+    return consumos
+
+
+def _crear_resultado_energia(factura, atr, inicio, fin, consumos, precios, tipo):
+    filas = []
+    for periodo, consumo in sorted(consumos.items()):
+        precio = precios.get(periodo)
+        if precio is None or pd.isna(precio) or precio <= 0:
+            raise ValueError(f"No hay un precio válido disponible para {periodo}.")
+        filas.append(
+            {
+                "Periodo": periodo,
+                "Consumo (kWh)": consumo,
+                "Precio propuesta (€/kWh)": precio,
+                "Coste propuesta (€)": consumo * precio,
+            }
+        )
+
+    detalle = pd.DataFrame(filas)
+    consumo_total = detalle["Consumo (kWh)"].sum()
+    detalle["Peso consumo (%)"] = (
+        detalle["Consumo (kWh)"] / consumo_total * 100
+    )
+    detalle["Precio ponderado (€/kWh)"] = (
+        detalle["Coste propuesta (€)"] / consumo_total
+    )
+    coste_propuesta = detalle["Coste propuesta (€)"].sum()
+    coste_facturado = sum(item.coste_eur for item in factura.energia_periodos)
+
+    return {
+        "tipo": tipo,
+        "atr": atr,
+        "inicio": inicio,
+        "fin": fin,
+        "detalle": detalle,
+        "consumo_total": consumo_total,
+        "coste_facturado": coste_facturado,
+        "coste_indexado": coste_propuesta,
+        "precio_facturado": coste_facturado / consumo_total,
+        "precio_indexado": coste_propuesta / consumo_total,
+        "diferencia": coste_propuesta - coste_facturado,
+    }
+
+
+def _calcular_comparativa_indexado(factura):
+    atr = _atr_indexado(factura.atr)
+    if atr is None:
+        raise ValueError(
+            f"El peaje {factura.atr or 'no detectado'} no está disponible en Telemindex."
+        )
+
+    inicio = _fecha_factura(factura.periodo_inicio)
+    fin = _fecha_factura(factura.periodo_fin)
+    if inicio is None or fin is None or inicio > fin:
+        raise ValueError("No se ha podido obtener un periodo de facturación válido.")
+
+    consumos = _consumos_factura_por_periodo(factura)
+
+    init_app()
+    init_app_index()
+    actualizar_df_index_por_zona(forzar=True)
+    df_index = st.session_state.df_sheets
+    fechas = pd.to_datetime(df_index["fecha"], errors="coerce").dt.date
+    df_periodo = df_index.loc[(fechas >= inicio) & (fechas <= fin)].copy()
+
+    if df_periodo.empty:
+        raise ValueError("No hay datos de indexado para el periodo de la factura.")
+    fecha_min = pd.to_datetime(df_periodo["fecha"]).dt.date.min()
+    fecha_max = pd.to_datetime(df_periodo["fecha"]).dt.date.max()
+    fechas_disponibles = set(pd.to_datetime(df_periodo["fecha"]).dt.date.unique())
+    fechas_esperadas = set(pd.date_range(inicio, fin, freq="D").date)
+    if (
+        fecha_min != inicio
+        or fecha_max != fin
+        or fechas_esperadas.difference(fechas_disponibles)
+    ):
+        raise ValueError(
+            "Telemindex no dispone todavía del periodo completo: "
+            f"{inicio:%d/%m/%Y}–{fin:%d/%m/%Y}."
+        )
+
+    columna_periodo = "dh_3p" if atr == "2.0" else "dh_6p"
+    columna_precio = f"precio_{atr}"
+    precios = (
+        df_periodo.assign(
+            _periodo=df_periodo[columna_periodo].astype(str).str.extract(r"(\d+)")[0]
+        )
+        .assign(_periodo=lambda df: "P" + df["_periodo"])
+        .groupby("_periodo", observed=False)[columna_precio]
+        .mean()
+        .div(1000)
+    )
+
+    return _crear_resultado_energia(
+        factura, atr, inicio, fin, consumos, precios, "Indexado"
+    )
+
+
+def _calcular_comparativa_fijo(factura):
+    atr = _atr_indexado(factura.atr)
+    if atr is None:
+        raise ValueError(
+            f"El peaje {factura.atr or 'no detectado'} no admite esta comparativa."
+        )
+    consumos = _consumos_factura_por_periodo(factura)
+    numero_periodos = 3 if atr == "2.0" else 6
+    precios = {
+        f"P{i}": st.session_state.get(f"factura_precio_fijo_p{i}", 0.0)
+        for i in range(1, numero_periodos + 1)
+    }
+    if any(precio <= 0 for precio in precios.values()):
+        raise ValueError(
+            f"Introduce un precio fijo mayor que cero en los {numero_periodos} periodos."
+        )
+    return _crear_resultado_energia(
+        factura,
+        atr,
+        _fecha_factura(factura.periodo_inicio),
+        _fecha_factura(factura.periodo_fin),
+        consumos,
+        precios,
+        "Fijo",
+    )
+
+
+def _coste_potencia_propuesta(factura):
+    modo = st.session_state.get(
+        "factura_modo_precio_potencia", "Aplicar precios BOE"
+    )
+    if modo == "Mantener precios de factura":
+        return factura.potencia
+    if not factura.potencia_periodos or any(
+        item.coste_boe_eur <= 0 for item in factura.potencia_periodos
+    ):
+        return None
+
+    coste_boe = sum(item.coste_boe_eur for item in factura.potencia_periodos)
+    if modo == "Aplicar precios BOE":
+        return round(coste_boe, 2)
+
+    margen_anual = st.session_state.get(
+        "factura_margen_potencia_personalizado", 0.0
+    )
+    coste_margen = sum(
+        item.potencia_kw * item.dias * margen_anual / 365
+        for item in factura.potencia_periodos
+    )
+    return round(coste_boe + coste_margen, 2)
+
+
+def _componentes_propuesta(factura, resultado_energia):
+    potencia_propuesta = _coste_potencia_propuesta(factura)
+    energia_propuesta = resultado_energia["coste_indexado"]
+    if potencia_propuesta is None:
+        diferencia_base = None
+    else:
+        diferencia_base = (
+            potencia_propuesta
+            - factura.potencia
+            + energia_propuesta
+            - factura.energia
+        )
+
+    iee_propuesta = None
+    verificacion_iee = factura.verificacion_iee
+    if diferencia_base is not None and verificacion_iee:
+        base_iee = max(verificacion_iee.base_eur + diferencia_base, 0.0)
+        iee_propuesta = base_iee * verificacion_iee.tipo_pct / 100
+        if verificacion_iee.minimo_eur_mwh is not None:
+            minimo_iee = (
+                factura.consumo_total_kwh
+                / 1000
+                * verificacion_iee.minimo_eur_mwh
+            )
+            iee_propuesta = max(iee_propuesta, minimo_iee)
+        iee_propuesta = round(iee_propuesta, 2)
+
+    iva_propuesta = None
+    verificacion_iva = factura.verificacion_iva
+    if diferencia_base is not None and verificacion_iva:
+        variacion_iee = (
+            iee_propuesta - factura.iee
+            if iee_propuesta is not None
+            else 0.0
+        )
+        base_iva = max(
+            verificacion_iva.base_eur + diferencia_base + variacion_iee,
+            0.0,
+        )
+        iva_propuesta = round(
+            base_iva * verificacion_iva.tipo_pct / 100, 2
+        )
+
+    valores_propuesta = {
+        "Potencia": (
+            potencia_propuesta
+            if potencia_propuesta is not None
+            else factura.potencia
+        ),
+        "Energía": energia_propuesta,
+        "Excesos": factura.excesos_potencia,
+        "Reactiva": factura.reactiva,
+        "Otros": factura.total_otros,
+        "IEE": iee_propuesta if iee_propuesta is not None else factura.iee,
+        "IVA": iva_propuesta if iva_propuesta is not None else factura.iva,
+    }
+    comparativa = pd.DataFrame(
+        [
+            {
+                "Componente": item["Componente"],
+                "Factura (€)": item["Importe (€)"],
+                "Propuesta (€)": valores_propuesta.get(
+                    item["Componente"], item["Importe (€)"]
+                ),
+            }
+            for item in componentes_grafico(factura)
+        ]
+    )
+    comparativa["Diferencia (€)"] = (
+        comparativa["Propuesta (€)"] - comparativa["Factura (€)"]
+    )
+    comparativa["Diferencia (%)"] = comparativa.apply(
+        lambda fila: (
+            fila["Diferencia (€)"] / fila["Factura (€)"] * 100
+            if fila["Factura (€)"]
+            else None
+        ),
+        axis=1,
+    )
+    return comparativa
+
+
+tab_analisis, tab_comparativa = st.tabs(["Análisis", "Propuesta"])
+
+with tab_analisis:
+    col_entrada, col_detalle, col_grafico = st.columns([0.26, 0.30, 0.44])
+
+factura = None
+huella = None
 
 with col_entrada:
     st.subheader("Suelta aquí tu factura", divider="rainbow")
@@ -302,7 +618,7 @@ if contenido is not None:
             for item in componentes
         }
         semaforos_factura = {
-            item["Componente"]: item["Verificación s/factura"]
+            item["Componente"]: item["Verif s/cálculo"]
             for item in componentes
         }
 
@@ -556,6 +872,9 @@ if contenido is not None:
                     use_container_width=True,
                 )
                 st.caption(
+                    "Verif s/factura: cuadre de los importes extraídos con el total · "
+                    "Verif s/cálculo: reproducción del importe con su detalle o fórmula · "
+                    "Verificación real: contraste regulatorio, contractual o externo. "
                     "🟢 Verificado · 🔴 No coincide · "
                     "🟢 ⚠️ Desvío favorable · 🟡 Sin datos suficientes · "
                     "🔵 No facturado"
@@ -838,10 +1157,15 @@ if contenido is not None:
                             formato_euros(factura.energia),
                         )
 
-            if factura.excesos_verificados or factura.verificacion_excesos:
-                with st.expander(
-                    etiqueta_expander("Excesos", "Verificación de excesos")
-                ):
+            desplegable_excesos = st.expander(
+                etiqueta_expander("Excesos", "Verificación de excesos")
+            )
+            if not factura.excesos_potencia:
+                desplegable_excesos.info(
+                    "🔵 La factura no incluye excesos de potencia."
+                )
+            elif factura.excesos_verificados or factura.verificacion_excesos:
+                with desplegable_excesos:
                     if factura.excesos_verificados:
                         es_tipo_123 = factura.tipo_suministro in {
                             "Tipo 1", "Tipo 2", "Tipo 3"
@@ -1088,8 +1412,20 @@ if contenido is not None:
                         [
                             {
                                 "Concepto": item.concepto,
-                                "Importe (€)": item.importe,
+                                "Importe factura (€)": item.importe,
+                                "Importe calculado (€)": (
+                                    factura.verificacion_fbs.importe_regulado_eur
+                                    if factura.verificacion_fbs
+                                    and "bono social" in item.concepto.lower()
+                                    else factura.verificacion_fnee.importe_referencia_eur
+                                    if factura.verificacion_fnee
+                                    and "fnee" in item.concepto.lower()
+                                    else None
+                                ),
                                 "Verificación": (
+                                    "🟡"
+                                    if "ssaa/ree" in item.concepto.lower()
+                                    else
                                     factura.verificacion_fbs.estado
                                     if factura.verificacion_fbs
                                     and "bono social" in item.concepto.lower()
@@ -1101,6 +1437,10 @@ if contenido is not None:
                                     )
                                 ),
                                 "Observación": (
+                                    "No verificable: la factura no identifica el "
+                                    "ciclo de liquidación al que corresponde."
+                                    if "ssaa/ree" in item.concepto.lower()
+                                    else
                                     "Servicio adicional contratado; compruebe si "
                                     "sigue siendo necesario y si puede cancelarse."
                                     if es_servicio_adicional(item)
@@ -1110,8 +1450,12 @@ if contenido is not None:
                                     if "alquiler" in item.concepto.lower()
                                     else factura.verificacion_fbs.mensaje
                                     if factura.verificacion_fbs
-                                    and factura.verificacion_fbs.estado == "🟡"
+                                    and not factura.verificacion_fbs.estado.startswith("🟢")
                                     and "bono social" in item.concepto.lower()
+                                    else factura.verificacion_fnee.mensaje
+                                    if factura.verificacion_fnee
+                                    and not factura.verificacion_fnee.estado.startswith("🟢")
+                                    and "fnee" in item.concepto.lower()
                                     else ""
                                 ),
                             }
@@ -1121,77 +1465,486 @@ if contenido is not None:
                     st.dataframe(
                         formatear_columnas_tabla(
                             df_otros,
-                            columnas_euros=["Importe (€)"],
+                            columnas_euros=[
+                                "Importe factura (€)",
+                                "Importe calculado (€)",
+                            ],
                             incluir_unidades=True,
                         ),
                         hide_index=True,
                         use_container_width=True,
                     )
-                    if factura.verificacion_fbs:
+                    if factura.verificacion_fbs or factura.verificacion_fnee:
                         fbs = factura.verificacion_fbs
-                        col_fbs_dias, col_fbs_facturado, col_fbs_regulado = st.columns(3)
-                        col_fbs_dias.metric("Días FBS", fbs.dias)
-                        col_fbs_facturado.metric(
-                            "FBS facturado", formato_euros(fbs.importe_facturado_eur)
-                        )
-                        col_fbs_regulado.metric(
-                            "FBS regulado",
-                            formato_euros(fbs.importe_regulado_eur)
-                            if fbs.importe_regulado_eur is not None
-                            else "No disponible",
-                        )
-                        if fbs.estado == "🟢":
-                            st.success(fbs.mensaje)
-                        elif fbs.estado == "🟢 ⚠️":
-                            st.warning(fbs.mensaje)
-                        elif fbs.estado == "🔴":
-                            st.error(fbs.mensaje)
-                        else:
-                            st.warning(fbs.mensaje)
-                    if factura.verificacion_fnee:
                         fnee = factura.verificacion_fnee
-                        st.markdown("**Verificación FNEE**")
-                        col_fnee_facturado, col_fnee_referencia, col_fnee_importe = (
+                        col_unitario_fbs, col_unitario_fnee, col_referencia_fnee = (
                             st.columns(3)
                         )
-                        col_fnee_facturado.metric(
-                            "Precio facturado/implícito",
-                            formato_eur_mwh(fnee.precio_facturado_eur_mwh, 3)
-                            if fnee.precio_facturado_eur_mwh is not None
-                            else "No disponible",
-                        )
-                        col_fnee_referencia.metric(
-                            "Referencia propia",
-                            formato_eur_mwh(fnee.precio_referencia_eur_mwh, 3)
-                            if fnee.precio_referencia_eur_mwh is not None
-                            else "No disponible",
-                        )
-                        col_fnee_importe.metric(
-                            "Importe según referencia",
-                            formato_euros(fnee.importe_referencia_eur)
-                            if fnee.importe_referencia_eur is not None
+                        col_unitario_fbs.metric(
+                            "FBS regulado",
+                            formato_euros(fbs.precio_regulado_eur_dia) + "/día"
+                            if fbs and fbs.precio_regulado_eur_dia is not None
                             else "No disponible",
                             delta=(
                                 formato_euros(
-                                    fnee.importe_facturado_eur
-                                    - fnee.importe_referencia_eur
+                                    fbs.precio_facturado_eur_dia
+                                    - fbs.precio_regulado_eur_dia
                                 )
-                                if fnee.importe_referencia_eur is not None
+                                if fbs
+                                and fbs.precio_facturado_eur_dia is not None
+                                and fbs.precio_regulado_eur_dia is not None
                                 else None
                             ),
                             delta_color="inverse",
                         )
+                        col_unitario_fnee.metric(
+                            "FNEE facturado/implícito",
+                            formato_eur_mwh(fnee.precio_facturado_eur_mwh, 3)
+                            if fnee
+                            and fnee.precio_facturado_eur_mwh is not None
+                            else "No disponible",
+                        )
+                        col_referencia_fnee.metric(
+                            "FNEE de referencia",
+                            formato_eur_mwh(fnee.precio_referencia_eur_mwh, 3)
+                            if fnee
+                            and fnee.precio_referencia_eur_mwh is not None
+                            else "No disponible",
+                        )
+                        if fbs:
+                            st.caption(f"FBS calculado sobre {fbs.dias} días.")
+                    if any(
+                        "ssaa/ree" in item.concepto.lower()
+                        for item in factura.otros
+                    ):
+                        st.warning(
+                            "La reliquidación de servicios de ajuste REE se ha "
+                            "detectado, pero no puede verificarse porque la factura "
+                            "no indica el ciclo de liquidación correspondiente."
+                        )
+                    if factura.verificacion_fnee:
+                        fnee = factura.verificacion_fnee
                         st.caption(f"Modalidad: {fnee.modalidad}")
-                        if fnee.estado == "🟢":
-                            st.success(fnee.mensaje)
-                        elif fnee.estado == "🟢 ⚠️":
-                            st.warning(fnee.mensaje)
-                        elif fnee.estado == "🔴":
-                            st.error(fnee.mensaje)
-                        else:
-                            st.info(fnee.mensaje)
 
             with st.expander("Detalles técnicos"):
                 st.write(f"Identificador local del PDF: `{huella[:16]}`")
                 st.json(factura.como_dict())
                 st.text_area("Texto extraído", texto, height=240)
+
+
+with tab_comparativa:
+    col_formula, col_resultado, col_visual = st.columns([0.30, 0.34, 0.36])
+
+    if factura is None:
+        with col_formula:
+            st.subheader("Comparativa de energía", divider="rainbow")
+            st.info("Carga una factura válida en la pestaña Análisis.")
+    else:
+        st.session_state.zona_periodos_index = "peninsula"
+        atr_indexado = _atr_indexado(factura.atr)
+        inicio_indexado = _fecha_factura(factura.periodo_inicio)
+        fin_indexado = _fecha_factura(factura.periodo_fin)
+
+        with col_formula:
+            st.subheader("Propuesta", divider="rainbow")
+
+            st.markdown("#### Término de potencia")
+            with st.container(border=True):
+                persist_widget(
+                    st.radio,
+                    "Tratamiento del precio de potencia",
+                    [
+                        "Mantener precios de factura",
+                        "Aplicar precios BOE",
+                        "Personalizar con margen",
+                    ],
+                    key="factura_modo_precio_potencia",
+                    default="Aplicar precios BOE",
+                )
+                if (
+                    st.session_state.get("factura_modo_precio_potencia")
+                    == "Personalizar con margen"
+                ):
+                    persist_widget(
+                        st.number_input,
+                        "Margen a añadir (€/kW año)",
+                        min_value=0.0,
+                        max_value=100.0,
+                        step=0.1,
+                        key="factura_margen_potencia_personalizado",
+                        default=0.0,
+                    )
+                    st.caption(
+                        "Margen único añadido al precio de todos los periodos."
+                    )
+
+            st.markdown("#### Término de energía")
+            with st.container(border=True):
+                persist_widget(
+                    st.radio,
+                    "Tipo de propuesta de energía",
+                    ["Indexado", "Fijo"],
+                    key="factura_tipo_energia",
+                    default="Indexado",
+                    horizontal=True,
+                )
+                if st.session_state.get("factura_tipo_energia") == "Fijo":
+                    numero_periodos = 3 if atr_indexado == "2.0" else 6
+                    columnas_precios = st.columns(3)
+                    for indice in range(1, numero_periodos + 1):
+                        with columnas_precios[(indice - 1) % 3]:
+                            persist_widget(
+                                st.number_input,
+                                f"P{indice} (€/kWh)",
+                                min_value=0.0,
+                                max_value=2.0,
+                                step=0.001,
+                                format="%.6f",
+                                key=f"factura_precio_fijo_p{indice}",
+                                default=0.0,
+                            )
+                else:
+                    st.caption(
+                        "Configuración compartida con Telemindex durante esta sesión."
+                    )
+                    mostrar_parametros_formula_indexado()
+
+            if st.session_state.get("factura_tipo_energia") == "Indexado":
+                if inicio_indexado and fin_indexado:
+                    st.info(
+                        f"Periodo trasladado: {inicio_indexado:%d/%m/%Y} → "
+                        f"{fin_indexado:%d/%m/%Y} · ATR "
+                        f"{factura.atr or 'no detectado'}"
+                    )
+                else:
+                    st.warning("La factura no contiene un periodo válido.")
+
+            calcular = st.button(
+                "Calcular comparativa",
+                type="primary",
+                use_container_width=True,
+                disabled=atr_indexado is None,
+            )
+
+            if calcular:
+                try:
+                    if st.session_state.get("factura_tipo_energia") == "Fijo":
+                        resultado_nuevo = _calcular_comparativa_fijo(factura)
+                    else:
+                        with st.spinner("Cargando precios y calculando el periodo…"):
+                            resultado_nuevo = _calcular_comparativa_indexado(factura)
+                except Exception as exc:
+                    st.session_state.pop("factura_comparativa_indexado", None)
+                    st.error(str(exc))
+                else:
+                    st.session_state.factura_comparativa_indexado = {
+                        "huella": huella,
+                        "firma": _firma_propuesta_energia(atr_indexado),
+                        "resultado": resultado_nuevo,
+                    }
+
+        comparativa_sesion = st.session_state.get("factura_comparativa_indexado")
+        resultado = None
+        if (
+            comparativa_sesion
+            and comparativa_sesion.get("huella") == huella
+            and comparativa_sesion.get("firma")
+            == _firma_propuesta_energia(atr_indexado)
+        ):
+            resultado = comparativa_sesion["resultado"]
+
+        with col_resultado:
+            st.subheader("Resultado", divider="rainbow")
+            if resultado is None:
+                st.info(
+                    "Pulsa «Calcular comparativa» para valorar el término de energía "
+                    "con la propuesta indicada."
+                )
+            else:
+                tipo_propuesta = resultado.get("tipo", "Indexado")
+                tipo_propuesta_minusculas = tipo_propuesta.lower()
+                diferencia_energia_pct = (
+                    resultado["diferencia"] / resultado["coste_facturado"] * 100
+                    if resultado["coste_facturado"]
+                    else None
+                )
+                df_comparativa_componentes = _componentes_propuesta(
+                    factura, resultado
+                )
+                total_factura = df_comparativa_componentes["Factura (€)"].sum()
+                total_propuesta = df_comparativa_componentes["Propuesta (€)"].sum()
+                diferencia_total = total_propuesta - total_factura
+                diferencia_total_pct = (
+                    diferencia_total / total_factura * 100
+                    if total_factura
+                    else None
+                )
+                propuesta_mejor = diferencia_total <= 0
+                aviso_icono = "🚀" if propuesta_mejor else "🛑"
+                aviso_color = "#00c853" if propuesta_mejor else "#ef4444"
+                aviso_fondo = (
+                    "rgba(0,200,83,.12)"
+                    if propuesta_mejor
+                    else "rgba(239,68,68,.12)"
+                )
+                aviso_borde = (
+                    "rgba(0,200,83,.55)"
+                    if propuesta_mejor
+                    else "rgba(239,68,68,.55)"
+                )
+                aviso_texto = (
+                    "La propuesta mejora la factura en"
+                    if propuesta_mejor
+                    else "La propuesta resulta más cara que la factura en"
+                )
+                diferencia_aviso = formato_euros(abs(diferencia_total))
+                porcentaje_aviso = (
+                    f" ({formato_pct(abs(diferencia_total_pct), 2)})"
+                    if diferencia_total_pct is not None
+                    else ""
+                )
+                st.markdown(
+                    "<div style='display:flex;align-items:center;justify-content:"
+                    "space-between;gap:1rem;flex-wrap:wrap;margin:1rem 0 .8rem 0;"
+                    f"padding:.8rem 1rem;border:1px solid {aviso_borde};"
+                    f"border-radius:1rem;background:{aviso_fondo};"
+                    "box-shadow:0 4px 14px rgba(0,0,0,.10);'>"
+                    "<div style='font-size:1.35rem;font-weight:700;line-height:1.3;'>"
+                    f"{aviso_texto} "
+                    f"<span style='color:{aviso_color};font-size:1.65rem;'>"
+                    f"{diferencia_aviso}{porcentaje_aviso}</span></div>"
+                    "<div style='display:flex;align-items:center;justify-content:center;"
+                    "width:3.7rem;height:3.7rem;flex:0 0 3.7rem;"
+                    "background:transparent;font-size:2.8rem;line-height:1;'>"
+                    f"{aviso_icono}</div></div>",
+                    unsafe_allow_html=True,
+                )
+                st.dataframe(
+                    formatear_columnas_tabla(
+                        df_comparativa_componentes,
+                        columnas_euros=[
+                            "Factura (€)", "Propuesta (€)", "Diferencia (€)",
+                        ],
+                        columnas_pct=["Diferencia (%)"],
+                        incluir_unidades=True,
+                    ),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+                metrica_total_factura, metrica_total_propuesta, metrica_diferencia = (
+                    st.columns(3)
+                )
+                metrica_total_factura.metric(
+                    "Total factura", formato_euros(total_factura)
+                )
+                metrica_total_propuesta.metric(
+                    "Total propuesta", formato_euros(total_propuesta)
+                )
+                metrica_diferencia.metric(
+                    "Diferencia",
+                    formato_euros(diferencia_total),
+                    delta=(
+                        formato_pct(diferencia_total_pct, 2)
+                        if diferencia_total_pct is not None
+                        else None
+                    ),
+                    delta_color="inverse",
+                )
+                st.markdown("#### Detalle del término de energía propuesto")
+                detalle_resultado = resultado["detalle"].copy()
+                if (
+                    "Coste propuesta (€)" not in detalle_resultado.columns
+                    and "Coste indexado (€)" in detalle_resultado.columns
+                ):
+                    detalle_resultado = detalle_resultado.rename(
+                        columns={"Coste indexado (€)": "Coste propuesta (€)"}
+                    )
+                if (
+                    "Precio propuesta (€/kWh)" not in detalle_resultado.columns
+                    and "Precio indexado (€/kWh)" in detalle_resultado.columns
+                ):
+                    detalle_resultado = detalle_resultado.rename(
+                        columns={
+                            "Precio indexado (€/kWh)": "Precio propuesta (€/kWh)"
+                        }
+                    )
+                if "Peso consumo (%)" not in detalle_resultado.columns:
+                    detalle_resultado["Peso consumo (%)"] = (
+                        detalle_resultado["Consumo (kWh)"]
+                        / resultado["consumo_total"]
+                        * 100
+                    )
+                detalle_mostrado = detalle_resultado[
+                    [
+                        "Periodo",
+                        "Consumo (kWh)",
+                        "Peso consumo (%)",
+                        "Precio propuesta (€/kWh)",
+                        "Coste propuesta (€)",
+                    ]
+                ]
+                detalle_mostrado = pd.concat(
+                    [
+                        detalle_mostrado,
+                        pd.DataFrame([{
+                            "Periodo": "Total",
+                            "Consumo (kWh)": resultado["consumo_total"],
+                            "Peso consumo (%)": 100.0,
+                            "Precio propuesta (€/kWh)": resultado["precio_indexado"],
+                            "Coste propuesta (€)": resultado["coste_indexado"],
+                        }]),
+                    ],
+                    ignore_index=True,
+                )
+                st.dataframe(
+                    formatear_columnas_tabla(
+                        detalle_mostrado,
+                        columnas_kwh=["Consumo (kWh)"],
+                        columnas_pct=["Peso consumo (%)"],
+                        columnas_eur_kwh=["Precio propuesta (€/kWh)"],
+                        columnas_euros=["Coste propuesta (€)"],
+                        decimales_kwh=2,
+                    ),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+                st.markdown(
+                    "<div style='font-size:1.05rem; line-height:1.45; margin-top:0.6rem;'>"
+                    "La fila total muestra el precio medio ponderado de la propuesta "
+                    "según el peso de consumo de cada periodo."
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    "<div style='height:1.25rem;'></div>",
+                    unsafe_allow_html=True,
+                )
+                metrica_precio_factura, metrica_precio_propuesta = st.columns(2)
+                metrica_precio_factura.metric(
+                    "Precio medio facturado",
+                    formato_eur_kwh(resultado["precio_facturado"], 5),
+                )
+                metrica_precio_propuesta.metric(
+                    f"Precio medio {tipo_propuesta_minusculas}",
+                    formato_eur_kwh(resultado["precio_indexado"], 5),
+                    delta=(
+                        formato_pct(diferencia_energia_pct, 2)
+                        if diferencia_energia_pct is not None
+                        else None
+                    ),
+                    delta_color="inverse",
+                )
+
+        with col_visual:
+            st.subheader("Factura frente a propuesta", divider="rainbow")
+            if resultado is not None:
+                colores_componentes = {
+                    "Potencia": "#2563EB",
+                    "Energía": "#F97316",
+                    "Excesos": "#DC2626",
+                    "Reactiva": "#9333EA",
+                    "Otros": "#EAB308",
+                    "IEE": "#14B8A6",
+                    "IVA": "#EC4899",
+                    "Sin asignar": "#64748B",
+                }
+                df_grafico_componentes = df_comparativa_componentes.melt(
+                    id_vars="Componente",
+                    value_vars=["Factura (€)", "Propuesta (€)"],
+                    var_name="Escenario",
+                    value_name="Importe (€)",
+                )
+                df_grafico_componentes["Escenario"] = (
+                    df_grafico_componentes["Escenario"]
+                    .str.replace(" (€)", "", regex=False)
+                )
+                figura_componentes = px.bar(
+                    df_grafico_componentes,
+                    x="Escenario",
+                    y="Importe (€)",
+                    color="Componente",
+                    barmode="stack",
+                    color_discrete_map=colores_componentes,
+                    category_orders={
+                        "Componente": list(colores_componentes),
+                        "Escenario": ["Factura", "Propuesta"],
+                    },
+                )
+                figura_componentes.update_traces(
+                    width=0.38,
+                    marker_cornerradius=8,
+                    hovertemplate=(
+                        "<b>%{fullData.name}</b><br>"
+                        "%{x}: %{y:,.2f} €<extra></extra>"
+                    ),
+                )
+                for escenario, total in (
+                    ("Factura", total_factura),
+                    ("Propuesta", total_propuesta),
+                ):
+                    figura_componentes.add_annotation(
+                        x=escenario,
+                        y=total,
+                        text=f"<b>{formato_euros(total)}</b>",
+                        showarrow=False,
+                        yshift=22,
+                        font=dict(size=24),
+                    )
+                figura_componentes.update_layout(
+                    title_text="",
+                    xaxis_title="",
+                    yaxis_title="",
+                    legend_title_text="",
+                    margin=dict(l=10, r=10, t=65, b=10),
+                )
+                figura_componentes = aplicar_estilo(figura_componentes)
+                figura_componentes.update_xaxes(
+                    title_text="",
+                    tickfont=dict(size=20),
+                )
+                figura_componentes.update_yaxes(
+                    title_text="Coste (€)",
+                    title_font=dict(size=20),
+                    tickfont=dict(size=16),
+                )
+                st.plotly_chart(figura_componentes, use_container_width=True)
+
+                mostrar_grafico_energia_anterior = False
+                if mostrar_grafico_energia_anterior:
+                    etiqueta_propuesta = (
+                        f"Propuesta {resultado.get('tipo', 'Indexado').lower()}"
+                    )
+                    df_comparacion = pd.DataFrame(
+                        {
+                            "Alternativa": ["Factura", etiqueta_propuesta],
+                            "Coste de energía (€)": [
+                                resultado["coste_facturado"],
+                                resultado["coste_indexado"],
+                            ],
+                        }
+                    )
+                    figura_comparacion = px.bar(
+                        df_comparacion,
+                        x="Alternativa",
+                        y="Coste de energía (€)",
+                        color="Alternativa",
+                        color_discrete_map={
+                            "Factura": "#ec4899",
+                            etiqueta_propuesta: "#1C83E1",
+                        },
+                    )
+                    figura_comparacion.update_traces(
+                        width=0.38,
+                        marker_cornerradius=12,
+                        texttemplate="<b>%{y:,.2f} €</b>",
+                        textposition="outside",
+                        textfont=dict(size=28),
+                        cliponaxis=False,
+                    )
+                    figura_comparacion.update_layout(
+                        title_text="",
+                        showlegend=False,
+                        margin=dict(l=10, r=10, t=55, b=10),
+                    )
+                    figura_comparacion = aplicar_estilo(figura_comparacion)
+                    st.plotly_chart(figura_comparacion, use_container_width=True)

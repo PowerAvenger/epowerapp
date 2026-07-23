@@ -17,7 +17,13 @@ from backend_telemindex import (
 ) 
 from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, aplicar_estilo, aplicar_dh6p_zona, NOMBRE_ZONA_PERIODOS, calcular_precios_atr
 from backend_curvadecarga import graficar_media_horaria, graficar_queso_periodos
-from utilidades import generar_menu, init_app, init_app_index, persist_widget
+from utilidades import (
+    generar_menu,
+    init_app,
+    init_app_index,
+    mostrar_parametros_formula_indexado,
+    persist_widget,
+)
 from formato_es import (
     formato_cent_eur_kwh,
     formato_eur_kwh,
@@ -66,6 +72,7 @@ if st.session_state.get('atr_dfnorm') in ['6.3', '6.4']:
     st.stop()  
 
 init_app()
+st.session_state.zona_periodos_index = "peninsula"
 
 st.sidebar.header('⚡ Histórico de indexados ⚡')
 zona_mensajes = st.sidebar.empty()
@@ -430,11 +437,14 @@ with st.sidebar.container(border=True):
     #st.selectbox("Selecciona zona de periodos horarios", options=["Península", "Baleares", "Canarias", "Ceuta", "Melilla"], index=0, key="zona_periodos_index")
     opciones_zona_periodos = ["peninsula", "baleares", "canarias", "ceuta", "melilla"]
 
-    st.selectbox(
+    persist_widget(
+        st.selectbox,
         "Selecciona zona de periodos horarios",
         options=opciones_zona_periodos,
         index=0,
         key="zona_periodos_index",
+        default="peninsula",
+        disabled=True,
         format_func=lambda x: {
             "peninsula": "Península",
             "baleares": "Baleares",
@@ -446,27 +456,7 @@ with st.sidebar.container(border=True):
 st.sidebar.subheader('Parámetros de fórmula')
     
 with st.sidebar.container(border=True):
-    
-    #st.number_input("Desvíos apantallados (€/MWh)", min_value=0.0, max_value=20.0, step=0.1, key="desvios_apant")
-    persist_widget(st.number_input, "Desvíos apantallados (€/MWh)", min_value=0.0, max_value=20.0, step=0.1, key="desvios_apant", default=1)
-
-    #persist_widget(st.checkbox, "Incluye SRAD", key="cfg_srad", default=True)
-    #st.checkbox("Añadir SRAD", key="cfg_srad")
-
-    persist_widget(st.number_input, "Margen (€/MWh)", min_value=0.0, max_value=50.0, step=0.1, key="margen_telemindex", default=5)
-    #st.number_input("Margen (€/MWh)", min_value=0.0, max_value=50.0, step=0.1, key="margen_telemindex")
-    
-
-    persist_widget(st.selectbox, "Ubicación margen", ["perdidas", "tm", "neto"], key="cfg_margen_pos", default="tm")
-    #st.selectbox("Ubicación margen", ["perdidas", "tm", "neto"], key="cfg_margen_pos")
-
-    persist_widget(st.checkbox, "Incluye FNEE", key="cfg_fnee", default=True)
-    if st.session_state.get("cfg_fnee", False):
-        persist_widget(st.selectbox, "Ubicación FNEE", ["perdidas", "tm", "neto"], key="cfg_fnee_pos", default= "perdidas")
-    #st.selectbox("Ubicación FNEE", ["perdidas", "tm", "neto"], key="cfg_fnee_pos")
-
-    #st.number_input("Coste financiero (%)", min_value=0.0, max_value=10.0, step=0.01, key="cf_pct")
-    persist_widget(st.number_input,"Coste financiero (%)", min_value=0.0, max_value=10.0, step=0.01, key="cf_pct", default=0.0)
+    mostrar_parametros_formula_indexado()
 
 
 # ZONA PRINCIPAL DE GRÁFICOS++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++

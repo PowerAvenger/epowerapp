@@ -445,5 +445,54 @@ def persist_widget(widget_func, label, *args, key=None, default=None, **kwargs):
     )
 
 
-    
-    
+def mostrar_parametros_formula_indexado():
+    """Dibuja la configuración de fórmula compartida por los indexados."""
+
+    persist_widget(
+        st.number_input,
+        "Desvíos apantallados (€/MWh)",
+        min_value=0.0,
+        max_value=20.0,
+        step=0.1,
+        key="desvios_apant",
+        default=1.0,
+    )
+    persist_widget(
+        st.number_input,
+        "Margen (€/MWh)",
+        min_value=0.0,
+        max_value=50.0,
+        step=0.1,
+        key="margen_telemindex",
+        default=5.0,
+    )
+    persist_widget(
+        st.selectbox,
+        "Ubicación margen",
+        ["perdidas", "tm", "neto"],
+        key="cfg_margen_pos",
+        default="tm",
+    )
+    persist_widget(
+        st.checkbox,
+        "Incluye FNEE",
+        key="cfg_fnee",
+        default=True,
+    )
+    if st.session_state.get("cfg_fnee", False):
+        persist_widget(
+            st.selectbox,
+            "Ubicación FNEE",
+            ["perdidas", "tm", "neto"],
+            key="cfg_fnee_pos",
+            default="perdidas",
+        )
+    persist_widget(
+        st.number_input,
+        "Coste financiero (%)",
+        min_value=0.0,
+        max_value=10.0,
+        step=0.01,
+        key="cf_pct",
+        default=0.0,
+    )
