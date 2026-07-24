@@ -18,7 +18,7 @@ def generar_menu():
 
         st.page_link('epowerapp.py', label = 'Bienvenida', icon = "🙌")
         st.page_link('pages/curvadecarga.py', label = 'Curvas de carga', icon = "🕒")
-        st.page_link('pages/factura.py', label = 'Lector de facturas', icon = "🧾")
+        st.page_link('pages/factura.py', label = 'Análisis de facturas', icon = "🧾")
         st.page_link('pages/opt2.py', label = 'Término de Potencia', icon = "🎯")
         st.page_link('pages/opt2_rdl.py', label = 'Optimización RDL 7/2026', icon = "🎯")
         st.page_link('pages/telemindex.py', label = 'Telemindex', icon = "📈")
