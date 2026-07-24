@@ -14,7 +14,7 @@ if (
 
 MODULOS = [
     ("Curva de carga", "pages/curvadecarga.py", "Curva de carga: Analiza el suministro", "🕒", "images/curvadecarga.jpg", None),
-    ("Lector de facturas", "pages/factura.py", "Analiza y verifica tu factura eléctrica", "🧾", "images/lector_facturas.jpg", None),
+    ("Análisis de facturas", "pages/factura.py", "Analiza y verifica tu factura eléctrica", "🧾", "images/lector_facturas.jpg", None),
     ("Término de potencia", "pages/opt2.py", "Optimiza y verifica el término de potencia", "🎯", "images/optimizacion.jpg", None),
     ("Telemindex", "pages/telemindex.py", "Analiza el mercado minorista de indexado", "📈", "images/telemindex.jpg", None),
     ("Simulindex", "pages/simulindex.py", "Simula los precios futuros de indexado", "🔮", "images/simulindex.jpg", None),

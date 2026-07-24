@@ -359,6 +359,23 @@ def _coste_potencia_propuesta(factura):
     return round(coste_boe + coste_margen, 2)
 
 
+def _margen_potencia_propuesta(factura):
+    if (
+        st.session_state.get(
+            "factura_modo_precio_potencia", "Aplicar precios BOE"
+        )
+        != "Personalizar con margen"
+    ):
+        return 0.0
+    margen_anual = st.session_state.get(
+        "factura_margen_potencia_personalizado", 0.0
+    )
+    return sum(
+        item.potencia_kw * item.dias * margen_anual / 365
+        for item in factura.potencia_periodos
+    )
+
+
 def _parametros_iee_propuesta(factura):
     """Obtiene una base de IEE contrastada, aunque no venga desglosada."""
     if factura.verificacion_iee:
@@ -1853,22 +1870,29 @@ with tab_comparativa:
                 metrica_total_factura, metrica_total_propuesta, metrica_diferencia = (
                     st.columns(3)
                 )
-                metrica_total_factura.metric(
-                    "Total factura", formato_euros(total_factura)
-                )
-                metrica_total_propuesta.metric(
-                    "Total propuesta", formato_euros(total_propuesta)
-                )
-                metrica_diferencia.metric(
-                    "Diferencia",
-                    formato_euros(diferencia_total),
-                    delta=(
-                        formato_pct(diferencia_total_pct, 2)
-                        if diferencia_total_pct is not None
-                        else None
-                    ),
-                    delta_color="inverse",
-                )
+                with metrica_total_factura:
+                    st.markdown(
+                        "<div style='height:.75rem'></div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.metric("Total factura", formato_euros(total_factura))
+                with metrica_total_propuesta:
+                    st.markdown(
+                        "<div style='height:.75rem'></div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.metric("Total propuesta", formato_euros(total_propuesta))
+                with metrica_diferencia.container(border=True):
+                    st.metric(
+                        "Diferencia",
+                        formato_euros(diferencia_total),
+                        delta=(
+                            formato_pct(diferencia_total_pct, 2)
+                            if diferencia_total_pct is not None
+                            else None
+                        ),
+                        delta_color="inverse",
+                    )
                 st.markdown("#### Detalle del término de energía propuesto")
                 detalle_resultado = resultado["detalle"].copy()
                 if (
@@ -1955,7 +1979,7 @@ with tab_comparativa:
                 )
 
         with col_visual:
-            st.subheader("Factura frente a propuesta", divider="rainbow")
+            st.subheader("Gráfico comparativo", divider="rainbow")
             if resultado is not None:
                 colores_componentes = {
                     "Potencia": "#2563EB",
@@ -2027,6 +2051,39 @@ with tab_comparativa:
                     tickfont=dict(size=16),
                 )
                 st.plotly_chart(figura_componentes, use_container_width=True)
+
+                margen_potencia_propuesta = _margen_potencia_propuesta(factura)
+                margen_energia_propuesta = (
+                    resultado["consumo_total"]
+                    * (
+                        st.session_state.get("margen_telemindex", 0.0)
+                        if resultado.get("tipo") == "Indexado"
+                        else 0.0
+                    )
+                    / 1000
+                )
+                margen_total_propuesta = (
+                    margen_potencia_propuesta + margen_energia_propuesta
+                )
+                st.subheader("Tu beneficio", divider="rainbow")
+                with st.container(border=True):
+                    col_margen_tp, col_margen_te, col_margen_total = st.columns(3)
+                    col_margen_tp.metric(
+                        "Término de potencia",
+                        formato_euros(margen_potencia_propuesta),
+                    )
+                    col_margen_te.metric(
+                        "Término de energía",
+                        formato_euros(margen_energia_propuesta),
+                    )
+                    col_margen_total.metric(
+                        "Margen total",
+                        formato_euros(margen_total_propuesta),
+                    )
+                    st.caption(
+                        "Margen comercial nominal correspondiente al periodo "
+                        "analizado, antes de IEE e IVA."
+                    )
 
                 mostrar_grafico_energia_anterior = False
                 if mostrar_grafico_energia_anterior:
