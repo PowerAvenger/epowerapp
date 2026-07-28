@@ -1677,7 +1677,9 @@ def _verificar_impuestos(factura: FacturaLeida, texto: str) -> None:
         )
 
     coincidencia_iee_eni = re.search(
-        r"Impuestos?\s+el[eé]ctricos?\s*\n\s*([\d.,]+)\s*€\s*x\s*"
+        r"Impuestos?\s+(?:especial(?:es)?\s+)?"
+        r"(?:sobre\s+la\s+|de\s+(?:la\s+)?)?el[eé]ctric(?:os?|idad)\s*\n\s*"
+        r"([\d.,]+)\s*€\s*x\s*"
         r"([\d.,]+)\s+([\d.,]+)\s*€",
         texto,
         re.IGNORECASE,
@@ -1794,7 +1796,8 @@ def _verificar_impuestos(factura: FacturaLeida, texto: str) -> None:
     else:
         patron_iee_base_primero = (
             r"Impuesto\s+(?:sobre\s+(?:la\s+)?)?El[eé]ctric(?:o|idad)[^\n]*?"
-            r"([\d.,]+)\s*€\s*[x*]\s*([\d.,]+)\s*%\s*([\d.,]+)\s*€?\s*$"
+            r"([\d.,]+)\s*€?\s*[x*]\s*([\d.,]+)\s*%\s*\)?\s*"
+            r"([\d.,]+)\s*€?\s*$"
         )
         coincidencia_iee_base = re.search(
             patron_iee_base_primero, texto, re.IGNORECASE | re.MULTILINE
@@ -2467,9 +2470,10 @@ def _aplicar_referencia_iee(
         factura.consumo_total_kwh / 1000 * referencia.minimo_eur_mwh, 2
     ) if factura.consumo_total_kwh else 0.0
     importe_regulado = max(cuota_porcentual, cuota_minima)
-    # Las facturas suelen imprimir el tipo legal 5,11269632 % redondeado a
-    # cuatro decimales (5,1127 %).
-    tipo_correcto = abs(verificacion.tipo_pct - referencia.tipo_pct) <= 0.00005
+    # Las facturas pueden imprimir el tipo legal 5,11269632 % redondeado
+    # incluso a dos decimales (5,11 %). La cuota sí se contrasta al céntimo
+    # contra el tipo regulado completo.
+    tipo_correcto = abs(verificacion.tipo_pct - referencia.tipo_pct) <= 0.005
     importe_correcto = (
         importes_coinciden(
             verificacion.importe_facturado_eur, importe_regulado, "impuestos"
@@ -5972,6 +5976,16 @@ def _plenitude(texto: str) -> FacturaLeida:
         [OtroConcepto("Alquiler equipo de medida", alquiler)]
         if alquiler else []
     )
+    bloque_excesos = _seccion(
+        texto,
+        r"Facturaci[oó]n\s+por\s+excesos\s+de\s+potencia",
+        r"Facturaci[oó]n\s+por\s+energ[ií]a\s+consumida",
+    )
+    excesos = sumar_coincidencias(
+        bloque_excesos,
+        r"^Periodo\s+P[1-6][^\n]*?Max[ií]metro\s*:\s*"
+        r"[\d.,]+\s*kW\s+([\d.,]+)\s*€\s*$",
+    )
 
     factura = FacturaLeida(
         formato="plenitude",
@@ -5995,8 +6009,13 @@ def _plenitude(texto: str) -> FacturaLeida:
         energia=buscar_numero(texto, [
             r"Por\s+energ[ií]a\s+consumida\s*:\s*([\d.,]+)\s*€",
         ]),
+        excesos_potencia=excesos,
+        # Plenitude ha usado varias etiquetas para el IEE y puede omitir la
+        # fórmula entre paréntesis en el resumen de importes.
         iee=buscar_numero(texto, [
-            r"^Impuesto\s+electricidad\s+\([^\n]*?\)\s+([\d.,]+)\s*€\s*$",
+            r"^Impuestos?\s+(?:especial(?:es)?\s+)?"
+            r"(?:sobre\s+la\s+|de\s+(?:la\s+)?)?electricidad\s*"
+            r"(?:\([^\n]*?\))?\s*([\d.,]+)\s*€\s*$",
         ]),
         iva=buscar_numero(texto, [
             r"^IVA\s+General\s+\([^)]+\)[^\n]*?\s([\d.,]+)\s*€\s*$",

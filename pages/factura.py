@@ -62,7 +62,7 @@ with st.sidebar:
     )
 
 
-VERSION_LECTOR = 115
+VERSION_LECTOR = 116
 MOSTRAR_TABLA_MAXIMETROS = False
 
 with st.sidebar:
@@ -2706,6 +2706,22 @@ with tab_informe:
                             resumen_sesion["html"],
                             height=900,
                             scrolling=True,
+                        )
+                        numero_informe = re.sub(
+                            r"[^A-Za-z0-9._-]+",
+                            "_",
+                            str(
+                                st.session_state.get(
+                                    "factura_informe_numero", ""
+                                )
+                            ),
+                        ).strip("._") or "factura"
+                        st.download_button(
+                            "Descargar informe HTML",
+                            data=resumen_sesion["html"].encode("utf-8"),
+                            file_name=f"informe_factura_{numero_informe}.html",
+                            mime="text/html; charset=utf-8",
+                            use_container_width=True,
                         )
                 elif resumen_sesion:
                     contenedor_salida_informe.info(

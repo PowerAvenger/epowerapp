@@ -486,7 +486,14 @@ def _guess_cols(df: pd.DataFrame):
         prefer_qh_consumo=True
     )
     c_per = find([r"periodo", r"^p$", r"^p[1-6]$"])
-    c_ind = find(["reactiva", "kvarh", "inductiva"])
+    c_ind = find([
+        r"reactiva",
+        r"reactive",
+        r"\breact\b",
+        r"react.?q1\b",
+        r"kvarh",
+        r"inductiva",
+    ])
     c_cap = find(["capac"])
     #c_ver = find([r"gener", r"vertid", r"exportad", r"as", r"prod"])
     #c_ver = find([r"generaci[oó]n", r"vertid", r"exportad", r"as", r"prod"])
@@ -3284,15 +3291,19 @@ def graficar_compensacion_dimensionamiento(df_curva_q, q_min, fp_min_rec, q_min_
     fp_obj_min = min(st.session_state.fp_obj_min, st.session_state.fp_obj_sel)
     fp_obj_sel = max(st.session_state.fp_obj_min, st.session_state.fp_obj_sel)
 
-    # Estado actual aproximado: primer punto con Q = 0 o mínimo de curva
-    df_no_cero = df_curva_q[df_curva_q["q_max"] > 0]
-
-    if not df_no_cero.empty:
-        fp_actual_aprox = df_no_cero["fp_obj"].min()
-    else:
-        fp_actual_aprox = df_curva_q["fp_obj"].min()
-
+    # Situación actual: factor de potencia medio recibido desde la interfaz y
+    # su Q interpolada sobre la propia curva de dimensionamiento.
     fp_actual_aprox = fp_ini
+    curva_ordenada = (
+        df_curva_q[["fp_obj", "q_max"]]
+        .dropna()
+        .sort_values("fp_obj")
+    )
+    q_actual_aprox = np.interp(
+        fp_actual_aprox,
+        curva_ordenada["fp_obj"],
+        curva_ordenada["q_max"],
+    )
     margen_x = 0.01
     x_min = max(0.89, df_curva_q["fp_obj"].min() - margen_x)
     x_max = min(1.01, df_curva_q["fp_obj"].max() + margen_x)
@@ -3388,7 +3399,7 @@ def graficar_compensacion_dimensionamiento(df_curva_q, q_min, fp_min_rec, q_min_
     # marcador inicial
     fig.add_trace(go.Scatter(
         x=[fp_actual_aprox],
-        y=[0],
+        y=[q_actual_aprox],
         mode="markers+text",
         name="Situación actual",
         text=[f"Q Actual<br>{fp_actual_aprox:.3f}"],

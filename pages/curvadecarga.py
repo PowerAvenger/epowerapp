@@ -851,11 +851,43 @@ if st.session_state.get("df_norm") is not None:
     # REACTIVA
     # ======================================================================================================================================================
     with tab5:
-        df_reactiva = tabla_mensual_periodos(st.session_state.df_norm_h, columna_valor='reactiva_kVArh')
-        df_excesos_reactiva = calcular_tabla_excesos_reactiva(tabla_mensual_consumos, df_reactiva)
-        df_fp = calcular_tabla_factor_potencia(tabla_mensual_consumos, df_reactiva)
+        df_norm_h_reactiva = st.session_state.df_norm_h.copy()
+        df_norm_reactiva = st.session_state.df_norm.copy()
+        fecha_fin_reactiva = df_norm_h_reactiva["fecha_hora"].max().normalize()
+        fecha_inicio_reactiva = df_norm_h_reactiva["fecha_hora"].min().normalize()
+        if (fecha_fin_reactiva - fecha_inicio_reactiva).days + 1 > 365:
+            fecha_inicio_reactiva = fecha_fin_reactiva - pd.Timedelta(days=364)
+            fecha_limite_reactiva = fecha_fin_reactiva + pd.Timedelta(days=1)
+            df_norm_h_reactiva = df_norm_h_reactiva[
+                (df_norm_h_reactiva["fecha_hora"] >= fecha_inicio_reactiva)
+                & (df_norm_h_reactiva["fecha_hora"] < fecha_limite_reactiva)
+            ].copy()
+            df_norm_reactiva = df_norm_reactiva[
+                (df_norm_reactiva["fecha_hora"] >= fecha_inicio_reactiva)
+                & (df_norm_reactiva["fecha_hora"] < fecha_limite_reactiva)
+            ].copy()
+
+        tabla_mensual_consumos_reactiva = tabla_mensual_periodos(
+            df_norm_h_reactiva,
+            columna_valor="consumo_neto_kWh",
+        )
+        df_reactiva = tabla_mensual_periodos(
+            df_norm_h_reactiva,
+            columna_valor="reactiva_kVArh",
+        )
+        df_excesos_reactiva = calcular_tabla_excesos_reactiva(
+            tabla_mensual_consumos_reactiva,
+            df_reactiva,
+        )
+        df_fp = calcular_tabla_factor_potencia(
+            tabla_mensual_consumos_reactiva,
+            df_reactiva,
+        )
         df_coste_excesos_reactiva = calcular_tabla_coste_excesos_reactiva(df_excesos_reactiva, df_fp)
-        df_potmed_qh = calcular_tabla_potencia_media_qh(st.session_state.df_norm, columna_valor="consumo_neto_kWh")
+        df_potmed_qh = calcular_tabla_potencia_media_qh(
+            df_norm_reactiva,
+            columna_valor="consumo_neto_kWh",
+        )
         df_coef_k_min = calcular_tabla_coef_k(df_fp, st.session_state.fp_obj_min)
         df_coef_k_sel = calcular_tabla_coef_k(df_fp, st.session_state.fp_obj_sel)
         df_q_condensadores_min = calcular_tabla_q_condensadores(df_potmed_qh, df_coef_k_min)
@@ -863,6 +895,11 @@ if st.session_state.get("df_norm") is not None:
 
         total_penalizacion_reactiva = df_coste_excesos_reactiva["Total"].sum()
 
+        tabla_mensual_consumos_reactiva_fmt = formatear_tabla_consumos(
+            tabla_mensual_consumos_reactiva,
+            columna_mes="Mes",
+            incluir_unidades=False,
+        )
         df_potmed_qh_fmt = formatear_tabla_consumos(df_potmed_qh, columna_mes="Mes", incluir_unidades=False)
         df_reactiva_fmt = formatear_tabla_consumos(df_reactiva, columna_mes="Mes", incluir_unidades=False)    
         df_excesos_react_fmt = formatear_tabla_consumos(df_excesos_reactiva, columna_mes="Mes", incluir_unidades=False)
@@ -934,8 +971,8 @@ if st.session_state.get("df_norm") is not None:
         from backend_curvadecarga import calcular_curva_q_dimensionamiento, graficar_compensacion_dimensionamiento
         cols_periodos = [c for c in df_fp.columns if c.startswith("P")]
         fp_min = df_fp[cols_periodos].min().min()
-        cols_total = [c for c in df_fp.columns if c.startswith("T")]
-        fp_med = round(df_fp[cols_total].mean() ,2)
+        fp_med = round(df_fp["Total"].mean(), 2)
+        fp_max = df_fp[cols_periodos].max().max()
 
         q_min_margen = q_min * (1 + st.session_state.margen_comp_min/100)
         
@@ -967,20 +1004,61 @@ if st.session_state.get("df_norm") is not None:
             df_curva_aux["fp_obj"]
         )    
         
-        fig_compensacion = graficar_compensacion_dimensionamiento(df_curva_q=df_curva_q, q_min=q_min, fp_min_rec=fp_min_margen, q_min_rec=q_min_margen, q_sel=q_sel, fp_ini = fp_min)
+        fig_compensacion = graficar_compensacion_dimensionamiento(df_curva_q=df_curva_q, q_min=q_min, fp_min_rec=fp_min_margen, q_min_rec=q_min_margen, q_sel=q_sel, fp_ini = fp_med)
 
 
         with st.container():
             c1, c2 = st.columns([.4,.6])
             with c1:
                 st.subheader('RESUMEN COMPENSACIÓN')
+                c_aviso, c_penalizacion = st.columns([2, 1])
+                if (
+                    pd.notna(total_penalizacion_reactiva)
+                    and total_penalizacion_reactiva > 0
+                ):
+                    c_aviso.warning(
+                        "Se ha detectado una penalización por energía reactiva "
+                        f"de {formato_euros(total_penalizacion_reactiva)} en el "
+                        f"periodo {fecha_inicio_reactiva:%d/%m/%Y} – "
+                        f"{fecha_fin_reactiva:%d/%m/%Y}.",
+                        icon="⚠️",
+                    )
+                color_valor_penalizacion = (
+                    "#b91c1c"
+                    if total_penalizacion_reactiva > 0
+                    else "#15803d"
+                )
+                with c_penalizacion:
+                    st.markdown(
+                        "<style>"
+                        ":is([data-testid='column'],[data-testid='stColumn']):has("
+                        ".valor-penalizacion-reactiva):not(:has("
+                        ":is([data-testid='column'],[data-testid='stColumn']) "
+                        ".valor-penalizacion-reactiva)) "
+                        "[data-testid='stMetricValue'],"
+                        ":is([data-testid='column'],[data-testid='stColumn']):has("
+                        ".valor-penalizacion-reactiva):not(:has("
+                        ":is([data-testid='column'],[data-testid='stColumn']) "
+                        ".valor-penalizacion-reactiva)) "
+                        "[data-testid='stMetricValue'] *"
+                        f"{{color:{color_valor_penalizacion} !important;}}"
+                        "</style>"
+                        "<span class='valor-penalizacion-reactiva' "
+                        "style='display:none'></span>",
+                        unsafe_allow_html=True,
+                    )
+                    st.metric(
+                        'Penalización reactiva (€)',
+                        formato_euros(total_penalizacion_reactiva),
+                    )
+
                 c31,c32,c33=st.columns(3)
                 with c31:
-                    st.metric(':red[Penalización reactiva (€)]', formato_euros(total_penalizacion_reactiva))
-                with c32:
                     st.metric('Factor de potencia mínimo', fp_min)
-                with c33:
+                with c32:
                     st.metric('Factor de potencia medio', fp_med)
+                with c33:
+                    st.metric('Factor de potencia máximo', fp_max)
                 c31,c32,c33=st.columns(3)
                 with c31:
                     st.number_input(f'Introduce el cos φ objetivo MÍNIMO', min_value=0.95, max_value=1.00, key = 'fp_obj_min', disabled=True)
@@ -1012,7 +1090,7 @@ if st.session_state.get("df_norm") is not None:
             c1, c2, c3 = st.columns(3)
             with c1:
                 st.subheader('Tabla de consumos mensuales (kWh)')
-                st.dataframe(tabla_mensual_consumos_fmt, use_container_width=True, hide_index=True, height=alto_df_fmt)
+                st.dataframe(tabla_mensual_consumos_reactiva_fmt, use_container_width=True, hide_index=True, height=alto_df_fmt)
             with c2:
                 st.subheader('Tabla de reactiva mensual (kVArh)')
                 st.dataframe(df_reactiva_fmt, use_container_width=True, hide_index=True, height=alto_df_fmt)
