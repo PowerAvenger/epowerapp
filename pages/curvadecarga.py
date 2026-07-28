@@ -1,11 +1,12 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
+import io
 from dateutil.relativedelta import relativedelta
 from datetime import timedelta
 import plotly.express as px
 from backend_curvadecarga import (
-    normalize_curve_simple, 
+    normalize_curve_simple, obtener_datos_contador,
     graficar_curva_horaria, graficar_diario_apilado, graficar_mensual_apilado, tabla_mensual_periodos, formatear_tabla_mensual_es, graficar_queso_periodos, 
     graficar_media_horaria, graficar_media_horaria_combinada, graficar_boxplot_horario,
     graficar_dem_ver_mensual, graficar_con_gen_mensual,
@@ -42,12 +43,46 @@ with st.sidebar:
 
     if not st.session_state.get('usuario_autenticado', False):
         st.warning("🔒 Este módulo es solo para usuarios premium. Lo que estás viendo es un fichero de ejemplo")
+        origen_curva = "Archivo CSV/Excel"
         uploaded = f"curvas/qh anual demo.csv" #es la --> qh 30 con aut anual Carles ES0031--01HS.csv
         atr_dfnorm = '3.0'
         
     else:
-        uploaded = st.file_uploader("📂 Sube un archivo CSV o Excel", type=["csv", "xlsx"], accept_multiple_files=True)
-        #uploaded = st.file_uploader("📂 Sube un archivo CSV o Excel", type=["csv", "xlsx"])
+        origen_curva = st.selectbox(
+            "Origen de la curva",
+            ("Archivo CSV/Excel", "Axon"),
+            index=0,
+        )
+        uploaded = None
+        if origen_curva == "Archivo CSV/Excel":
+            uploaded = st.file_uploader(
+                "📂 Sube un archivo CSV o Excel",
+                type=["csv", "xlsx"],
+                accept_multiple_files=True,
+            )
+        else:
+            usuario_axon = st.text_input("Usuario Axon")
+            password_axon = st.text_input("Contraseña Axon", type="password")
+            cups_axon = st.text_input("CUPS")
+            hoy_axon = pd.Timestamp.today().date()
+            rango_axon = st.date_input(
+                "Periodo de la curva",
+                value=(
+                    hoy_axon - timedelta(days=30),
+                    hoy_axon - timedelta(days=1),
+                ),
+                max_value=hoy_axon,
+                format="DD/MM/YYYY",
+            )
+            tipo_curva_axon = st.selectbox(
+                "Tipo de curva",
+                ("TM2", "TM1"),
+                index=0,
+                format_func=lambda valor: {
+                    "TM1": "TM1 · Horaria (H)",
+                    "TM2": "TM2 · Cuartohoraria (QH)",
+                }[valor],
+            )
         atr_dfnorm = st.sidebar.selectbox(
                     "Selecciona peaje de acceso:",
                     ("2.0", "3.0", "6.1", "6.2", "6.3", "6.4"),
@@ -69,7 +104,13 @@ with st.sidebar:
             }[x]
         )
         
-    normalizar = st.button('Normalizar curva de carga', type='primary', use_container_width=True)
+    normalizar = st.button(
+        "Obtener y normalizar curva"
+        if origen_curva == "Axon"
+        else "Normalizar curva de carga",
+        type='primary',
+        use_container_width=True,
+    )
         
     zona_mensajes = st.sidebar.empty()
     zona_mensajes2 = st.sidebar.empty()
@@ -99,7 +140,38 @@ if "csv_bytes_h" not in st.session_state:
     st.session_state.csv_bytes_h = None
   
 
-if normalizar and uploaded:    
+if normalizar and origen_curva == "Axon":
+    try:
+        if not isinstance(rango_axon, (tuple, list)) or len(rango_axon) != 2:
+            raise ValueError("Selecciona una fecha inicial y una fecha final.")
+        with st.spinner("Conectando con Axon y descargando medidas…"):
+            curva_axon, frecuencia_axon = obtener_datos_contador(
+                usuario_axon,
+                password_axon,
+                cups_axon,
+                rango_axon[0],
+                rango_axon[1],
+                tipo_curva_axon,
+            )
+        st.session_state.df_axon_raw = curva_axon
+        st.session_state.frec_axon_raw = frecuencia_axon
+        archivo_axon = io.BytesIO(
+            curva_axon.to_csv(index=False, sep=";").encode("utf-8")
+        )
+        archivo_axon.name = f"axon_{tipo_curva_axon.lower()}.csv"
+        uploaded = archivo_axon
+        zona_mensajes.success(
+            f"✅ Curva de Axon obtenida: "
+            f"{formato_numero_es(len(curva_axon))} registros."
+        )
+        zona_mensajes2.info(f"Resolución recibida: {frecuencia_axon}.")
+    except Exception as e:
+        st.session_state.pop("df_axon_raw", None)
+        st.session_state.pop("frec_axon_raw", None)
+        zona_mensajes.error(f"❌ Error al obtener la curva de Axon: {e}")
+
+
+if normalizar and uploaded:
     try:
         
         dfs_norm = []
@@ -268,7 +340,7 @@ if normalizar and uploaded:
         zona_mensajes.error(f"❌ Error al normalizar: {e}")
         st.stop()
 
-else:
+elif origen_curva == "Archivo CSV/Excel":
     zona_mensajes.info("⬆️ Sube un archivo CSV o Excel para comenzar.")
 
 

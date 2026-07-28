@@ -3,6 +3,7 @@ import plotly.express as px
 import pandas as pd
 import numpy as np
 import io, re
+import requests
 from unidecode import unidecode
 import plotly.graph_objects as go
 from backend_comun import aplicar_estilo, aplicar_texto_pie_porcentaje
@@ -10,6 +11,7 @@ from formato_es import formato_numero_es
 
 
 TZ = "Europe/Madrid"
+AXON_API_BASE = "https://api.twinmeter.es"
 
 colores_periodo = {
         "P1": "red",
@@ -46,6 +48,257 @@ colores_neteo= {
 # ===============================
 #  Utilidades base
 # ===============================
+
+def obtener_datos_contador(
+    usuario,
+    password,
+    cups,
+    fecha_inicio,
+    fecha_fin,
+    tipo_curva="TM2",
+    timeout=30,
+):
+    """Descarga de Axon una curva horaria (TM1) o cuartohoraria (TM2).
+    
+    Según documentación Axon, la respuesta incluye:
+    - energia: Energía activa entrante (consumida)
+    - exportada: Energía activa saliente (vertida)
+    - ie1q: Energía inductiva primer cuadrante (reactiva inductiva)
+    - ce2q: Energía capacitiva segundo cuadrante
+    - ie3q: Energía inductiva tercer cuadrante
+    - ce4q: Energía capacitiva cuarto cuadrante
+    - periodo: Si periodos=1
+    """
+
+    usuario = str(usuario or "").strip()
+    password = str(password or "")
+    cups = re.sub(r"\s+", "", str(cups or "")).upper()
+    tipo_curva = str(tipo_curva or "").strip().upper()
+    if not usuario or not password or not cups:
+        raise ValueError("Usuario, contraseña y CUPS son obligatorios.")
+    if tipo_curva not in {"TM1", "TM2"}:
+        raise ValueError("El tipo de curva debe ser TM1 o TM2.")
+
+    inicio = pd.to_datetime(fecha_inicio, errors="coerce")
+    fin = pd.to_datetime(fecha_fin, errors="coerce")
+    if pd.isna(inicio) or pd.isna(fin):
+        raise ValueError("El rango de fechas no es válido.")
+    if inicio.date() > fin.date():
+        raise ValueError("La fecha inicial no puede ser posterior a la final.")
+
+    def respuesta_json(respuesta, contexto):
+        try:
+            respuesta.raise_for_status()
+        except requests.RequestException as exc:
+            raise RuntimeError(
+                f"Axon no ha podido completar {contexto} "
+                f"(HTTP {respuesta.status_code})."
+            ) from exc
+        try:
+            return respuesta.json()
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Axon ha devuelto una respuesta no válida durante {contexto}."
+            ) from exc
+
+    try:
+        with requests.Session() as sesion:
+            autenticacion = respuesta_json(
+                sesion.get(
+                    f"{AXON_API_BASE}/auth",
+                    params={"usuario": usuario, "pass": password},
+                    timeout=timeout,
+                ),
+                "la autenticación",
+            )
+            token = autenticacion.get("data", {}).get("token")
+            if not token:
+                raise RuntimeError(
+                    "Axon no ha proporcionado un token de autenticación."
+                )
+
+            cabeceras = {"token": token}
+            respuesta_cups = respuesta_json(
+                sesion.get(
+                    f"{AXON_API_BASE}/suministros/",
+                    params={"cups": cups},
+                    headers=cabeceras,
+                    timeout=timeout,
+                ),
+                "la búsqueda del CUPS",
+            )
+            datos_cups = respuesta_cups.get("data")
+            if isinstance(datos_cups, list):
+                suministro = next(
+                    (
+                        item
+                        for item in datos_cups
+                        if re.sub(
+                            r"\s+", "", str(item.get("cups", ""))
+                        ).upper() == cups
+                    ),
+                    datos_cups[0] if datos_cups else {},
+                )
+            elif isinstance(datos_cups, dict):
+                suministro = datos_cups
+            else:
+                suministro = {}
+            cups_id = suministro.get("cups_id")
+            if not cups_id:
+                raise ValueError(
+                    "Axon no ha encontrado el CUPS indicado o no permite acceder a él."
+                )
+
+            # --- DESCARGA DE MEDIDAS (INCLUYE ACTIVA, REACTIVA, PERIODOS EN UNA SOLA LLAMADA) ---
+            respuesta_medidas = respuesta_json(
+                sesion.get(
+                    f"{AXON_API_BASE}/medidas",
+                    params={
+                        "cups_id": cups_id,
+                        "fecha_ini": inicio.date().isoformat(),
+                        "fecha_fin": fin.date().isoformat(),
+                        "tipo_curva": tipo_curva,
+                        "periodos": 1,  # Solicitar periodos en la respuesta
+                    },
+                    headers=cabeceras,
+                    timeout=timeout,
+                ),
+                "la descarga de medidas",
+            )
+    except requests.RequestException as exc:
+        raise RuntimeError(
+            "No se ha podido conectar con Axon. Comprueba la conexión e inténtalo "
+            "de nuevo."
+        ) from exc
+
+    # --- PROCESAMIENTO DE MEDIDAS ---
+    medidas = respuesta_medidas.get("data", [])
+    if not isinstance(medidas, list) or not medidas:
+        raise ValueError("Axon no ha devuelto medidas para el rango seleccionado.")
+
+    curva = pd.DataFrame(medidas)
+    columnas_obligatorias = {"fecha", "energia"}
+    if not columnas_obligatorias.issubset(curva.columns):
+        raise RuntimeError(
+            "La respuesta de Axon no contiene las columnas fecha y energía."
+        )
+
+    # --- MAPEO DE COLUMNAS AXON ---
+    # Función auxiliar para buscar columnas por patrones regex
+    def find_col(patterns, df=None):
+        """Busca la primera columna que coincida con algún patrón regex."""
+        if df is None:
+            df = curva
+        for col in df.columns:
+            col_clean = _clean(col)
+            for pattern in patterns:
+                if re.search(pattern, col_clean, re.IGNORECASE):
+                    return col
+        return None
+
+    # Debugging: mostrar todas las columnas disponibles
+    print("\n=== COLUMNAS DEVUELTAS POR AXON ===")
+    print(f"Columnas: {list(curva.columns)}")
+    print(f"Primeros registros:")
+    print(curva.head(3))
+    print("==================================\n")
+    
+    # Buscar campos según documentación Axon
+    c_periodo = find_col([r"periodo"])
+    c_ie1q = find_col([r"ie1q"])  # Inductiva primer cuadrante
+    c_ce2q = find_col([r"ce2q"])  # Capacitiva segundo cuadrante
+    c_ie3q = find_col([r"ie3q"])  # Inductiva tercer cuadrante
+    c_ce4q = find_col([r"ce4q"])  # Capacitiva cuarto cuadrante
+    c_exportada = find_col([r"exportada", r"exporta"])
+
+    # --- EXTRACCIÓN DE DATOS RAW (SIN NORMALIZAR) ---
+    # Nombres descriptivos para que _guess_cols los reconozca después
+    curva["Fecha y hora"] = pd.to_datetime(
+        curva["fecha"], dayfirst=True, errors="coerce"
+    )
+    
+    # Consumo activo (kWh)
+    curva["Consumo (kWh)"] = pd.to_numeric(
+        curva["energia"].astype(str).str.replace(",", ".", regex=False),
+        errors="coerce",
+    )
+    
+    # Período (si existe, desde parámetro periodos=1)
+    if c_periodo:
+        curva["Periodo"] = curva[c_periodo]
+    
+    # Energía Reactiva (kVArh) - Axon devuelve en 4 campos según cuadrante
+    # ie1q: Inductiva 1er cuadrante (reactiva inductiva entrada, típicamente penalizada en España)
+    # ce2q: Capacitiva 2do cuadrante (reactiva capacitiva salida)
+    # ie3q: Inductiva 3er cuadrante (reactiva inductiva salida)
+    # ce4q: Capacitiva 4to cuadrante (reactiva capacitiva entrada)
+    reactivas_disponibles = []
+    if c_ie1q:
+        reactivas_disponibles.append(c_ie1q)
+    if c_ce2q:
+        reactivas_disponibles.append(c_ce2q)
+    if c_ie3q:
+        reactivas_disponibles.append(c_ie3q)
+    if c_ce4q:
+        reactivas_disponibles.append(c_ce4q)
+    
+    # Usar ie1q si está disponible (es la penalizada), si no usar la primera encontrada
+    c_reactiva_final = c_ie1q or (reactivas_disponibles[0] if reactivas_disponibles else None)
+    if c_reactiva_final:
+        curva["Reactiva (kVArh)"] = pd.to_numeric(
+            curva[c_reactiva_final].astype(str).str.replace(",", ".", regex=False),
+            errors="coerce",
+        )
+        print(f"📊 Usando reactiva: {c_reactiva_final}")
+    
+    # Exportación/Vertido (kWh)
+    if c_exportada:
+        curva["Vertido (kWh)"] = pd.to_numeric(
+            curva[c_exportada].astype(str).str.replace(",", ".", regex=False),
+            errors="coerce",
+        )
+
+    curva = curva.dropna(subset=["Fecha y hora", "Consumo (kWh)"])
+    if curva.empty:
+        raise ValueError("Axon no ha devuelto medidas utilizables.")
+
+    # --- CONSTRUCCIÓN DEL DATAFRAME FINAL ---
+    # ⚠️ IMPORTANTE: Sin transformaciones. Los datos se devuelven raw de Axon.
+    # El ajuste de hora (desfase QH/H) se hace en normalize_curve_simple
+    frecuencia = "QH" if tipo_curva == "TM2" else "H"
+    
+    # Columnas a retornar (en orden lógico, similar a normalize_curve_simple)
+    columnas_salida = ["Fecha y hora", "Consumo (kWh)"]
+    if "Vertido (kWh)" in curva.columns and curva["Vertido (kWh)"].notna().any():
+        columnas_salida.append("Vertido (kWh)")
+    if "Generación (kWh)" in curva.columns and curva["Generación (kWh)"].notna().any():
+        columnas_salida.append("Generación (kWh)")
+    if "Reactiva (kVArh)" in curva.columns and curva["Reactiva (kVArh)"].notna().any():
+        columnas_salida.append("Reactiva (kVArh)")
+    if "Capacitiva (kVArh)" in curva.columns and curva["Capacitiva (kVArh)"].notna().any():
+        columnas_salida.append("Capacitiva (kVArh)")
+    if "Periodo" in curva.columns and curva["Periodo"].notna().any():
+        columnas_salida.append("Periodo")
+    
+    print("\n=== RESULTADO FINAL AXON (RAW, SIN TRANSFORMACIONES) ===")
+    print(f"Columnas detectadas: {columnas_salida}")
+    print(f"Periodo detectado: {c_periodo}")
+    print(f"Reactiva IE1Q: {c_ie1q}")
+    print(f"Capacitiva CE2Q: {c_ce2q}")
+    print(f"Reactiva IE3Q: {c_ie3q}")
+    print(f"Capacitiva CE4Q: {c_ce4q}")
+    print(f"Exportada: {c_exportada}")
+    print(f"Frecuencia: {frecuencia}")
+    print(f"Total registros: {len(curva)}")
+    print("============================\n")
+    
+    curva = (
+        curva[columnas_salida]
+        .drop_duplicates(subset="Fecha y hora", keep="first")
+        .sort_values("Fecha y hora")
+        .reset_index(drop=True)
+    )
+    return curva, frecuencia
 
 def _clean(s: str) -> str:
     s = unidecode(str(s)).lower().strip()
