@@ -5752,6 +5752,24 @@ def _naturgy(texto: str) -> FacturaLeida:
                 re.IGNORECASE | re.MULTILINE,
             ), start=1)
         ]
+    if not energia_periodos:
+        energia_precio_unico = re.search(
+            r"^[^\n]*?Consumo\s+electricidad\s+([\d.,]+)\s+kWh\s+x\s+"
+            r"([\d.,]+)\s*€/kWh\s+([\d.,]+)\s*€?\s*$",
+            texto,
+            re.IGNORECASE | re.MULTILINE,
+        )
+        if energia_precio_unico:
+            consumo, precio, coste = energia_precio_unico.groups()
+            energia_periodos = [EnergiaPeriodo(
+                periodo="Precio único",
+                consumo_kwh=consumo_es(consumo),
+                precio_eur_kwh=numero_es(precio),
+                coste_eur=numero_es(coste),
+                coste_calculado_eur=round(
+                    consumo_es(consumo) * numero_es(precio), 2
+                ),
+            )]
 
     potencia_periodos = [
         PotenciaFacturadaPeriodo(
@@ -5762,7 +5780,7 @@ def _naturgy(texto: str) -> FacturaLeida:
             coste_facturado_eur=numero_es(coste),
         )
         for periodo, potencia_kw, dias, precio, coste in re.findall(
-            r"^T[eé]rmino\s+potencia\s+P([1-6])\s+([\d.,]+)\s+kW\s+x\s+"
+            r"^[^\n]*?T[eé]rmino\s+potencia\s+P([1-6])\s+([\d.,]+)\s+kW\s+x\s+"
             r"(\d+)\s+d[ií]as\s+x\s+([\d.,]+)\s*€/kW\s+d[ií]a\s+"
             r"([\d.,]+)\s*€?\s*$",
             texto,
