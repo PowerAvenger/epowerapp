@@ -62,7 +62,7 @@ with st.sidebar:
     )
 
 
-VERSION_LECTOR = 116
+VERSION_LECTOR = 123
 MOSTRAR_TABLA_MAXIMETROS = False
 
 with st.sidebar:
@@ -189,15 +189,20 @@ def _firma_propuesta_energia(atr):
     return ("energia_indexada_v1", modo, *_firma_formula_indexado())
 
 
-def _consumos_factura_por_periodo(factura):
+def _consumos_factura_por_periodo(factura, periodos_requeridos=None):
     consumos = {}
+    periodos_identificados = set()
     periodos_sin_identificar = []
     for item in factura.energia_periodos:
-        if item.consumo_kwh <= 0:
-            continue
         periodo = str(item.periodo or "").strip().upper()
         if not re.fullmatch(r"P[1-6]", periodo):
-            periodos_sin_identificar.append(str(item.periodo or "Sin periodo"))
+            if item.consumo_kwh > 0:
+                periodos_sin_identificar.append(
+                    str(item.periodo or "Sin periodo")
+                )
+            continue
+        periodos_identificados.add(periodo)
+        if item.consumo_kwh <= 0:
             continue
         consumos[periodo] = consumos.get(periodo, 0.0) + item.consumo_kwh
 
@@ -209,6 +214,19 @@ def _consumos_factura_por_periodo(factura):
         )
     if not consumos:
         raise ValueError("No hay consumos por periodo utilizables para ponderar.")
+    if periodos_requeridos:
+        faltantes = [
+            periodo for periodo in periodos_requeridos
+            if periodo not in periodos_identificados
+        ]
+        if faltantes:
+            raise ValueError(
+                "La comparativa necesita el consumo real desglosado de "
+                + ", ".join(periodos_requeridos)
+                + ". Faltan: "
+                + ", ".join(faltantes)
+                + "."
+            )
     return consumos
 
 
@@ -265,7 +283,13 @@ def _calcular_comparativa_indexado(factura):
     if inicio is None or fin is None or inicio > fin:
         raise ValueError("No se ha podido obtener un periodo de facturación válido.")
 
-    consumos = _consumos_factura_por_periodo(factura)
+    numero_periodos = 3 if atr == "2.0" else 6
+    periodos_requeridos = [
+        f"P{i}" for i in range(1, numero_periodos + 1)
+    ]
+    consumos = _consumos_factura_por_periodo(
+        factura, periodos_requeridos=periodos_requeridos
+    )
 
     init_app()
     init_app_index()
@@ -313,7 +337,6 @@ def _calcular_comparativa_fijo(factura):
         raise ValueError(
             f"El peaje {factura.atr or 'no detectado'} no admite esta comparativa."
         )
-    consumos = _consumos_factura_por_periodo(factura)
     numero_periodos = 3 if atr == "2.0" else 6
     precios = {
         f"P{i}": st.session_state.get(f"factura_precio_fijo_p{i}", 0.0)
@@ -323,6 +346,29 @@ def _calcular_comparativa_fijo(factura):
         raise ValueError(
             f"Introduce un precio fijo mayor que cero en los {numero_periodos} periodos."
         )
+    periodos_requeridos = [
+        f"P{i}" for i in range(1, numero_periodos + 1)
+    ]
+    try:
+        consumos = _consumos_factura_por_periodo(
+            factura, periodos_requeridos=periodos_requeridos
+        )
+    except ValueError as exc:
+        precio_unico = (
+            len({round(precio, 9) for precio in precios.values()}) == 1
+        )
+        if not precio_unico:
+            raise ValueError(
+                f"{exc} Para comparar sin desglose por periodos, introduce "
+                f"el mismo precio fijo en las {numero_periodos} casillas."
+            ) from exc
+        consumo_total = factura.consumo_total_kwh
+        if consumo_total <= 0:
+            raise ValueError(
+                "La factura no contiene un consumo total utilizable."
+            ) from exc
+        consumos = {"Precio único": consumo_total}
+        precios = {"Precio único": next(iter(precios.values()))}
     return _crear_resultado_energia(
         factura,
         atr,
@@ -505,6 +551,30 @@ def _componentes_propuesta(factura, resultado_energia):
         axis=1,
     )
     return comparativa
+
+
+def _estilar_diferencias_comparativa(tabla_numerica):
+    """Formatea la tabla y colorea las diferencias según su signo."""
+    tabla_formateada = formatear_columnas_tabla(
+        tabla_numerica,
+        columnas_euros=[
+            "Factura (€)", "Propuesta (€)", "Diferencia (€)",
+        ],
+        columnas_pct=["Diferencia (%)"],
+        incluir_unidades=True,
+    )
+    estilos = pd.DataFrame(
+        "", index=tabla_formateada.index, columns=tabla_formateada.columns
+    )
+    for columna in ("Diferencia (€)", "Diferencia (%)"):
+        for indice, valor in tabla_numerica[columna].items():
+            if pd.isna(valor) or abs(valor) < 0.005:
+                continue
+            color = "#00c853" if valor < 0 else "#ef4444"
+            estilos.loc[indice, columna] = (
+                f"color: {color}; font-weight: 700;"
+            )
+    return tabla_formateada.style.apply(lambda _: estilos, axis=None)
 
 
 tab_analisis, tab_comparativa, tab_informe = st.tabs(
@@ -1738,6 +1808,11 @@ with tab_comparativa:
                                 key=f"factura_precio_fijo_p{indice}",
                                 default=0.0,
                             )
+                    st.caption(
+                        "Si la propuesta tiene precio único, introduce el "
+                        f"mismo valor en las {numero_periodos} casillas. "
+                        "En ese caso se utiliza directamente el consumo total."
+                    )
                 else:
                     st.caption(
                         "Configuración compartida con Telemindex durante esta sesión."
@@ -1856,13 +1931,8 @@ with tab_comparativa:
                     unsafe_allow_html=True,
                 )
                 st.dataframe(
-                    formatear_columnas_tabla(
-                        df_comparativa_componentes,
-                        columnas_euros=[
-                            "Factura (€)", "Propuesta (€)", "Diferencia (€)",
-                        ],
-                        columnas_pct=["Diferencia (%)"],
-                        incluir_unidades=True,
+                    _estilar_diferencias_comparativa(
+                        df_comparativa_componentes
                     ),
                     hide_index=True,
                     use_container_width=True,

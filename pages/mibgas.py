@@ -9,6 +9,12 @@ from utilidades import generar_menu, init_app
 from backend_comun import carga_mibgas, carga_total_sheets
 from backend_mibgas import (
     filtrar_por_producto, graficar_qs, graficar_futuros_mibgas, graficar_da_corrido, graficar_da_2026_acumulado, graficar_da_comparado,
+    construir_comparativa_diaria_mibgas_omie, graficar_comparativa_diaria_mibgas_omie,
+    construir_resumen_mensual_omie_mibgas, estimar_omie_mensual_desde_gas,
+    ajustar_modelo_lineal_omie_gas, graficar_diagnostico_ratio_gas,
+    graficar_modelo_lineal_omie_gas,
+    construir_relacion_horaria_omie_mibgas, graficar_mapa_calor_relacion_omie_mibgas,
+    graficar_relacion_omie_mibgas_por_mes, graficar_relacion_omie_mibgas_por_hora,
     descargar_sendeco, obtener_sendeco, graficar_gas_co2,
     obtener_spot_mensual, construir_df_mensual, graf_simul_spot, obtener_spot_diario,
     obtener_mibgas_mensual, graficar_mibgas_mensual_historico, construir_curva_mibgas_2026, graficar_curva_mibgas_2026,
@@ -146,7 +152,7 @@ df_total_data_gas_co2['día_del_año'] = df_total_data_gas_co2['fecha_entrega'].
 graf_co2_gas = graficar_gas_co2(df_total_data_gas_co2)
 
 
-df_spot_mensual = obtener_spot_mensual()
+df_spot_mensual = obtener_spot_mensual(st.session_state.df_sheets)
 print (df_spot_mensual)
 
 df_total_data = df_total_data_gas_co2.merge(df_spot_mensual, on = 'fecha_entrega', how = 'left')
@@ -155,10 +161,42 @@ df_mensual = construir_df_mensual(df_total_data)
 
 
 #valor_mibgas_previsto = 40
-df_spot_diario = obtener_spot_diario()
+df_spot_diario = obtener_spot_diario(st.session_state.df_sheets)
 print (df_spot_diario)
 omie_media_2026 = round(df_spot_diario.loc[df_spot_diario["fecha"].dt.year == 2026, "spot"].mean(),2)
 print(omie_media_2026)
+df_comparativa_diaria_mibgas_omie = construir_comparativa_diaria_mibgas_omie(
+    df_mg_da,
+    df_spot_diario,
+)
+df_comparativa_diaria_historica = construir_comparativa_diaria_mibgas_omie(
+    df_mg_da,
+    df_spot_diario,
+    año=None,
+)
+df_resumen_mensual_omie_mibgas = construir_resumen_mensual_omie_mibgas(
+    df_comparativa_diaria_historica
+)
+graf_comparativa_diaria_mibgas_omie = graficar_comparativa_diaria_mibgas_omie(
+    df_comparativa_diaria_mibgas_omie
+)
+df_relacion_horaria_omie_mibgas = construir_relacion_horaria_omie_mibgas(
+    df_mg_da,
+    st.session_state.df_sheets,
+)
+graf_mapa_calor_omie_mibgas = graficar_mapa_calor_relacion_omie_mibgas(
+    df_relacion_horaria_omie_mibgas
+)
+graf_relacion_por_mes, df_relacion_por_mes = (
+    graficar_relacion_omie_mibgas_por_mes(
+        df_relacion_horaria_omie_mibgas
+    )
+)
+graf_relacion_por_hora, df_relacion_por_hora = (
+    graficar_relacion_omie_mibgas_por_hora(
+        df_relacion_horaria_omie_mibgas
+    )
+)
 
 
 df_validacion = pd.DataFrame({
@@ -201,7 +239,77 @@ with tab1:
             st.write(graf_da_corrido)
             st.write(graf_da_comparado)
             st.write(graf_mibgas_mensual_historico)
-            st.write(graf_da_2026_acumulado) 
+            st.write(graf_da_2026_acumulado)
+            st.plotly_chart(
+                graf_comparativa_diaria_mibgas_omie,
+                use_container_width=True,
+            )
+            with st.expander("Ver tabla diaria MIBGAS D+1 vs OMIE"):
+                st.dataframe(
+                    df_comparativa_diaria_mibgas_omie,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "fecha": st.column_config.DateColumn(
+                            "Fecha", format="DD/MM/YYYY"
+                        ),
+                        "mibgas_d1": st.column_config.NumberColumn(
+                            "MIBGAS D+1 (€/MWh)", format="%.2f"
+                        ),
+                        "omie": st.column_config.NumberColumn(
+                            "OMIE (€/MWh)", format="%.2f"
+                        ),
+                        "rel_omie_gas": st.column_config.NumberColumn(
+                            "Rel. OMIE/Gas", format="%.4f"
+                        ),
+                    },
+                )
+
+    col_mapa, col_metricas = st.columns([.85, .15])
+    with col_mapa:
+        st.plotly_chart(
+            graf_mapa_calor_omie_mibgas,
+            use_container_width=True,
+        )
+    with col_metricas:
+        if not df_relacion_horaria_omie_mibgas.empty:
+            fila_max = df_relacion_horaria_omie_mibgas.loc[
+                df_relacion_horaria_omie_mibgas["rel_omie_gas"].idxmax()
+            ]
+            st.metric(
+                "Máx. OMIE/Gas",
+                f"{fila_max['rel_omie_gas']:.2f}",
+            )
+            st.metric(
+                "Fecha del máximo",
+                fila_max["fecha"].strftime("%d/%m/%Y"),
+            )
+            st.metric(
+                "Hora",
+                f"{int(fila_max['hora']):02d}:00",
+            )
+            st.metric(
+                "OMIE",
+                f"{fila_max['omie']:.2f} €/MWh",
+            )
+            st.metric(
+                "MIBGAS D+1",
+                f"{fila_max['mibgas_d1']:.2f} €/MWh",
+            )
+        else:
+            st.info("No hay datos horarios coincidentes para 2026.")
+
+    col_rel_mes, col_rel_hora = st.columns(2)
+    with col_rel_mes:
+        st.plotly_chart(
+            graf_relacion_por_mes,
+            use_container_width=True,
+        )
+    with col_rel_hora:
+        st.plotly_chart(
+            graf_relacion_por_hora,
+            use_container_width=True,
+        )
             
             
         with col2:
@@ -288,6 +396,241 @@ with tab4:
 
         #renderer = StreamlitRenderer(df_mensual)
         #renderer.explorer()
+
+    st.divider()
+    st.subheader("Estimación mensual OMIE a partir de MIBGAS")
+    st.caption(
+        "La relación mensual es la media de los ratios diarios "
+        "OMIE/MIBGAS. La estimación usa únicamente el mismo mes de años "
+        "anteriores."
+    )
+    meses_estimacion = {
+        1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+        5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+        9: "Septiembre", 10: "Octubre", 11: "Noviembre",
+        12: "Diciembre",
+    }
+    col_simul_mensual, col_hist_mensual = st.columns([.32, .68])
+    with col_simul_mensual:
+        mes_objetivo = st.selectbox(
+            "Mes objetivo",
+            options=list(meses_estimacion),
+            index=7,
+            format_func=lambda mes: meses_estimacion[mes],
+            key="gas_mes_objetivo_ratio",
+        )
+        año_objetivo = st.number_input(
+            "Año objetivo",
+            min_value=2025,
+            max_value=2035,
+            value=2026,
+            step=1,
+            key="gas_año_objetivo_ratio",
+        )
+        gas_mensual_simulado = st.number_input(
+            "MIBGAS mensual previsto (€/MWh)",
+            min_value=0.01,
+            max_value=200.0,
+            value=40.0,
+            step=0.5,
+            format="%.2f",
+            key="gas_mensual_simulado_ratio",
+        )
+        modelo_lineal_mensual = ajustar_modelo_lineal_omie_gas(
+            df_resumen_mensual_omie_mibgas,
+            gas_mensual_simulado,
+        )
+        modelo_lineal_12m = ajustar_modelo_lineal_omie_gas(
+            df_resumen_mensual_omie_mibgas,
+            gas_mensual_simulado,
+            ultimos_meses=12,
+        )
+        estimacion_mensual = estimar_omie_mensual_desde_gas(
+            df_resumen_mensual_omie_mibgas,
+            gas_mensual_simulado,
+            mes_objetivo,
+            año_objetivo,
+        )
+        if estimacion_mensual:
+            st.metric(
+                "OMIE mensual estimado",
+                f"{estimacion_mensual['omie_estimado']:.2f} €/MWh",
+            )
+            st.metric(
+                "Ratio histórico medio",
+                f"{estimacion_mensual['ratio_medio']:.3f}",
+            )
+            st.metric(
+                "Rango histórico resultante",
+                (
+                    f"{estimacion_mensual['omie_minimo']:.2f} – "
+                    f"{estimacion_mensual['omie_maximo']:.2f} €/MWh"
+                ),
+            )
+            st.caption(
+                "Años utilizados: "
+                + ", ".join(
+                    str(año)
+                    for año in estimacion_mensual["años_utilizados"]
+                )
+            )
+        else:
+            años_disponibles_mes = (
+                df_resumen_mensual_omie_mibgas.loc[
+                    df_resumen_mensual_omie_mibgas["mes"] == mes_objetivo,
+                    "año",
+                ]
+                .astype(int)
+                .tolist()
+            )
+            st.warning(
+                "No hay ratios históricos anteriores disponibles para ese mes. "
+                "Años encontrados: "
+                + (
+                    ", ".join(str(año) for año in años_disponibles_mes)
+                    if años_disponibles_mes
+                    else "ninguno"
+                )
+            )
+        if modelo_lineal_mensual:
+            st.markdown("#### Corrección por nivel del gas")
+            st.metric(
+                "OMIE estimado · modelo lineal",
+                f"{modelo_lineal_mensual['omie_estimado']:.2f} €/MWh",
+            )
+            st.metric(
+                "Banda residual orientativa",
+                (
+                    f"{modelo_lineal_mensual['omie_inferior_orientativo']:.2f}"
+                    " – "
+                    f"{modelo_lineal_mensual['omie_superior_orientativo']:.2f}"
+                    " €/MWh"
+                ),
+            )
+            st.caption(
+                f"R²: {modelo_lineal_mensual['r2']:.3f} · "
+                f"{modelo_lineal_mensual['num_observaciones']} meses · "
+                "Correlación gas-ratio: "
+                f"{modelo_lineal_mensual['correlacion_ratio_gas']:.3f}"
+            )
+        if modelo_lineal_12m:
+            st.markdown("#### Modelo últimos 12 meses")
+            st.metric(
+                "OMIE estimado · 12 meses",
+                f"{modelo_lineal_12m['omie_estimado']:.2f} €/MWh",
+            )
+            st.metric(
+                "Banda residual · 12 meses",
+                (
+                    f"{modelo_lineal_12m['omie_inferior_orientativo']:.2f}"
+                    " – "
+                    f"{modelo_lineal_12m['omie_superior_orientativo']:.2f}"
+                    " €/MWh"
+                ),
+            )
+            st.caption(
+                f"R²: {modelo_lineal_12m['r2']:.3f} · "
+                f"{modelo_lineal_12m['num_observaciones']} meses · "
+                "Correlación gas-ratio: "
+                f"{modelo_lineal_12m['correlacion_ratio_gas']:.3f}"
+            )
+
+    with col_hist_mensual:
+        if estimacion_mensual:
+            detalle_ratio_mes = estimacion_mensual["detalle"].copy()
+            detalle_ratio_mes["año"] = detalle_ratio_mes["año"].astype(str)
+            graf_ratio_mes = px.bar(
+                detalle_ratio_mes,
+                x="año",
+                y="ratio_medio_diario",
+                text_auto=".3f",
+                labels={
+                    "año": "Año",
+                    "ratio_medio_diario": "Media ratios diarios OMIE/Gas",
+                },
+                title=(
+                    f"Ratio histórico de {meses_estimacion[mes_objetivo]}"
+                ),
+                color_discrete_sequence=["#4C78A8"],
+            )
+            graf_ratio_mes.add_hline(
+                y=estimacion_mensual["ratio_medio"],
+                line_dash="dot",
+                line_color="#E74C3C",
+                annotation_text="Media histórica",
+            )
+            graf_ratio_mes.update_layout(
+                title={"x": 0.5, "xanchor": "center"},
+                showlegend=False,
+                height=430,
+            )
+            st.plotly_chart(graf_ratio_mes, use_container_width=True)
+
+    if modelo_lineal_mensual:
+        col_diag_ratio, col_modelo_lineal = st.columns(2)
+        with col_diag_ratio:
+            st.plotly_chart(
+                graficar_diagnostico_ratio_gas(
+                    df_resumen_mensual_omie_mibgas
+                ),
+                use_container_width=True,
+            )
+        with col_modelo_lineal:
+            st.plotly_chart(
+                graficar_modelo_lineal_omie_gas(
+                    modelo_lineal_mensual,
+                    gas_mensual_simulado,
+                    etiqueta_objetivo=(
+                        f"{meses_estimacion[mes_objetivo]} "
+                        f"{int(año_objetivo)}"
+                    ),
+                    destacar_objetivo=True,
+                    mes_objetivo=mes_objetivo,
+                ),
+                use_container_width=True,
+            )
+            if modelo_lineal_12m:
+                st.plotly_chart(
+                    graficar_modelo_lineal_omie_gas(
+                        modelo_lineal_12m,
+                        gas_mensual_simulado,
+                        titulo=(
+                            "Modelo lineal OMIE vs MIBGAS · "
+                            "últimos 12 meses"
+                        ),
+                        etiqueta_objetivo=(
+                            f"{meses_estimacion[mes_objetivo]} "
+                            f"{int(año_objetivo)}"
+                        ),
+                    ),
+                    use_container_width=True,
+                )
+
+    with st.expander("Ver tabla mensual OMIE, MIBGAS y ratios diarios"):
+        st.dataframe(
+            df_resumen_mensual_omie_mibgas,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "año": st.column_config.NumberColumn("Año", format="%d"),
+                "mes": st.column_config.NumberColumn("Mes", format="%d"),
+                "fecha_mes": st.column_config.DateColumn(
+                    "Periodo", format="MMM YYYY"
+                ),
+                "mibgas_medio": st.column_config.NumberColumn(
+                    "MIBGAS medio (€/MWh)", format="%.2f"
+                ),
+                "omie_medio": st.column_config.NumberColumn(
+                    "OMIE medio (€/MWh)", format="%.2f"
+                ),
+                "ratio_medio_diario": st.column_config.NumberColumn(
+                    "Media ratios diarios", format="%.4f"
+                ),
+                "dias_con_datos": st.column_config.NumberColumn(
+                    "Días", format="%d"
+                ),
+            },
+        )
 
 
 with tab5:

@@ -4862,6 +4862,7 @@ def _generico(texto: str) -> FacturaLeida:
         potencia = buscar_numero(texto, [r"^Potencia\s+([\d.,]+)\s*€"])
     energia = round(sum(item.coste_eur for item in energia_periodos), 2)
     descuentos_energia = []
+    lineas_descuento = []
     for linea_descuento, importe_descuento in re.findall(
         r"^([^\n]*(?:Descuentos?|Dto\.?)[^\n]*?)\s+"
         r"(-[\d.,]+)\s*€\s*$",
@@ -4891,6 +4892,25 @@ def _generico(texto: str) -> FacturaLeida:
             coste_descuento,
             coste_calculado_eur=coste_descuento,
         ))
+        lineas_descuento.append(linea_descuento.strip())
+    if es_endesa and len(descuentos_energia) > 1:
+        for indice, linea_descuento in enumerate(lineas_descuento):
+            if not re.fullmatch(
+                r"Descuentos?\s*", linea_descuento, re.IGNORECASE
+            ):
+                continue
+            importe_resumen = descuentos_energia[indice].coste_eur
+            importe_detalle = round(sum(
+                item.coste_eur
+                for posicion, item in enumerate(descuentos_energia)
+                if posicion != indice
+            ), 2)
+            if importes_coinciden(
+                importe_resumen, importe_detalle, "componentes"
+            ):
+                descuentos_energia.pop(indice)
+                lineas_descuento.pop(indice)
+                break
     descuento_energia = round(
         sum(item.coste_eur for item in descuentos_energia), 2
     )
@@ -5761,15 +5781,55 @@ def _naturgy(texto: str) -> FacturaLeida:
         )
         if energia_precio_unico:
             consumo, precio, coste = energia_precio_unico.groups()
-            energia_periodos = [EnergiaPeriodo(
-                periodo="Precio único",
-                consumo_kwh=consumo_es(consumo),
-                precio_eur_kwh=numero_es(precio),
-                coste_eur=numero_es(coste),
-                coste_calculado_eur=round(
-                    consumo_es(consumo) * numero_es(precio), 2
-                ),
-            )]
+            consumo_total = consumo_es(consumo)
+            precio_unico = numero_es(precio)
+            coste_total = numero_es(coste)
+            consumos_lecturas = {
+                {"punta": "P1", "llano": "P2", "valle": "P3"}[nombre.lower()]:
+                consumo_es(valor)
+                for nombre, valor in re.findall(
+                    r"^\d{2}/\d{2}/\d{4}\s+"
+                    r"(Punta|Llano|Valle)\s+(?:real|estimad[ao])\s+"
+                    r"[\d.,]+\s+([\d.,]+)\s+kWh\s*$",
+                    texto,
+                    re.IGNORECASE | re.MULTILINE,
+                )
+            }
+            consumo_lecturas_total = round(sum(consumos_lecturas.values()), 3)
+            if (
+                len(consumos_lecturas) == 3
+                and abs(consumo_lecturas_total - consumo_total) <= 1
+            ):
+                energia_periodos = []
+                coste_asignado = 0.0
+                for indice, periodo in enumerate(("P1", "P2", "P3")):
+                    consumo_periodo = consumos_lecturas[periodo]
+                    if indice < 2:
+                        coste_periodo = round(
+                            consumo_periodo * precio_unico, 2
+                        )
+                        coste_asignado += coste_periodo
+                    else:
+                        coste_periodo = round(coste_total - coste_asignado, 2)
+                    energia_periodos.append(EnergiaPeriodo(
+                        periodo=periodo,
+                        consumo_kwh=consumo_periodo,
+                        precio_eur_kwh=precio_unico,
+                        coste_eur=coste_periodo,
+                        coste_calculado_eur=round(
+                            consumo_periodo * precio_unico, 2
+                        ),
+                    ))
+            else:
+                energia_periodos = [EnergiaPeriodo(
+                    periodo="Precio único",
+                    consumo_kwh=consumo_total,
+                    precio_eur_kwh=precio_unico,
+                    coste_eur=coste_total,
+                    coste_calculado_eur=round(
+                        consumo_total * precio_unico, 2
+                    ),
+                )]
 
     potencia_periodos = [
         PotenciaFacturadaPeriodo(
@@ -6435,7 +6495,44 @@ def _repsol(texto: str) -> FacturaLeida:
     return _completar_advertencias(factura)
 
 
+def _endesa(texto: str) -> FacturaLeida:
+    """Extrae las variantes de Endesa, incluidas Tempo Open 20 y Open 30."""
+    factura = _generico(texto)
+    if re.search(
+        r"Potencias?\s+contratadas?\s*:\s*punta-llano",
+        texto,
+        re.IGNORECASE,
+    ):
+        factura.formato = "endesa_open_20"
+    elif re.search(
+        r"Pot\.\s*P6\s+[\d.,]+\s*kW",
+        texto,
+        re.IGNORECASE,
+    ):
+        factura.formato = "endesa_open_30"
+    else:
+        factura.formato = "endesa"
+    factura.comercializadora = "Endesa"
+    return factura
+
+
+def _iberdrola(texto: str) -> FacturaLeida:
+    """Extrae el formato general de Iberdrola Clientes."""
+    factura = _generico(texto)
+    factura.formato = "iberdrola"
+    factura.comercializadora = "Iberdrola Clientes"
+    return factura
+
+
 EXTRACTORES: list[tuple[str, Callable[[str], FacturaLeida], Callable[[str], bool]]] = [
+    (
+        "endesa",
+        _endesa,
+        lambda t: (
+            "horas open" in t.lower()
+            or "endesa energ" in t.lower()
+        ),
+    ),
     (
         "plenitude",
         _plenitude,
@@ -6475,6 +6572,11 @@ EXTRACTORES: list[tuple[str, Callable[[str], FacturaLeida], Callable[[str], bool
         ),
     ),
     (
+        "iberdrola",
+        _iberdrola,
+        lambda t: "iberdrola clientes" in t.lower(),
+    ),
+    (
         "naturgy_grandes_clientes",
         _naturgy_grandes_clientes,
         lambda t: "atenciongrandesclientes@naturgy.com" in t.lower(),
@@ -6501,6 +6603,203 @@ EXTRACTORES: list[tuple[str, Callable[[str], FacturaLeida], Callable[[str], bool
 ]
 
 
+def _repartir_energia_2td_desde_lecturas(
+    factura: FacturaLeida, texto: str
+) -> None:
+    """Recupera P1-P3 de una tabla de lecturas cuando se facturó por tramos."""
+    atr = (factura.atr or "").replace(" ", "").upper()
+    if not atr.startswith("2.0"):
+        return
+    periodos_presentes = {
+        str(item.periodo or "").strip().upper()
+        for item in factura.energia_periodos
+        if item.consumo_kwh > 0
+    }
+    if {"P1", "P2", "P3"}.issubset(periodos_presentes):
+        return
+
+    mapa_periodos = {"punta": "P1", "llano": "P2", "valle": "P3"}
+    consumos_lecturas = {}
+    for linea in texto.splitlines():
+        coincidencia = re.search(
+            r"\b(Punta|Llano|Valle)\s+"
+            r"((?:[+-]?[\d.,]+\s+){2,}[+-]?[\d.,]+)\s*$",
+            linea,
+            re.IGNORECASE,
+        )
+        if not coincidencia:
+            continue
+        nombre, columnas = coincidencia.groups()
+        valores = re.findall(r"[+-]?[\d.,]+", columnas)
+        if valores:
+            periodo = mapa_periodos[nombre.lower()]
+            consumo = consumo_es(valores[-1])
+            consumos_lecturas[periodo] = max(
+                consumo, consumos_lecturas.get(periodo, 0.0)
+            )
+
+    if set(consumos_lecturas) != {"P1", "P2", "P3"}:
+        return
+    consumo_lecturas_total = sum(consumos_lecturas.values())
+    consumo_facturado = factura.consumo_total_kwh
+    tolerancia_kwh = max(1.0, consumo_facturado * 0.005)
+    if (
+        consumo_facturado <= 0
+        or abs(consumo_lecturas_total - consumo_facturado) > tolerancia_kwh
+    ):
+        return
+
+    conceptos_positivos = [
+        item for item in factura.energia_periodos
+        if item.consumo_kwh > 0 and item.coste_eur > 0
+    ]
+    if not conceptos_positivos:
+        return
+    coste_bruto = round(
+        sum(item.coste_eur for item in conceptos_positivos), 2
+    )
+    precio_efectivo = coste_bruto / consumo_lecturas_total
+    conceptos_sin_consumo = [
+        item for item in factura.energia_periodos
+        if item not in conceptos_positivos
+    ]
+
+    energia_por_periodo = []
+    coste_asignado = 0.0
+    for indice, periodo in enumerate(("P1", "P2", "P3")):
+        consumo_periodo = consumos_lecturas[periodo]
+        if indice < 2:
+            coste_periodo = round(consumo_periodo * precio_efectivo, 2)
+            coste_asignado += coste_periodo
+        else:
+            coste_periodo = round(coste_bruto - coste_asignado, 2)
+        energia_por_periodo.append(EnergiaPeriodo(
+            periodo=periodo,
+            consumo_kwh=consumo_periodo,
+            precio_eur_kwh=precio_efectivo,
+            coste_eur=coste_periodo,
+            coste_calculado_eur=coste_periodo,
+        ))
+    factura.energia_periodos = energia_por_periodo + conceptos_sin_consumo
+
+
+def _repartir_energia_desde_tablas_lecturas(
+    factura: FacturaLeida, texto: str
+) -> None:
+    """Recupera P1-P6 desde registros 1.18.x o filas de energía activa."""
+    atr = (factura.atr or "").replace(" ", "").upper()
+    numero_periodos = 3 if atr.startswith("2.0") else 6
+    periodos_requeridos = {
+        f"P{indice}" for indice in range(1, numero_periodos + 1)
+    }
+    periodos_presentes = {
+        str(item.periodo or "").strip().upper()
+        for item in factura.energia_periodos
+        if item.consumo_kwh >= 0
+    }
+    if periodos_requeridos.issubset(periodos_presentes):
+        return
+
+    consumos_registros = {}
+    for periodo, consumo in re.findall(
+        r"\bP([1-6])\s*1\.18\.\1\s+"
+        r"[+-]?[\d.,]+\s+[+-]?[\d.,]+\s+[+-]?[\d.,]+\s+"
+        r"[+-]?[\d.,]+\s+([+-]?[\d.,]+)",
+        texto,
+        re.IGNORECASE,
+    ):
+        consumos_registros[f"P{periodo}"] = max(
+            consumo_es(consumo),
+            consumos_registros.get(f"P{periodo}", 0.0),
+        )
+    for periodo, consumo in re.findall(
+        r"Energ[ií]a\s+activa\s+P([1-6])\s+[^\n]*\s"
+        r"([\d.,]+)\s*kWh\s*$",
+        texto,
+        re.IGNORECASE | re.MULTILINE,
+    ):
+        consumos_registros[f"P{periodo}"] = max(
+            consumo_es(consumo),
+            consumos_registros.get(f"P{periodo}", 0.0),
+        )
+    consumos_desagregados = re.search(
+        r"consumos\s+desagregados\s+han\s+sido\s+"
+        r"punta\s*:\s*([\d.,]+)\s*kWh\s*;\s*"
+        r"llano\s*:\s*([\d.,]+)\s*kWh\s*;\s*"
+        r"valle\s*:?\s*([\d.,]+)\s*kWh",
+        texto,
+        re.IGNORECASE,
+    )
+    if consumos_desagregados:
+        for periodo, consumo in zip(
+            ("P1", "P2", "P3"), consumos_desagregados.groups()
+        ):
+            consumos_registros[periodo] = max(
+                consumo_es(consumo),
+                consumos_registros.get(periodo, 0.0),
+            )
+
+    if not periodos_requeridos.issubset(consumos_registros):
+        return
+    consumo_registros_total = sum(
+        consumos_registros[periodo] for periodo in periodos_requeridos
+    )
+    consumo_facturado = factura.consumo_total_kwh
+    tolerancia_kwh = max(6.0, consumo_facturado * 0.02)
+    if (
+        consumo_registros_total <= 0
+        or consumo_facturado <= 0
+        or abs(consumo_registros_total - consumo_facturado) > tolerancia_kwh
+    ):
+        return
+
+    conceptos_positivos = [
+        item for item in factura.energia_periodos
+        if item.consumo_kwh > 0 and item.coste_eur > 0
+    ]
+    if not conceptos_positivos:
+        return
+    coste_bruto = round(
+        sum(item.coste_eur for item in conceptos_positivos), 2
+    )
+    conceptos_sin_consumo = [
+        item for item in factura.energia_periodos
+        if item not in conceptos_positivos
+    ]
+
+    factor_ajuste = consumo_facturado / consumo_registros_total
+    consumos_ajustados = {
+        periodo: consumos_registros[periodo] * factor_ajuste
+        for periodo in periodos_requeridos
+    }
+    precio_efectivo = coste_bruto / consumo_facturado
+    energia_por_periodo = []
+    coste_asignado = 0.0
+    consumo_asignado = 0.0
+    periodos_ordenados = sorted(
+        periodos_requeridos, key=lambda periodo: int(periodo[1:])
+    )
+    for indice, periodo in enumerate(periodos_ordenados):
+        if indice < len(periodos_ordenados) - 1:
+            consumo_periodo = round(consumos_ajustados[periodo], 3)
+            consumo_asignado += consumo_periodo
+            coste_periodo = round(consumo_periodo * precio_efectivo, 2)
+            coste_asignado += coste_periodo
+        else:
+            consumo_periodo = round(
+                consumo_facturado - consumo_asignado, 3
+            )
+            coste_periodo = round(coste_bruto - coste_asignado, 2)
+        energia_por_periodo.append(EnergiaPeriodo(
+            periodo=periodo,
+            consumo_kwh=consumo_periodo,
+            precio_eur_kwh=precio_efectivo,
+            coste_eur=coste_periodo,
+            coste_calculado_eur=coste_periodo,
+        ))
+    factura.energia_periodos = energia_por_periodo + conceptos_sin_consumo
+
+
 def analizar_factura(texto: str) -> FacturaLeida:
     for _, extractor, detecta in EXTRACTORES:
         if detecta(texto):
@@ -6508,6 +6807,8 @@ def analizar_factura(texto: str) -> FacturaLeida:
             break
     else:
         factura = _generico(texto)
+    _repartir_energia_desde_tablas_lecturas(factura, texto)
+    _repartir_energia_2td_desde_lecturas(factura, texto)
     for abono in _extraer_compensaciones_excedentes(texto):
         if not any(
             (

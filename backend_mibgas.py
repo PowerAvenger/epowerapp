@@ -368,6 +368,678 @@ def graficar_da_2026_acumulado(df, año=2026):
 
     return fig
 
+
+def construir_comparativa_diaria_mibgas_omie(
+    df_mg_da, df_spot_diario, año=2026
+):
+    """Alinea por fecha MIBGAS D+1 y el precio medio diario de OMIE."""
+    df_gas = df_mg_da[["fecha_entrega", "precio_gas"]].copy()
+    df_gas["fecha"] = pd.to_datetime(
+        df_gas["fecha_entrega"], errors="coerce"
+    ).dt.normalize()
+    df_gas["mibgas_d1"] = pd.to_numeric(
+        df_gas["precio_gas"], errors="coerce"
+    )
+    df_gas = (
+        df_gas
+        .dropna(subset=["fecha", "mibgas_d1"])
+        .groupby("fecha", as_index=False)["mibgas_d1"]
+        .mean()
+    )
+
+    df_omie = df_spot_diario[["fecha", "spot"]].copy()
+    df_omie["fecha"] = pd.to_datetime(
+        df_omie["fecha"], errors="coerce"
+    ).dt.normalize()
+    df_omie["omie"] = pd.to_numeric(df_omie["spot"], errors="coerce")
+    df_omie = (
+        df_omie
+        .dropna(subset=["fecha", "omie"])
+        .groupby("fecha", as_index=False)["omie"]
+        .mean()
+    )
+
+    df_comparativa = (
+        df_gas
+        .merge(df_omie[["fecha", "omie"]], on="fecha", how="inner")
+        .sort_values("fecha")
+    )
+    if año is not None:
+        df_comparativa = df_comparativa[
+            df_comparativa["fecha"].dt.year == año
+        ].copy()
+    df_comparativa["rel_omie_gas"] = np.where(
+        df_comparativa["mibgas_d1"].ne(0),
+        df_comparativa["omie"] / df_comparativa["mibgas_d1"],
+        np.nan,
+    )
+    df_comparativa["mibgas_d1"] = df_comparativa["mibgas_d1"].round(2)
+    df_comparativa["omie"] = df_comparativa["omie"].round(2)
+    df_comparativa["rel_omie_gas"] = df_comparativa[
+        "rel_omie_gas"
+    ].round(4)
+
+    return df_comparativa.reset_index(drop=True)
+
+
+def construir_resumen_mensual_omie_mibgas(
+    df_comparativa_diaria, año_inicio=2024
+):
+    """Resume medias diarias y la media mensual de los ratios diarios."""
+    columnas = [
+        "año", "mes", "fecha_mes", "mibgas_medio", "omie_medio",
+        "ratio_medio_diario", "dias_con_datos",
+    ]
+    if df_comparativa_diaria.empty:
+        return pd.DataFrame(columns=columnas)
+
+    df = df_comparativa_diaria.copy()
+    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+    for columna in ("mibgas_d1", "omie", "rel_omie_gas"):
+        df[columna] = pd.to_numeric(df[columna], errors="coerce")
+    df = df.dropna(
+        subset=["fecha", "mibgas_d1", "omie", "rel_omie_gas"]
+    )
+    df = df[df["fecha"].dt.year >= año_inicio].copy()
+    df["año"] = df["fecha"].dt.year
+    df["mes"] = df["fecha"].dt.month
+
+    resumen = (
+        df.groupby(["año", "mes"], as_index=False)
+        .agg(
+            mibgas_medio=("mibgas_d1", "mean"),
+            omie_medio=("omie", "mean"),
+            ratio_medio_diario=("rel_omie_gas", "mean"),
+            dias_con_datos=("fecha", "nunique"),
+        )
+        .sort_values(["año", "mes"])
+    )
+    resumen["fecha_mes"] = pd.to_datetime(
+        dict(
+            year=resumen["año"],
+            month=resumen["mes"],
+            day=1,
+        )
+    )
+    resumen["mibgas_medio"] = resumen["mibgas_medio"].round(2)
+    resumen["omie_medio"] = resumen["omie_medio"].round(2)
+    resumen["ratio_medio_diario"] = resumen[
+        "ratio_medio_diario"
+    ].round(4)
+
+    return resumen[columnas].reset_index(drop=True)
+
+
+def estimar_omie_mensual_desde_gas(
+    df_resumen_mensual, gas_eur_mwh, mes, año_objetivo
+):
+    """Estima OMIE con ratios del mismo mes en años anteriores."""
+    historico = df_resumen_mensual[
+        (df_resumen_mensual["mes"] == int(mes))
+        & (df_resumen_mensual["año"] < int(año_objetivo))
+    ].copy()
+    historico = historico.dropna(subset=["ratio_medio_diario"])
+    if historico.empty:
+        return None
+
+    ratio_medio = float(historico["ratio_medio_diario"].mean())
+    ratio_minimo = float(historico["ratio_medio_diario"].min())
+    ratio_maximo = float(historico["ratio_medio_diario"].max())
+    gas = float(gas_eur_mwh)
+    return {
+        "omie_estimado": gas * ratio_medio,
+        "omie_minimo": gas * ratio_minimo,
+        "omie_maximo": gas * ratio_maximo,
+        "ratio_medio": ratio_medio,
+        "ratio_minimo": ratio_minimo,
+        "ratio_maximo": ratio_maximo,
+        "años_utilizados": historico["año"].astype(int).tolist(),
+        "num_observaciones": len(historico),
+        "detalle": historico,
+    }
+
+
+def ajustar_modelo_lineal_omie_gas(
+    df_resumen_mensual, gas_eur_mwh, min_dias=20, ultimos_meses=None
+):
+    """Ajusta OMIE mensual = intercepto + pendiente * MIBGAS mensual."""
+    datos = df_resumen_mensual[
+        df_resumen_mensual["dias_con_datos"] >= int(min_dias)
+    ].dropna(
+        subset=["mibgas_medio", "omie_medio", "ratio_medio_diario"]
+    ).sort_values("fecha_mes").copy()
+    if ultimos_meses is not None:
+        datos = datos.tail(int(ultimos_meses)).copy()
+    if len(datos) < 3 or datos["mibgas_medio"].nunique() < 2:
+        return None
+
+    x = datos["mibgas_medio"].to_numpy(dtype=float)
+    y = datos["omie_medio"].to_numpy(dtype=float)
+    pendiente, intercepto = np.polyfit(x, y, 1)
+    ajustado = intercepto + pendiente * x
+    residuos = y - ajustado
+    suma_residuos = float(np.sum(residuos ** 2))
+    suma_total = float(np.sum((y - y.mean()) ** 2))
+    r2 = 1 - suma_residuos / suma_total if suma_total else 0.0
+    rmse = float(np.sqrt(np.mean(residuos ** 2)))
+    gas = float(gas_eur_mwh)
+    omie_estimado = intercepto + pendiente * gas
+    correlacion_ratio_gas = float(np.corrcoef(
+        datos["mibgas_medio"].to_numpy(dtype=float),
+        datos["ratio_medio_diario"].to_numpy(dtype=float),
+    )[0, 1])
+    datos["omie_ajustado"] = ajustado
+
+    return {
+        "omie_estimado": omie_estimado,
+        "omie_inferior_orientativo": omie_estimado - 1.96 * rmse,
+        "omie_superior_orientativo": omie_estimado + 1.96 * rmse,
+        "pendiente": float(pendiente),
+        "intercepto": float(intercepto),
+        "r2": r2,
+        "rmse": rmse,
+        "correlacion_ratio_gas": correlacion_ratio_gas,
+        "num_observaciones": len(datos),
+        "ultimos_meses": ultimos_meses,
+        "datos": datos,
+    }
+
+
+def graficar_diagnostico_ratio_gas(df_resumen_mensual):
+    """Visualiza la relación entre gas mensual y media de ratios diarios."""
+    datos = df_resumen_mensual[
+        df_resumen_mensual["dias_con_datos"] >= 20
+    ].dropna(
+        subset=["mibgas_medio", "ratio_medio_diario"]
+    ).copy()
+    fig = px.scatter(
+        datos,
+        x="mibgas_medio",
+        y="ratio_medio_diario",
+        color=datos["año"].astype(str),
+        custom_data=["fecha_mes", "omie_medio", "dias_con_datos"],
+        labels={
+            "mibgas_medio": "MIBGAS medio (€/MWh)",
+            "ratio_medio_diario": "Media ratios diarios OMIE/Gas",
+            "color": "Año",
+        },
+        title="¿Disminuye el ratio cuando aumenta el gas?",
+    )
+    if len(datos) >= 2 and datos["mibgas_medio"].nunique() >= 2:
+        pendiente, intercepto = np.polyfit(
+            datos["mibgas_medio"], datos["ratio_medio_diario"], 1
+        )
+        x_linea = np.linspace(
+            datos["mibgas_medio"].min(),
+            datos["mibgas_medio"].max(),
+            100,
+        )
+        fig.add_trace(go.Scatter(
+            x=x_linea,
+            y=intercepto + pendiente * x_linea,
+            mode="lines",
+            name="Tendencia",
+            line=dict(color="#E74C3C", dash="dash"),
+            hoverinfo="skip",
+        ))
+    fig.update_traces(
+        marker=dict(size=10),
+        hovertemplate=(
+            "<b>%{customdata[0]|%b %Y}</b><br>"
+            "MIBGAS: %{x:.2f} €/MWh<br>"
+            "Ratio medio diario: %{y:.3f}<br>"
+            "OMIE: %{customdata[1]:.2f} €/MWh<br>"
+            "Días: %{customdata[2]}"
+            "<extra></extra>"
+        ),
+        selector=dict(mode="markers"),
+    )
+    fig.update_layout(
+        title={"x": 0.5, "xanchor": "center"},
+        height=500,
+    )
+    fig = aplicar_estilo(fig)
+    fig.update_layout(height=500)
+    return fig
+
+
+def graficar_modelo_lineal_omie_gas(
+    modelo,
+    gas_eur_mwh,
+    titulo="Modelo lineal mensual OMIE vs MIBGAS",
+    etiqueta_objetivo="Estimación",
+    destacar_objetivo=False,
+    mes_objetivo=None,
+):
+    """Dibuja observaciones mensuales, recta y punto OMIE estimado."""
+    datos = modelo["datos"]
+    x_min = min(float(datos["mibgas_medio"].min()), float(gas_eur_mwh))
+    x_max = max(float(datos["mibgas_medio"].max()), float(gas_eur_mwh))
+    margen = max((x_max - x_min) * 0.08, 1.0)
+    x_linea = np.linspace(x_min - margen, x_max + margen, 120)
+    y_linea = modelo["intercepto"] + modelo["pendiente"] * x_linea
+
+    datos_grafico = datos.copy()
+    datos_grafico["periodo_hover"] = pd.to_datetime(
+        datos_grafico["fecha_mes"]
+    ).dt.strftime("%m/%Y")
+    fig = px.scatter(
+        datos_grafico,
+        x="mibgas_medio",
+        y="omie_medio",
+        color=datos["año"].astype(str),
+        custom_data=[
+            "periodo_hover", "ratio_medio_diario", "dias_con_datos"
+        ],
+        labels={
+            "mibgas_medio": "MIBGAS medio (€/MWh)",
+            "omie_medio": "OMIE medio (€/MWh)",
+            "color": "Año",
+        },
+        title=titulo,
+    )
+    fig.update_traces(
+        marker=dict(size=10),
+        hovertemplate=(
+            "<b>%{customdata[0]}</b><br>"
+            "MIBGAS: %{x:.2f} €/MWh<br>"
+            "OMIE: %{y:.2f} €/MWh<br>"
+            "Ratio medio diario: %{customdata[1]:.3f}<br>"
+            "Días: %{customdata[2]}"
+            "<extra></extra>"
+        ),
+        selector=dict(mode="markers"),
+    )
+    if destacar_objetivo and mes_objetivo is not None:
+        datos_mismo_mes = datos_grafico[
+            datos_grafico["mes"].astype(int) == int(mes_objetivo)
+        ]
+        if not datos_mismo_mes.empty:
+            fig.add_trace(go.Scatter(
+                x=datos_mismo_mes["mibgas_medio"],
+                y=datos_mismo_mes["omie_medio"],
+                mode="markers",
+                name=f"Histórico mes {int(mes_objetivo):02d}",
+                customdata=datos_mismo_mes[
+                    ["periodo_hover", "ratio_medio_diario", "dias_con_datos"]
+                ].to_numpy(),
+                marker=dict(
+                    color="#FF8C00",
+                    size=18,
+                    symbol="square",
+                    line=dict(color="white", width=2),
+                ),
+                hovertemplate=(
+                    "<b>%{customdata[0]} · mismo mes objetivo</b><br>"
+                    "MIBGAS: %{x:.2f} €/MWh<br>"
+                    "OMIE: %{y:.2f} €/MWh<br>"
+                    "Ratio medio diario: %{customdata[1]:.3f}<br>"
+                    "Días: %{customdata[2]}"
+                    "<extra></extra>"
+                ),
+            ))
+    fig.add_trace(go.Scatter(
+        x=x_linea,
+        y=y_linea,
+        mode="lines",
+        name="Ajuste lineal",
+        line=dict(color="#F4D03F", width=3),
+        hoverinfo="skip",
+    ))
+    fig.add_trace(go.Scatter(
+        x=[gas_eur_mwh],
+        y=[modelo["omie_estimado"]],
+        mode="markers",
+        name=etiqueta_objetivo,
+        marker=dict(
+            color="#E74C3C",
+            size=20 if destacar_objetivo else 15,
+            symbol="square" if destacar_objetivo else "diamond",
+            line=dict(color="white", width=2),
+        ),
+        hovertemplate=(
+            f"<b>{etiqueta_objetivo}</b><br>"
+            "Gas simulado: %{x:.2f} €/MWh<br>"
+            "OMIE estimado: %{y:.2f} €/MWh"
+            "<extra></extra>"
+        ),
+    ))
+    fig.update_layout(
+        title={"x": 0.5, "xanchor": "center"},
+        height=500,
+    )
+    fig = aplicar_estilo(fig)
+    fig.update_layout(height=500)
+    return fig
+
+
+def graficar_comparativa_diaria_mibgas_omie(df_comparativa, año=2026):
+    """Compara las cotizaciones diarias MIBGAS D+1 y OMIE."""
+    inicio_año = pd.Timestamp(year=año, month=1, day=1)
+    fin_año = pd.Timestamp(year=año, month=12, day=31)
+    fig = go.Figure()
+
+    if not df_comparativa.empty:
+        fig.add_trace(go.Scatter(
+            x=df_comparativa["fecha"],
+            y=df_comparativa["mibgas_d1"],
+            mode="lines",
+            name="MIBGAS D+1",
+            line=dict(color=colores.get(año, COLOR_MIBGAS_2026), width=2),
+            hovertemplate="MIBGAS D+1: %{y:.2f} €/MWh<extra></extra>",
+        ))
+        fig.add_trace(go.Scatter(
+            x=df_comparativa["fecha"],
+            y=df_comparativa["omie"],
+            mode="lines",
+            name="OMIE",
+            line=dict(color="#2ECC71", width=2),
+            hovertemplate="OMIE: %{y:.2f} €/MWh<extra></extra>",
+        ))
+
+    titulo = f"Evolución diaria MIBGAS D+1 vs OMIE {año}"
+    if df_comparativa.empty:
+        titulo = f"No hay datos coincidentes MIBGAS D+1 y OMIE para {año}"
+
+    fig.update_layout(
+        title_font_size=28,
+        title={"text": titulo, "x": 0.5, "xanchor": "center"},
+        xaxis_title="Fecha",
+        yaxis_title="Precio (€/MWh)",
+        hovermode="x unified",
+        hoverlabel=dict(font_size=18),
+        legend=dict(
+            title_text="",
+            orientation="h",
+            x=0.5,
+            xanchor="center",
+            y=1.03,
+            yanchor="bottom",
+            font=dict(size=14),
+        ),
+    )
+    fig.update_xaxes(
+        showgrid=True,
+        gridwidth=1,
+        tickmode="linear",
+        dtick="M1",
+        range=[inicio_año, fin_año],
+        hoverformat="%d/%m/%Y",
+    )
+
+    return aplicar_estilo(fig)
+
+
+def construir_relacion_horaria_omie_mibgas(df_mg_da, df_spot_horario, año=2026):
+    """Cruza el SPOT horario con el MIBGAS D+1 de cada día."""
+    columnas_salida = [
+        "fecha", "mes", "dia", "hora", "omie", "mibgas_d1",
+        "rel_omie_gas",
+    ]
+    columnas_spot = {"fecha", "hora", "spot"}
+    if not columnas_spot.issubset(df_spot_horario.columns):
+        return pd.DataFrame(columns=columnas_salida)
+
+    df_gas = df_mg_da[["fecha_entrega", "precio_gas"]].copy()
+    df_gas["fecha"] = pd.to_datetime(
+        df_gas["fecha_entrega"], errors="coerce"
+    ).dt.normalize()
+    df_gas["mibgas_d1"] = pd.to_numeric(
+        df_gas["precio_gas"], errors="coerce"
+    )
+    df_gas = (
+        df_gas
+        .dropna(subset=["fecha", "mibgas_d1"])
+        .groupby("fecha", as_index=False)["mibgas_d1"]
+        .mean()
+    )
+
+    df_omie = df_spot_horario[["fecha", "hora", "spot"]].copy()
+    df_omie["fecha"] = pd.to_datetime(
+        df_omie["fecha"], errors="coerce"
+    ).dt.normalize()
+    df_omie["hora"] = pd.to_numeric(df_omie["hora"], errors="coerce")
+    df_omie["omie"] = pd.to_numeric(df_omie["spot"], errors="coerce")
+    df_omie = (
+        df_omie
+        .dropna(subset=["fecha", "hora", "omie"])
+        .groupby(["fecha", "hora"], as_index=False)["omie"]
+        .mean()
+    )
+
+    df_relacion = df_omie.merge(df_gas, on="fecha", how="inner")
+    df_relacion = df_relacion[
+        df_relacion["fecha"].dt.year == año
+    ].copy()
+    df_relacion = df_relacion[df_relacion["mibgas_d1"].ne(0)]
+    df_relacion["rel_omie_gas"] = (
+        df_relacion["omie"] / df_relacion["mibgas_d1"]
+    )
+    df_relacion["mes"] = df_relacion["fecha"].dt.month
+    df_relacion["dia"] = df_relacion["fecha"].dt.day
+    df_relacion["hora"] = df_relacion["hora"].astype(int)
+    df_relacion["omie"] = df_relacion["omie"].round(2)
+    df_relacion["mibgas_d1"] = df_relacion["mibgas_d1"].round(2)
+    df_relacion["rel_omie_gas"] = df_relacion[
+        "rel_omie_gas"
+    ].round(4)
+
+    return (
+        df_relacion[columnas_salida]
+        .sort_values(["fecha", "hora"])
+        .reset_index(drop=True)
+    )
+
+
+def graficar_mapa_calor_relacion_omie_mibgas(df_relacion, año=2026):
+    """Mapa anual de la relación horaria OMIE/MIBGAS."""
+    if df_relacion.empty:
+        fig = go.Figure()
+        fig.update_layout(
+            title={
+                "text": f"No hay datos horarios OMIE/MIBGAS para {año}",
+                "x": 0.5,
+                "xanchor": "center",
+            },
+            xaxis_title="Hora",
+            yaxis_title="Día",
+            height=650,
+        )
+        fig = aplicar_estilo(fig)
+        fig.update_layout(height=650)
+        return fig
+
+    df = df_relacion.copy()
+    horas = list(range(int(df["hora"].min()), int(df["hora"].max()) + 1))
+    fechas = pd.date_range(df["fecha"].min(), df["fecha"].max(), freq="D")
+
+    def matriz(columna):
+        return (
+            df.pivot_table(
+                index="fecha",
+                columns="hora",
+                values=columna,
+                aggfunc="mean",
+            )
+            .reindex(index=fechas, columns=horas)
+        )
+
+    matriz_rel = matriz("rel_omie_gas")
+    matriz_omie = matriz("omie")
+    matriz_gas = matriz("mibgas_d1")
+    etiquetas_fecha = [fecha.strftime("%d-%b") for fecha in fechas]
+
+    valores = df["rel_omie_gas"].replace([np.inf, -np.inf], np.nan).dropna()
+    distancia_centro = max(
+        abs(float(valores.quantile(0.02)) - 1),
+        abs(float(valores.quantile(0.98)) - 1),
+        0.01,
+    )
+    limite_inferior = 1 - distancia_centro
+    limite_superior = 1 + distancia_centro
+
+    customdata = np.dstack([
+        matriz_omie.to_numpy(),
+        matriz_gas.to_numpy(),
+    ])
+    fig = go.Figure(go.Heatmap(
+        x=horas,
+        y=etiquetas_fecha,
+        z=matriz_rel.to_numpy(),
+        customdata=customdata,
+        colorscale="RdBu_r",
+        zmin=limite_inferior,
+        zmid=1,
+        zmax=limite_superior,
+        colorbar=dict(title="OMIE/Gas"),
+        hovertemplate=(
+            "<b>%{y} · hora %{x}</b><br>"
+            "Rel. OMIE/Gas: %{z:.2f}<br>"
+            "OMIE: %{customdata[0]:.2f} €/MWh<br>"
+            "MIBGAS D+1: %{customdata[1]:.2f} €/MWh"
+            "<extra></extra>"
+        ),
+        hoverongaps=False,
+    ))
+
+    primer_dia_mes = [
+        i for i, fecha in enumerate(fechas)
+        if fecha.day == 1 or i == 0
+    ]
+    ticktext = [fechas[i].strftime("%d-%b") for i in primer_dia_mes]
+    altura_mapa = max(850, len(fechas) * 5)
+    fig.update_layout(
+        title={
+            "text": f"Relación horaria OMIE / MIBGAS D+1 · {año}",
+            "x": 0.5,
+            "xanchor": "center",
+            "font": {"size": 28},
+        },
+        xaxis_title="Hora",
+        yaxis_title="Día y mes",
+        height=altura_mapa,
+        hoverlabel=dict(font_size=16),
+        margin=dict(l=75, r=30, t=90, b=50),
+    )
+    fig.update_xaxes(
+        tickmode="array",
+        tickvals=horas,
+        ticktext=[f"{hora:02d}" for hora in horas],
+        side="bottom",
+    )
+    fig.update_yaxes(
+        tickmode="array",
+        tickvals=ticktext,
+        ticktext=ticktext,
+        autorange="reversed",
+    )
+
+    fig = aplicar_estilo(fig)
+    fig.update_layout(height=altura_mapa)
+    return fig
+
+
+def graficar_relacion_omie_mibgas_por_mes(df_relacion, año=2026):
+    """Compara la relación media OMIE/MIBGAS de cada mes."""
+    meses = {
+        1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr",
+        5: "May", 6: "Jun", 7: "Jul", 8: "Ago",
+        9: "Sep", 10: "Oct", 11: "Nov", 12: "Dic",
+    }
+    resumen = (
+        df_relacion
+        .groupby("mes", as_index=False)["rel_omie_gas"]
+        .mean()
+        .sort_values("mes")
+    )
+    resumen["mes_nombre"] = resumen["mes"].map(meses)
+    resumen["es_maximo"] = False
+    if not resumen.empty:
+        resumen.loc[
+            resumen["rel_omie_gas"].idxmax(), "es_maximo"
+        ] = True
+
+    colores_barras = np.where(
+        resumen["es_maximo"], "#E74C3C", "#4C78A8"
+    )
+    fig = go.Figure(go.Bar(
+        x=resumen["mes_nombre"],
+        y=resumen["rel_omie_gas"],
+        marker_color=colores_barras,
+        text=resumen["rel_omie_gas"].map(lambda valor: f"{valor:.2f}"),
+        textposition="outside",
+        hovertemplate=(
+            "<b>%{x}</b><br>"
+            "Relación media OMIE/Gas: %{y:.2f}"
+            "<extra></extra>"
+        ),
+    ))
+    fig.update_layout(
+        title={
+            "text": f"Relación media OMIE / MIBGAS por mes · {año}",
+            "x": 0.5,
+            "xanchor": "center",
+        },
+        xaxis_title="Mes",
+        yaxis_title="Relación media OMIE/Gas",
+        showlegend=False,
+        height=480,
+    )
+    fig = aplicar_estilo(fig)
+    fig.update_layout(height=480)
+    return fig, resumen
+
+
+def graficar_relacion_omie_mibgas_por_hora(df_relacion, año=2026):
+    """Compara la relación media OMIE/MIBGAS de cada hora."""
+    resumen = (
+        df_relacion
+        .groupby("hora", as_index=False)["rel_omie_gas"]
+        .mean()
+        .sort_values("hora")
+    )
+    resumen["es_maximo"] = False
+    if not resumen.empty:
+        resumen.loc[
+            resumen["rel_omie_gas"].idxmax(), "es_maximo"
+        ] = True
+
+    colores_barras = np.where(
+        resumen["es_maximo"], "#E74C3C", "#4C78A8"
+    )
+    fig = go.Figure(go.Bar(
+        x=resumen["hora"],
+        y=resumen["rel_omie_gas"],
+        marker_color=colores_barras,
+        text=resumen["rel_omie_gas"].map(lambda valor: f"{valor:.2f}"),
+        textposition="outside",
+        hovertemplate=(
+            "<b>Hora %{x}</b><br>"
+            "Relación media OMIE/Gas: %{y:.2f}"
+            "<extra></extra>"
+        ),
+    ))
+    fig.update_layout(
+        title={
+            "text": f"Relación media OMIE / MIBGAS por hora · {año}",
+            "x": 0.5,
+            "xanchor": "center",
+        },
+        xaxis_title="Hora",
+        yaxis_title="Relación media OMIE/Gas",
+        showlegend=False,
+        height=480,
+    )
+    fig.update_xaxes(
+        tickmode="array",
+        tickvals=resumen["hora"],
+        ticktext=[f"{int(hora):02d}" for hora in resumen["hora"]],
+    )
+    fig = aplicar_estilo(fig)
+    fig.update_layout(height=480)
+    return fig, resumen
+
+
 def graficar_da_comparado(df):
 
     df = df.copy()
@@ -608,9 +1280,8 @@ def graficar_gas_co2(df_total_data_gas_co2):
 # DF CON LOS VALORES MEDIOS MENSUALES DEL SPOT DE TODO EL HISTÓRICO
 # SE USAN PARA VISUALIZARLOS CON LINEAS HORIZONTALES FRENTE A LA EVOLUCIÓN DE OMIP
 @st.cache_data
-def obtener_spot_mensual():
-   
-    df = st.session_state.df_sheets.copy()
+def obtener_spot_mensual(df_sheets):
+    df = df_sheets.copy()
     df['fecha'] = pd.to_datetime(df['fecha'])
     df = df.rename(columns={"fecha": "fecha_entrega"})
 
@@ -1980,9 +2651,8 @@ def graficar_evolucion_media_mibgas_forward(
 
 
 @st.cache_data
-def obtener_spot_diario():
-    
-    df = st.session_state.df_sheets.copy()
+def obtener_spot_diario(df_sheets):
+    df = df_sheets.copy()
     df["fecha"] = pd.to_datetime(df["fecha"])
     df = df.set_index("fecha")
 

@@ -306,7 +306,44 @@ def _clean(s: str) -> str:
     return s
 
    
-def _read_any(uploaded_or_path):
+def detectar_hojas_curva_excel(uploaded_or_path):
+    """
+    Devuelve únicamente las hojas de curva admitidas que contienen datos.
+
+    Por ahora se limita deliberadamente a las designaciones exactas
+    ``Horarias`` y ``Cuarto horarias``.
+    """
+    posicion = None
+    if hasattr(uploaded_or_path, "tell"):
+        try:
+            posicion = uploaded_or_path.tell()
+        except Exception:
+            posicion = None
+
+    try:
+        xls = pd.ExcelFile(uploaded_or_path)
+        hojas = []
+        for nombre in ("Horarias", "Cuarto horarias"):
+            if nombre not in xls.sheet_names:
+                continue
+            muestra = pd.read_excel(
+                uploaded_or_path,
+                sheet_name=nombre,
+                dtype=str,
+                header=None,
+                nrows=25,
+            )
+            muestra = muestra.dropna(how="all").dropna(axis=1, how="all")
+            # Exigimos cabecera y al menos una fila de valores.
+            if len(muestra) >= 4 and muestra.shape[1] >= 2:
+                hojas.append(nombre)
+        return hojas
+    finally:
+        if posicion is not None and hasattr(uploaded_or_path, "seek"):
+            uploaded_or_path.seek(posicion)
+
+
+def _read_any(uploaded_or_path, preferred_sheet=None):
     """
     Lee CSV o Excel forzando texto (sin autoconversión de fechas) y
     detecta automáticamente la fila de cabecera real (por ejemplo, si el archivo
@@ -321,8 +358,14 @@ def _read_any(uploaded_or_path):
             row = df.iloc[i].astype(str).tolist()
             row_values = " ".join(row).lower()
 
+            header_keywords = [
+                "fecha", "hora", "consumo", "energ", "cups",
+                "periodo", "react", "generacion",
+            ]
+            keyword_hits = sum(k in row_values for k in header_keywords)
+
             # Debe contener al menos una palabra clave
-            if not any(k in row_values for k in ["fecha", "hora", "consumo", "energ", "cups"]):
+            if keyword_hits == 0:
                 continue
 
             # Debe tener pocas celdas vacías y poca presencia de números
@@ -331,7 +374,10 @@ def _read_any(uploaded_or_path):
             ratio_text = text_like / max(len(non_empty), 1)
 
             # Si más del 70% parecen texto (no números), se asume cabecera real
-            if ratio_text > 0.7 and len(non_empty) >= 2:
+            # Algunas distribuidoras incluyen Q1-Q4 y RESERVA 1-2 en los
+            # encabezados. Esos dígitos reducen ratio_text aunque la fila sea
+            # inequívocamente una cabecera.
+            if len(non_empty) >= 2 and (ratio_text > 0.7 or keyword_hits >= 2):
                 return i
 
         return None
@@ -344,7 +390,12 @@ def _read_any(uploaded_or_path):
         if path.endswith(".csv"):
             df = pd.read_csv(uploaded_or_path, dtype=str, header=None, skip_blank_lines=True)
         else:
-            df = pd.read_excel(uploaded_or_path, dtype=str, header=None)
+            df = pd.read_excel(
+                uploaded_or_path,
+                sheet_name=preferred_sheet if preferred_sheet is not None else 0,
+                dtype=str,
+                header=None,
+            )
     else:
         print('Fichero seleccionado por upload files')
         name = uploaded_or_path.name.lower()
@@ -361,6 +412,9 @@ def _read_any(uploaded_or_path):
             mejor_df = None
             mejor_hoja = None
             mejor_score = 0
+            hoja_horarias = None
+            hoja_cuarto_horarias = None
+            hoja_preferida = None
 
             MIN_FILAS = 20
             MIN_COLUMNAS = 2
@@ -391,10 +445,26 @@ def _read_any(uploaded_or_path):
                     print(f"Descartando hoja pequeña: {sheet}")
                     continue
 
+                if _clean(sheet) == "horarias":
+                    hoja_horarias = (df_tmp_limpio, sheet, score)
+                elif _clean(sheet) == "cuarto horarias":
+                    hoja_cuarto_horarias = (df_tmp_limpio, sheet, score)
+                if preferred_sheet is not None and sheet == preferred_sheet:
+                    hoja_preferida = (df_tmp_limpio, sheet, score)
+
                 if score > mejor_score:
                     mejor_score = score
                     mejor_df = df_tmp_limpio
                     mejor_hoja = sheet
+
+            # Prioridad explícita para estos libros:
+            # "Cuarto horarias" con datos > "Horarias" con datos > hoja mayor.
+            if hoja_preferida is not None:
+                mejor_df, mejor_hoja, mejor_score = hoja_preferida
+            elif hoja_cuarto_horarias is not None:
+                mejor_df, mejor_hoja, mejor_score = hoja_cuarto_horarias
+            elif hoja_horarias is not None:
+                mejor_df, mejor_hoja, mejor_score = hoja_horarias
 
             if mejor_df is None:
                 raise ValueError(
@@ -457,6 +527,23 @@ def _guess_cols(df: pd.DataFrame):
             return col_consumo_red
 
         if prefer_qh_consumo:
+            # Priorizar columnas inequívocas de energía activa/consumo frente
+            # a metadatos genéricos como "TIPO MEDIDA".
+            for c in matches:
+                cc = cleaned[c]
+                es_consumo = re.search(
+                    r"\bconsumo\b|\bactive.?energy\b|\benergia\s+activa\b|\bkwh\b",
+                    cc,
+                    re.IGNORECASE,
+                )
+                es_auxiliar = re.search(
+                    r"\bcal\.?\b|\bgeneraci[oó]n\b|\breact",
+                    cc,
+                    re.IGNORECASE,
+                )
+                if es_consumo and not es_auxiliar:
+                    return c
+
             col_h = None
             col_qh = None
 
@@ -547,7 +634,11 @@ def _localize_madrid(dt: pd.Series) -> pd.Series:
 # FUNCIÓN PARA NORMALIZAR CURVA
 # ------------------------------------
 
-def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd.DataFrame, str]:
+def normalize_curve_simple(
+    uploaded,
+    origin="archivo",
+    excel_sheet=None,
+) -> tuple[pd.DataFrame, pd.DataFrame, str]:
 
     import traceback
 
@@ -557,7 +648,7 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
     #     - Si está a las 00:00 → no tocar.
     #   Detección automática de formato de fecha (día primero o año primero)."""
     
-    df, header_row = _read_any(uploaded)
+    df, header_row = _read_any(uploaded, preferred_sheet=excel_sheet)
     c_dt, c_date, c_time, c_quarter, c_kwh, c_per, c_ind, c_cap, c_ver, c_gen = _guess_cols(df)
 
     if not (c_dt or (c_date and c_time)):
@@ -576,7 +667,13 @@ def normalize_curve_simple(uploaded, origin="archivo") -> tuple[pd.DataFrame, pd
 
     msg_unidades = ""
 
-    if (header_row > 1) or ("wh" in str(c_kwh).lower() and "kwh" not in str(c_kwh).lower()):
+    nombre_consumo = _clean(c_kwh)
+    unidad_kwh_explicita = "kwh" in nombre_consumo
+    unidad_wh_explicita = bool(re.search(r"\bwh\b", nombre_consumo)) and not unidad_kwh_explicita
+
+    # La posición de la cabecera puede sugerir ciertos formatos históricos,
+    # pero una unidad "kWh" escrita en la propia columna siempre prevalece.
+    if unidad_wh_explicita or (header_row > 1 and not unidad_kwh_explicita):
         kwh_consumo = kwh_consumo / 1000
         kwh_vertido = kwh_vertido / 1000
         msg_unidades = "Detectado consumo en Wh → Convertido automáticamente a kWh"
@@ -2859,10 +2956,10 @@ def calcular_tabla_potencia_media_qh(df_norm, columna_valor="consumo_neto_kWh"):
     if columna_valor not in df_norm.columns:
         return None
     
-    if st.session_state.frec == 'QH':
-        multiplicador = 4
-    else:
-        multiplicador = 1
+    multiplicador = {
+        "QH": 4,
+        "10MIN": 6,
+    }.get(st.session_state.frec, 1)
 
     df_plot = (
         df_norm
@@ -2906,7 +3003,7 @@ def calcular_tabla_potencia_media_qh(df_norm, columna_valor="consumo_neto_kWh"):
         df_norm
         .assign(
             mes=lambda d: d["fecha_hora"].dt.to_period("M").dt.to_timestamp(),
-            potencia_qh_kw=lambda d: d[columna_valor] * 4
+            potencia_qh_kw=lambda d: d[columna_valor] * multiplicador
         )
         .groupby("mes", as_index=False)["potencia_qh_kw"]
         .mean()
