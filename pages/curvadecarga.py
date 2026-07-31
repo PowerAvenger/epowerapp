@@ -2,9 +2,14 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import io
+import base64
+import re
+from html import escape
+from pathlib import Path
 from dateutil.relativedelta import relativedelta
 from datetime import timedelta
 import plotly.express as px
+from jinja2 import Environment, FileSystemLoader
 from backend_curvadecarga import (
     normalize_curve_simple, detectar_hojas_curva_excel, obtener_datos_contador,
     graficar_curva_horaria, graficar_diario_apilado, graficar_mensual_apilado, tabla_mensual_periodos, formatear_tabla_mensual_es, graficar_queso_periodos,
@@ -65,6 +70,7 @@ def limpiar_curva_cargada():
         "reactiva_base_cache",
         "reactiva_compensacion",
         "curva_reactiva_version",
+        "informe_reactiva_html",
     )
     for clave in claves_curva:
         st.session_state.pop(clave, None)
@@ -412,6 +418,7 @@ if normalizar and uploaded:
         )
         st.session_state.pop("reactiva_base_cache", None)
         st.session_state.pop("reactiva_compensacion", None)
+        st.session_state.pop("informe_reactiva_html", None)
         st.session_state.atr_dfnorm = atr_dfnorm
         st.session_state.df_norm_h = df_norm_h
         st.session_state.csv_bytes_norm = csv_bytes_norm
@@ -463,7 +470,16 @@ if st.session_state.get("df_norm") is not None:
 
 
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(['Resumen', 'Perfiles Horarios', 'Autoconsumo', 'Comparaciones', 'Reactiva'])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+        [
+            'Resumen',
+            'Perfiles Horarios',
+            'Autoconsumo',
+            'Comparaciones',
+            'Reactiva',
+            'Informe',
+        ]
+    )
 
     # ===============================================================
     # RESUMEN GENERAL
@@ -1182,7 +1198,7 @@ if st.session_state.get("df_norm") is not None:
                         fp_min_rec=fp_min_margen,
                         q_min_rec=q_min_margen,
                         q_sel=q_sel,
-                        fp_ini=fp_med,
+                        fp_ini=fp_min,
                     )
                     st.session_state.margen_comp_min = margen_comp_form
                     st.session_state.fp_obj_sel = fp_obj_sel_aplicado
@@ -1200,6 +1216,7 @@ if st.session_state.get("df_norm") is not None:
                         "q_sel_df": df_q_condensadores_sel,
                         "figura": fig_compensacion,
                     }
+                    st.session_state.pop("informe_reactiva_html", None)
                     st.rerun()
 
                 resultado_compensacion = st.session_state.get(
@@ -1282,8 +1299,14 @@ if st.session_state.get("df_norm") is not None:
                                 formato_numero_es(
                                     resultado_compensacion["q_min_margen"], 2
                                 ),
-                                delta=formato_numero_es(
-                                    resultado_compensacion["fp_min_margen"], 3
+                                delta=(
+                                    "cos φ "
+                                    + formato_numero_es(
+                                        resultado_compensacion[
+                                            "fp_min_margen"
+                                        ],
+                                        3,
+                                    )
                                 ),
                             )
                         with c33:
@@ -1294,7 +1317,10 @@ if st.session_state.get("df_norm") is not None:
                                 ),
                                 delta=(
                                     "cos φ "
-                                    f"{resultado_compensacion['fp_aplicado']:.3f}"
+                                    + formato_numero_es(
+                                        resultado_compensacion["fp_aplicado"],
+                                        3,
+                                    )
                                 ),
                             )
                         if (
@@ -1410,7 +1436,7 @@ if st.session_state.get("df_norm") is not None:
                         unsafe_allow_html=True,
                     )
                 with c3:
-                    st.subheader("Evolución mensual de la penalización")
+                    st.subheader("Evolución mensual de la penalización (€)")
                     st.plotly_chart(
                         graf_penalizacion_reactiva,
                         use_container_width=True,
@@ -1484,6 +1510,262 @@ if st.session_state.get("df_norm") is not None:
                             df_q_condensadores_sel_fmt,
                         )
 
+    with tab6:
+        st.subheader("Informe de compensación", divider="rainbow")
+        informe_base = st.session_state.get("reactiva_base_cache")
+        informe_compensacion = st.session_state.get("reactiva_compensacion")
+
+        if not informe_base:
+            st.info(
+                "Carga una curva con datos de reactiva para preparar el informe."
+            )
+        elif not informe_compensacion:
+            st.info(
+                "Pulsa «Calcular compensación» en la pestaña Reactiva antes "
+                "de preparar el informe."
+            )
+        else:
+            col_datos_informe, col_previa_informe = st.columns([0.38, 0.62])
+            with col_datos_informe:
+                st.caption(
+                    "Completa los datos del cliente y del realizador. Estos "
+                    "campos siguen el mismo esquema utilizado en Factura."
+                )
+                with st.container(border=True):
+                    st.markdown("#### Datos del cliente y del suministro")
+                    col_cliente, col_nif = st.columns([0.68, 0.32])
+                    col_cliente.text_input(
+                        "Cliente / Razón social",
+                        key="reactiva_informe_cliente",
+                    )
+                    col_nif.text_input(
+                        "NIF / CIF",
+                        key="reactiva_informe_nif",
+                    )
+                    st.text_input(
+                        "Dirección",
+                        key="reactiva_informe_direccion",
+                    )
+                    col_cups, col_atr = st.columns([0.68, 0.32])
+                    col_cups.text_input(
+                        "CUPS",
+                        key="reactiva_informe_cups",
+                    )
+                    col_atr.text_input(
+                        "ATR",
+                        value=str(st.session_state.get("atr_dfnorm", "")),
+                        key="reactiva_informe_atr",
+                    )
+
+                with st.container(border=True):
+                    st.markdown("#### Datos del informe")
+                    col_autor, col_fecha = st.columns([0.60, 0.40])
+                    col_autor.text_input(
+                        "Realizado por",
+                        key="reactiva_informe_realizado_por",
+                    )
+                    col_fecha.text_input(
+                        "Fecha de realización",
+                        value=pd.Timestamp.today().strftime("%d/%m/%Y"),
+                        key="reactiva_informe_fecha",
+                    )
+                    st.text_input(
+                        "Objeto del estudio",
+                        value=(
+                            "Analizar la penalización por energía reactiva y "
+                            "dimensionar su compensación."
+                        ),
+                        key="reactiva_informe_objeto",
+                    )
+
+                with st.container(border=True):
+                    st.markdown("#### Personalización")
+                    logo_reactiva = st.file_uploader(
+                        "Logo para el informe",
+                        type=["png", "jpg", "jpeg"],
+                        accept_multiple_files=False,
+                        key="reactiva_informe_logo",
+                    )
+                    if logo_reactiva is not None:
+                        st.image(logo_reactiva, width=180)
+
+                preparar_informe_reactiva = st.button(
+                    "Preparar informe",
+                    type="primary",
+                    use_container_width=True,
+                    key="preparar_informe_reactiva",
+                )
+
+            with col_previa_informe:
+                if preparar_informe_reactiva:
+                    def figura_data_uri(figura, ancho=1100, alto=520):
+                        try:
+                            imagen = figura.to_image(
+                                format="png",
+                                width=ancho,
+                                height=alto,
+                                scale=1.5,
+                            )
+                            return (
+                                "data:image/png;base64,"
+                                + base64.b64encode(imagen).decode("ascii")
+                            )
+                        except Exception:
+                            return ""
+
+                    logo_data = ""
+                    if logo_reactiva is not None:
+                        subtipo = (
+                            "jpeg"
+                            if logo_reactiva.type == "image/jpeg"
+                            else "png"
+                        )
+                        logo_data = (
+                            f"data:image/{subtipo};base64,"
+                            + base64.b64encode(
+                                logo_reactiva.getvalue()
+                            ).decode("ascii")
+                        )
+
+                    df_fp_informe = informe_base["fp"].copy()
+                    df_fp_informe.columns.name = None
+                    df_excesos_informe = informe_base["excesos"].copy()
+                    df_excesos_informe.columns.name = None
+                    for tabla in (df_fp_informe, df_excesos_informe):
+                        for columna in tabla.columns:
+                            if columna != "Mes":
+                                tabla[columna] = pd.to_numeric(
+                                    tabla[columna],
+                                    errors="coerce",
+                                ).round(2)
+
+                    penalizacion_informe = float(
+                        informe_base["costes"]["Total"].sum()
+                    )
+                    fp_informe = informe_base["fp"]
+                    fp_medio_informe = float(fp_informe["Total"].mean())
+                    periodo_informe = (
+                        f"{st.session_state.df_norm['fecha_hora'].min():%d/%m/%Y}"
+                        " – "
+                        f"{st.session_state.df_norm['fecha_hora'].max():%d/%m/%Y}"
+                    )
+                    contexto_informe = {
+                        "logo": logo_data,
+                        "cliente": escape(st.session_state.get(
+                            "reactiva_informe_cliente", ""
+                        )),
+                        "nif": escape(st.session_state.get(
+                            "reactiva_informe_nif", ""
+                        )),
+                        "direccion": escape(st.session_state.get(
+                            "reactiva_informe_direccion", ""
+                        )),
+                        "cups": escape(st.session_state.get(
+                            "reactiva_informe_cups", ""
+                        )),
+                        "atr": escape(st.session_state.get(
+                            "reactiva_informe_atr", ""
+                        )),
+                        "realizado_por": escape(st.session_state.get(
+                            "reactiva_informe_realizado_por", ""
+                        )),
+                        "fecha_realizacion": escape(st.session_state.get(
+                            "reactiva_informe_fecha", ""
+                        )),
+                        "objeto": escape(st.session_state.get(
+                            "reactiva_informe_objeto", ""
+                        )),
+                        "periodo": periodo_informe,
+                        "penalizacion": formato_euros(
+                            penalizacion_informe
+                        ),
+                        "mensaje_penalizacion": (
+                            "Existe coste evitable asociado al exceso de "
+                            "energía reactiva."
+                            if penalizacion_informe > 0
+                            else "No se estima penalización en el periodo."
+                        ),
+                        "q_minima": (
+                            f"{formato_numero_es(informe_compensacion['q_min'], 2)} "
+                            "kVAr"
+                        ),
+                        "q_recomendada": (
+                            f"{formato_numero_es(informe_compensacion['q_min_margen'], 2)} "
+                            "kVAr"
+                        ),
+                        "q_propuesta": (
+                            f"{formato_numero_es(informe_compensacion['q_sel'], 2)} "
+                            "kVAr"
+                        ),
+                        "fp_medio": formato_numero_es(fp_medio_informe, 3),
+                        "fp_margen": formato_numero_es(
+                            informe_compensacion["fp_min_margen"], 3
+                        ),
+                        "fp_propuesto": formato_numero_es(
+                            informe_compensacion["fp_aplicado"], 3
+                        ),
+                        "grafico_compensacion": figura_data_uri(
+                            informe_compensacion["figura"]
+                        ),
+                        "grafico_penalizacion": figura_data_uri(
+                            graf_penalizacion_reactiva
+                        ),
+                        "tabla_fp": df_fp_informe.to_html(
+                            index=False,
+                            border=0,
+                            na_rep="—",
+                        ),
+                        "tabla_excesos": df_excesos_informe.to_html(
+                            index=False,
+                            border=0,
+                            na_rep="—",
+                        ),
+                    }
+                    ruta_plantilla = (
+                        Path(__file__).resolve().parent.parent
+                        / "templates"
+                        / "informe_reactiva.html"
+                    )
+                    entorno = Environment(
+                        loader=FileSystemLoader(str(ruta_plantilla.parent))
+                    )
+                    html_informe_reactiva = entorno.get_template(
+                        ruta_plantilla.name
+                    ).render(**contexto_informe)
+                    st.session_state.informe_reactiva_html = (
+                        html_informe_reactiva
+                    )
+
+                html_informe_reactiva = st.session_state.get(
+                    "informe_reactiva_html"
+                )
+                if html_informe_reactiva:
+                    st.markdown("#### Vista previa")
+                    st.components.v1.html(
+                        html_informe_reactiva,
+                        height=980,
+                        scrolling=True,
+                    )
+                    nombre_cliente = re.sub(
+                        r"[^A-Za-z0-9._-]+",
+                        "_",
+                        st.session_state.get(
+                            "reactiva_informe_cliente", ""
+                        ),
+                    ).strip("._") or "cliente"
+                    st.download_button(
+                        "Descargar informe HTML",
+                        data=html_informe_reactiva.encode("utf-8"),
+                        file_name=(
+                            f"informe_compensacion_reactiva_{nombre_cliente}.html"
+                        ),
+                        mime="text/html; charset=utf-8",
+                        use_container_width=True,
+                    )
+                else:
+                    st.info(
+                        "La vista previa aparecerá aquí al preparar el informe."
+                    )
 
 
 

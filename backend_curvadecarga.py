@@ -3388,7 +3388,7 @@ def graficar_compensacion_dimensionamiento(df_curva_q, q_min, fp_min_rec, q_min_
     fp_obj_min = min(st.session_state.fp_obj_min, st.session_state.fp_obj_sel)
     fp_obj_sel = max(st.session_state.fp_obj_min, st.session_state.fp_obj_sel)
 
-    # Situación actual: factor de potencia medio recibido desde la interfaz y
+    # Situación actual: factor de potencia mínimo recibido desde la interfaz y
     # su Q interpolada sobre la propia curva de dimensionamiento.
     fp_actual_aprox = fp_ini
     curva_ordenada = (
@@ -3498,8 +3498,8 @@ def graficar_compensacion_dimensionamiento(df_curva_q, q_min, fp_min_rec, q_min_
         x=[fp_actual_aprox],
         y=[q_actual_aprox],
         mode="markers+text",
-        name="Situación actual",
-        text=[f"Q Actual<br>{fp_actual_aprox:.3f}"],
+        name="FP actual mínimo",
+        text=[f"FP actual mínimo<br>{fp_actual_aprox:.3f}"],
         textposition="top left",
         textfont=dict(
             size=16,
@@ -3511,7 +3511,7 @@ def graficar_compensacion_dimensionamiento(df_curva_q, q_min, fp_min_rec, q_min_
             color = 'red'
         ),
         hovertemplate=(
-            "Estado actual aproximado<br>"
+            "FP actual mínimo<br>"
             "cos φ: %{x:.3f}<br>"
             "Q: %{y:.1f} kVAr"
             "<extra></extra>"
@@ -3666,6 +3666,15 @@ def graficar_compensacion_dimensionamiento(df_curva_q, q_min, fp_min_rec, q_min_
         ),
         autosize=False,
         height=1000
+    )
+
+    fig = add_area_entre_q(
+        fig,
+        df_curva_q,
+        q_low=q_actual_aprox,
+        q_high=q_min,
+        color="red",
+        name="Compensación hasta objetivo mínimo"
     )
 
     fig = add_area_entre_q(

@@ -7,16 +7,39 @@ from datetime import datetime
 
 @st.cache_data
 def download_esios (id, fecha_ini, fecha_fin, agrupacion, tipo_agregacion):
+    columnas_salida = ["datetime", "value", "short_name", "name"]
+    if pd.to_datetime(fecha_ini) > pd.to_datetime(fecha_fin):
+        return pd.DataFrame(columns=columnas_salida)
+
     cab = dict()
     cab ['x-api-key']=st.secrets['ESIOS_API_KEY']
     url_id = 'https://api.esios.ree.es/indicators'
     url=f'{url_id}/{id}?&start_date={fecha_ini}T00:00:00&end_date={fecha_fin}T23:59:59&time_trunc={agrupacion}&time_agg={tipo_agregacion}'
     print(url)
-    datos_origen = requests.get(url, headers = cab).json()
-    print(datos_origen)
-    short_name = datos_origen['indicator']['short_name']
-    name = datos_origen['indicator']['name']
-    df_in = pd.DataFrame(datos_origen['indicator']['values'])
+    respuesta = requests.get(url, headers=cab, timeout=30)
+    respuesta.raise_for_status()
+    datos_origen = respuesta.json()
+    indicador = datos_origen.get("indicator")
+    if not isinstance(indicador, dict):
+        raise ValueError(
+            f"ESIOS no ha devuelto un indicador válido para el ID {id}."
+        )
+
+    short_name = indicador.get("short_name", f"Indicador {id}")
+    name = indicador.get("name", short_name)
+    df_in = pd.DataFrame(indicador.get("values") or [])
+    if df_in.empty:
+        return pd.DataFrame(columns=columnas_salida)
+
+    if "datetime" not in df_in.columns and "datetime_utc" in df_in.columns:
+        df_in["datetime"] = df_in["datetime_utc"]
+    columnas_faltantes = {"datetime", "value"} - set(df_in.columns)
+    if columnas_faltantes:
+        raise ValueError(
+            f"Respuesta ESIOS incompleta para el ID {id}: faltan "
+            f"{', '.join(sorted(columnas_faltantes))}."
+        )
+
     df_in = (df_in
         .assign(datetime = lambda vh_: pd #formateamos campo fecha, desde un str con diferencia horaria a un naive
             .to_datetime(vh_['datetime'], utc = True)  # con la fecha local
@@ -28,7 +51,7 @@ def download_esios (id, fecha_ini, fecha_fin, agrupacion, tipo_agregacion):
             name = name
             ) 
             .loc[:,['datetime','value', 'short_name', 'name']]
-    )    
+    )
     return df_in
 
 def graficar_media_diaria(df_demand, años_visibles, mes_nombre_actual, año_actual):

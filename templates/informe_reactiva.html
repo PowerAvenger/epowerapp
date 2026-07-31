@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Informe de compensación de energía reactiva</title>
+  <style>
+    :root { --azul:#12304a; --rojo:#b83f4b; --naranja:#d97706; --gris:#64748b; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#eef2f6; color:#172033; font:14px/1.45 Arial,sans-serif; }
+    .documento { max-width:1040px; margin:24px auto; background:#fff; box-shadow:0 8px 30px #0f172a20; }
+    header { padding:34px 44px 26px; border-bottom:5px solid var(--azul); display:flex; justify-content:space-between; gap:30px; }
+    header img { max-width:190px; max-height:76px; object-fit:contain; }
+    h1 { margin:0; color:var(--azul); font-size:28px; }
+    h2 { color:var(--azul); margin:0 0 18px; font-size:21px; }
+    h3 { margin:22px 0 10px; color:#334155; }
+    .subtitulo { color:var(--gris); margin-top:6px; }
+    .meta { text-align:right; color:#475569; min-width:260px; }
+    section { padding:32px 44px; border-bottom:1px solid #dbe3ec; }
+    .nivel { color:#fff; background:var(--azul); display:inline-block; padding:5px 11px; border-radius:999px; font-size:12px; font-weight:700; margin-bottom:12px; }
+    .datos { display:grid; grid-template-columns:repeat(3,1fr); gap:10px 24px; margin-top:22px; }
+    .dato span { display:block; color:var(--gris); font-size:12px; text-transform:uppercase; }
+    .dato strong { display:block; margin-top:3px; }
+    .impactos { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin:22px 0; }
+    .impacto { padding:22px; border-radius:12px; border:1px solid #cbd5e1; background:#f8fafc; }
+    .impacto.alerta { border-color:#fecaca; background:#fff1f2; }
+    .impacto.accion { border-color:#fed7aa; background:#fff7ed; }
+    .impacto .etiqueta { color:var(--gris); font-size:12px; text-transform:uppercase; font-weight:700; }
+    .impacto .valor { font-size:30px; font-weight:800; margin:7px 0; color:var(--azul); }
+    .impacto.alerta .valor { color:var(--rojo); }
+    .impacto.accion .valor { color:var(--naranja); }
+    .metricas { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:18px 0 24px; }
+    .metrica { padding:16px; border:1px solid #dbe3ec; border-radius:10px; }
+    .metrica span { display:block; color:var(--gris); font-size:12px; }
+    .metrica strong { display:block; color:var(--azul); font-size:22px; margin-top:4px; }
+    .grafico { width:100%; max-height:520px; object-fit:contain; margin:8px 0 18px; }
+    .tabla-wrap { overflow-x:auto; margin-bottom:24px; }
+    table { width:100%; border-collapse:collapse; font-size:12px; }
+    th { background:var(--azul); color:#fff; padding:8px; text-align:right; }
+    td { padding:7px 8px; border-bottom:1px solid #e2e8f0; text-align:right; }
+    th:first-child, td:first-child { text-align:left; }
+    footer { padding:22px 44px 34px; color:var(--gris); font-size:12px; }
+    @media print { body { background:#fff; } .documento { margin:0; box-shadow:none; max-width:none; } section { break-inside:avoid; } }
+  </style>
+</head>
+<body>
+<main class="documento">
+  <header>
+    <div>
+      <h1>Informe de compensación de energía reactiva</h1>
+      <div class="subtitulo">{{ objeto }}</div>
+    </div>
+    <div class="meta">
+      {% if logo %}<img src="{{ logo }}" alt="Logo"><br>{% endif %}
+      <strong>{{ realizado_por }}</strong><br>
+      {{ fecha_realizacion }}
+    </div>
+  </header>
+
+  <section>
+    <span class="nivel">Nivel 1 · Impacto y acción</span>
+    <h2>Resumen ejecutivo</h2>
+    <div class="datos">
+      <div class="dato"><span>Cliente</span><strong>{{ cliente or "—" }}</strong></div>
+      <div class="dato"><span>NIF / CIF</span><strong>{{ nif or "—" }}</strong></div>
+      <div class="dato"><span>CUPS</span><strong>{{ cups or "—" }}</strong></div>
+      <div class="dato"><span>Dirección</span><strong>{{ direccion or "—" }}</strong></div>
+      <div class="dato"><span>Peaje</span><strong>{{ atr or "—" }}</strong></div>
+      <div class="dato"><span>Periodo analizado</span><strong>{{ periodo }}</strong></div>
+    </div>
+    <div class="impactos">
+      <div class="impacto alerta">
+        <div class="etiqueta">Penalización actual estimada</div>
+        <div class="valor">{{ penalizacion }}</div>
+        <div>{{ mensaje_penalizacion }}</div>
+      </div>
+      <div class="impacto accion">
+        <div class="etiqueta">Acción propuesta</div>
+        <div class="valor">{{ q_propuesta }}</div>
+        <div>Potencia de condensadores a instalar para alcanzar el cos φ propuesto.</div>
+      </div>
+    </div>
+    <p><strong>Recomendación:</strong> realizar la compensación indicada y solicitar una oferta de ejecución. En una fase posterior podrá incorporarse el coste de instalación para calcular el plazo de amortización.</p>
+  </section>
+
+  <section>
+    <span class="nivel">Nivel 2 · Dimensionamiento</span>
+    <h2>Detalle de la solución propuesta</h2>
+    <div class="metricas">
+      <div class="metrica"><span>Q mínima</span><strong>{{ q_minima }}</strong></div>
+      <div class="metrica"><span>Q mínima recomendada</span><strong>{{ q_recomendada }}</strong></div>
+      <div class="metrica"><span>Q propuesta</span><strong>{{ q_propuesta }}</strong></div>
+    </div>
+    <div class="metricas">
+      <div class="metrica"><span>Factor de potencia actual medio</span><strong>{{ fp_medio }}</strong></div>
+      <div class="metrica"><span>Cos φ tras margen</span><strong>{{ fp_margen }}</strong></div>
+      <div class="metrica"><span>Cos φ propuesto</span><strong>{{ fp_propuesto }}</strong></div>
+    </div>
+    {% if grafico_compensacion %}<img class="grafico" src="{{ grafico_compensacion }}" alt="Gráfico de compensación">{% endif %}
+  </section>
+
+  <section>
+    <span class="nivel">Nivel 3 · Evidencia técnica</span>
+    <h2>Factor de potencia, excesos y evolución</h2>
+    <h3>Factor de potencia mensual</h3>
+    <div class="tabla-wrap">{{ tabla_fp | safe }}</div>
+    <h3>Excesos de energía reactiva</h3>
+    <div class="tabla-wrap">{{ tabla_excesos | safe }}</div>
+    <h3>Evolución de la penalización (€)</h3>
+    {% if grafico_penalizacion %}<img class="grafico" src="{{ grafico_penalizacion }}" alt="Evolución de la penalización">{% endif %}
+  </section>
+
+  <footer>
+    Estimación realizada a partir de la curva de carga facilitada. El dimensionamiento definitivo debe ser contrastado por un instalador habilitado considerando características de la instalación, armónicos, maniobras y condiciones reales de operación.
+  </footer>
+</main>
+</body>
+</html>

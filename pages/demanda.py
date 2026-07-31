@@ -61,7 +61,18 @@ fecha_mañana_api=fecha_mañana.strftime('%Y-%m-%d')
 #fecha_final = fecha_mañana + timedelta(days=15)
 fecha_final = datetime(año_hoy, num_mes_hoy, calendar.monthrange(año_hoy, num_mes_hoy)[1])
 fecha_final_api = fecha_final.strftime('%Y-%m-%d')
-df_dem_prevista = download_esios(id_dem_prevista, fecha_mañana_api, fecha_final_api, agrupacion, tipo_agregacion)
+if fecha_mañana.date() <= fecha_final.date():
+    df_dem_prevista = download_esios(
+        id_dem_prevista,
+        fecha_mañana_api,
+        fecha_final_api,
+        agrupacion,
+        tipo_agregacion,
+    )
+else:
+    df_dem_prevista = pd.DataFrame(
+        columns=["datetime", "value", "short_name", "name"]
+    )
 
 
 # Unimos real con prevista
