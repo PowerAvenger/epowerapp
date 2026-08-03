@@ -1,4 +1,5 @@
 import hashlib
+import math
 import pathlib
 import tempfile
 
@@ -6,9 +7,11 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
+from plotly.subplots import make_subplots
 from utilidades import generar_menu
 from backend_opt2 import (leer_curva_normalizada, calcular_costes, calcular_optimizacion, pyc_tp, tepp45, tepp123, meses, normalizar_tabla_maximetros)
 from backend_curvadecarga import colores_periodo
+from backend_comun import aplicar_estilo
 from report_generator import preparar_informe, generar_formato_informe
 from utils_docx import generar_docx_bytes, insertar_tabla
 from formato_es import formato_euros, formato_numero_es
@@ -109,6 +112,7 @@ if 'atr_dfnorm' not in st.session_state:
     st.session_state.atr_dfnorm = 'Ninguno'
 
 pot_con = st.session_state.df_pot["Potencia (kW)"].to_dict()
+orden_periodos = [f'P{i}' for i in range(1, 7)]
 fijar_P6 = st.session_state["mantener_potencia"] == "Mantener"
 
 if 'frec' not in st.session_state:
@@ -187,6 +191,22 @@ if modo1:
             for k, v in tepp45[año_opt][tarifa].items()
         }
 
+        meses_maximetros = len(df_in)
+        st.sidebar.caption('Costes regulados aplicados: 2026')
+        if meses_maximetros < 12:
+            st.sidebar.warning(
+                f'Optimización basada en {meses_maximetros} mes(es) de '
+                'maxímetros. El resultado puede no representar la '
+                'estacionalidad anual.',
+                icon='⚠️'
+            )
+        elif meses_maximetros == 12:
+            st.sidebar.success('Periodo recomendado: 12 meses analizados.')
+        else:
+            st.sidebar.info(
+                f'Optimización basada en {meses_maximetros} meses.'
+            )
+
         habilitar_opt = True
         habilitar_ver = False
 
@@ -207,8 +227,6 @@ else:
             año_ver = fecha_ini.year
 
             const_verif = 31
-            const_optim_inf = 320
-            const_optim_sup = 366
 
             if st.session_state.frec =='H':
                 coef_excesos = 2
@@ -216,79 +234,66 @@ else:
             else:
                 coef_excesos = 1
 
-            # mes natural: se puede verificar
+            fechas_opt = pd.to_datetime(
+                df_in['fecha_hora'], errors='coerce'
+            ).dropna()
+            periodos_analizados = fechas_opt.dt.to_period('M').nunique()
+            cobertura_mensual = (
+                pd.DataFrame({'fecha': fechas_opt})
+                .assign(
+                    periodo_mes=lambda x: x['fecha'].dt.to_period('M'),
+                    dia=lambda x: x['fecha'].dt.date,
+                    dias_mes=lambda x: x['fecha'].dt.days_in_month
+                )
+                .groupby('periodo_mes')
+                .agg(dias_observados=('dia', 'nunique'), dias_mes=('dias_mes', 'first'))
+            )
+            meses_incompletos = cobertura_mensual[
+                cobertura_mensual['dias_observados'] < cobertura_mensual['dias_mes']
+            ]
+            st.sidebar.caption('Costes regulados aplicados: 2026')
+            if periodos_analizados < 12:
+                st.sidebar.warning(
+                    f'Optimización basada en {periodos_analizados} mes(es). '
+                    'El resultado puede no representar la estacionalidad anual.',
+                    icon='⚠️'
+                )
+            elif periodos_analizados == 12:
+                st.sidebar.success('Periodo recomendado: 12 meses analizados.')
+            else:
+                st.sidebar.info(
+                    f'Optimización basada en {periodos_analizados} meses.'
+                )
+            if not meses_incompletos.empty:
+                etiquetas_incompletas = ', '.join(
+                    str(periodo) for periodo in meses_incompletos.index
+                )
+                st.sidebar.warning(
+                    'Meses parciales (coste de potencia prorrateado por días): '
+                    f'{etiquetas_incompletas}.',
+                    icon='⚠️'
+                )
+
+            año_opt = 2026
+            pyc_tp_opt = pyc_tp[año_opt][tarifa]
+            tepp_opt = {
+                k: v * coef_excesos
+                for k, v in tepp123[año_opt][tarifa].items()
+            }
+            habilitar_opt = True
+
+            # Un mes natural también se puede verificar.
             if dias_rango <= const_verif:
                 st.sidebar.info('Es posible verificar.')
-                habilitar_opt = False
-                
                 habilitar_ver = True
                 pyc_tp_ver = pyc_tp[año_ver][tarifa]
                 tepp_ver = {
                     k: v * coef_excesos
                     for k, v in tepp123[año_ver][tarifa].items()
                 }
-
-                #añadido para pruebas con menos de 12 meses
-                habilitar_opt = True
-                año_opt = 2026
-                pyc_tp_opt = pyc_tp[año_opt][tarifa]
-            
-                tepp_opt = {
-                    k: v * coef_excesos
-                    for k, v in tepp123[año_opt][tarifa].items()
-                }
-                
-            # no hay días suficientes para optimizar
-            elif (const_verif < dias_rango < const_optim_inf): #or (dias_rango > const_optim_sup):
-                st.sidebar.warning('No es posible ejecutar ninguna acción.', icon='⚠️')
-                habilitar_opt = False
-                habilitar_ver = False
-
-            # sobran días: se recorta a los últimos 365    
-            elif dias_rango > const_optim_sup:
-                st.sidebar.warning('Curva demasiado larga → se recortan los últimos 365 días', icon='⚠️')
-
-                # 🔹 fecha de corte (365 días naturales)
-                fecha_ini = fecha_fin - pd.Timedelta(days=364)
-
-                # 🔹 filtrar por fechas completas (date vs date)
-                df_in = df_in[
-                    (df_in["fecha"] >= fecha_ini) &
-                    (df_in["fecha"] <= fecha_fin)
-                ]
-                print('curva recortada')
-                print(df_in)
-                # 🔹 recalcular rango real
-                fecha_ini = df_in["fecha"].min()
-                fecha_fin = df_in["fecha"].max()
-                dias_rango = (fecha_fin - fecha_ini).days + 1
-
-                st.sidebar.info(f'Nuevo rango: {fecha_ini} → {fecha_fin}')
-                st.sidebar.write("Días finales:", dias_rango)
-
-                habilitar_opt = True
-                habilitar_ver = False
-
-                año_opt = 2026
-                pyc_tp_opt = pyc_tp[año_opt][tarifa]
-            
-                tepp_opt = {
-                    k: v * coef_excesos
-                    for k, v in tepp123[año_opt][tarifa].items()
-                }
             else:
-                # 365 días: se puede optimizar    
                 st.sidebar.info('Es posible optimizar.')
-                habilitar_opt = True
                 habilitar_ver = False
-                
-                año_opt = 2026
-                pyc_tp_opt = pyc_tp[año_opt][tarifa]
-            
-                tepp_opt = {
-                    k: v * coef_excesos
-                    for k, v in tepp123[año_opt][tarifa].items()
-                }
             
         else:
             st.sidebar.error('No es posible ejecutar ninguna acción. El peaje de acceso es 2.0TD', icon='⚠️')
@@ -298,8 +303,11 @@ else:
 
 submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=not habilitar_opt)
 submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=not habilitar_ver)
-    
-    
+
+tab_optimizacion, tab_verificacion, tab_comparacion, tab_informe = st.tabs(
+    ['Optimización', 'Verificación', 'Comparar potencias', 'Informe']
+)
+
 resultados = None    
 
 # OPTIMIZACIÓN DE POTENCIA. USADO EN MODO PREMIUM Y MODO DEMO.  
@@ -392,7 +400,8 @@ if resultados is not None:
     if modo1:
         periodo_datos_informe = "Tabla de maxímetros"
         detalle_datos_optimizacion = (
-            f"ATR/Peaje: **{tarifa}** · Datos utilizados: **tabla de maxímetros**"
+            f"ATR/Peaje: **{tarifa}** · Datos utilizados: **tabla de maxímetros** "
+            "· Costes regulados: **2026**"
         )
     else:
         columna_fecha = (
@@ -409,7 +418,8 @@ if resultados is not None:
                 f"{fechas_usadas.max():%d/%m/%Y}"
             )
         detalle_datos_optimizacion = (
-            f"ATR/Peaje: **{tarifa}** · Curva utilizada: **{rango_usado}**"
+            f"ATR/Peaje: **{tarifa}** · Curva utilizada: **{rango_usado}** "
+            "· Costes regulados: **2026**"
         )
         periodo_datos_informe = rango_usado
 
@@ -417,8 +427,7 @@ if resultados is not None:
     # INTERFAZ STREAMLIT
     # ===============================================================================================================================    
 
-    tab1, tab2 = st.tabs(['Resultados', 'Informe'])
-    with tab1:
+    with tab_optimizacion:
         
         
         c11, c12= st.columns([.55, .45])
@@ -463,8 +472,17 @@ if resultados is not None:
         #with c12:
             
 
-    with tab2:    
+    with tab_informe:
         st.subheader("📄 Generar informe")
+        st.selectbox(
+            'Tipo de informe disponible',
+            ['Informe de optimización'],
+            disabled=True,
+            help=(
+                'La verificación ya dispone de una pestaña y estado propios. '
+                'Su plantilla documental se incorporará cuando se defina su contenido.'
+            )
+        )
 
         # Opciones que el usuario puede personalizar
         col_titulo, col_logo = st.columns([2, 2])
@@ -609,13 +627,21 @@ if resultados is not None:
                     formatos["html"], height=700, scrolling=True
                 )
 
-    
+
+if resultados is None:
+    with tab_optimizacion:
+        st.info('Calcula una optimización para mostrar sus resultados.')
+    with tab_informe:
+        st.info(
+            'El informe de optimización estará disponible después de realizar '
+            'el cálculo.'
+        )
 
 # VERIFICACIÓN DE EXCESOS. NO SE USA EN MODO DEMO
 if submit_ver and st.session_state.df_norm is not None:
         coste_potfra_potcon, coste_excesos_potcon, coste_tp_potcon, df_coste_potfra_potcon, df_coste_excesos_potcon = calcular_costes(df_in, tarifa, pyc_tp_ver, tepp_ver, meses, pot_con)
 
-        mes_verificado = df_in['mes_nom'].iloc[0]
+        mes_verificado = df_coste_potfra_potcon.index[0]
         df_pot_mes = df_coste_potfra_potcon.loc[[mes_verificado]].copy()
         df_exc_mes = df_coste_excesos_potcon.loc[[mes_verificado]].copy()
         df_pot_mes['Total (€)'] = df_pot_mes.sum(axis=1)
@@ -657,33 +683,67 @@ if submit_ver and st.session_state.df_norm is not None:
 
 
 
-        orden_periodos = list(pot_con.keys())
-        orden_periodos_presentes = [
-            p for p in orden_periodos if p in df_in['periodo'].unique()
-        ]
+        orden_periodos = [f'P{i}' for i in range(1, 7)]
+        periodos_presentes = set(df_in['periodo'].dropna().unique())
+        orden_visual = [p for p in orden_periodos if p in periodos_presentes]
 
-        fig_detalle_demanda = px.bar(
-            df_in,
-            x='fecha_hora',
-            y='potencia',
-            facet_col='periodo',
-            facet_col_wrap=1,
-            color='periodo',
-            color_discrete_map=colores_periodo,
-            category_orders={'periodo': orden_periodos_presentes},
-            title='Demanda cuartohoraria vs Potencia contratada por periodo',
-            height=250 * df_in['periodo'].nunique()
+        fig_detalle_demanda = make_subplots(
+            rows=len(orden_visual),
+            cols=1,
+            shared_xaxes=True,
+            subplot_titles=orden_visual,
+            vertical_spacing=0.07
         )
+
+        fecha_min = df_in['fecha_hora'].min()
+        fecha_max = df_in['fecha_hora'].max()
+        demanda_max_global = pd.to_numeric(
+            df_in['potencia'], errors='coerce'
+        ).max()
+        potencia_contratada_max = max(
+            float(pot_con[p]) for p in orden_visual
+        )
+        valor_max_global = max(
+            float(demanda_max_global) if pd.notna(demanda_max_global) else 0,
+            potencia_contratada_max
+        )
+        paso_eje = 500
+        ultimo_tick = max(
+            paso_eje,
+            math.ceil(valor_max_global * 1.05 / paso_eje) * paso_eje
+        )
+        # El margen coloca el último tick dentro del área del gráfico para
+        # que su línea de división sea visible y no coincida con el borde.
+        limite_superior = ultimo_tick + paso_eje * 0.08
         
-        for i, periodo in enumerate(orden_periodos_presentes, start=1):
+        for fila, periodo in enumerate(orden_visual, start=1):
             df_p = df_in[df_in['periodo'] == periodo]
+            color_periodo = colores_periodo[periodo]
+
+            fig_detalle_demanda.add_trace(
+                go.Bar(
+                    x=df_p['fecha_hora'],
+                    y=df_p['potencia'],
+                    marker_color=color_periodo,
+                    name=periodo,
+                    legendgroup=periodo,
+                    hovertemplate=(
+                        f'<b>{periodo}</b><br>'
+                        'Fecha: %{x|%d/%m/%Y %H:%M}<br>'
+                        'Demanda: %{y:,.2f} kW<extra></extra>'
+                    )
+                ),
+                row=fila,
+                col=1
+            )
 
             fig_detalle_demanda.add_trace(
                 go.Scatter(
-                    x=df_p['fecha_hora'],
-                    y=[pot_con[periodo]] * len(df_p),
+                    x=[fecha_min, fecha_max],
+                    y=[pot_con[periodo], pot_con[periodo]],
                     mode='lines',
                     line=dict(
+                        color=color_periodo,
                         dash='dash',
                         width=2
                     ),
@@ -691,64 +751,467 @@ if submit_ver and st.session_state.df_norm is not None:
                     legendgroup=periodo,     # mismo grupo → mismo color
                     showlegend=False
                 ),
-                row=i,
+                row=fila,
                 col=1
             )
-        
-        fig_detalle_demanda2 = px.bar(
-            df_in,
-            x='fecha_hora',
-            y='potencia',
-            facet_col='periodo',
-            facet_col_wrap=1,
-            category_orders={'periodo': orden_periodos_presentes},
+
+        fig_detalle_demanda = aplicar_estilo(fig_detalle_demanda)
+        fig_detalle_demanda.update_layout(
             title='Demanda cuartohoraria vs Potencia contratada por periodo',
-            height=250 * len(orden_periodos_presentes)
+            height=320 * len(orden_visual),
+            legend_title_text='Periodo',
+            bargap=0,
+            margin=dict(t=100, b=70)
         )
-        for i, periodo in enumerate(orden_periodos_presentes, start=1):
-            fig_detalle_demanda2.update_traces(
-                marker_color=colores_periodo[periodo],
-                row=i,
-                col=1
-            )
-        
-        for i, periodo in enumerate(orden_periodos_presentes, start=1):
-            df_p = df_in[df_in['periodo'] == periodo]
+        fig_detalle_demanda.update_yaxes(
+            title_text='kW',
+            range=[0, limite_superior],
+            dtick=paso_eje,
+            showgrid=True,
+            gridwidth=1,
+            gridcolor='rgba(128, 128, 128, 0.35)'
+        )
 
-            fig_detalle_demanda2.add_trace(
-                go.Scatter(
-                    x=df_p['fecha_hora'],
-                    y=[pot_con[periodo]] * len(df_p),
-                    mode='lines',
-                    line=dict(
-                        color=colores_periodo[periodo],
-                        dash='dash',
-                        width=2
-                    ),
-                    showlegend=False
-                ),
-                row=i,
-                col=1
-            )
-        fig_detalle_demanda2.update_yaxes(title_text='kW')
+        st.session_state.resultados_verificacion_potencia = {
+            'fecha_inicio': fecha_inicio,
+            'fecha_final': fecha_final,
+            'df_coste': df_coste,
+            'df_pot_mes': df_pot_mes,
+            'fig_pie': fig_pie,
+            'fig_detalle_demanda': fig_detalle_demanda,
+            'coste_excesos': coste_excesos_potcon,
+            'potencias': pot_con.copy(),
+        }
 
 
-        st.header('Resultados de la verificación', divider = 'rainbow')
-        st.write(f'Datos del {fecha_inicio} al {fecha_final}')
+with tab_verificacion:
+    verificacion = st.session_state.get('resultados_verificacion_potencia')
+    if verificacion is None:
+        st.info('Realiza una verificación para mostrar sus resultados.')
+    else:
+        st.header('Resultados de la verificación', divider='rainbow')
+        st.write(
+            f"Datos del {verificacion['fecha_inicio']} al "
+            f"{verificacion['fecha_final']}"
+        )
+        df_potencias_verificacion = pd.DataFrame(
+            [verificacion['potencias']],
+            index=['Potencia contratada (kW)']
+        )
+        df_potencias_verificacion.index.name = 'Concepto'
+        df_potencias_verificacion = df_potencias_verificacion.applymap(
+            lambda valor: formato_numero_es(valor, 2)
+        )
+
         c1, c2 = st.columns([.3,.7])
         with c1:
-            st.dataframe(df_coste, hide_index=True, use_container_width=True)
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.subheader('Potencias utilizadas en la verificación')
+            st.dataframe(
+                df_potencias_verificacion,
+                use_container_width=True
+            )
+            st.subheader('Resultado económico')
+            st.dataframe(
+                verificacion['df_coste'],
+                hide_index=True,
+                use_container_width=True
+            )
+            st.plotly_chart(verificacion['fig_pie'], use_container_width=True)
             c21,c22,c23 = st.columns(3)
             with c21:
-                total_potfra = round(df_pot_mes['Total (€)'].sum(),2)
+                total_potfra = round(
+                    verificacion['df_pot_mes']['Total (€)'].sum(), 2
+                )
                 st.metric('Potencia facturada €)', formato_euros(total_potfra))
             with c22:
-                st.metric('Excesos facturados €)', formato_euros(coste_excesos_potcon))
+                st.metric(
+                    'Excesos facturados €)',
+                    formato_euros(verificacion['coste_excesos'])
+                )
             with c23:
-                total_tp_fra = round(total_potfra+coste_excesos_potcon,2)
+                total_tp_fra = round(
+                    total_potfra + verificacion['coste_excesos'], 2
+                )
                 st.metric('Total término de potencia €)', formato_euros(total_tp_fra))
         with c2:
-            st.plotly_chart(fig_detalle_demanda2, use_container_width=True)
+            st.plotly_chart(
+                verificacion['fig_detalle_demanda'],
+                use_container_width=True
+            )
+
+
+with tab_comparacion:
+    st.caption(
+        'Todos los escenarios se valoran sobre el mismo periodo y con los '
+        'costes regulados de 2026.'
+    )
+
+    if 'df_in' not in locals() or df_in is None or df_in.empty:
+        st.info('Carga una curva o una tabla de maxímetros para comparar.')
+    else:
+        df_comparacion_base = df_in.copy()
+        rango_comparacion = None
+        col_entrada, col_metricas, col_resultado = st.columns(
+            [0.25, 0.30, 0.45],
+            gap='large'
+        )
+
+        with col_entrada:
+            st.subheader('Datos de entrada', divider='rainbow')
+            with st.form('form_comparacion_potencias'):
+                if 'fecha_hora' in df_comparacion_base.columns:
+                    fechas_disponibles = pd.to_datetime(
+                        df_comparacion_base['fecha_hora'], errors='coerce'
+                    ).dropna()
+                    fecha_min_comparacion = fechas_disponibles.min().date()
+                    fecha_max_comparacion = fechas_disponibles.max().date()
+                    rango_comparacion = st.date_input(
+                        'Rango de fechas de la comparación',
+                        value=(fecha_min_comparacion, fecha_max_comparacion),
+                        min_value=fecha_min_comparacion,
+                        max_value=fecha_max_comparacion,
+                        format='DD/MM/YYYY'
+                    )
+
+                st.subheader('Potencias alternativas')
+                df_potencias_comparacion_ini = pd.DataFrame(
+                    {'Potencia (kW)': pot_con}
+                )
+                df_potencias_comparacion = st.data_editor(
+                    df_potencias_comparacion_ini,
+                    use_container_width=True,
+                    num_rows='fixed'
+                )
+                submit_comparacion = st.form_submit_button(
+                    'Calcular comparación',
+                    type='primary',
+                    use_container_width=True
+                )
+
+        with col_resultado:
+            st.subheader('Gráfico comparativo', divider='rainbow')
+
+        with col_metricas:
+            st.subheader('Resumen', divider='rainbow')
+
+        if submit_comparacion:
+            errores_comparacion = validar_potencias(df_potencias_comparacion)
+            if errores_comparacion:
+                for error in errores_comparacion:
+                    st.error(error)
+            else:
+                df_periodo_comparacion = df_comparacion_base.copy()
+                if rango_comparacion is not None:
+                    if not isinstance(rango_comparacion, (tuple, list)) or len(rango_comparacion) != 2:
+                        st.error('Selecciona una fecha inicial y una fecha final.')
+                        st.stop()
+                    inicio_comparacion, fin_comparacion = rango_comparacion
+                    fechas_comparacion = pd.to_datetime(
+                        df_periodo_comparacion['fecha_hora'], errors='coerce'
+                    )
+                    df_periodo_comparacion = df_periodo_comparacion.loc[
+                        (fechas_comparacion.dt.date >= inicio_comparacion)
+                        & (fechas_comparacion.dt.date <= fin_comparacion)
+                    ].copy()
+
+                if df_periodo_comparacion.empty:
+                    st.error('No hay datos en el rango seleccionado.')
+                    st.stop()
+
+                potencias_alternativas = (
+                    df_potencias_comparacion['Potencia (kW)']
+                    .astype(float)
+                    .to_dict()
+                )
+                escenarios = {
+                    'Contratadas': pot_con.copy(),
+                }
+
+                resultados_opt_sesion = st.session_state.get(
+                    'resultados_potencia'
+                )
+                if resultados_opt_sesion is not None:
+                    tabla_opt = resultados_opt_sesion[5]
+                    fila_opt = tabla_opt.loc[
+                        tabla_opt['Potencias (kW)'] == 'Optimizadas'
+                    ]
+                    if not fila_opt.empty:
+                        def a_float_es(valor):
+                            if isinstance(valor, str):
+                                valor = valor.replace('.', '').replace(',', '.')
+                            return float(valor)
+
+                        escenarios['Optimizadas'] = {
+                            p: a_float_es(fila_opt.iloc[0][p])
+                            for p in orden_periodos
+                        }
+
+                escenarios['Alternativas'] = potencias_alternativas
+
+                filas_comparacion = []
+                for nombre_escenario, potencias_escenario in escenarios.items():
+                    coste_potencia, coste_excesos, coste_total, _, _ = calcular_costes(
+                        df_periodo_comparacion,
+                        tarifa,
+                        pyc_tp_opt,
+                        tepp_opt,
+                        meses,
+                        potencias_escenario
+                    )
+                    filas_comparacion.append({
+                        'Escenario': nombre_escenario,
+                        **potencias_escenario,
+                        'Coste potencia (€)': coste_potencia,
+                        'Coste excesos (€)': coste_excesos,
+                        'Coste total (€)': coste_total,
+                    })
+
+                df_resultado_comparacion = pd.DataFrame(filas_comparacion)
+                coste_base = df_resultado_comparacion.loc[
+                    df_resultado_comparacion['Escenario'] == 'Contratadas',
+                    'Coste total (€)'
+                ].iloc[0]
+                df_resultado_comparacion['Ahorro vs contratadas (€)'] = (
+                    coste_base - df_resultado_comparacion['Coste total (€)']
+                )
+
+                df_grafico_comparacion = df_resultado_comparacion.melt(
+                    id_vars='Escenario',
+                    value_vars=['Coste potencia (€)', 'Coste excesos (€)'],
+                    var_name='Concepto',
+                    value_name='Coste (€)'
+                )
+                fig_comparacion = px.bar(
+                    df_grafico_comparacion,
+                    x='Escenario',
+                    y='Coste (€)',
+                    color='Concepto',
+                    text='Coste (€)',
+                    barmode='stack',
+                    title='Comparación de costes en el periodo seleccionado',
+                    color_discrete_map={
+                        'Coste potencia (€)': 'deepskyblue',
+                        'Coste excesos (€)': 'blue',
+                    }
+                )
+                fig_comparacion = aplicar_estilo(fig_comparacion)
+                fig_comparacion.update_traces(
+                    texttemplate='<b>%{y:,.0f} €</b>',
+                    textposition='auto',
+                    textfont_size=24,
+                    cliponaxis=False,
+                    hovertemplate=(
+                        '<b>%{x}</b><br>'
+                        'Coste: %{y:,.2f} €<extra></extra>'
+                    )
+                )
+                fig_comparacion.update_layout(
+                    barcornerradius=8,
+                    legend_title_text='',
+                    height=520,
+                    xaxis=dict(
+                        tickfont=dict(size=20),
+                        title_font=dict(size=20)
+                    )
+                )
+
+                fila_alternativa_grafico = df_resultado_comparacion.loc[
+                    df_resultado_comparacion['Escenario'] == 'Alternativas'
+                ].iloc[0]
+                coste_alternativo_grafico = fila_alternativa_grafico[
+                    'Coste total (€)'
+                ]
+                ahorro_grafico = coste_base - coste_alternativo_grafico
+                porcentaje_grafico = (
+                    abs(ahorro_grafico) / coste_base * 100
+                    if coste_base else 0
+                )
+                ahorro_favorable_grafico = ahorro_grafico >= 0
+                texto_impacto_grafico = (
+                    'Ahorro' if ahorro_favorable_grafico else 'Sobrecoste'
+                )
+                fondo_impacto_grafico = (
+                    '#bbf7d0' if ahorro_favorable_grafico else '#fecaca'
+                )
+                borde_impacto_grafico = (
+                    '#15803d' if ahorro_favorable_grafico else '#dc2626'
+                )
+                fig_comparacion.add_annotation(
+                    x='Alternativas',
+                    y=1.02,
+                    yref='paper',
+                    yanchor='bottom',
+                    visible=False,
+                    text=(
+                        f'<b>{texto_impacto_grafico}</b><br>'
+                        f'<b>{formato_euros(abs(ahorro_grafico))} '
+                        f'({formato_numero_es(porcentaje_grafico, 1)} %)</b>'
+                    ),
+                    showarrow=False,
+                    bgcolor=fondo_impacto_grafico,
+                    bordercolor=borde_impacto_grafico,
+                    borderwidth=2,
+                    borderpad=8,
+                    font=dict(color=borde_impacto_grafico, size=20),
+                    align='center'
+                )
+
+                st.session_state.resultado_comparacion_potencias = {
+                    'tabla': df_resultado_comparacion,
+                    'grafico': fig_comparacion,
+                    'rango': rango_comparacion,
+                }
+
+        comparacion_guardada = st.session_state.get(
+            'resultado_comparacion_potencias'
+        )
+        if comparacion_guardada is not None:
+            tabla_comparacion_fmt = comparacion_guardada['tabla'].copy()
+            for columna in orden_periodos:
+                tabla_comparacion_fmt[columna] = tabla_comparacion_fmt[columna].apply(
+                    lambda valor: formato_numero_es(valor, 2)
+                )
+            for columna in (
+                'Coste potencia (€)',
+                'Coste excesos (€)',
+                'Coste total (€)',
+                'Ahorro vs contratadas (€)',
+            ):
+                tabla_comparacion_fmt[columna] = tabla_comparacion_fmt[columna].apply(
+                    formato_euros
+                )
+
+            # La tabla horizontal se conserva como fuente; se presenta
+            # transpuesta para comparar cada concepto entre escenarios.
+            tabla_comparacion_vertical = (
+                tabla_comparacion_fmt
+                .set_index('Escenario')
+                .T
+            )
+
+            with col_resultado:
+                st.plotly_chart(
+                    comparacion_guardada['grafico'],
+                    use_container_width=True
+                )
+                st.subheader('Detalle por escenario')
+                st.dataframe(
+                    tabla_comparacion_vertical,
+                    use_container_width=True
+                )
+
+            tabla_metricas = comparacion_guardada['tabla']
+            fila_contratada = tabla_metricas.loc[
+                tabla_metricas['Escenario'] == 'Contratadas'
+            ].iloc[0]
+            fila_alternativa = tabla_metricas.loc[
+                tabla_metricas['Escenario'] == 'Alternativas'
+            ].iloc[0]
+            ahorro_alternativa = (
+                fila_contratada['Coste total (€)']
+                - fila_alternativa['Coste total (€)']
+            )
+            porcentaje_impacto = (
+                abs(ahorro_alternativa)
+                / fila_contratada['Coste total (€)']
+                * 100
+                if fila_contratada['Coste total (€)'] else 0
+            )
+
+            with col_metricas:
+                hay_ahorro = ahorro_alternativa >= 0
+                texto_impacto = (
+                    'El ahorro en el TP es de'
+                    if hay_ahorro
+                    else 'El sobrecoste es de'
+                )
+                color_impacto = '#15803d' if hay_ahorro else '#dc2626'
+                borde_impacto = '#86efac' if hay_ahorro else '#fca5a5'
+                fondo_impacto = '#bbf7d0' if hay_ahorro else '#fecaca'
+                st.markdown(
+                    f'''
+                    <div style="
+                        width: 100%;
+                        box-sizing: border-box;
+                        padding: 1rem;
+                        margin-bottom: 1rem;
+                        border: 1px solid {borde_impacto};
+                        border-radius: 0.5rem;
+                        background-color: {fondo_impacto};
+                        color: {color_impacto};
+                        text-align: center;
+                    ">
+                        <div style="font-size: 1.3rem; font-weight: 600;">
+                            {texto_impacto}
+                        </div>
+                        <div style="font-size: 2.5rem; font-weight: 700;">
+                            {formato_euros(abs(ahorro_alternativa))}
+                            ({formato_numero_es(porcentaje_impacto, 1)} %)
+                        </div>
+                    </div>
+                    ''',
+                    unsafe_allow_html=True
+                )
+
+                col_resumen, col_alternativa = st.columns(2, gap='medium')
+                with col_resumen:
+                    st.markdown(
+                        '<div style="font-size: 1.35rem; font-weight: 700;">'
+                        'Contratadas</div>',
+                        unsafe_allow_html=True
+                    )
+                    st.metric(
+                        'Coste Potencia',
+                        formato_euros(fila_contratada['Coste potencia (€)'])
+                    )
+                    st.metric(
+                        'Coste Excesos',
+                        formato_euros(fila_contratada['Coste excesos (€)'])
+                    )
+                    st.metric(
+                        'Total TP',
+                        formato_euros(fila_contratada['Coste total (€)'])
+                    )
+
+                with col_alternativa:
+                    st.markdown(
+                        '<div style="font-size: 1.35rem; font-weight: 700;">'
+                        'Alternativas</div>',
+                        unsafe_allow_html=True
+                    )
+                    st.metric(
+                        'Coste Potencia',
+                        formato_euros(fila_alternativa['Coste potencia (€)'])
+                    )
+                    st.metric(
+                        'Coste Excesos',
+                        formato_euros(fila_alternativa['Coste excesos (€)'])
+                    )
+                    st.metric(
+                        'Total TP',
+                        formato_euros(fila_alternativa['Coste total (€)']),
+                        delta=(
+                            f'{formato_euros(ahorro_alternativa)} '
+                            f'({formato_numero_es(porcentaje_impacto, 1)} %)'
+                        )
+                    )
+
+            with col_entrada:
+                rango_guardado = comparacion_guardada.get('rango')
+                if (
+                    isinstance(rango_guardado, (tuple, list))
+                    and len(rango_guardado) == 2
+                ):
+                    texto_rango = (
+                        f'{rango_guardado[0]:%d/%m/%Y} – '
+                        f'{rango_guardado[1]:%d/%m/%Y}'
+                    )
+                else:
+                    texto_rango = 'Meses disponibles en la tabla'
+                st.info(
+                    f'**Periodo valorado:** {texto_rango}\n\n'
+                    f'**Escenarios:** {len(tabla_metricas)}\n\n'
+                    '**Costes regulados:** 2026'
+                )
 
 

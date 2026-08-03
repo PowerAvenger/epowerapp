@@ -401,6 +401,7 @@ def leer_curva_normalizada(pot_con):
     df_in['hora'] = df_in['fecha_hora'].dt.hour
     df_in['mes_num'] = df_in['fecha_hora'].dt.month
     df_in['dia'] = df_in['fecha_hora'].dt.day
+    df_in['periodo_mes'] = df_in['fecha_hora'].dt.to_period('M').astype(str)
 
     # --- Normalizar columna periodo ---
     df_in['periodo'] = df_in['periodo'].astype(str).str.strip().str.upper()
@@ -582,32 +583,49 @@ def normalizar_tabla_maximetros(df, meses):
 
     df["mes_nom"] = df[col_mes].apply(convertir_a_mes_nom)
 
+    def convertir_a_periodo_mes(valor):
+        if isinstance(valor, (pd.Timestamp, datetime, date)):
+            return pd.Timestamp(valor).to_period('M').strftime('%Y-%m')
+
+        txt = str(valor).strip()
+        fechas = re.findall(r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}", txt)
+        fecha = pd.to_datetime(
+            fechas[0] if fechas else txt,
+            dayfirst=True,
+            errors="coerce"
+        )
+        if pd.notna(fecha):
+            return fecha.to_period('M').strftime('%Y-%m')
+
+        return convertir_a_mes_nom(valor)
+
+    df["periodo_mes"] = df[col_mes].apply(convertir_a_periodo_mes)
+
     if df["mes_nom"].isna().any():
         filas_malas = df[df["mes_nom"].isna()].index.tolist()
         raise ValueError(
             f"No he podido interpretar el mes en estas filas: {filas_malas}"
         )
 
-    df = df[["mes_nom"] + periodos].copy()
+    df = df[["periodo_mes", "mes_nom"] + periodos].copy()
 
     for p in periodos:
         df[p] = pd.to_numeric(df[p], errors="coerce").fillna(0)
 
     # Si hay meses duplicados, nos quedamos con el máximo por periodo
     df = (
-        df.groupby("mes_nom", as_index=False)[periodos]
-        .max()
+        df.groupby("periodo_mes", as_index=False)
+        .agg({"mes_nom": "first", **{p: "max" for p in periodos}})
     )
 
-    df["mes_nom"] = pd.Categorical(
-        df["mes_nom"],
-        categories=meses,
-        ordered=True
+    orden_mes = {mes: i for i, mes in enumerate(meses, start=1)}
+    df["_orden"] = pd.to_datetime(df["periodo_mes"], errors="coerce")
+    df["_orden_mes"] = df["mes_nom"].map(orden_mes)
+    df = (
+        df.sort_values(["_orden", "_orden_mes"], na_position="last")
+        .drop(columns=["_orden", "_orden_mes"])
+        .reset_index(drop=True)
     )
-
-    df = df.sort_values("mes_nom").reset_index(drop=True)
-
-    df["mes_nom"] = df["mes_nom"].astype(str)
 
     return df
 
@@ -616,12 +634,52 @@ def normalizar_tabla_maximetros(df, meses):
 def calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, potencias):
     df_temp = df_in.copy()
     modo_calc = detectar_entrada_potencia(df_temp)
+
+    if modo_calc == 'curva':
+        fechas = pd.to_datetime(df_temp['fecha_hora'], errors='coerce')
+        df_temp = df_temp.loc[fechas.notna()].copy()
+        df_temp['fecha_hora'] = fechas.loc[fechas.notna()]
+        df_temp['periodo_mes'] = (
+            df_temp['fecha_hora'].dt.to_period('M').astype(str)
+        )
+        dias_observados = (
+            df_temp.assign(fecha_dia=df_temp['fecha_hora'].dt.date)
+            .groupby('periodo_mes')['fecha_dia']
+            .nunique()
+        )
+        dias_del_mes = (
+            df_temp.groupby('periodo_mes')['fecha_hora']
+            .min()
+            .dt.days_in_month
+        )
+        factores_mensuales = (dias_observados / dias_del_mes).clip(upper=1)
+    else:
+        # Cada fila de maxímetros representa una mensualidad disponible.
+        columna_indice = (
+            'periodo_mes' if 'periodo_mes' in df_temp.columns else 'mes_nom'
+        )
+        factores_mensuales = pd.Series(
+            1.0,
+            index=df_temp[columna_indice].astype(str),
+            dtype=float
+        )
+
+    indices_calculo = factores_mensuales.index.tolist()
     # ============================================================
     # 1. Coste de potencia facturada
     # ============================================================
-    df_coste_potfra_temp = pd.DataFrame(index=meses, columns=potencias.keys())
+    df_coste_potfra_temp = pd.DataFrame(
+        index=indices_calculo,
+        columns=potencias.keys(),
+        dtype=float
+    )
     for periodo, pot_opt_value in potencias.items():
-        df_coste_potfra_temp[periodo] = pot_opt_value * pyc_tp[periodo] / 12
+        df_coste_potfra_temp[periodo] = (
+            pot_opt_value
+            * pyc_tp[periodo]
+            / 12
+            * factores_mensuales.to_numpy()
+        )
     coste_potfra_temp = df_coste_potfra_temp.sum().sum()
     
     # ============================================================
@@ -640,7 +698,13 @@ def calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, potencias):
         
         
         # Calculamos el coste de excesos
-        df_excesos_temp = pd.pivot_table(df_temp, values='excesos_cuad_opt', index='mes_nom', columns='periodo', aggfunc='sum')
+        df_excesos_temp = pd.pivot_table(
+            df_temp,
+            values='excesos_cuad_opt',
+            index='periodo_mes',
+            columns='periodo',
+            aggfunc='sum'
+        )
         df_excesos_temp = np.sqrt(df_excesos_temp)
         for periodo, x in tepp.items():
             if periodo in df_excesos_temp.columns:
@@ -662,7 +726,7 @@ def calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, potencias):
                 f"Faltan columnas en la tabla de maxímetros: {columnas_faltantes}"
             )
 
-        df_excesos_temp = df_temp.set_index("mes_nom")[periodos].copy()
+        df_excesos_temp = df_temp.set_index(columna_indice)[periodos].copy()
 
         # Convertir maxímetros a numérico por seguridad
         for periodo in periodos:
@@ -688,9 +752,11 @@ def calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, potencias):
 
 
             
-    df_excesos_temp.index = pd.Categorical(df_excesos_temp.index, categories=meses, ordered=True)
-    #ordenamos
-    df_excesos_temp = df_excesos_temp.sort_index()
+    df_excesos_temp = df_excesos_temp.reindex(
+        index=indices_calculo,
+        columns=list(potencias.keys()),
+        fill_value=0
+    ).fillna(0)
     coste_excesos_temp = df_excesos_temp.sum().sum()
     # Coste total
     coste_tp_temp = round(coste_potfra_temp + coste_excesos_temp, 2)
