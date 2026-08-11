@@ -307,7 +307,12 @@ def tabla_precios_medios_horarios(df):
     ).reset_index()
 
 # GRAFICO PRINCIPAL CON LAS BARRAS DE OMIE Y SSAA Y LAS LINEAS DE PRECIO FINAL. HORARIAS
-def graficar_precios_medios_horarios(df_filtrado, colores_precios):
+def graficar_precios_medios_horarios(
+    df_filtrado,
+    colores_precios,
+    incluir_curva=True,
+    leyenda_horizontal=False,
+):
 
     pt2 = tabla_precios_medios_horarios(df_filtrado)
 
@@ -320,6 +325,8 @@ def graficar_precios_medios_horarios(df_filtrado, colores_precios):
     
 
     if (
+        incluir_curva
+        and
         "df_curva_sheets" in st.session_state
         and st.session_state.df_curva_sheets is not None
         and "coste_total" in st.session_state.df_curva_sheets.columns
@@ -481,6 +488,18 @@ def graficar_precios_medios_horarios(df_filtrado, colores_precios):
     )
 
     graf_pt1 = aplicar_estilo(graf_pt1)
+
+    if leyenda_horizontal:
+        graf_pt1.update_layout(
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="center",
+                x=0.5,
+                title_text=None,
+            )
+        )
 
     return graf_pt1
 
@@ -1154,6 +1173,87 @@ def evol_precios_diarios(df, colores_precios):
     )
     fig = aplicar_estilo(fig)
     return df_diario, fig
+
+
+def graficar_media_acumulada_mensual_atr(
+    df,
+    colores_precios,
+    año=None,
+    mes=None,
+):
+    """Media acumulada diaria del mes para los precios 2.0, 3.0 y 6.1."""
+    datos = df.copy()
+    if "fecha" in datos.columns:
+        datos["fecha"] = pd.to_datetime(datos["fecha"], errors="coerce").dt.floor("D")
+    elif "datetime" in datos.columns:
+        datos["fecha"] = pd.to_datetime(datos["datetime"], errors="coerce").dt.floor("D")
+    elif "fecha_hora" in datos.columns:
+        datos["fecha"] = pd.to_datetime(datos["fecha_hora"], errors="coerce").dt.floor("D")
+    else:
+        raise ValueError("No encuentro columna 'fecha', 'datetime' ni 'fecha_hora'.")
+
+    columnas = ["precio_2.0", "precio_3.0", "precio_6.1"]
+    faltantes = [col for col in columnas if col not in datos.columns]
+    if faltantes:
+        raise ValueError(f"No encuentro las columnas: {', '.join(faltantes)}")
+
+    if año is not None:
+        datos = datos[datos["fecha"].dt.year == año]
+    if mes is not None:
+        datos = datos[datos["fecha"].dt.month == mes]
+
+    diario = (
+        datos.dropna(subset=["fecha"])
+        .groupby("fecha", as_index=False)[columnas]
+        .mean()
+        .sort_values("fecha")
+    )
+    for col in columnas:
+        diario[col] = pd.to_numeric(diario[col], errors="coerce") / 10
+        diario[f"{col}_media_acumulada"] = diario[col].expanding().mean()
+
+    fig = go.Figure()
+    nombres = {
+        "precio_2.0": "Peaje 2.0",
+        "precio_3.0": "Peaje 3.0",
+        "precio_6.1": "Peaje 6.1",
+    }
+    for col in columnas:
+        nombre = nombres[col]
+        fig.add_trace(
+            go.Scatter(
+                x=diario["fecha"],
+                y=diario[f"{col}_media_acumulada"],
+                mode="lines",
+                name=nombre,
+                line=dict(
+                    color=colores_precios.get(col),
+                    width=3,
+                ),
+                hovertemplate=(
+                    f"{nombre}: "
+                    "%{y:.2f} c€/kWh<extra></extra>"
+                ),
+            )
+        )
+
+    fig.update_layout(
+        title="",
+        hovermode="x unified",
+        legend_title_text="",
+    )
+    fig.update_yaxes(
+        rangemode="tozero",
+        showgrid=True,
+        title_text="Media acumulada c€/kWh",
+    )
+    fig.update_xaxes(showgrid=True, tickformat="%d", title_text="Día")
+    if año is not None and mes is not None:
+        inicio = pd.Timestamp(año, mes, 1)
+        fin = inicio + pd.offsets.MonthEnd(0)
+        fig.update_xaxes(range=[inicio, fin])
+
+    return diario, aplicar_estilo(fig)
 
 
 from plotly.subplots import make_subplots
@@ -3363,7 +3463,8 @@ def graficar_diferencial_precios_mensuales(
     df_mensual,
     anio_base,
     anio_comp,
-    convertir_a_cent_kwh=True
+    convertir_a_cent_kwh=True,
+    mes_num=None,
 ):
     """
     Compara dos años a nivel mensual y genera un gráfico de diferenciales:
@@ -3418,6 +3519,12 @@ def graficar_diferencial_precios_mensuales(
         "precio_3.0": "darkred",
         "precio_6.1": "#1C83E1"
     }
+    posiciones_mes = {
+        "spot": -0.24,
+        "precio_2.0": -0.08,
+        "precio_3.0": 0.08,
+        "precio_6.1": 0.24,
+    }
 
     num_a_mes = {
         1: "Ene",
@@ -3468,6 +3575,8 @@ def graficar_diferencial_precios_mensuales(
 
     df_delta = df_delta.sort_values("mes_num")
     df_delta["Mes"] = df_delta["mes_num"].map(num_a_mes)
+    if mes_num is not None:
+        df_delta = df_delta[df_delta["mes_num"] == mes_num].copy()
 
     meses_orden = ["Ene", "Feb", "Mar", "Abr", "May", "Jun",
                "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
@@ -3488,13 +3597,6 @@ def graficar_diferencial_precios_mensuales(
         )
         df_delta[f"{col}_delta"] = delta_abs.round(2)
         df_delta[f"{col}_delta_pct"] = pd.Series(delta_pct, index=df_delta.index).round(2)
-
-        delta_log_pct = np.where(
-            (df_delta[f"{col}_base"] > 0) & (df_delta[f"{col}_comp"] > 0),
-            np.log(df_delta[f"{col}_comp"] / df_delta[f"{col}_base"]) * 100,
-            np.nan
-        )
-        df_delta[f"{col}_delta_log_pct"] = pd.Series(delta_log_pct, index=df_delta.index).round(2)
 
     # =====================================================
     # ELASTICIDADES VS SPOT
@@ -3529,7 +3631,7 @@ def graficar_diferencial_precios_mensuales(
                 f"{anio_base}: %{{customdata[0]:.2f}} c€/kWh<br>"
                 f"{anio_comp}: %{{customdata[1]:.2f}} c€/kWh<br>"
                 "Δ absoluto: %{customdata[2]:+.2f} c€/kWh<br>"
-                "Δ porcentual: %{customdata[3]:+.2f} %"
+                "Δ porcentual real: %{y:+.2f} %"
                 "<extra></extra>"
             )
 
@@ -3550,7 +3652,7 @@ def graficar_diferencial_precios_mensuales(
                 f"{anio_base}: %{{customdata[0]:.2f}} c€/kWh<br>"
                 f"{anio_comp}: %{{customdata[1]:.2f}} c€/kWh<br>"
                 "Δ absoluto: %{customdata[2]:+.2f} c€/kWh<br>"
-                "Δ porcentual: %{customdata[3]:+.2f} %<br>"
+                "Δ porcentual real: %{y:+.2f} %<br>"
                 "Elasticidad vs SPOT: %{customdata[4]:.2f}"
                 "<extra></extra>"
             )
@@ -3558,13 +3660,26 @@ def graficar_diferencial_precios_mensuales(
         fig_delta.add_trace(
             go.Bar(
                 #x=df_delta["Mes"],
-                x=df_delta["mes_num"],
+                x=(
+                    [posiciones_mes[col]] * len(df_delta)
+                    if mes_num is not None
+                    else df_delta["mes_num"]
+                ),
                 #y=df_delta[f"{col}_delta"],
                 #y=df_delta[f"{col}_delta_pct"],
-                y=df_delta[f"{col}_delta_log_pct"],
+                y=df_delta[f"{col}_delta_pct"],
                 name=nombres[col],
                 marker_color=colores[col],
-                width=0.08,
+                width=0.11 if mes_num is not None else 0.08,
+                text=(
+                    df_delta[f"{col}_delta_pct"]
+                    if mes_num is not None
+                    else None
+                ),
+                texttemplate="%{text:+.2f} %" if mes_num is not None else None,
+                textposition="outside" if mes_num is not None else None,
+                textfont=dict(size=15) if mes_num is not None else None,
+                cliponaxis=False,
                 customdata=customdata,
                 hovertemplate=hovertemplate
             )
@@ -3579,15 +3694,20 @@ def graficar_diferencial_precios_mensuales(
 
     fig_delta.update_layout(
         title=dict(
-            text=f"Diferencial mensual de precios (%): {anio_comp} vs {anio_base}",
+            text=(
+                f"Diferencial de precios (%): {anio_comp} vs {anio_base}"
+                if mes_num is not None
+                else f"Diferencial mensual de precios (%): {anio_comp} vs {anio_base}"
+            ),
             x=0.5,
             xanchor="center"
         ),
         xaxis_title="Mes",
-        yaxis_title="Diferencial en %",
+        yaxis_title="Diferencia real en %",
         barmode="group",
-        bargap=0.55,
-        bargroupgap=1,
+        bargap=0.72 if mes_num is not None else 0.55,
+        bargroupgap=0.35 if mes_num is not None else 1,
+        barcornerradius=6 if mes_num is not None else 0,
         hovermode="x unified",
         legend_title_text="",
         
@@ -3600,13 +3720,27 @@ def graficar_diferencial_precios_mensuales(
         zerolinecolor="gray"
     )
 
-    fig_delta.update_xaxes(
-        tickmode="array",
-        tickvals=list(range(1, 13)),
-        ticktext=["Ene", "Feb", "Mar", "Abr", "May", "Jun",
-                "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"],
-        range=[0.5, 12.5]
-    )
+    if mes_num is None:
+        fig_delta.update_xaxes(
+            tickmode="array",
+            tickvals=list(range(1, 13)),
+            ticktext=["Ene", "Feb", "Mar", "Abr", "May", "Jun",
+                    "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"],
+            range=[0.5, 12.5]
+        )
+    else:
+        fig_delta.update_xaxes(
+            title_text=None,
+            tickmode="array",
+            tickvals=[
+                posiciones_mes["spot"],
+                posiciones_mes["precio_2.0"],
+                posiciones_mes["precio_3.0"],
+                posiciones_mes["precio_6.1"],
+            ],
+            ticktext=["SPOT", "2.0", "3.0", "6.1"],
+            range=[-0.42, 0.42],
+        )
 
     fig_delta=aplicar_estilo(fig_delta)
     fig_delta.update_layout(height=600)

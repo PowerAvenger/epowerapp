@@ -26,8 +26,8 @@ meses_completos = pd.DataFrame({
 from backend_comun import rango_componentes
 
 
-def get_limites_componentes():
-    datos_limites = rango_componentes()
+def get_limites_componentes(componente=None):
+    datos_limites = rango_componentes(componente=componente)
 
     rangos = datos_limites['rango']
     etiquetas = datos_limites['valor_asignado']
@@ -102,6 +102,144 @@ def leer_json(file_id, _creds_dict):
     return datos, fecha_ini, fecha_fin
 
 #gráfico con todos los valores diarios desde el 2018
+def cargar_datos_escalacv(componente, file_id_spot, file_id_ssaa, creds_dict):
+    """Carga la serie ESIOS-ID de Escala CV sin depender de session_state."""
+    if componente not in {"SPOT", "SSAA", "SPOT+SSAA"}:
+        raise ValueError(f"Componente de mercado no válido: {componente}")
+
+    if componente == "SPOT":
+        return leer_json(file_id_spot, creds_dict)
+    if componente == "SSAA":
+        return leer_json(file_id_ssaa, creds_dict)
+
+    datos_spot, fecha_ini_spot, fecha_fin_spot = leer_json(
+        file_id_spot, creds_dict
+    )
+    datos_ssaa, fecha_ini_ssaa, fecha_fin_ssaa = leer_json(
+        file_id_ssaa, creds_dict
+    )
+    datos_spot = datos_spot.reset_index()
+    datos_ssaa = datos_ssaa.reset_index()
+    datos = (
+        datos_spot[["datetime", "value"]]
+        .rename(columns={"value": "value_spot"})
+        .merge(
+            datos_ssaa[["datetime", "value"]].rename(
+                columns={"value": "value_ssaa"}
+            ),
+            on="datetime",
+            how="inner",
+        )
+    )
+    datos["value"] = datos["value_spot"] + datos["value_ssaa"]
+    datos["fecha"] = datos["datetime"].dt.date
+    datos["hora"] = datos["datetime"].dt.hour
+    datos["dia"] = datos["datetime"].dt.day
+    datos["mes"] = datos["datetime"].dt.month
+    datos["año"] = datos["datetime"].dt.year
+    datos.set_index("datetime", inplace=True)
+    return datos, max(fecha_ini_spot, fecha_ini_ssaa), min(
+        fecha_fin_spot, fecha_fin_ssaa
+    )
+
+
+def graficar_comparativa_spot_mensual(
+    datos_spot,
+    mes,
+    año_actual,
+    año_comparacion=2025,
+):
+    """Compara el SPOT medio diario de un mes por número de día."""
+    datos = datos_spot.copy()
+    datos["fecha"] = pd.to_datetime(
+        datos["fecha"], errors="coerce"
+    ).dt.floor("D")
+    datos["value"] = pd.to_numeric(datos["value"], errors="coerce")
+    datos = datos[
+        (datos["fecha"].dt.month == mes)
+        & datos["fecha"].dt.year.isin([año_actual, año_comparacion])
+    ].copy()
+    diario = (
+        datos.dropna(subset=["fecha", "value"])
+        .assign(año=lambda df: df["fecha"].dt.year)
+        .groupby(["año", "fecha"], as_index=False)["value"]
+        .mean()
+        .sort_values(["año", "fecha"])
+    )
+    diario["día"] = diario["fecha"].dt.day
+    diario["media_acumulada"] = (
+        diario.groupby("año")["value"]
+        .expanding()
+        .mean()
+        .reset_index(level=0, drop=True)
+    )
+
+    fig = go.Figure()
+    colores_años = {
+        año_actual: "#09ab3b",
+        año_comparacion: "#83c9ff",
+    }
+    for año in (año_actual, año_comparacion):
+        serie = diario[diario["año"] == año]
+        if serie.empty:
+            continue
+        fig.add_trace(
+            go.Scatter(
+                x=serie["día"],
+                y=serie["value"],
+                mode="lines+markers",
+                name=str(año),
+                line=dict(
+                    color=colores_años[año],
+                    width=3.5 if año == año_actual else 2.5,
+                ),
+                marker=dict(size=5),
+                hovertemplate=(
+                    f"{año} · día "
+                    "%{x}: %{y:.2f} €/MWh<extra></extra>"
+                ),
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=serie["día"],
+                y=serie["media_acumulada"],
+                mode="lines",
+                name=f"Media acumulada {año}",
+                line=dict(
+                    color=colores_años[año],
+                    width=3,
+                    dash="dot",
+                ),
+                hovertemplate=(
+                    f"Media acumulada {año} · día "
+                    "%{x}: %{y:.2f} €/MWh<extra></extra>"
+                ),
+            )
+        )
+
+    fig.update_layout(
+        title="",
+        hovermode="x unified",
+        legend_title_text="",
+    )
+    fig.update_xaxes(
+        title_text="Día",
+        tickmode="linear",
+        tick0=1,
+        dtick=2,
+        range=[1, 31],
+        showgrid=True,
+    )
+    fig.update_yaxes(
+        title_text="SPOT medio €/MWh",
+        rangemode="tozero",
+        showgrid=True,
+    )
+    medias = diario.groupby("año")["value"].mean().to_dict()
+    return diario, aplicar_estilo(fig), medias
+
+
 def diarios_totales(datos, fecha_ini, fecha_fin):    
     datos_dia = datos.copy()
     datos_dia = datos_dia.drop(columns=['hora'])
@@ -541,14 +679,26 @@ def diarios(datos, fecha_ini, fecha_fin, datos_comparar):
     return datos_dia, graf_ecv_diario
 
 
-def graficar_media_acumulada_periodo(datos, mes_num=None):
+def graficar_media_acumulada_periodo(
+    datos,
+    mes_num=None,
+    componente=None,
+    predator_mode=None,
+    año=None,
+):
     """Precios medios diarios y media acumulada del mes o año seleccionado."""
     df = datos.copy()
     df["fecha"] = pd.to_datetime(df["fecha"])
-    componente = st.session_state.get("componente", "SPOT")
-    predator_mode = componente == "SPOT+SSAA" and st.session_state.get(
-        "dos_colores", False
-    )
+    if componente is None:
+        componente = st.session_state.get("componente", "SPOT")
+    if predator_mode is None:
+        predator_mode = componente == "SPOT+SSAA" and st.session_state.get(
+            "dos_colores", False
+        )
+    else:
+        predator_mode = componente == "SPOT+SSAA" and predator_mode
+    if año is None:
+        año = st.session_state.get("año_seleccionado_esc", pd.Timestamp.today().year)
 
     if mes_num is not None:
         df = df[df["fecha"].dt.month == mes_num].copy()
@@ -574,7 +724,9 @@ def graficar_media_acumulada_periodo(datos, mes_num=None):
     df["value"] = pd.to_numeric(df["value"], errors="coerce").round(2)
     df["media_acumulada"] = df["value"].expanding().mean()
 
-    df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes()
+    df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes(
+        componente=componente
+    )
     df["escala"] = pd.cut(
         df["value"],
         bins=df_limites["rango"],
@@ -594,7 +746,7 @@ def graficar_media_acumulada_periodo(datos, mes_num=None):
     periodo = (
         meses_español[mes_num]
         if mes_num is not None
-        else f"año {st.session_state.año_seleccionado_esc}"
+        else f"año {año}"
     )
     if predator_mode:
         df_predator = df_componentes.melt(
@@ -685,15 +837,15 @@ def graficar_media_acumulada_periodo(datos, mes_num=None):
     )
     if mes_num is not None:
         inicio_eje = pd.Timestamp(
-            st.session_state.año_seleccionado_esc, mes_num, 1
+            año, mes_num, 1
         )
         fin_eje = inicio_eje + pd.offsets.MonthEnd(0) + pd.Timedelta(
             hours=23, minutes=59
         )
     else:
-        inicio_eje = pd.Timestamp(st.session_state.año_seleccionado_esc, 1, 1)
+        inicio_eje = pd.Timestamp(año, 1, 1)
         fin_eje = pd.Timestamp(
-            st.session_state.año_seleccionado_esc, 12, 31, 23, 59
+            año, 12, 31, 23, 59
         )
     fig.update_xaxes(
         showgrid=True,

@@ -6,6 +6,25 @@ import streamlit as st
 import numpy as np
 from backend_comun import aplicar_estilo
 
+
+TECNOLOGIAS_MIX_PRINCIPALES = [
+    'Ciclo combinado',
+    'Hidráulica',
+    'Nuclear',
+    'Solar fotovoltaica',
+    'Eólica',
+    'Cogeneración',
+]
+COLORES_MIX_GENERACION = {
+    'Ciclo combinado': '#555867',
+    'Hidráulica': '#4be4ff',
+    'Nuclear': '#ff2b2b',
+    'Solar fotovoltaica': '#ff8700',
+    'Eólica': '#09ab3b',
+    'Cogeneración': '#6d3fc0',
+    'Resto': '#FFFFE0',
+}
+
 # LECTURA DE LOS JSON CON LOS DATOS DE ESTRUCTURA DE LA GENERACIÓN Y POTENCIA INSTALADA
 @st.cache_data
 def leer_json(file_id, widget):
@@ -28,6 +47,59 @@ def leer_json(file_id, widget):
             "porcentaje": column_mapping[widget]["porcentaje"]
         }, inplace=True)
     return df_in
+
+
+def preparar_mix_generacion_mensual(
+    df_generacion,
+    año,
+    mes,
+    tecnologias=None,
+):
+    """Agrega el mix mensual con las tecnologías principales y Resto."""
+    tecnologias = tecnologias or TECNOLOGIAS_MIX_PRINCIPALES
+    df = df_generacion[
+        (df_generacion['año'] == año) & (df_generacion['mes_num'] == mes)
+    ].copy()
+    if df.empty:
+        return pd.DataFrame(
+            columns=['tecnologia', 'generacion_GWh', '%_mix_gen']
+        )
+
+    df = df[~df['tecnologia'].isin(['Generación total', 'Potencia total'])]
+    resumen = (
+        df.groupby('tecnologia', as_index=False)['gen_GWh_dia']
+        .sum()
+        .rename(columns={'gen_GWh_dia': 'generacion_GWh'})
+    )
+    generacion_total = resumen['generacion_GWh'].sum()
+    if generacion_total <= 0:
+        return pd.DataFrame(
+            columns=['tecnologia', 'generacion_GWh', '%_mix_gen']
+        )
+
+    principales = resumen[resumen['tecnologia'].isin(tecnologias)].copy()
+    generacion_resto = (
+        generacion_total - principales['generacion_GWh'].sum()
+    )
+    if generacion_resto > 0:
+        principales = pd.concat(
+            [
+                principales,
+                pd.DataFrame(
+                    [{
+                        'tecnologia': 'Resto',
+                        'generacion_GWh': generacion_resto,
+                    }]
+                ),
+            ],
+            ignore_index=True,
+        )
+    principales['%_mix_gen'] = (
+        principales['generacion_GWh'] / generacion_total
+    )
+    return principales.sort_values('%_mix_gen', ascending=False).reset_index(
+        drop=True
+    )
     
      
 # TABLA CON DATOS DIARIOS DE CADA TECNOLOGÍA

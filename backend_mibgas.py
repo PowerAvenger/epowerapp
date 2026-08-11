@@ -277,15 +277,23 @@ def graficar_da_corrido(df):
 
     return fig
 
-def graficar_da_2026_acumulado(df, año=2026):
+def graficar_da_2026_acumulado(df, año=2026, mes=None):
 
     df = df.copy()
-    inicio_año = pd.Timestamp(year=año, month=1, day=1)
-    fin_año = pd.Timestamp(year=año, month=12, day=31)
+    if mes is None:
+        inicio_periodo = pd.Timestamp(year=año, month=1, day=1)
+        fin_periodo = pd.Timestamp(year=año, month=12, day=31)
+        periodo_titulo = str(año)
+    else:
+        inicio_periodo = pd.Timestamp(year=año, month=mes, day=1)
+        fin_periodo = inicio_periodo + pd.offsets.MonthEnd(0)
+        periodo_titulo = inicio_periodo.strftime("%B %Y")
 
     df["fecha_entrega"] = pd.to_datetime(df["fecha_entrega"])
     df["precio_gas"] = pd.to_numeric(df["precio_gas"], errors="coerce")
     df = df[df["fecha_entrega"].dt.year == año].copy()
+    if mes is not None:
+        df = df[df["fecha_entrega"].dt.month == mes].copy()
     df = df.sort_values("fecha_entrega")
 
     if df.empty:
@@ -293,7 +301,7 @@ def graficar_da_2026_acumulado(df, año=2026):
         fig.update_layout(
             title_font_size=28,
             title={
-                "text": f"No hay datos MIBGAS D+1 disponibles para {año}",
+                "text": f"No hay datos MIBGAS D+1 para {periodo_titulo}",
                 "x": 0.5,
                 "xanchor": "center"
             },
@@ -301,7 +309,7 @@ def graficar_da_2026_acumulado(df, año=2026):
             yaxis_title="Precio gas (€/MWh)",
             hoverlabel=dict(font_size=18)
         )
-        fig.update_xaxes(range=[inicio_año, fin_año])
+        fig.update_xaxes(range=[inicio_periodo, fin_periodo])
         fig = aplicar_estilo(fig)
         return fig
 
@@ -336,7 +344,7 @@ def graficar_da_2026_acumulado(df, año=2026):
     fig.update_layout(
         title_font_size=28,
         title={
-            "text": f"Evolución diaria y media acumulada MIBGAS D+1 {año}",
+            "text": f"Evolución diaria y media acumulada MIBGAS D+1 {periodo_titulo}",
             "x": 0.5,
             "xanchor": "center"
         },
@@ -359,8 +367,8 @@ def graficar_da_2026_acumulado(df, año=2026):
         showgrid=True,
         gridwidth=1,
         tickmode="linear",
-        dtick="M1",
-        range=[inicio_año, fin_año],
+        dtick="D2" if mes is not None else "M1",
+        range=[inicio_periodo, fin_periodo],
         hoverformat="%d/%m/%Y"
     )
 
