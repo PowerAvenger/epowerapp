@@ -12,6 +12,9 @@ import plotly.express as px
 from jinja2 import Environment, FileSystemLoader
 from backend_curvadecarga import (
     normalize_curve_simple, detectar_hojas_curva_excel, obtener_datos_contador,
+    obtener_suministros_datadis, obtener_consumo_datadis,
+    obtener_detalle_contrato_datadis, extraer_potencias_contratadas_datadis,
+    analizar_calidad_curva,
     graficar_curva_horaria, graficar_diario_apilado, graficar_mensual_apilado, tabla_mensual_periodos, formatear_tabla_mensual_es, graficar_queso_periodos,
     graficar_media_horaria, graficar_media_horaria_combinada, graficar_boxplot_horario,
     graficar_dem_ver_mensual, graficar_con_gen_mensual,
@@ -39,10 +42,10 @@ if not st.session_state.get('usuario_autenticado', False) and not st.session_sta
 generar_menu()
 
 if 'zona_periodos_cdc' not in st.session_state:
-    st.session_state.zona_periodos = 'peninsula'
+    st.session_state.zona_periodos_cdc = 'peninsula'
 
 # ===============================
-#  Interfaz SIDEBAR
+#  Interfaz principal
 # ===============================
 
 hoja_curva_excel = None
@@ -67,10 +70,14 @@ def limpiar_curva_cargada():
         "precios_mensuales",
         "df_axon_raw",
         "frec_axon_raw",
+        "df_datadis_raw",
+        "frec_datadis_raw",
+        "suministros_datadis",
         "reactiva_base_cache",
         "reactiva_compensacion",
         "curva_reactiva_version",
         "informe_reactiva_html",
+        "diagnosticos_curva",
     )
     for clave in claves_curva:
         st.session_state.pop(clave, None)
@@ -79,131 +86,334 @@ def limpiar_curva_cargada():
     )
 
 
-with st.sidebar:
+tab_curva, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+    [
+        "Curva",
+        "Resumen",
+        "Perfiles Horarios",
+        "Autoconsumo",
+        "Comparaciones",
+        "Reactiva",
+        "Informe",
+    ]
+)
 
-    st.title("⚡:rainbow[PowerLoader]⚡")
-    st.caption("Lee CSV/Excel, detecta columnas y normaliza horas al rango 0–23 del mismo día. Añade columnas adicionales.")
+with tab_curva:
+    col_curva_entrada, col_curva_vista, col_curva_info = st.columns(
+        [0.27, 0.46, 0.27],
+        gap="large",
+    )
 
-    if not st.session_state.get('usuario_autenticado', False):
-        st.warning("🔒 Este módulo es solo para usuarios premium. Lo que estás viendo es un fichero de ejemplo")
-        origen_curva = "Archivo CSV/Excel"
-        uploaded = f"curvas/qh anual demo.csv" #es la --> qh 30 con aut anual Carles ES0031--01HS.csv
-        atr_dfnorm = '3.0'
-
-    else:
-        origen_curva = st.selectbox(
-            "Origen de la curva",
-            ("Archivo CSV/Excel", "Axon"),
-            index=0,
+    with col_curva_entrada:
+        st.subheader("Datos de entrada", divider="rainbow")
+        st.caption(
+            "Lee CSV/Excel, detecta columnas y normaliza las horas al rango "
+            "0–23 del mismo día."
         )
-        uploaded = None
-        if origen_curva == "Archivo CSV/Excel":
-            uploaded = st.file_uploader(
-                "📂 Sube un archivo CSV o Excel",
-                type=["csv", "xlsx"],
-                accept_multiple_files=True,
-                key=(
-                    "curva_archivos_"
-                    f"{st.session_state.get('curva_uploader_version', 0)}"
-                ),
+
+        if not st.session_state.get('usuario_autenticado', False):
+            st.warning(
+                "🔒 Este módulo es solo para usuarios premium. "
+                "Se utilizará un fichero de ejemplo."
             )
-            if uploaded:
-                archivos_excel = [
-                    archivo for archivo in uploaded
-                    if archivo.name.lower().endswith(".xlsx")
-                ]
-                hojas_por_archivo = []
-                for archivo_excel in archivos_excel:
-                    try:
-                        hojas_por_archivo.append(
-                            set(detectar_hojas_curva_excel(archivo_excel))
-                        )
-                    except Exception:
-                        hojas_por_archivo.append(set())
-
-                if hojas_por_archivo:
-                    hojas_comunes = set.intersection(*hojas_por_archivo)
-                    opciones_hoja = [
-                        h for h in ("Cuarto horarias", "Horarias")
-                        if h in hojas_comunes
-                    ]
-
-                    if len(opciones_hoja) > 1:
-                        hoja_curva_excel = st.radio(
-                            "Curva de los Excel",
-                            opciones_hoja,
-                            format_func=lambda h: {
-                                "Cuarto horarias": "Cuarto horaria",
-                                "Horarias": "Horaria",
-                            }[h],
-                            horizontal=True,
-                        )
-                    elif len(opciones_hoja) == 1:
-                        hoja_curva_excel = opciones_hoja[0]
+            origen_curva = "Archivo CSV/Excel"
+            uploaded = "curvas/qh anual demo.csv"
+            atr_dfnorm = "3.0"
         else:
-            usuario_axon = st.text_input("Usuario Axon")
-            password_axon = st.text_input("Contraseña Axon", type="password")
-            cups_axon = st.text_input("CUPS")
-            hoy_axon = pd.Timestamp.today().date()
-            rango_axon = st.date_input(
-                "Periodo de la curva",
-                value=(
-                    hoy_axon - timedelta(days=30),
-                    hoy_axon - timedelta(days=1),
-                ),
-                max_value=hoy_axon,
-                format="DD/MM/YYYY",
-            )
-            tipo_curva_axon = st.selectbox(
-                "Tipo de curva",
-                ("TM2", "TM1"),
+            origen_curva = st.selectbox(
+                "Origen de la curva",
+                ("Archivo CSV/Excel", "Axon", "Datadis"),
                 index=0,
-                format_func=lambda valor: {
-                    "TM1": "TM1 · Horaria (H)",
-                    "TM2": "TM2 · Cuartohoraria (QH)",
-                }[valor],
             )
-        atr_dfnorm = st.sidebar.selectbox(
-                    "Selecciona peaje de acceso:",
-                    ("2.0", "3.0", "6.1", "6.2", "6.3", "6.4"),
-                    index=0
+            uploaded = None
+            if origen_curva == "Archivo CSV/Excel":
+                uploaded = st.file_uploader(
+                    "📂 Sube uno o varios archivos CSV o Excel",
+                    type=["csv", "xlsx"],
+                    accept_multiple_files=True,
+                    key=(
+                        "curva_archivos_"
+                        f"{st.session_state.get('curva_uploader_version', 0)}"
+                    ),
                 )
-        #st.selectbox("Selecciona zona", options=["peninsula", "canarias", "baleares", "ceuta", "melilla"], index=0, key = 'zona_periodos', help="Se usa para asignar los periodos horarios según zona cuando la curva no trae columna de periodo.")
-        opciones_zona_periodos = ["peninsula", "baleares", "canarias", "ceuta", "melilla"]
-        st.selectbox(
-            "Selecciona zona de periodos horarios",
-            options=opciones_zona_periodos,
-            index=0,
-            key="zona_periodos_cdc",
-            format_func=lambda x: {
-                "peninsula": "Península",
-                "baleares": "Baleares",
-                "canarias": "Canarias",
-                "ceuta": "Ceuta",
-                "melilla": "Melilla",
-            }[x]
+                if uploaded:
+                    archivos_excel = [
+                        archivo for archivo in uploaded
+                        if archivo.name.lower().endswith(".xlsx")
+                    ]
+                    hojas_por_archivo = []
+                    for archivo_excel in archivos_excel:
+                        try:
+                            hojas_por_archivo.append(
+                                set(detectar_hojas_curva_excel(archivo_excel))
+                            )
+                        except Exception:
+                            hojas_por_archivo.append(set())
+
+                    if hojas_por_archivo:
+                        hojas_comunes = set.intersection(*hojas_por_archivo)
+                        opciones_hoja = [
+                            hoja for hoja in ("Cuarto horarias", "Horarias")
+                            if hoja in hojas_comunes
+                        ]
+                        if len(opciones_hoja) > 1:
+                            hoja_curva_excel = st.radio(
+                                "Curva de los Excel",
+                                opciones_hoja,
+                                format_func=lambda hoja: {
+                                    "Cuarto horarias": "Cuarto horaria",
+                                    "Horarias": "Horaria",
+                                }[hoja],
+                                horizontal=True,
+                            )
+                        elif len(opciones_hoja) == 1:
+                            hoja_curva_excel = opciones_hoja[0]
+            elif origen_curva == "Axon":
+                usuario_axon = st.text_input("Usuario Axon")
+                password_axon = st.text_input("Contraseña Axon", type="password")
+                cups_axon = st.text_input("CUPS")
+                hoy_axon = pd.Timestamp.today().date()
+                rango_axon = st.date_input(
+                    "Periodo de la curva",
+                    value=(
+                        hoy_axon - timedelta(days=30),
+                        hoy_axon - timedelta(days=1),
+                    ),
+                    max_value=hoy_axon,
+                    format="DD/MM/YYYY",
+                )
+                tipo_curva_axon = st.selectbox(
+                    "Tipo de curva",
+                    ("TM2", "TM1"),
+                    index=0,
+                    format_func=lambda valor: {
+                        "TM1": "TM1 · Horaria (H)",
+                        "TM2": "TM2 · Cuartohoraria (QH)",
+                    }[valor],
+                )
+            else:
+                usuario_datadis = st.text_input("Usuario Datadis")
+                password_datadis = st.text_input("Contraseña Datadis", type="password")
+                acceso_datadis = st.radio(
+                    "Acceso", ("Titular", "Autorizado"), horizontal=True
+                )
+                authorized_nif_datadis = ""
+                if acceso_datadis == "Autorizado":
+                    authorized_nif_datadis = st.text_input("NIF del titular")
+
+                if st.button(
+                    "Consultar suministros",
+                    use_container_width=True,
+                    key="consultar_suministros_datadis",
+                ):
+                    try:
+                        with st.spinner("Consultando suministros en Datadis…"):
+                            st.session_state.suministros_datadis = obtener_suministros_datadis(
+                                usuario_datadis,
+                                password_datadis,
+                                authorized_nif=authorized_nif_datadis,
+                            )
+                    except Exception as e:
+                        st.session_state.pop("suministros_datadis", None)
+                        st.error(f"No se pudieron consultar los suministros: {e}")
+
+                suministros_datadis = st.session_state.get("suministros_datadis")
+                suministro_datadis = None
+                if suministros_datadis is not None and not suministros_datadis.empty:
+                    indices_suministros = list(suministros_datadis.index)
+
+                    def etiqueta_suministro(indice):
+                        fila = suministros_datadis.loc[indice]
+                        cups = str(fila.get("cups", ""))
+                        direccion = str(
+                            fila.get("address", fila.get("postalCode", "")) or ""
+                        ).strip()
+                        return f"{cups} · {direccion}" if direccion else cups
+
+                    indice_datadis = st.selectbox(
+                        "Suministro",
+                        indices_suministros,
+                        format_func=etiqueta_suministro,
+                    )
+                    suministro_datadis = suministros_datadis.loc[indice_datadis].to_dict()
+                    st.caption(
+                        f"Distribuidora: {suministro_datadis.get('distributorCode', '—')} · "
+                        f"Tipo de punto: {suministro_datadis.get('pointType', '—')}"
+                    )
+
+                    clave_detalle_datadis = (
+                        str(usuario_datadis or "").strip().upper(),
+                        str(authorized_nif_datadis or "").strip().upper(),
+                        str(suministro_datadis.get("cups", "")).strip().upper(),
+                        str(suministro_datadis.get("distributorCode", "")).strip(),
+                    )
+                    cache_detalles = st.session_state.setdefault(
+                        "datadis_detalles_cache", {}
+                    )
+                    if st.button(
+                        "Consultar detalle del contrato",
+                        use_container_width=True,
+                        key="consultar_detalle_datadis",
+                    ):
+                        try:
+                            detalle_cacheado = cache_detalles.get(clave_detalle_datadis)
+                            if detalle_cacheado is None:
+                                with st.spinner("Consultando el contrato en Datadis…"):
+                                    detalle_cacheado = obtener_detalle_contrato_datadis(
+                                        usuario_datadis,
+                                        password_datadis,
+                                        suministro_datadis,
+                                        authorized_nif=authorized_nif_datadis,
+                                    )
+                                cache_detalles[clave_detalle_datadis] = detalle_cacheado
+                            st.session_state.detalle_datadis_actual = detalle_cacheado
+                            st.session_state.detalle_datadis_clave = clave_detalle_datadis
+                        except Exception as e:
+                            st.error(f"No se pudo consultar el detalle: {e}")
+
+                    detalle_datadis = None
+                    if st.session_state.get("detalle_datadis_clave") == clave_detalle_datadis:
+                        detalle_datadis = st.session_state.get("detalle_datadis_actual")
+                    elif clave_detalle_datadis in cache_detalles:
+                        detalle_datadis = cache_detalles[clave_detalle_datadis]
+
+                    if detalle_datadis:
+                        potencias_datadis = extraer_potencias_contratadas_datadis(
+                            detalle_datadis
+                        )
+                        with st.expander("Detalle del suministro", expanded=True):
+                            campos_detalle = {
+                                "Tarifa": detalle_datadis.get("codeFare"),
+                                "Comercializadora": detalle_datadis.get("marketer"),
+                                "Distribuidora": detalle_datadis.get("distributor"),
+                                "Tensión": detalle_datadis.get("tension"),
+                                "Control de potencia": detalle_datadis.get("modePowerControl"),
+                                "Inicio del contrato": detalle_datadis.get("startDate"),
+                                "Fin del contrato": detalle_datadis.get("endDate"),
+                            }
+                            st.dataframe(
+                                pd.DataFrame(
+                                    [
+                                        {"Dato": campo, "Valor": valor}
+                                        for campo, valor in campos_detalle.items()
+                                        if valor not in (None, "")
+                                    ]
+                                ),
+                                hide_index=True,
+                                use_container_width=True,
+                            )
+                            if potencias_datadis:
+                                st.dataframe(
+                                    pd.DataFrame(
+                                        {
+                                            "Periodo": potencias_datadis.keys(),
+                                            "Potencia (kW)": potencias_datadis.values(),
+                                        }
+                                    ),
+                                    hide_index=True,
+                                    use_container_width=True,
+                                )
+                                if len(potencias_datadis) == 6:
+                                    if st.button(
+                                        "Copiar P1–P6 a Optimización de potencia",
+                                        use_container_width=True,
+                                        key="copiar_potencias_datadis",
+                                    ):
+                                        st.session_state.df_pot = pd.DataFrame(
+                                            {
+                                                "Periodo": potencias_datadis.keys(),
+                                                "Potencia (kW)": potencias_datadis.values(),
+                                            }
+                                        ).set_index("Periodo")
+                                        st.success(
+                                            "Potencias copiadas. Estarán disponibles en "
+                                            "Optimización de potencia."
+                                        )
+                                else:
+                                    st.info(
+                                        "El contrato no contiene seis potencias; "
+                                        "se muestran sin modificar la tabla de optimización."
+                                    )
+
+                mes_actual_datadis = pd.Timestamp.today().to_period("M")
+                meses_datadis = [
+                    str(periodo).replace("-", "/")
+                    for periodo in pd.period_range(
+                        start="2020-01",
+                        end=mes_actual_datadis,
+                        freq="M",
+                    )
+                ]
+                mes_anterior_datadis = str(mes_actual_datadis - 1).replace("-", "/")
+                indice_mes_defecto = meses_datadis.index(mes_anterior_datadis)
+                col_mes_inicio, col_mes_fin = st.columns(2)
+                with col_mes_inicio:
+                    mes_inicio_datadis = st.selectbox(
+                        "Mes inicial",
+                        meses_datadis,
+                        index=indice_mes_defecto,
+                        key="mes_inicio_datadis",
+                    )
+                with col_mes_fin:
+                    mes_fin_datadis = st.selectbox(
+                        "Mes final",
+                        meses_datadis,
+                        index=indice_mes_defecto,
+                        key="mes_fin_datadis",
+                    )
+                st.caption("Datadis recibirá las fechas en formato AAAA/MM.")
+                preferir_qh_datadis = st.checkbox(
+                    "Intentar curva cuartohoraria",
+                    value=True,
+                    help="Para tipos 4 y 5 se solicitará directamente curva horaria.",
+                )
+            atr_dfnorm = st.selectbox(
+                "Selecciona peaje de acceso",
+                ("2.0", "3.0", "6.1", "6.2", "6.3", "6.4"),
+                index=0,
+            )
+            opciones_zona_periodos = [
+                "peninsula", "baleares", "canarias", "ceuta", "melilla"
+            ]
+            st.selectbox(
+                "Selecciona zona de periodos horarios",
+                options=opciones_zona_periodos,
+                index=0,
+                key="zona_periodos_cdc",
+                format_func=lambda zona: {
+                    "peninsula": "Península",
+                    "baleares": "Baleares",
+                    "canarias": "Canarias",
+                    "ceuta": "Ceuta",
+                    "melilla": "Melilla",
+                }[zona],
+            )
+
+        normalizar = st.button(
+            "Obtener y normalizar curva"
+            if origen_curva in {"Axon", "Datadis"}
+            else "Normalizar curva de carga",
+            type="primary",
+            use_container_width=True,
+        )
+        st.button(
+            "🗑️ Eliminar curva y resultados",
+            use_container_width=True,
+            on_click=limpiar_curva_cargada,
+            help=(
+                "Elimina la curva cargada y sus cálculos de esta sesión. "
+                "No borra preferencias, usuario ni cachés compartidas."
+            ),
         )
 
-    normalizar = st.button(
-        "Obtener y normalizar curva"
-        if origen_curva == "Axon"
-        else "Normalizar curva de carga",
-        type='primary',
-        use_container_width=True,
-    )
-    st.button(
-        "🗑️ Eliminar curva y resultados",
-        use_container_width=True,
-        on_click=limpiar_curva_cargada,
-        help=(
-            "Elimina la curva cargada y sus cálculos de esta sesión. "
-            "No borra preferencias, usuario ni cachés compartidas."
-        ),
-    )
+    with col_curva_vista:
+        st.subheader("Vista y normalización", divider="rainbow")
 
-    zona_mensajes = st.sidebar.empty()
-    zona_mensajes2 = st.sidebar.empty()
-    zona_mensajes3 = st.sidebar.empty()
+    with col_curva_info:
+        st.subheader("Resumen y avisos", divider="rainbow")
+        zona_mensajes = st.empty()
+        zona_mensajes2 = st.empty()
+        zona_mensajes3 = st.empty()
 
 
 # Inicializa el estado si no existe
@@ -227,6 +437,8 @@ if "csv_bytes_norm" not in st.session_state:
     st.session_state.csv_bytes_norm = None
 if "csv_bytes_h" not in st.session_state:
     st.session_state.csv_bytes_h = None
+if "datadis_curvas_cache" not in st.session_state:
+    st.session_state.datadis_curvas_cache = {}
 
 
 if normalizar and origen_curva == "Axon":
@@ -260,11 +472,161 @@ if normalizar and origen_curva == "Axon":
         zona_mensajes.error(f"❌ Error al obtener la curva de Axon: {e}")
 
 
+if normalizar and origen_curva == "Datadis":
+    try:
+        if suministro_datadis is None:
+            raise ValueError("Consulta y selecciona primero un suministro.")
+        fecha_inicio_datadis = pd.Timestamp(f"{mes_inicio_datadis.replace('/', '-')}-01")
+        fecha_fin_datadis = (
+            pd.Timestamp(f"{mes_fin_datadis.replace('/', '-')}-01")
+            + pd.offsets.MonthEnd(0)
+        )
+        if fecha_inicio_datadis > fecha_fin_datadis:
+            raise ValueError("El mes inicial no puede ser posterior al mes final.")
+        clave_datadis = (
+            str(usuario_datadis or "").strip().upper(),
+            str(authorized_nif_datadis or "").strip().upper(),
+            str(suministro_datadis.get("cups", "")).strip().upper(),
+            str(suministro_datadis.get("distributorCode", "")).strip(),
+            mes_inicio_datadis,
+            mes_fin_datadis,
+            bool(preferir_qh_datadis),
+        )
+        resultado_cacheado = st.session_state.datadis_curvas_cache.get(clave_datadis)
+        if resultado_cacheado is not None:
+            curva_datadis, frecuencia_datadis, aviso_fallback = resultado_cacheado
+            curva_datadis = curva_datadis.copy()
+            zona_mensajes2.info(
+                "Se reutiliza la descarga Datadis de esta sesión para no repetir la llamada."
+            )
+        else:
+            with st.spinner("Conectando con Datadis y descargando consumos…"):
+                curva_datadis, frecuencia_datadis, aviso_fallback = obtener_consumo_datadis(
+                    usuario_datadis,
+                    password_datadis,
+                    suministro_datadis,
+                    fecha_inicio_datadis,
+                    fecha_fin_datadis,
+                    authorized_nif=authorized_nif_datadis,
+                    preferir_qh=preferir_qh_datadis,
+                )
+            st.session_state.datadis_curvas_cache[clave_datadis] = (
+                curva_datadis.copy(),
+                frecuencia_datadis,
+                aviso_fallback,
+            )
+        st.session_state.df_datadis_raw = curva_datadis
+        st.session_state.frec_datadis_raw = frecuencia_datadis
+        cache_detalles = st.session_state.setdefault("datadis_detalles_cache", {})
+        detalle_datadis = cache_detalles.get(clave_detalle_datadis)
+        if detalle_datadis is None:
+            try:
+                with st.spinner("Consultando el detalle del contrato…"):
+                    detalle_datadis = obtener_detalle_contrato_datadis(
+                        usuario_datadis,
+                        password_datadis,
+                        suministro_datadis,
+                        authorized_nif=authorized_nif_datadis,
+                    )
+                cache_detalles[clave_detalle_datadis] = detalle_datadis
+                st.session_state.detalle_datadis_actual = detalle_datadis
+                st.session_state.detalle_datadis_clave = clave_detalle_datadis
+            except Exception as error_detalle:
+                zona_mensajes3.warning(
+                    f"La curva se ha obtenido, pero no el detalle del contrato: "
+                    f"{error_detalle}"
+                )
+        if detalle_datadis:
+            st.session_state.detalle_datadis_actual = detalle_datadis
+            st.session_state.detalle_datadis_clave = clave_detalle_datadis
+        archivo_datadis = io.BytesIO(
+            curva_datadis.to_csv(index=False, sep=";").encode("utf-8")
+        )
+        archivo_datadis.name = f"datadis_{frecuencia_datadis.lower()}.csv"
+        uploaded = archivo_datadis
+        zona_mensajes.success(
+            f"✅ Curva de Datadis obtenida: "
+            f"{formato_numero_es(len(curva_datadis))} registros."
+        )
+        if aviso_fallback:
+            zona_mensajes2.warning(
+                "La curva cuartohoraria no estaba disponible; "
+                "se ha descargado la curva horaria."
+            )
+        elif resultado_cacheado is None:
+            zona_mensajes2.info(f"Resolución recibida: {frecuencia_datadis}.")
+    except Exception as e:
+        st.session_state.pop("df_datadis_raw", None)
+        st.session_state.pop("frec_datadis_raw", None)
+        zona_mensajes.error(f"❌ Error al obtener la curva de Datadis: {e}")
+
+
+if origen_curva == "Datadis":
+    detalle_visible_datadis = st.session_state.get("detalle_datadis_actual")
+    clave_visible_datadis = st.session_state.get("detalle_datadis_clave")
+    if (
+        detalle_visible_datadis
+        and suministro_datadis is not None
+        and clave_visible_datadis == clave_detalle_datadis
+    ):
+        potencias_visibles_datadis = extraer_potencias_contratadas_datadis(
+            detalle_visible_datadis
+        )
+        with col_curva_info:
+            st.markdown("#### Contrato Datadis")
+            campos_visibles = {
+                "Tarifa": detalle_visible_datadis.get("codeFare"),
+                "Comercializadora": detalle_visible_datadis.get("marketer"),
+                "Distribuidora": detalle_visible_datadis.get("distributor"),
+                "Tensión": detalle_visible_datadis.get("tension"),
+                "Control": detalle_visible_datadis.get("modePowerControl"),
+                "Inicio": detalle_visible_datadis.get("startDate"),
+                "Fin": detalle_visible_datadis.get("endDate"),
+            }
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {"Dato": campo, "Valor": valor}
+                        for campo, valor in campos_visibles.items()
+                        if valor not in (None, "")
+                    ]
+                ),
+                hide_index=True,
+                use_container_width=True,
+            )
+            if potencias_visibles_datadis:
+                st.markdown("##### Potencias contratadas")
+                st.dataframe(
+                    pd.DataFrame(
+                        {
+                            "Periodo": potencias_visibles_datadis.keys(),
+                            "Potencia (kW)": potencias_visibles_datadis.values(),
+                        }
+                    ),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+                if len(potencias_visibles_datadis) == 6:
+                    if st.button(
+                        "Copiar a Optimización de potencia",
+                        use_container_width=True,
+                        key="copiar_potencias_datadis_resumen",
+                    ):
+                        st.session_state.df_pot = pd.DataFrame(
+                            {
+                                "Periodo": potencias_visibles_datadis.keys(),
+                                "Potencia (kW)": potencias_visibles_datadis.values(),
+                            }
+                        ).set_index("Periodo")
+                        st.success("Potencias P1–P6 copiadas correctamente.")
+
+
 if normalizar and uploaded:
     try:
 
         dfs_norm = []
         dfs_in = []
+        diagnosticos_curva = []
 
         if not isinstance(uploaded, list):
             uploaded = [uploaded]
@@ -277,6 +639,15 @@ if normalizar and uploaded:
             )
             dfs_norm.append(df_norm_i)
             dfs_in.append(df_in_i)
+            diagnosticos_curva.append(
+                analizar_calidad_curva(
+                    df_norm_i,
+                    df_origen=df_in_i,
+                    frecuencia=frec,
+                    periodos_en_origen=flag_periodos_en_origen,
+                    origen=file.name if hasattr(file, "name") else str(file),
+                )
+            )
 
         df_norm = pd.concat(dfs_norm)
         if len(dfs_in) == 1:
@@ -347,12 +718,12 @@ if normalizar and uploaded:
 
                     if not numeros.empty and numeros.max() == 3:
                         atr_dfnorm = "2.0"
-                        st.sidebar.success("Tres periodos detectados.")
+                        col_curva_info.success("Tres periodos detectados.")
                     else:
-                        st.sidebar.warning("Seis periodos detectados")
+                        col_curva_info.warning("Seis periodos detectados.")
 
                 else:
-                    st.sidebar.warning("ATENCIÓN: NO HAY PERIODOS DETECTADOS")
+                    col_curva_info.warning("ATENCIÓN: NO HAY PERIODOS DETECTADOS")
             else:
                 atr_dfnorm = "3.0"
 
@@ -407,8 +778,6 @@ if normalizar and uploaded:
         )
 
 
-        consumototalhorario= df_norm_h['consumo_neto_kWh'].sum()
-        print(f'consumo total df_norm_h: {consumototalhorario}')
         csv_bytes_norm = df_norm.reset_index(drop=True).to_csv(index=False, sep=";", decimal=",", float_format="%.3f").encode("utf-8")
         csv_bytes_h = df_norm_h.reset_index(drop=True).to_csv(index=False, sep=";", decimal=",", float_format="%.3f").encode("utf-8")
 
@@ -430,6 +799,7 @@ if normalizar and uploaded:
         st.session_state.vertido_total=vertido_total
         st.session_state.consumo_neto=consumo_neto
         st.session_state.vertido_neto=vertido_neto
+        st.session_state.diagnosticos_curva = diagnosticos_curva
         # Obtener fechas mínima y máxima del df_norm_h y guardar para telemindex
         fecha_ini = df_norm["fecha"].min()
         fecha_fin = df_norm["fecha"].max()
@@ -439,91 +809,167 @@ if normalizar and uploaded:
         zona_mensajes.error(f"❌ Error al normalizar: {e}")
         st.stop()
 
-elif origen_curva == "Archivo CSV/Excel":
-    zona_mensajes.info("⬆️ Sube un archivo CSV o Excel para comenzar.")
+elif (
+    origen_curva == "Archivo CSV/Excel"
+    and st.session_state.get("df_norm") is None
+):
+    if uploaded:
+        zona_mensajes.info("Pulsa **Normalizar curva de carga** para procesar los archivos.")
+    else:
+        zona_mensajes.info("⬆️ Sube un archivo CSV o Excel para comenzar.")
 
 
 
+
+
+if st.session_state.get("df_norm") is None:
+    col_curva_vista.info(
+        "La vista del archivo original y la tabla normalizada aparecerán aquí."
+    )
 
 
 if st.session_state.get("df_norm") is not None:
-    st.sidebar.markdown(f'Peaje actualmente seleccionado: **:orange[{st.session_state.atr_dfnorm}]**')
-    st.sidebar.markdown(f'Resolución temporal de la curva: **:orange[{st.session_state.frec}]**')
+    col_curva_info.markdown(
+        f'Peaje actualmente seleccionado: '
+        f'**:orange[{st.session_state.atr_dfnorm}]**'
+    )
+    col_curva_info.markdown(
+        f'Resolución temporal de la curva: '
+        f'**:orange[{st.session_state.frec}]**'
+    )
     # --- Descarga ---
     csv_bytes = st.session_state.get("csv_bytes_norm")
     if not st.session_state.get('usuario_autenticado', False):
         habilitar_descarga = False
-        #st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=True)
     else:
         habilitar_descarga = True
-        #st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=False)
-    st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes or b"", "curva_normalizada.csv", "text/csv", disabled=not habilitar_descarga or csv_bytes is None, use_container_width=True)
+    col_curva_entrada.download_button("⬇️ Descargar CSV normalizado", csv_bytes or b"", "curva_normalizada.csv", "text/csv", disabled=not habilitar_descarga or csv_bytes is None, use_container_width=True)
 
     csv_bytes_h = st.session_state.get("csv_bytes_h")
     if not st.session_state.get('usuario_autenticado', False):
         habilitar_descarga = False
-        #st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=True)
     else:
         habilitar_descarga = True
-        #st.sidebar.download_button("⬇️ Descargar CSV normalizado", csv_bytes, "curva_normalizada.csv", "text/csv", disabled=False)
-    st.sidebar.download_button("⬇️ Descargar CSV agrupado horario", csv_bytes_h or b"", "curva_agrupado.csv", "text/csv", disabled=not habilitar_descarga or csv_bytes_h is None, use_container_width=True)
+    col_curva_entrada.download_button("⬇️ Descargar CSV agrupado horario", csv_bytes_h or b"", "curva_agrupado.csv", "text/csv", disabled=not habilitar_descarga or csv_bytes_h is None, use_container_width=True)
 
-
-
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
-        [
-            'Resumen',
-            'Perfiles Horarios',
-            'Autoconsumo',
-            'Comparaciones',
-            'Reactiva',
-            'Informe',
-        ]
+    diagnosticos_curva = st.session_state.get("diagnosticos_curva", [])
+    campos_incidencia = {
+        "fechas_invalidas": "Fechas no interpretadas",
+        "consumos_ausentes": "Consumos ausentes/no numéricos",
+        "consumos_negativos": "Consumos negativos",
+        "duplicados_fecha_hora": "Marcas temporales duplicadas",
+        "saltos_temporales": "Saltos en la secuencia temporal",
+        "intervalos_ausentes_estimados": "Intervalos ausentes estimados",
+        "periodos_ausentes": "Periodos ausentes en el origen",
+    }
+    hay_incidencias = any(
+        diagnostico.get(campo, 0) > 0
+        for diagnostico in diagnosticos_curva
+        for campo in campos_incidencia
     )
+    titulo_calidad = (
+        "⚠️ Calidad de datos"
+        if hay_incidencias
+        else "✅ Calidad de datos"
+    )
+    with col_curva_info.expander(titulo_calidad, expanded=hay_incidencias):
+        st.caption(
+            "Los saltos o duplicados pueden proceder del cambio oficial de hora, "
+            "de periodos parciales o de huecos del origen. Se muestran para revisión "
+            "y no modifican automáticamente la curva."
+        )
+        if not diagnosticos_curva:
+            st.caption("No hay diagnóstico disponible para esta curva.")
+        for diagnostico in diagnosticos_curva:
+            st.markdown(f"**{diagnostico['origen']}**")
+            incidencias_archivo = [
+                f"{etiqueta}: {formato_numero_es(diagnostico.get(campo, 0))}"
+                for campo, etiqueta in campos_incidencia.items()
+                if diagnostico.get(campo, 0) > 0
+            ]
+            if incidencias_archivo:
+                for incidencia in incidencias_archivo:
+                    st.warning(incidencia)
+            else:
+                st.success("Sin incidencias estructurales detectadas.")
+
+            columnas_calidad = diagnostico.get("columnas_calidad", [])
+            if columnas_calidad:
+                st.caption("Información de lectura real/estimada detectada:")
+                for columna in columnas_calidad:
+                    valores = ", ".join(
+                        f"{valor}: {formato_numero_es(cantidad)}"
+                        for valor, cantidad in columna["valores"].items()
+                    )
+                    st.markdown(f"- **{columna['columna']}** — {valores}")
+            else:
+                st.caption("El origen no incluye una columna reconocible de calidad de lectura.")
+
+    with col_curva_vista:
+        altura_df = 250
+        st.markdown("**Archivo original**")
+        if st.session_state.get("df_in") is not None:
+            # Altura aproximada de seis filas visibles; el resto queda accesible
+            # mediante scroll sin recortar el DataFrame de origen.
+            df_in_preview = (
+                st.session_state.df_in
+                .reset_index(drop=True)
+                .fillna("")
+            )
+            st.caption(
+                f"Lecturas de origen: {formato_numero_es(len(df_in_preview))}"
+            )
+            st.dataframe(
+                df_in_preview,
+                height=altura_df,
+                use_container_width=True,
+                hide_index=True,
+            )
+        elif st.session_state.get("lista_ficheros"):
+            with st.container(height=altura_df):
+                st.info("Se han cargado múltiples suministros.")
+                for fichero in st.session_state.lista_ficheros:
+                    st.write(f"• {fichero}")
+
+        st.markdown("**Tabla normalizada**")
+        total_filas_norm = len(st.session_state.df_norm)
+        st.caption(
+            f"Vista previa: primeras 1.000 filas de "
+            f"{formato_numero_es(total_filas_norm)}"
+        )
+        st.dataframe(
+            st.session_state.df_norm.head(1000),
+            height=altura_df,
+            use_container_width=True,
+        )
+
+    with col_curva_info:
+        st.markdown("**Resumen de datos**")
+        resumen_1, resumen_2 = st.columns(2, gap="medium")
+        with resumen_1:
+            st.metric("Registros", formato_numero_es(len(st.session_state.df_norm)))
+            st.metric("Consumo total", formato_kwh(st.session_state.consumo_total))
+            st.metric(
+                "Reactiva total",
+                formato_numero_es(st.session_state.reactiva_total),
+            )
+            st.metric("Consumo neto", formato_kwh(st.session_state.consumo_neto))
+        with resumen_2:
+            st.metric(
+                "Fecha inicio",
+                st.session_state.df_norm["fecha_hora"].min().strftime("%d.%m.%Y"),
+            )
+            st.metric(
+                "Fecha final",
+                st.session_state.df_norm["fecha_hora"].max().strftime("%d.%m.%Y"),
+            )
+            st.metric("Vertido total", formato_kwh(st.session_state.vertido_total))
+            st.metric("Vertido neto", formato_kwh(st.session_state.vertido_neto))
 
     # ===============================================================
     # RESUMEN GENERAL
     # ===============================================================
     with tab1:
-        altura_df = 250
-        c1,c2,c3=st.columns([.35,.35,.3])
-        with c1:
-            # Visor del df in
-            st.subheader("📄 Vista previa del archivo original")
-            if st.session_state.get("df_in") is not None:
-                st.dataframe(st.session_state.df_in, height=altura_df)
-            elif st.session_state.get("lista_ficheros"):
-            #elif st.session_state.get("lista_ficheros") is not None:
-                with st.container(height=250):
-                    st.info("Se han cargado múltiples suministros.")
-
-                    st.write("Archivos cargados:")
-                    for f in st.session_state.lista_ficheros:
-                        st.write(f"• {f}")
-        with c2:
-            # Visor del df out
-            st.subheader("📊 Tabla normalizada de datos")
-            total_filas_norm = len(st.session_state.df_norm)
-            st.caption(f"Vista previa: primeras 1.000 filas de {formato_numero_es(total_filas_norm)}")
-            st.dataframe(st.session_state.df_norm.head(1000), height=altura_df)
-        with c3:
-            # --- Resumen registros---
-            st.subheader("Resumen de datos")
-            c31,c32,c33 = st.columns(3)
-            with c31:
-                st.metric("Número de registros", formato_numero_es(len(st.session_state.df_norm)))
-                st.metric("Fecha inicio", st.session_state.df_norm["fecha_hora"].min().strftime("%d.%m.%Y"))
-                st.metric("Fecha final", st.session_state.df_norm["fecha_hora"].max().strftime("%d.%m.%Y"))
-            with c32:
-                #st.subheader("Resumen datos")
-                st.metric("Consumo total kWh", formato_kwh(st.session_state.consumo_total))
-                st.metric("Vertido total kWh", formato_kwh(st.session_state.vertido_total))
-                st.metric("Reactiva total kVArh", formato_numero_es(st.session_state.reactiva_total))
-            with c33:
-                #st.subheader("Resumen datos")
-                st.metric("Consumo neteo kWh", formato_kwh(st.session_state.consumo_neto))
-                st.metric("Vertido neteo kWh", formato_kwh(st.session_state.vertido_neto))
-
         c1,c2=st.columns([.7,.3])
         with c1:
             st.subheader("Gráfico de consumo")

@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import io, re
 import requests
+from pathlib import Path
 from unidecode import unidecode
 import plotly.graph_objects as go
 from backend_comun import aplicar_estilo, aplicar_texto_pie_porcentaje
@@ -12,6 +13,8 @@ from formato_es import formato_numero_es
 
 TZ = "Europe/Madrid"
 AXON_API_BASE = "https://api.twinmeter.es"
+DATADIS_API_BASE = "https://datadis.es"
+BASE_DIR = Path(__file__).resolve().parent
 
 colores_periodo = {
         "P1": "red",
@@ -48,6 +51,140 @@ colores_neteo= {
 # ===============================
 #  Utilidades base
 # ===============================
+
+PATRONES_COLUMNAS_CALIDAD = (
+    r"real.?estim",
+    r"estimad",
+    r"metodo.?obt",
+    r"tipo.?lect",
+    r"cualificador.*activa.*import",
+    r"lectura.?real",
+    r"fuente.?final",
+    r"firmeza",
+    r"estado",
+    r"bandera",
+)
+
+
+def detectar_columnas_calidad_lectura(df_origen, max_valores=8):
+    """Resume columnas que pueden informar si una lectura es real o estimada.
+
+    No interpreta códigos opacos de distribuidora. Expone sus valores y solo
+    clasifica textos inequívocos para evitar falsos diagnósticos.
+    """
+    if df_origen is None or df_origen.empty:
+        return []
+
+    resultado = []
+    for columna in df_origen.columns:
+        nombre_limpio = _clean(columna)
+        if not any(re.search(patron, nombre_limpio) for patron in PATRONES_COLUMNAS_CALIDAD):
+            continue
+
+        serie = df_origen[columna].astype("string").str.strip()
+        serie = serie[serie.notna() & ~serie.str.lower().isin(("", "nan", "none"))]
+        conteos = serie.value_counts(dropna=False).head(max_valores)
+        valores_normalizados = serie.map(_clean)
+        estimadas_explicitas = int(
+            valores_normalizados.str.contains(r"estim", regex=True, na=False).sum()
+        )
+        reales_explicitas = int(
+            valores_normalizados.str.contains(r"\breal", regex=True, na=False).sum()
+        )
+        resultado.append({
+            "columna": str(columna),
+            "informadas": int(len(serie)),
+            "sin_informar": int(len(df_origen) - len(serie)),
+            "reales_explicitas": reales_explicitas,
+            "estimadas_explicitas": estimadas_explicitas,
+            "valores": {str(valor): int(cantidad) for valor, cantidad in conteos.items()},
+        })
+    return resultado
+
+
+def analizar_calidad_curva(
+    df_norm,
+    df_origen=None,
+    frecuencia=None,
+    periodos_en_origen=False,
+    origen="archivo",
+):
+    """Calcula incidencias sin modificar la curva normalizada."""
+    diagnostico = {
+        "origen": str(origen),
+        "filas": int(len(df_norm)) if df_norm is not None else 0,
+        "frecuencia": frecuencia,
+        "fechas_invalidas": 0,
+        "consumos_ausentes": 0,
+        "consumos_negativos": 0,
+        "duplicados_fecha_hora": 0,
+        "saltos_temporales": 0,
+        "intervalos_ausentes_estimados": 0,
+        "periodos_ausentes": 0,
+        "columnas_calidad": detectar_columnas_calidad_lectura(df_origen),
+    }
+    if df_norm is None or df_norm.empty:
+        return diagnostico
+
+    fechas = pd.to_datetime(df_norm.get("fecha_hora"), errors="coerce")
+    consumos = pd.to_numeric(df_norm.get("consumo_kWh"), errors="coerce")
+    diagnostico["fechas_invalidas"] = int(fechas.isna().sum())
+    diagnostico["consumos_ausentes"] = int(consumos.isna().sum())
+    diagnostico["consumos_negativos"] = int((consumos < 0).sum())
+
+    fechas_validas = fechas.dropna()
+    diagnostico["duplicados_fecha_hora"] = int(
+        len(fechas_validas) - fechas_validas.nunique()
+    )
+    minutos_esperados = {"H": 60, "QH": 15, "10MIN": 10}.get(frecuencia)
+    if minutos_esperados and not fechas_validas.empty:
+        diferencias = (
+            fechas_validas.drop_duplicates().sort_values().diff().dt.total_seconds()
+            / 60
+        ).dropna()
+        saltos = diferencias[diferencias > minutos_esperados * 1.5]
+        diagnostico["saltos_temporales"] = int(len(saltos))
+        diagnostico["intervalos_ausentes_estimados"] = int(
+            ((saltos / minutos_esperados).round() - 1).clip(lower=0).sum()
+        )
+
+    if periodos_en_origen and "periodo" in df_norm.columns:
+        periodos = df_norm["periodo"].astype("string").str.strip()
+        diagnostico["periodos_ausentes"] = int(
+            (periodos.isna() | periodos.str.lower().isin(("", "nan", "none"))).sum()
+        )
+    return diagnostico
+
+
+@st.cache_data(show_spinner=False)
+def cargar_calendario_periodos(periodos_path, mtime_ns):
+    """Carga y prepara una vez cada versión del calendario tarifario."""
+    del mtime_ns  # Forma parte de la clave de caché.
+    df_periodos = pd.read_excel(
+        periodos_path,
+        dtype={
+            "año": int,
+            "mes": int,
+            "dia": int,
+            "hora": int,
+            "dh_3p": str,
+            "dh_6p": str,
+        },
+    )
+    if (
+        pd.api.types.is_numeric_dtype(df_periodos["hora"])
+        or df_periodos["hora"].astype(str).str.match(r"^\d+$").all()
+    ):
+        texto_hora = df_periodos["hora"].astype(str) + ":00:00"
+    else:
+        hora_aux = df_periodos["hora"].astype(str).str.strip()
+        texto_hora = hora_aux.where(hora_aux.str.count(":") == 2, hora_aux + ":00")
+    df_periodos["fecha_hora"] = pd.to_datetime(
+        df_periodos["fecha"].astype(str) + " " + texto_hora,
+        errors="coerce",
+        dayfirst=True,
+    )
+    return df_periodos
 
 def obtener_datos_contador(
     usuario,
@@ -196,13 +333,6 @@ def obtener_datos_contador(
                     return col
         return None
 
-    # Debugging: mostrar todas las columnas disponibles
-    print("\n=== COLUMNAS DEVUELTAS POR AXON ===")
-    print(f"Columnas: {list(curva.columns)}")
-    print(f"Primeros registros:")
-    print(curva.head(3))
-    print("==================================\n")
-    
     # Buscar campos según documentación Axon
     c_periodo = find_col([r"periodo"])
     c_ie1q = find_col([r"ie1q"])  # Inductiva primer cuadrante
@@ -249,7 +379,6 @@ def obtener_datos_contador(
             curva[c_reactiva_final].astype(str).str.replace(",", ".", regex=False),
             errors="coerce",
         )
-        print(f"📊 Usando reactiva: {c_reactiva_final}")
     
     # Exportación/Vertido (kWh)
     if c_exportada:
@@ -280,18 +409,6 @@ def obtener_datos_contador(
     if "Periodo" in curva.columns and curva["Periodo"].notna().any():
         columnas_salida.append("Periodo")
     
-    print("\n=== RESULTADO FINAL AXON (RAW, SIN TRANSFORMACIONES) ===")
-    print(f"Columnas detectadas: {columnas_salida}")
-    print(f"Periodo detectado: {c_periodo}")
-    print(f"Reactiva IE1Q: {c_ie1q}")
-    print(f"Capacitiva CE2Q: {c_ce2q}")
-    print(f"Reactiva IE3Q: {c_ie3q}")
-    print(f"Capacitiva CE4Q: {c_ce4q}")
-    print(f"Exportada: {c_exportada}")
-    print(f"Frecuencia: {frecuencia}")
-    print(f"Total registros: {len(curva)}")
-    print("============================\n")
-    
     curva = (
         curva[columnas_salida]
         .drop_duplicates(subset="Fecha y hora", keep="first")
@@ -299,6 +416,265 @@ def obtener_datos_contador(
         .reset_index(drop=True)
     )
     return curva, frecuencia
+
+
+def _datadis_json(response, contexto):
+    """Valida una respuesta Datadis sin exponer credenciales ni el token."""
+    try:
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        detalle = str(getattr(response, "text", "") or "").strip()[:300]
+        mensaje = f"Datadis no ha podido completar {contexto} (HTTP {response.status_code})."
+        if detalle:
+            mensaje += f" {detalle}"
+        raise RuntimeError(mensaje) from exc
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Datadis ha devuelto una respuesta no válida durante {contexto}."
+        ) from exc
+
+
+def autenticar_datadis(usuario, password, timeout=30, session=None):
+    usuario = str(usuario or "").strip()
+    password = str(password or "")
+    if not usuario or not password:
+        raise ValueError("Usuario y contraseña de Datadis son obligatorios.")
+
+    cliente = session or requests
+    try:
+        respuesta = cliente.post(
+            f"{DATADIS_API_BASE}/nikola-auth/tokens/login",
+            data={"username": usuario, "password": password},
+            timeout=timeout,
+        )
+        respuesta.raise_for_status()
+    except requests.RequestException as exc:
+        codigo = getattr(getattr(exc, "response", None), "status_code", None)
+        sufijo = f" (HTTP {codigo})" if codigo else ""
+        raise RuntimeError(f"No se ha podido iniciar sesión en Datadis{sufijo}.") from exc
+
+    token = str(respuesta.text or "").strip().strip('"')
+    if not token:
+        raise RuntimeError("Datadis no ha proporcionado un token de autenticación.")
+    return token
+
+
+def obtener_suministros_datadis(
+    usuario,
+    password,
+    authorized_nif=None,
+    timeout=30,
+    session=None,
+):
+    """Autentica y devuelve los suministros propios o autorizados."""
+    cliente = session or requests.Session()
+    cerrar = session is None
+    try:
+        token = autenticar_datadis(usuario, password, timeout=timeout, session=cliente)
+        params = {}
+        authorized_nif = str(authorized_nif or "").strip().upper()
+        if authorized_nif:
+            params["authorizedNif"] = authorized_nif
+        respuesta = cliente.get(
+            f"{DATADIS_API_BASE}/api-private/api/get-supplies",
+            params=params,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=timeout,
+        )
+        datos = _datadis_json(respuesta, "la consulta de suministros")
+    finally:
+        if cerrar:
+            cliente.close()
+
+    if not isinstance(datos, list):
+        raise RuntimeError("Datadis ha devuelto un listado de suministros no válido.")
+    suministros = pd.DataFrame(datos)
+    obligatorias = {"cups", "distributorCode", "pointType"}
+    if suministros.empty:
+        raise ValueError("Datadis no ha devuelto suministros para este usuario.")
+    if not obligatorias.issubset(suministros.columns):
+        raise RuntimeError(
+            "La respuesta de Datadis no contiene CUPS, distribuidora y tipo de punto."
+        )
+    return suministros
+
+
+def obtener_detalle_contrato_datadis(
+    usuario,
+    password,
+    suministro,
+    authorized_nif=None,
+    timeout=30,
+    session=None,
+):
+    """Devuelve el detalle del contrato de un CUPS, incluidas sus potencias."""
+    faltantes = [
+        campo for campo in ("cups", "distributorCode")
+        if not str(suministro.get(campo, "") or "").strip()
+    ]
+    if faltantes:
+        raise ValueError(f"Faltan datos del suministro Datadis: {', '.join(faltantes)}.")
+
+    cliente = session or requests.Session()
+    cerrar = session is None
+    try:
+        token = autenticar_datadis(usuario, password, timeout=timeout, session=cliente)
+        params = {
+            "cups": str(suministro["cups"]).strip().upper(),
+            "distributorCode": str(suministro["distributorCode"]).strip(),
+        }
+        authorized_nif = str(authorized_nif or "").strip().upper()
+        if authorized_nif:
+            params["authorizedNif"] = authorized_nif
+        respuesta = cliente.get(
+            f"{DATADIS_API_BASE}/api-private/api/get-contract-detail",
+            params=params,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=timeout,
+        )
+        datos = _datadis_json(respuesta, "la consulta del detalle de contrato")
+    finally:
+        if cerrar:
+            cliente.close()
+
+    if isinstance(datos, list):
+        detalle = datos[0] if datos else None
+    elif isinstance(datos, dict):
+        detalle = datos
+    else:
+        detalle = None
+    if not isinstance(detalle, dict) or not detalle:
+        raise ValueError("Datadis no ha devuelto el detalle del contrato.")
+    return detalle
+
+
+def extraer_potencias_contratadas_datadis(detalle):
+    """Convierte contractedPowerkW en un diccionario P1, P2, ... validado."""
+    valores = detalle.get("contractedPowerkW") if isinstance(detalle, dict) else None
+    if not isinstance(valores, (list, tuple)) or not valores:
+        return {}
+    potencias = {}
+    for indice, valor in enumerate(valores[:6], start=1):
+        numero = pd.to_numeric(str(valor).replace(",", "."), errors="coerce")
+        if pd.notna(numero):
+            potencias[f"P{indice}"] = float(numero)
+    return potencias
+
+
+def _descargar_consumo_datadis(
+    cliente,
+    token,
+    suministro,
+    fecha_inicio,
+    fecha_fin,
+    measurement_type,
+    authorized_nif=None,
+    timeout=60,
+):
+    params = {
+        "cups": str(suministro["cups"]).strip().upper(),
+        "distributorCode": str(suministro["distributorCode"]).strip(),
+        "startDate": pd.Timestamp(fecha_inicio).strftime("%Y/%m"),
+        "endDate": pd.Timestamp(fecha_fin).strftime("%Y/%m"),
+        "measurementType": str(measurement_type),
+        "pointType": str(suministro["pointType"]).strip(),
+    }
+    authorized_nif = str(authorized_nif or "").strip().upper()
+    if authorized_nif:
+        params["authorizedNif"] = authorized_nif
+
+    respuesta = cliente.get(
+        f"{DATADIS_API_BASE}/api-private/api/get-consumption-data",
+        params=params,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=timeout,
+    )
+    datos = _datadis_json(respuesta, "la descarga de consumos")
+    if not isinstance(datos, list):
+        raise RuntimeError("Datadis ha devuelto datos de consumo no válidos.")
+    return pd.DataFrame(datos)
+
+
+def obtener_consumo_datadis(
+    usuario,
+    password,
+    suministro,
+    fecha_inicio,
+    fecha_fin,
+    authorized_nif=None,
+    preferir_qh=True,
+    timeout=60,
+    session=None,
+):
+    """Descarga solo energía activa; intenta QH y, si falla, usa H."""
+    inicio = pd.to_datetime(fecha_inicio, errors="coerce")
+    fin = pd.to_datetime(fecha_fin, errors="coerce")
+    if pd.isna(inicio) or pd.isna(fin) or inicio.date() > fin.date():
+        raise ValueError("El rango de fechas de Datadis no es válido.")
+
+    faltantes = [
+        campo for campo in ("cups", "distributorCode", "pointType")
+        if not str(suministro.get(campo, "") or "").strip()
+    ]
+    if faltantes:
+        raise ValueError(f"Faltan datos del suministro Datadis: {', '.join(faltantes)}.")
+
+    cliente = session or requests.Session()
+    cerrar = session is None
+    try:
+        token = autenticar_datadis(usuario, password, timeout=timeout, session=cliente)
+        point_type = str(suministro["pointType"]).strip().split(".")[0]
+        intentar_qh = bool(preferir_qh and point_type not in {"4", "5"})
+        aviso_fallback = None
+        if intentar_qh:
+            try:
+                curva = _descargar_consumo_datadis(
+                    cliente, token, suministro, inicio, fin, "1",
+                    authorized_nif=authorized_nif, timeout=timeout,
+                )
+                frecuencia = "QH"
+            except Exception as exc:
+                aviso_fallback = str(exc)
+                curva = _descargar_consumo_datadis(
+                    cliente, token, suministro, inicio, fin, "0",
+                    authorized_nif=authorized_nif, timeout=timeout,
+                )
+                frecuencia = "H"
+        else:
+            curva = _descargar_consumo_datadis(
+                cliente, token, suministro, inicio, fin, "0",
+                authorized_nif=authorized_nif, timeout=timeout,
+            )
+            frecuencia = "H"
+    finally:
+        if cerrar:
+            cliente.close()
+
+    obligatorias = {"date", "time", "consumptionKWh"}
+    if curva.empty:
+        raise ValueError("Datadis no ha devuelto consumos para el rango seleccionado.")
+    if not obligatorias.issubset(curva.columns):
+        raise RuntimeError("La respuesta Datadis no contiene fecha, hora y consumo activo.")
+
+    fechas = pd.to_datetime(curva["date"], errors="coerce")
+    mascara = fechas.dt.date.between(inicio.date(), fin.date())
+    salida = curva.loc[mascara, ["date", "time", "consumptionKWh"]].rename(
+        columns={
+            "date": "Fecha",
+            "time": "Hora",
+            "consumptionKWh": "Consumo (kWh)",
+        }
+    )
+    salida["Consumo (kWh)"] = pd.to_numeric(
+        salida["Consumo (kWh)"].astype(str).str.replace(",", ".", regex=False),
+        errors="coerce",
+    )
+    salida = salida.dropna(subset=["Fecha", "Hora", "Consumo (kWh)"])
+    if salida.empty:
+        raise ValueError("Datadis no ha devuelto consumos utilizables en las fechas elegidas.")
+    return salida.reset_index(drop=True), frecuencia, aviso_fallback
 
 def _clean(s: str) -> str:
     s = unidecode(str(s)).lower().strip()
@@ -384,11 +760,18 @@ def _read_any(uploaded_or_path, preferred_sheet=None):
 
     # --- Leer según tipo ---
     if isinstance(uploaded_or_path, str):
-        print('Fichero seleccionado con ruta manual') #SOLO SE USARÁ EN CASO DE DEMO
         path = uploaded_or_path.lower()
-        print(path)
         if path.endswith(".csv"):
-            df = pd.read_csv(uploaded_or_path, dtype=str, header=None, skip_blank_lines=True)
+            content = Path(uploaded_or_path).read_bytes()
+            sample = content[:4096].decode("utf-8", errors="ignore")
+            sep = ";" if sample.count(";") > sample.count(",") else ","
+            df = pd.read_csv(
+                io.BytesIO(content),
+                sep=sep,
+                dtype=str,
+                header=None,
+                skip_blank_lines=True,
+            )
         else:
             df = pd.read_excel(
                 uploaded_or_path,
@@ -397,9 +780,7 @@ def _read_any(uploaded_or_path, preferred_sheet=None):
                 header=None,
             )
     else:
-        print('Fichero seleccionado por upload files')
         name = uploaded_or_path.name.lower()
-        print(name)
         if name.endswith(".csv"):
             content = uploaded_or_path.read()
             sample = content[:4096].decode("utf-8", errors="ignore")
@@ -418,14 +799,19 @@ def _read_any(uploaded_or_path, preferred_sheet=None):
 
             MIN_FILAS = 20
             MIN_COLUMNAS = 2
-            for sheet in xls.sheet_names:
+            hojas_a_revisar = (
+                [preferred_sheet]
+                if preferred_sheet in xls.sheet_names
+                else xls.sheet_names
+            )
+            for sheet in hojas_a_revisar:
                 #df = pd.read_excel(uploaded_or_path, sheet_name=sheet, dtype=str, header=None)
                 #if not df.empty:
                 #    print(f"Usando hoja: {sheet}")
                 #    break
                 #print(df)
                 df_tmp = pd.read_excel(
-                    uploaded_or_path,
+                    xls,
                     sheet_name=sheet,
                     dtype=str,
                     header=None
@@ -439,10 +825,7 @@ def _read_any(uploaded_or_path, preferred_sheet=None):
                 filas, columnas = df_tmp_limpio.shape
                 score = filas * columnas
 
-                print(f"Hoja revisada: {sheet} | filas={filas}, columnas={columnas}, score={score}")
-
                 if filas < MIN_FILAS or columnas < MIN_COLUMNAS:
-                    print(f"Descartando hoja pequeña: {sheet}")
                     continue
 
                 if _clean(sheet) == "horarias":
@@ -472,7 +855,6 @@ def _read_any(uploaded_or_path, preferred_sheet=None):
                 )
 
             df = mejor_df
-            print(f"Usando hoja: {mejor_hoja} | score={mejor_score}")
 
     # --- Detección automática de cabecera ---
     header_row = detect_header_row(df)
@@ -485,9 +867,6 @@ def _read_any(uploaded_or_path, preferred_sheet=None):
         df = df.iloc[1:].reset_index(drop=True)
     
     df = df.dropna(axis=1, how="all")
-
-    print('df original')
-    print (df)
 
     return df, (header_row or 0)
 
@@ -587,12 +966,6 @@ def _guess_cols(df: pd.DataFrame):
     c_ver = find([r"vertid", r"exporta"])
     c_gen = find(["generac"])
 
-    print("\n--- Columnas originales ---")
-    print(cols)
-    print("\n--- Columnas limpias ---")
-    for c, cc in cleaned.items():
-        print(f"{c} → {cc}")
-
     return c_dt, c_date, c_time, c_quarter, c_kwh, c_per, c_ind, c_cap, c_ver, c_gen
 
 def _parse_date_ddmmyyyy(series: pd.Series) -> pd.Series:
@@ -639,8 +1012,6 @@ def normalize_curve_simple(
     origin="archivo",
     excel_sheet=None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, str]:
-
-    import traceback
 
     #Lee y normaliza la curva, devolviendo (df_in, df_norm).
     #   Regla simple:
@@ -692,7 +1063,6 @@ def normalize_curve_simple(
         if c_dt:
             # Disponemos de fecha y hora en la misma columna
             sample = str(df[c_dt].dropna().iloc[0]).strip()
-            print('Intentamos entrar por datetime')
             # Detectar si TIENE hora → patrón HH:MM
             tiene_hora = re.search(r"\d{1,2}:\d{2}", sample) is not None
     
@@ -714,11 +1084,8 @@ def normalize_curve_simple(
                     # Formato DD/MM/AAAA
                     dt0 = pd.to_datetime(df[c_dt], errors="coerce", dayfirst=True)
                 
-                print("Detectamos datetime fecha-hora")
-
             else:
                 # SOLO FECHA → tratar como fecha + hora separadas
-                print(f'Columna "{c_dt}" contiene solo fecha o contiene 00:00:00 (excel con sólo fecha) → pasamos a parseo por separado')
                 raise ValueError("NO_DATETIME")
 
         else:
@@ -728,12 +1095,8 @@ def normalize_curve_simple(
 
     except ValueError as e:
         if str(e) == "NO_DATETIME":
-            print("Entramos por fecha y hora separadas")
-
             # --- Caso cuartohorario explícito: HORA + CUARTO EN COLUMNAS SEPARADAS. CASO TIPO ENDESA QH---
             if c_time and c_quarter:
-                print("Detectado formato cuartohorario (HORA + CUARTO)")
-
                 d = _parse_date_ddmmyyyy(df[c_date])
 
                 h = pd.to_numeric(df[c_time], errors="coerce").fillna(0)
@@ -748,41 +1111,27 @@ def normalize_curve_simple(
                     + pd.to_timedelta(minutos, unit="m")
                 )
 
-                print("DEBUG --- dt0 cuartohorario:")
-                print(dt0.head(12))
-                
                 endesa_qh = True
 
             else:
                 # --- Fecha y hora en columnas separadas. CASO HABITUAL ---
                 d = _parse_date_ddmmyyyy(df[c_date])
-                print('Datos de la columna fecha')
-                print(d.head(24))
-
                 hora_raw = df[c_time].astype(str).str.strip()
-                print('hora_raw')
-                print(hora_raw)
 
                 # --- Corregir valores 24:00 ---
                 mask_24 = hora_raw.isin(["24:00", "24:00:00"])
                 if mask_24.any():
                     hora_raw.loc[mask_24] = "00:00"
                     d.loc[mask_24] = d.loc[mask_24] + pd.Timedelta(days=1)
-                    print('Datos de la columna fecha con retoque 24:00 (tipo DATADIS)')
-                    print(d.head(96))
-                    print('Columna hora modificada (origen 24:00)')
-                    print(hora_raw.head(96))
 
                 # Detectar casos con formato HH:MM o HH:MM:SS
                 if hora_raw.str.contains(":").any():
-                    print("La columna hora contiene ':'")
                     #print(d.head(24))
 
                     minutos = hora_raw.str.extract(r":(\d{2})")[0].astype(float)
 
                     if minutos.max() == 0:
                         # Horario tipo “01:00”
-                        print("Registros horarios")
                         #dt0 = d + pd.to_timedelta(hora_raw +":00", errors="coerce")
                         #dt0 = d + pd.to_timedelta(hora_raw, errors="coerce")
                         hora_norm = hora_raw.copy()
@@ -792,15 +1141,11 @@ def normalize_curve_simple(
                         hora_norm.loc[mask_horario] = hora_norm.loc[mask_horario] + ":00"
 
                         dt0 = d + pd.to_timedelta(hora_norm, errors="coerce")
-                        print(dt0)
-
                         # Ajuste por casos 01:00→00:00 del día siguiente
                         if dt0.dt.hour.min() == 1:
-                            print('Hora mínima = 1')
                             dt0 = dt0 - pd.Timedelta(hours=1)
                     else:
                         # Cuartohoraria (00:15, 00:30…)
-                        print("Registros cuarto horarios")
                         hora_norm = hora_raw.copy()
 
                         # HH:MM → añadir segundos
@@ -808,9 +1153,6 @@ def normalize_curve_simple(
                         hora_norm.loc[mask_horario] = hora_norm.loc[mask_horario] + ":00"
                         #h = pd.to_timedelta(hora_raw, errors="coerce")
                         h = pd.to_timedelta(hora_norm, errors="coerce")
-                        if h.isna().any():
-                            print("🚨 HORAS PROBLEMÁTICAS:")
-                            print(hora_norm[h.isna()].unique())
                         #print(repr(hora_raw.iloc[0]))
                         #print(type(hora_raw))
                         #print(hora_raw.dtype)
@@ -820,8 +1162,6 @@ def normalize_curve_simple(
                         #print(pd.to_timedelta(["0:15", "1:30"]))     # prueba lista
                         dt0 = d + h
 
-                        print("DEBUG --- dt0 primeras filas:")
-                        print(dt0.head(96))
 
                 else:
                     # Horas numéricas (1–24)
@@ -834,8 +1174,6 @@ def normalize_curve_simple(
                     #print(dt0.diff().dt.total_seconds().head(10))
     
     except Exception as e:
-        print("ERROR DETECTADO:")
-        traceback.print_exc()
         raise
 
     #print(df[c_date].head())
@@ -865,8 +1203,6 @@ def normalize_curve_simple(
         freq = "desconocida"
         ajuste_tiempo = pd.Timedelta(0)
         st.warning("Frecuencia no reconocida. No se aplica ajuste temporal.")
-
-    print(f'Frecuencia detectada: {freq}')
 
     if dt0.dt.hour.min() == 1:
         # Formato 1–24 → ajustar 24:00
@@ -905,7 +1241,8 @@ def normalize_curve_simple(
         "QH": "15T",
         "10MIN": "10T"
     }
-    dt_adj = dt_adj.dt.floor(PANDAS_FREQ[freq])
+    if freq in PANDAS_FREQ:
+        dt_adj = dt_adj.dt.floor(PANDAS_FREQ[freq])
     dt_tz = _localize_madrid(dt_adj)
 
     # obtención de periodos------------------------------------------------
@@ -943,44 +1280,23 @@ def normalize_curve_simple(
             # Puedes definir esta ruta al inicio del script
             #periodos_path = "utils/periodos_horarios.xlsx"
             mapa_periodos_path = {
-                "peninsula": "utils/periodos_horarios.xlsx",
-                "canarias": "utils/periodos_horarios_canarias.xlsx",
-                "baleares": "utils/periodos_horarios_baleares.xlsx",
-                "ceuta": "utils/periodos_horarios_ceuta.xlsx",
-                "melilla": "utils/periodos_horarios_melilla.xlsx",
+                "peninsula": BASE_DIR / "utils" / "periodos_horarios.xlsx",
+                "canarias": BASE_DIR / "utils" / "periodos_horarios_canarias.xlsx",
+                "baleares": BASE_DIR / "utils" / "periodos_horarios_baleares.xlsx",
+                "ceuta": BASE_DIR / "utils" / "periodos_horarios_ceuta.xlsx",
+                "melilla": BASE_DIR / "utils" / "periodos_horarios_melilla.xlsx",
             }
             zona_periodos_cdc = st.session_state.get("zona_periodos_cdc", "peninsula")
             #periodos_path = mapa_periodos_path[st.session_state.zona_periodos_cdc]
             periodos_path = mapa_periodos_path.get(
                 zona_periodos_cdc,
-                "utils/periodos_horarios.xlsx"
+                BASE_DIR / "utils" / "periodos_horarios.xlsx"
             )
-            print(f'RUTA PERIODOS: {periodos_path}')
-            df_periodos = pd.read_excel(periodos_path, dtype={"año": int, "mes": int, "dia": int, "hora": int, "dh_3p": str, "dh_6p": str})
-
-            
-            #df_periodos["fecha_hora"] = pd.to_datetime(
-            #    df_periodos["fecha"].astype(str) + " " + df_periodos["hora"].astype(str) + ":00",
-            #    errors="coerce",
-            #    dayfirst=True)
-
-            # --- Compatibilidad con curvas horarias y cuartohorarias ---
-            # Si el fichero tiene horas tipo 0–23, convertir a datetime horario
-            if df_periodos["hora"].dtype in [int, float] or df_periodos["hora"].astype(str).str.match(r"^\d+$").all():
-                df_periodos["fecha_hora"] = pd.to_datetime(
-                    df_periodos["fecha"].astype(str) + " " + df_periodos["hora"].astype(str) + ":00:00",
-                    errors="coerce",
-                    dayfirst=True
-                )
-            else:
-                # Si las horas incluyen formato "HH:MM", lo respetamos
-                hora_aux = df_periodos["hora"].astype(str).str.strip()
-                df_periodos["fecha_hora"] = pd.to_datetime(
-                    df_periodos["fecha"].astype(str) + " " +
-                    hora_aux.where(hora_aux.str.count(":") == 2, hora_aux + ":00"),
-                    errors="coerce",
-                    dayfirst=True
-                )
+            periodos_path = Path(periodos_path)
+            df_periodos = cargar_calendario_periodos(
+                str(periodos_path),
+                periodos_path.stat().st_mtime_ns,
+            )
 
 
             periodo = np.nan
@@ -994,22 +1310,6 @@ def normalize_curve_simple(
             st.warning(f"No se pudieron cargar los periodos: {e}")
             periodo = np.nan
     
-    # --- NUEVO BLOQUE: Determinación del ATR según periodos detectados ---
-    #try:
-    if isinstance(periodo, pd.Series):
-        # Extraemos el número del periodo (P1→1, etc.)
-        numeros = periodo.dropna().str.extract(r"P(\d+)")[0].astype(float)
-        if not numeros.empty and numeros.max() == 3:
-            st.sidebar.warning("La curva parece compatible con 2.0TD (3 periodos). Verifique el ATR seleccionado.")
-                #atr_dfnorm = "2.0"
-            #else:
-            #    atr_dfnorm = None
-        #else:
-            #atr_dfnorm = None
-    #except Exception as e:
-    #    atr_dfnorm = None
-    #    print(f"Error determinando ATR: {e}")
-
     ind = pd.to_numeric(df[c_ind], errors="coerce") if c_ind else np.nan
     cap = pd.to_numeric(df[c_cap], errors="coerce") if c_cap else np.nan
 
@@ -1048,10 +1348,6 @@ def normalize_curve_simple(
     
     #print('atr dentro de la función')    
     #print(atr_dfnorm)
-
-    print('df norm dentro de la funcion')
-    print(df_norm)
-
 
     return df_in, df_norm, msg_unidades, flag_periodos_en_origen, df_periodos, freq
 
@@ -3755,9 +4051,6 @@ def calcular_comparacion():
         "debug": {}
     }
 
-    print("fecha_ini_global:", fecha_ini_global)
-    print("fecha_fin_global:", fecha_fin_global)
-    print("fecha_max_comparable:", fecha_max_comparable)
 
     # =====================================================
     # 2. VALIDACIÓN DE DATOS SUFICIENTES
@@ -3783,7 +4076,6 @@ def calcular_comparacion():
     resultado["fechas"]["rango_valido"] = rango_valido
     resultado["fechas"]["fecha_delta"] = fecha_delta
 
-    print(f"rango_valido: {rango_valido}")
 
     # =====================================================
     # 4. INICIALIZACIÓN / SANEADO DEL RANGO EN SESSION_STATE
@@ -3812,7 +4104,6 @@ def calcular_comparacion():
             else:
                 st.session_state.rango_fechas_comparativa = (f_ini, f_fin)
 
-    print(f"Rango fechas comparativa: {st.session_state.rango_fechas_comparativa}")
 
     # =====================================================
     # 5. RECUPERAR FECHAS SELECCIONADAS

@@ -746,6 +746,15 @@ if contenido is not None:
                             f"({dias_restantes} días restantes)."
                         )
 
+            if factura.permanencia is False:
+                st.success(
+                    "✅ La factura indica que el contrato no tiene permanencia."
+                )
+            elif factura.permanencia is True:
+                st.warning(
+                    "⚠️ La factura indica que el contrato tiene permanencia."
+                )
+
             col_total_factura, col_resultado_factura = st.columns(2)
             col_total_factura.metric("Total factura", formato_euros(factura.total))
             if reconstruccion_total_completa:
@@ -761,6 +770,11 @@ if contenido is not None:
             vencimiento = escape(
                 str(factura.fecha_vencimiento_contrato or "No detectado")
             )
+            permanencia = (
+                "No" if factura.permanencia is False
+                else "Sí" if factura.permanencia is True
+                else "No detectada"
+            )
             periodo_inicio = escape(str(factura.periodo_inicio or "?"))
             periodo_fin = escape(str(factura.periodo_fin or "?"))
             cups_html = escape(str(cups_mostrado))
@@ -772,13 +786,14 @@ if contenido is not None:
                 f"""
                 <div style="background:rgba(236,72,153,.10); border-left:4px solid #ec4899;
                             border-radius:8px; padding:12px 14px; margin:8px 0;
-                            height:190px; box-sizing:border-box;">
+                            height:215px; box-sizing:border-box;">
                     <div style="color:#db2777; font-size:1.45rem; font-weight:700;
                                 margin-bottom:7px;">Datos del contrato</div>
                     <div style="font-size:1.02rem; line-height:1.65;">
                         <b>Factura:</b> {factura_numero}<br>
                         <b>Fecha de factura:</b> {fecha_factura}<br>
                         <b>Vencimiento:</b> {vencimiento}<br>
+                        <b>Permanencia:</b> {permanencia}<br>
                         <b>Periodo:</b> {periodo_inicio} - {periodo_fin}
                     </div>
                 </div>
@@ -789,7 +804,7 @@ if contenido is not None:
                 f"""
                 <div style="background:rgba(249,115,22,.11); border-left:4px solid #f97316;
                             border-radius:8px; padding:12px 14px; margin:8px 0;
-                            height:190px; box-sizing:border-box;">
+                            height:215px; box-sizing:border-box;">
                     <div style="color:#ea580c; font-size:1.45rem; font-weight:700;
                                 margin-bottom:7px;">Datos del suministro</div>
                     <div style="font-size:1.02rem; line-height:1.65;">

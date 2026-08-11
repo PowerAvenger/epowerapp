@@ -190,6 +190,7 @@ class FacturaLeida:
     tipo_suministro: str | None = None
     fecha_factura: str | None = None
     fecha_vencimiento_contrato: str | None = None
+    permanencia: bool | None = None
     periodo_inicio: str | None = None
     periodo_fin: str | None = None
     potencia: float = 0.0
@@ -1480,6 +1481,14 @@ def _verificar_iva_multiple(
         re.IGNORECASE | re.MULTILINE,
     )
     if len(lineas) < 2:
+        lineas = re.findall(
+            r"^IVA(?:\s+Reducido)?(?:\s*\([^\n]*?\))?\s+"
+            r"([\d.,]+)\s*%\s+s/\s*([\d.,]+)\s*€\s+"
+            r"([\d.,]+)\s*€\s*$",
+            texto,
+            re.IGNORECASE | re.MULTILINE,
+        )
+    if len(lineas) < 2:
         return None
 
     from regulacion_iva import obtener_referencia_iva
@@ -1492,6 +1501,8 @@ def _verificar_iva_multiple(
     bases = [numero_es(base) for _, base, _ in lineas]
     tipos = [numero_es(tipo) for tipo, _, _ in lineas]
     importes = [numero_es(importe) for _, _, importe in lineas]
+    total_facturado = round(sum(importes), 2)
+    factura.iva = total_facturado
     calculados = [
         float((
             Decimal(str(base)) * Decimal(str(tipo)) / Decimal("100")
@@ -1512,7 +1523,6 @@ def _verificar_iva_multiple(
             factura.iva, sum(importes), "impuestos"
         )
     )
-    total_facturado = round(sum(importes), 2)
     total_calculado = round(sum(calculados), 2)
     return VerificacionImpuesto(
         base_eur=round(sum(bases), 2),
@@ -2683,7 +2693,8 @@ def es_servicio_adicional(concepto: str | OtroConcepto) -> bool:
     return bool(re.search(
         r"protecci.n|mantenimiento|asistencia|asistente|24\s*h|"
         r"reparaci.n|urgencias?|"
-        r"servicio\s+(?:hogar|el.ctrico|t.cnico)|seguro\s+hogar",
+        r"servicio\s+(?:hogar|el.ctrico|t.cnico)|seguro\s+hogar|"
+        r"pack(?:\s+iberdrola)?\s+hogar",
         nombre,
         re.IGNORECASE,
     ))
@@ -2711,6 +2722,12 @@ def _extraer_servicios_adicionales(texto: str) -> list[OtroConcepto]:
         concepto = re.split(
             r"\s+(?=[-\d.,]+\s+(?:mes(?:es)?|d[ií]as?|años?|"
             r"kWh|MWh|kW|\u20ac/))",
+            concepto,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
+        concepto = re.split(
+            r"\s+\d+(?:[.,]\d+)?\s*%\s+s/",
             concepto,
             maxsplit=1,
             flags=re.IGNORECASE,
@@ -2845,6 +2862,32 @@ def _extraer_fecha_vencimiento_contrato(texto: str) -> str | None:
     if len(partes) == 3 and len(partes[2]) == 2:
         partes[2] = f"20{partes[2]}"
     return "/".join(parte.zfill(2) for parte in partes)
+
+
+def _extraer_permanencia(texto: str) -> bool | None:
+    """Lee una declaración contractual explícita de permanencia."""
+    patrones_sin_permanencia = (
+        r"\bPermanencia\s*[:.]?\s*No\b",
+        r"\b(?:sin|no\s+(?:tiene|existe|hay))\s+(?:compromiso\s+de\s+)?permanencia\b",
+        r"\bcompromiso\s+de\s+permanencia\s*[:.]?\s*No\b",
+    )
+    if any(
+        re.search(patron, texto, re.IGNORECASE)
+        for patron in patrones_sin_permanencia
+    ):
+        return False
+
+    patrones_con_permanencia = (
+        r"\bPermanencia\s*[:.]?\s*S[ií]\b",
+        r"\bcon\s+(?:compromiso\s+de\s+)?permanencia\b",
+        r"\bcompromiso\s+de\s+permanencia\s*[:.]?\s*S[ií]\b",
+    )
+    if any(
+        re.search(patron, texto, re.IGNORECASE)
+        for patron in patrones_con_permanencia
+    ):
+        return True
+    return None
 
 
 def _maximetros_desde_excesos(
@@ -5457,12 +5500,22 @@ def _iberdrola_tramos(texto: str) -> FacturaLeida:
             re.IGNORECASE | re.MULTILINE,
         ), start=1)
     ]
-    descuento = buscar_numero(texto, [
-        r"^Descuento\s+sobre\s+consumo[^\n]*?\s(-[\d.,]+)\s*€\s*$",
-    ])
-    if descuento:
+    descuentos = [
+        numero_es(importe)
+        for importe in re.findall(
+            r"^Descuento\s+sobre\s+consumo[^\n]*?\s(-[\d.,]+)\s*€\s*$",
+            texto,
+            re.IGNORECASE | re.MULTILINE,
+        )
+    ]
+    for indice, descuento in enumerate(descuentos, start=1):
+        periodo = (
+            "Descuento sobre consumo"
+            if len(descuentos) == 1
+            else f"Descuento sobre consumo {indice}"
+        )
         energia_periodos.append(EnergiaPeriodo(
-            "Descuento sobre consumo", 0.0, 0.0, descuento,
+            periodo, 0.0, 0.0, descuento,
             coste_calculado_eur=descuento,
         ))
 
@@ -6831,6 +6884,7 @@ def analizar_factura(texto: str) -> FacturaLeida:
         ):
             factura.otros.append(servicio)
     factura.fecha_vencimiento_contrato = _extraer_fecha_vencimiento_contrato(texto)
+    factura.permanencia = _extraer_permanencia(texto)
     _verificar_fbs(factura, texto)
     _verificar_fnee(factura, texto)
     _verificar_impuestos(factura, texto)
