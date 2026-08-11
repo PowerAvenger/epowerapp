@@ -251,8 +251,9 @@ def calcular_precios_atr(df):
 
 colores_precios = {'precio_2.0': 'goldenrod', 'precio_3.0': 'darkred', 'precio_6.1': '#1C83E1', 'precio_curva': 'limegreen'}
 
-def rango_componentes():
-    componente = st.session_state.get('componente', 'SPOT')
+def rango_componentes(componente=None):
+    if componente is None:
+        componente = st.session_state.get('componente', 'SPOT')
 
     if componente in ['SPOT', 'SPOT+SSAA']:
         return {

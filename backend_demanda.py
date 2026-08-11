@@ -3,7 +3,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go 
 import streamlit as st
-from datetime import datetime
+from datetime import date, datetime, timedelta
+import calendar
 
 @st.cache_data
 def download_esios (id, fecha_ini, fecha_fin, agrupacion, tipo_agregacion):
@@ -53,6 +54,111 @@ def download_esios (id, fecha_ini, fecha_fin, agrupacion, tipo_agregacion):
             .loc[:,['datetime','value', 'short_name', 'name']]
     )
     return df_in
+
+
+def obtener_demanda_mensual_dashboard(año, mes):
+    """Prepara demanda diaria real y prevista para un mes del dashboard.
+
+    Incluye el año anterior como referencia. La previsión ESIOS solo se añade
+    para el mes natural en curso, que es el único período donde tiene sentido.
+    """
+    hoy = date.today()
+    ultimo_dia = calendar.monthrange(año, mes)[1]
+    fecha_inicio = date(año, mes, 1)
+    fecha_fin = date(año, mes, ultimo_dia)
+    frames = []
+
+    for año_real in (año - 1, año):
+        ultimo_dia_real = calendar.monthrange(año_real, mes)[1]
+        real = download_esios(
+            1293,
+            date(año_real, mes, 1).isoformat(),
+            date(año_real, mes, ultimo_dia_real).isoformat(),
+            "day",
+            "average",
+        ).copy()
+        if not real.empty:
+            real["datetime"] = pd.to_datetime(real["datetime"])
+            if año_real == hoy.year and mes == hoy.month:
+                real = real[real["datetime"].dt.date <= hoy].copy()
+            real["short_name"] = "Demanda real"
+            frames.append(real)
+
+    hay_prevision = año == hoy.year and mes == hoy.month
+    if hay_prevision:
+        inicio_prevision = max(hoy + timedelta(days=1), fecha_inicio)
+        if inicio_prevision <= fecha_fin:
+            prevista = download_esios(
+                2563,
+                inicio_prevision.isoformat(),
+                fecha_fin.isoformat(),
+                "day",
+                "average",
+            ).copy()
+            if not prevista.empty:
+                prevista["short_name"] = "Previsión diaria"
+                frames.append(prevista)
+
+    if not frames:
+        return pd.DataFrame(), None, False
+
+    datos = pd.concat(frames, ignore_index=True)
+    datos["datetime"] = pd.to_datetime(datos["datetime"])
+    datos["año"] = datos["datetime"].dt.year
+    datos["mes"] = datos["datetime"].dt.month
+    datos = datos[
+        (datos["mes"] == mes) & datos["año"].isin([año - 1, año])
+    ].copy()
+    ultimo_real_seleccionado = datos.loc[
+        (datos["año"] == año) & (datos["short_name"] == "Demanda real"),
+        "datetime",
+    ].max()
+    if pd.notna(ultimo_real_seleccionado):
+        datos = datos[
+            (datos["short_name"] != "Previsión diaria")
+            | (datos["datetime"] > ultimo_real_seleccionado)
+        ].copy()
+    datos["GW"] = pd.to_numeric(datos["value"], errors="coerce") / 1000
+    datos = datos.dropna(subset=["GW"]).sort_values(["año", "datetime"])
+
+    # La media prevista continúa la media real acumulada del mes.
+    datos["media_mensual"] = datos.groupby("año")["GW"].expanding().mean().reset_index(
+        level=0, drop=True
+    )
+    datos["mes_nombre"] = datos["mes"].map(
+        {
+            1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+            5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+            9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre",
+        }
+    )
+    datos["fecha_ficticia"] = pd.to_datetime(
+        {
+            "year": 2020,
+            "month": datos["datetime"].dt.month,
+            "day": datos["datetime"].dt.day,
+        }
+    )
+
+    reales_seleccionados = datos[
+        (datos["año"] == año) & (datos["short_name"] == "Demanda real")
+    ]
+    ultimo_real = (
+        reales_seleccionados["datetime"].max()
+        if not reales_seleccionados.empty
+        else None
+    )
+
+    previstas = datos[
+        (datos["año"] == año) & (datos["short_name"] == "Previsión diaria")
+    ]
+    if not previstas.empty and not reales_seleccionados.empty:
+        puente = reales_seleccionados.sort_values("datetime").iloc[-1].copy()
+        puente["short_name"] = "Previsión diaria"
+        datos = pd.concat([datos, puente.to_frame().T], ignore_index=True)
+        datos = datos.sort_values(["año", "datetime", "short_name"])
+
+    return datos, ultimo_real, not previstas.empty
 
 def graficar_media_diaria(df_demand, años_visibles, mes_nombre_actual, año_actual):
     graf_media_evol_mes = px.line(df_demand, x = 'fecha_ficticia', y = 'media_mensual', 
