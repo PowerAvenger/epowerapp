@@ -1,0 +1,443 @@
+"""Conciliación independiente entre una factura y una curva de carga."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import pandas as pd
+
+from calculo_excesos import prorratear_costes_excesos_mensuales
+
+from backend_curvadecarga import (
+    agrupar_curva_horaria,
+    analizar_cobertura_periodo,
+    completar_periodos_curva,
+    dataframe_como_archivo_curva,
+    normalize_curve_simple,
+    recortar_curva_periodo,
+    resumir_consumo_por_periodo,
+)
+
+
+@dataclass
+class ResultadoCurvaFactura:
+    curva_original: pd.DataFrame
+    curva_normalizada: pd.DataFrame
+    curva_periodo: pd.DataFrame
+    frecuencia: str
+    cobertura: dict
+    consumos_periodos: dict[str, float]
+
+
+def preparar_curva_factura(
+    curva_original: pd.DataFrame,
+    fecha_inicio,
+    fecha_fin,
+    atr="2.0",
+    zona_periodos="peninsula",
+    nombre_origen="curva.csv",
+) -> ResultadoCurvaFactura:
+    """Normaliza una curva, asigna periodos y extrae el ciclo de factura."""
+    archivo = dataframe_como_archivo_curva(curva_original, nombre_origen)
+    return preparar_archivo_factura(
+        archivo,
+        fecha_inicio,
+        fecha_fin,
+        atr=atr,
+        zona_periodos=zona_periodos,
+        nombre_origen=nombre_origen,
+        curva_original=curva_original,
+    )
+
+
+def preparar_archivo_factura(
+    archivo,
+    fecha_inicio,
+    fecha_fin,
+    atr="2.0",
+    zona_periodos="peninsula",
+    nombre_origen=None,
+    curva_original=None,
+) -> ResultadoCurvaFactura:
+    """Prepara un único CSV/Excel con el normalizador compartido."""
+    return preparar_archivos_factura(
+        [archivo],
+        fecha_inicio,
+        fecha_fin,
+        atr=atr,
+        zona_periodos=zona_periodos,
+        nombres_origen=[nombre_origen] if nombre_origen else None,
+        curva_original=curva_original,
+    )
+
+
+def preparar_archivos_factura(
+    archivos,
+    fecha_inicio,
+    fecha_fin,
+    atr="2.0",
+    zona_periodos="peninsula",
+    nombres_origen=None,
+    curva_original=None,
+) -> ResultadoCurvaFactura:
+    """Normaliza y reúne varios CSV/Excel antes de recortar el ciclo."""
+    archivos = list(archivos or [])
+    if not archivos:
+        raise ValueError("Selecciona al menos un archivo de curva.")
+    nombres = list(nombres_origen or [])
+    normalizadas = []
+    originales = []
+    frecuencias = []
+    for indice, archivo in enumerate(archivos):
+        nombre = (
+            nombres[indice]
+            if indice < len(nombres) and nombres[indice]
+            else getattr(archivo, "name", f"curva_{indice + 1}")
+        )
+        df_in, normalizada, _, periodos_en_origen, calendario, frecuencia = (
+            normalize_curve_simple(
+                archivo,
+                origin=nombre,
+                zona_periodos=zona_periodos,
+            )
+        )
+        if not periodos_en_origen:
+            normalizada = completar_periodos_curva(normalizada, calendario, atr)
+        originales.append(df_in)
+        normalizadas.append(normalizada)
+        frecuencias.append(frecuencia)
+    frecuencias_distintas = set(frecuencias)
+    if len(frecuencias_distintas) != 1:
+        raise ValueError(
+            "Todos los archivos deben tener la misma resolución temporal."
+        )
+    frecuencia = frecuencias[0]
+    normalizada = (
+        pd.concat(normalizadas, ignore_index=True)
+        .sort_values("fecha_hora")
+        .reset_index(drop=True)
+    )
+    cobertura = analizar_cobertura_periodo(
+        normalizada, fecha_inicio, fecha_fin, frecuencia
+    )
+    periodo = recortar_curva_periodo(normalizada, fecha_inicio, fecha_fin)
+    consumos = resumir_consumo_por_periodo(periodo)
+    return ResultadoCurvaFactura(
+        curva_original=(
+            curva_original.copy()
+            if curva_original is not None
+            else pd.concat(originales, ignore_index=True)
+        ),
+        curva_normalizada=normalizada,
+        curva_periodo=periodo,
+        frecuencia=frecuencia,
+        cobertura=cobertura,
+        consumos_periodos=consumos,
+    )
+
+
+def tabla_conciliacion_consumos(
+    consumos_factura: dict[str, float],
+    consumos_medida: dict[str, float],
+) -> pd.DataFrame:
+    """Compara P1–P3 y total conservando diferencias con signo."""
+    periodos = sorted(
+        set(consumos_factura) | set(consumos_medida),
+        key=lambda valor: int(str(valor).upper().removeprefix("P")),
+    )
+    filas = []
+    for periodo in periodos:
+        factura = float(consumos_factura.get(periodo, 0.0))
+        medida = float(consumos_medida.get(periodo, 0.0))
+        filas.append({
+            "Periodo": periodo,
+            "Factura (kWh)": factura,
+            "Medida (kWh)": medida,
+            "Diferencia (kWh)": medida - factura,
+            "Diferencia (%)": (
+                (medida - factura) / factura * 100 if factura else None
+            ),
+        })
+    total_factura = sum(item["Factura (kWh)"] for item in filas)
+    total_medida = sum(item["Medida (kWh)"] for item in filas)
+    filas.append({
+        "Periodo": "Total",
+        "Factura (kWh)": total_factura,
+        "Medida (kWh)": total_medida,
+        "Diferencia (kWh)": total_medida - total_factura,
+        "Diferencia (%)": (
+            (total_medida - total_factura) / total_factura * 100
+            if total_factura else None
+        ),
+    })
+    return pd.DataFrame(filas)
+
+
+def calcular_energia_fija(
+    consumos_periodos: dict[str, float],
+    precios_periodos: dict[str, float],
+) -> tuple[pd.DataFrame, float]:
+    """Valora la medida por periodo con precios fijos confirmados."""
+    filas = []
+    for periodo in sorted(
+        consumos_periodos,
+        key=lambda valor: int(str(valor).upper().removeprefix("P")),
+    ):
+        consumo = float(consumos_periodos[periodo])
+        precio = float(precios_periodos.get(periodo, 0.0))
+        filas.append({
+            "Periodo": periodo,
+            "Consumo medida (kWh)": consumo,
+            "Precio confirmado (€/kWh)": precio,
+            "Coste verificado (€)": consumo * precio,
+        })
+    detalle = pd.DataFrame(filas)
+    return detalle, round(detalle["Coste verificado (€)"].sum(), 2)
+
+
+def calcular_energia_indexada(curva_periodo, precios_index, atr, frecuencia):
+    """Agrupa la medida a horas y la valora con el precio horario Telemindex."""
+    columna_precio = f"precio_{atr}"
+    requeridas_curva = {"fecha_hora", "periodo", "consumo_neto_kWh"}
+    if not requeridas_curva.issubset(curva_periodo.columns):
+        raise ValueError("La curva no contiene fecha, periodo y consumo normalizados.")
+    if columna_precio not in precios_index.columns:
+        raise ValueError(f"Telemindex no contiene la columna {columna_precio}.")
+
+    curva = agrupar_curva_horaria(curva_periodo, frecuencia)
+    curva["fecha_hora"] = pd.to_datetime(curva["fecha_hora"], errors="coerce")
+    curva = curva.dropna(subset=["fecha_hora"])
+    curva["_fecha"] = curva["fecha_hora"].dt.date
+    curva["_hora"] = curva["fecha_hora"].dt.hour
+    curva["periodo"] = curva["periodo"].astype(str).str.strip().str.upper()
+
+    precios = precios_index.copy()
+    precios["_fecha"] = pd.to_datetime(precios["fecha"], errors="coerce").dt.date
+    precios["_hora"] = pd.to_numeric(precios["hora"], errors="coerce")
+    precios = precios.dropna(subset=["_fecha", "_hora", columna_precio])
+    # Algunas fuentes numeran las horas 1–24 y otras 0–23.
+    if not precios.empty and precios["_hora"].min() >= 1 and precios["_hora"].max() == 24:
+        precios["_hora"] = precios["_hora"] - 1
+    precios = (
+        precios.groupby(["_fecha", "_hora"], as_index=False)[columna_precio]
+        .mean()
+    )
+    detalle_intervalos = curva.merge(
+        precios, on=["_fecha", "_hora"], how="left", validate="many_to_one"
+    )
+    sin_precio = detalle_intervalos[columna_precio].isna()
+    if sin_precio.any():
+        faltantes = detalle_intervalos.loc[sin_precio, "fecha_hora"]
+        raise ValueError(
+            f"Faltan precios Telemindex para {sin_precio.sum()} intervalos "
+            f"({faltantes.min():%d/%m/%Y %H:%M}–{faltantes.max():%d/%m/%Y %H:%M})."
+        )
+    detalle_intervalos["Precio verificación (€/kWh)"] = (
+        pd.to_numeric(detalle_intervalos[columna_precio], errors="raise") / 1000
+    )
+    detalle_intervalos["Coste verificado (€)"] = (
+        pd.to_numeric(detalle_intervalos["consumo_neto_kWh"], errors="raise")
+        * detalle_intervalos["Precio verificación (€/kWh)"]
+    )
+    detalle = (
+        detalle_intervalos.groupby("periodo", as_index=False)
+        .agg({
+            "consumo_neto_kWh": "sum",
+            "Coste verificado (€)": "sum",
+        })
+        .rename(columns={"consumo_neto_kWh": "Consumo medida (kWh)"})
+    )
+    detalle["Precio verificación (€/kWh)"] = (
+        detalle["Coste verificado (€)"] / detalle["Consumo medida (kWh)"]
+    )
+    detalle = detalle[[
+        "periodo", "Consumo medida (kWh)",
+        "Precio verificación (€/kWh)", "Coste verificado (€)",
+    ]].rename(columns={"periodo": "Periodo"})
+    return detalle, round(detalle["Coste verificado (€)"].sum(), 2)
+
+
+def estado_verificacion_energia_real(
+    importe_facturado,
+    importe_verificado,
+    *,
+    cobertura_completa=True,
+    precios_completos=True,
+    tolerancia_pct=0.5,
+    tolerancia_minima_eur=0.02,
+):
+    """Devuelve el semáforo real del coste de energía."""
+    if not cobertura_completa or not precios_completos:
+        return "🟡"
+    facturado = float(importe_facturado)
+    verificado = float(importe_verificado)
+    margen = max(
+        float(tolerancia_minima_eur),
+        max(abs(facturado), abs(verificado)) * float(tolerancia_pct) / 100,
+    )
+    diferencia = facturado - verificado
+    if abs(diferencia) <= margen:
+        return "🟢"
+    return "🟢 ⚠️" if diferencia < 0 else "🔴"
+
+
+def calcular_potencia_confirmada(periodos):
+    """Calcula potencia × días × precio diario para los valores confirmados."""
+    filas = []
+    for item in periodos:
+        periodo = str(item["periodo"])
+        potencia = float(item["potencia_kw"])
+        dias = int(item["dias"])
+        precio = float(item["precio_eur_kw_dia"])
+        filas.append({
+            "Periodo": periodo,
+            "Potencia confirmada (kW)": potencia,
+            "Días": dias,
+            "Precio confirmado (€/kW día)": precio,
+            "Coste verificado (€)": potencia * dias * precio,
+        })
+    detalle = pd.DataFrame(filas)
+    return detalle, round(detalle["Coste verificado (€)"].sum(), 2)
+
+
+def calcular_excesos_desde_curva(
+    curva_periodo,
+    frecuencia,
+    tarifa,
+    anio,
+    potencias,
+):
+    """Reutiliza el cálculo de Término de potencia para verificar excesos."""
+    from backend_opt2 import calcular_costes, meses, pyc_tp, tepp123
+
+    tarifa = str(tarifa or "").replace("TD", "").strip()
+    if anio not in pyc_tp or tarifa not in pyc_tp[anio]:
+        raise ValueError(f"No hay precios de potencia para {tarifa} en {anio}.")
+    if anio not in tepp123 or tarifa not in tepp123[anio]:
+        raise ValueError(f"No hay TEPp para {tarifa} en {anio}.")
+
+    curva = curva_periodo.copy()
+    curva["fecha_hora"] = pd.to_datetime(curva["fecha_hora"], errors="coerce")
+    curva["periodo"] = curva["periodo"].astype(str).str.strip().str.upper()
+    curva["mes_nom"] = curva["fecha_hora"].dt.month.map(
+        dict(enumerate(meses, start=1))
+    )
+    consumo = pd.to_numeric(curva["consumo_neto_kWh"], errors="coerce").fillna(0)
+    multiplicador_potencia = 4 if str(frecuencia).upper() == "QH" else 1
+    curva["potencia"] = consumo * multiplicador_potencia
+
+    coeficiente_frecuencia = 2 if str(frecuencia).upper() == "H" else 1
+    tepp = {
+        periodo: float(valor) * coeficiente_frecuencia
+        for periodo, valor in tepp123[anio][tarifa].items()
+        if periodo in potencias and valor is not None
+    }
+    _, _, _, _, costes_brutos = calcular_costes(
+        curva,
+        tarifa,
+        pyc_tp[anio][tarifa],
+        tepp,
+        meses,
+        potencias,
+    )
+    costes, factores_prorrateo = prorratear_costes_excesos_mensuales(
+        costes_brutos,
+        curva,
+    )
+    coste_excesos = float(costes.to_numpy().sum())
+    filas = []
+    for periodo_mes, fila in costes.iterrows():
+        datos_prorrateo = factores_prorrateo.loc[periodo_mes]
+        for periodo in potencias:
+            importe = float(fila.get(periodo, 0.0))
+            importe_bruto = float(
+                costes_brutos.loc[periodo_mes].get(periodo, 0.0)
+            )
+            termino = float(tepp.get(periodo, 0.0))
+            filas.append({
+                "Mes": str(periodo_mes),
+                "Periodo": periodo,
+                "Potencia contratada (kW)": float(potencias[periodo]),
+                "Raíz Σ excesos² (kW)": (
+                    importe_bruto / termino if termino else 0.0
+                ),
+                "TEPp aplicado (€/kW)": termino,
+                "Excesos sin prorrateo (€)": importe_bruto,
+                "Días ciclo": int(datos_prorrateo["Días ciclo"]),
+                "Días mes": int(datos_prorrateo["Días mes"]),
+                "Factor prorrateo": float(
+                    datos_prorrateo["Factor prorrateo"]
+                ),
+                "Excesos verificados (€)": importe,
+            })
+    return pd.DataFrame(filas), round(float(coste_excesos), 2)
+
+
+def reconstruir_total_beta(
+    *,
+    total_factura,
+    potencia_facturada,
+    potencia_verificada,
+    energia_facturada,
+    energia_verificada,
+    otros_facturados,
+    otros_confirmados,
+    iee_facturado,
+    iva_facturado,
+    base_iee_factura=None,
+    tipo_iee_pct=None,
+    base_iva_factura=None,
+    tipo_iva_pct=None,
+):
+    """Reconstruye el total manteniendo el resto de conceptos por diferencias."""
+    otros_facturados = {
+        str(clave): float(valor) for clave, valor in otros_facturados.items()
+    }
+    otros_confirmados = {
+        str(clave): float(valor) for clave, valor in otros_confirmados.items()
+    }
+    delta_potencia = float(potencia_verificada) - float(potencia_facturada)
+    delta_energia = float(energia_verificada) - float(energia_facturada)
+    delta_otros = sum(
+        otros_confirmados.get(clave, valor) - valor
+        for clave, valor in otros_facturados.items()
+    )
+
+    iee_verificado = float(iee_facturado)
+    base_iee_verificada = base_iee_factura
+    if base_iee_factura is not None and tipo_iee_pct is not None:
+        base_iee_verificada = (
+            float(base_iee_factura) + delta_potencia + delta_energia
+        )
+        iee_verificado = round(
+            base_iee_verificada * float(tipo_iee_pct) / 100, 2
+        )
+    delta_iee = iee_verificado - float(iee_facturado)
+
+    iva_verificado = float(iva_facturado)
+    base_iva_verificada = base_iva_factura
+    if base_iva_factura is not None and tipo_iva_pct is not None:
+        base_iva_verificada = (
+            float(base_iva_factura)
+            + delta_potencia + delta_energia + delta_otros + delta_iee
+        )
+        iva_verificado = round(
+            base_iva_verificada * float(tipo_iva_pct) / 100, 2
+        )
+    delta_iva = iva_verificado - float(iva_facturado)
+    total_verificado = round(
+        float(total_factura)
+        + delta_potencia + delta_energia + delta_otros + delta_iee + delta_iva,
+        2,
+    )
+    return {
+        "total_verificado": total_verificado,
+        "diferencia_total": round(float(total_factura) - total_verificado, 2),
+        "potencia_verificada": round(float(potencia_verificada), 2),
+        "energia_verificada": round(float(energia_verificada), 2),
+        "otros_confirmados": otros_confirmados,
+        "base_iee_verificada": base_iee_verificada,
+        "iee_verificado": iee_verificado,
+        "base_iva_verificada": base_iva_verificada,
+        "iva_verificado": iva_verificado,
+    }

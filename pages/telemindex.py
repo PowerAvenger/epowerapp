@@ -11,6 +11,7 @@ from backend_telemindex import (
     evol_mensual, evol_precios_diarios, graficar_diferencial_precios_mensuales, tabla_evol_mes_por_años,
     evol_diario,
     construir_df_curva_sheets, añadir_costes_curva,
+    calcular_verificacion_ssaa,
     check_medias,
     analizar_dependencia_omie, graficar_elasticidad_lineal,
     
@@ -461,7 +462,7 @@ with st.sidebar.container(border=True):
 
 # ZONA PRINCIPAL DE GRÁFICOS++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-tab1, tab2, tab3 = st.tabs(['Principal', 'Evol', 'Comparativa'])
+tab1, tab2, tab3, tab4 = st.tabs(['Principal', 'Evol', 'Comparativa', 'Verificación SSAA'])
 
 with tab1:
     
@@ -1123,3 +1124,145 @@ with tab3:
 
 
        
+
+with tab4:
+    st.subheader("Verificación de la regularización de SSAA", divider="rainbow")
+    st.caption(
+        "Se incluyen exclusivamente meses naturales completos. La tabla compara "
+        "el criterio contractual por media aritmética mensual con la aplicación "
+        "de la misma horquilla a cada hora. En el cálculo horario no se aplica "
+        "apuntamiento, porque el perfil ya está recogido en el consumo real horario."
+    )
+
+    df_curva_ssaa = st.session_state.get("df_curva_sheets")
+    if df_curva_ssaa is None or df_curva_ssaa.empty:
+        st.warning("Introduce una curva de carga que contenga meses naturales completos.")
+    else:
+        atr_ssaa = st.session_state.atr_dfnorm
+        perdidas_contractuales_defecto = 17.0 if atr_ssaa == "2.0" else 7.0
+        metodo_ssaa = st.radio(
+            "Método principal de verificación",
+            ["Media aritmética mensual", "Hora a hora"],
+            horizontal=True,
+            help="Los dos resultados se calculan siempre para poder comparar su diferencia.",
+        )
+
+        with st.expander("Parámetros contractuales", expanded=True):
+            p1, p2, p3, p4, p5 = st.columns(5)
+            ref_inferior = p1.number_input(
+                "Referencia inferior (€/MWh)", value=13.0, step=0.1, key="ssaa_ref_inferior"
+            )
+            ref_superior = p2.number_input(
+                "Referencia superior (€/MWh)", value=16.0, step=0.1, key="ssaa_ref_superior"
+            )
+            perdidas_ssaa = p3.number_input(
+                "Pérdidas media mensual (%)", min_value=0.0,
+                value=perdidas_contractuales_defecto, step=0.5,
+                key=f"ssaa_perdidas_{atr_ssaa}",
+                help="La verificación hora a hora toma las pérdidas horarias del CSV.",
+            )
+            ap_ssaa = p4.number_input(
+                "Apuntamiento media mensual", min_value=0.0, value=1.02, step=0.01,
+                format="%.3f", key="ssaa_ap",
+                help="No se aplica en la verificación hora a hora.",
+            )
+            hl_ssaa = p5.number_input(
+                "Hacienda Local", min_value=0.0, value=1.015, step=0.001, format="%.3f", key="ssaa_hl"
+            )
+
+        if ref_inferior >= ref_superior:
+            st.error("La referencia inferior debe ser menor que la referencia superior.")
+        else:
+            columna_perdidas_ssaa = f"perd_{atr_ssaa}"
+            st.caption(
+                f"En el método hora a hora se aplica `{columna_perdidas_ssaa}` "
+                "del CSV a cada registro."
+            )
+            df_verificacion, meses_excluidos = calcular_verificacion_ssaa(
+                df_curva_ssaa,
+                referencia_inferior=ref_inferior,
+                referencia_superior=ref_superior,
+                perdidas_pct=perdidas_ssaa,
+                apuntamiento=ap_ssaa,
+                hacienda_local=hl_ssaa,
+                columna_perdidas_horarias=columna_perdidas_ssaa,
+            )
+
+            if meses_excluidos:
+                st.info("Meses incompletos excluidos: " + ", ".join(meses_excluidos))
+
+            if df_verificacion.empty:
+                st.warning("El periodo seleccionado no contiene ningún mes natural completo.")
+            else:
+                col_metodo = (
+                    "Regularización media mensual (€)"
+                    if metodo_ssaa == "Media aritmética mensual"
+                    else "Regularización hora a hora (€)"
+                )
+                total_media = df_verificacion["Regularización media mensual (€)"].sum()
+                total_horas = df_verificacion["Regularización hora a hora (€)"].sum()
+                total_principal = df_verificacion[col_metodo].sum()
+                diferencia_total = total_horas - total_media
+                diferencia_pct = (
+                    diferencia_total / abs(total_media) * 100
+                    if total_media != 0
+                    else None
+                )
+
+                m1, m2, m3, m4, m5 = st.columns(5)
+                m1.metric("Método seleccionado", metodo_ssaa)
+                m2.metric("Regularización seleccionada", formato_euros(total_principal, 2))
+                m3.metric("Media mensual", formato_euros(total_media, 2))
+                m4.metric("Hora a hora", formato_euros(total_horas, 2))
+                m5.metric(
+                    "Diferencia",
+                    formato_euros(diferencia_total, 2),
+                    delta=formato_pct(diferencia_pct, 2) if diferencia_pct is not None else "Sin base",
+                    delta_color="inverse",
+                    help="Hora a hora menos media mensual. El porcentaje se calcula sobre el valor absoluto de la media mensual.",
+                )
+
+                st.markdown("#### Detalle mensual")
+                columnas_euros = [
+                    "Regularización media mensual (€)",
+                    "Regularización hora a hora (€)",
+                    "Diferencia entre métodos (€)",
+                ]
+                formato_tabla = {
+                    "SSAA medio (€/MWh)": "{:.2f}",
+                    "Diferencia mensual (€/MWh)": "{:+.2f}",
+                    "Consumo (MWh)": "{:,.2f}",
+                    **{col: "{:+,.2f}" for col in columnas_euros},
+                }
+                st.dataframe(
+                    df_verificacion.drop(columns=["Año"]).style.format(formato_tabla),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                df_trimestral = (
+                    df_verificacion.groupby("Trimestre", as_index=False)
+                    .agg(
+                        Meses=("Periodo", "count"),
+                        **{
+                            "Consumo (MWh)": ("Consumo (MWh)", "sum"),
+                            "Media mensual (€)": ("Regularización media mensual (€)", "sum"),
+                            "Hora a hora (€)": ("Regularización hora a hora (€)", "sum"),
+                            "Diferencia (€)": ("Diferencia entre métodos (€)", "sum"),
+                        },
+                    )
+                )
+                df_trimestral["Estado"] = df_trimestral["Meses"].map(
+                    lambda meses: "Trimestre completo" if meses == 3 else "Trimestre parcial"
+                )
+                st.markdown("#### Resumen trimestral")
+                st.dataframe(
+                    df_trimestral.style.format({
+                        "Consumo (MWh)": "{:,.2f}",
+                        "Media mensual (€)": "{:+,.2f}",
+                        "Hora a hora (€)": "{:+,.2f}",
+                        "Diferencia (€)": "{:+,.2f}",
+                    }),
+                    use_container_width=True,
+                    hide_index=True,
+                )

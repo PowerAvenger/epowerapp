@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from datetime import date, datetime, timedelta
 import calendar
+from backend_comun import aplicar_estilo
 
 @st.cache_data
 def download_esios (id, fecha_ini, fecha_fin, agrupacion, tipo_agregacion):
@@ -160,13 +161,28 @@ def obtener_demanda_mensual_dashboard(año, mes):
 
     return datos, ultimo_real, not previstas.empty
 
-def graficar_media_diaria(df_demand, años_visibles, mes_nombre_actual, año_actual):
-    graf_media_evol_mes = px.line(df_demand, x = 'fecha_ficticia', y = 'media_mensual', 
+def graficar_media_diaria(
+    df_demand,
+    años_visibles,
+    mes_nombre_actual,
+    año_actual,
+    incluir_barras_diarias=False,
+):
+    df_demand = df_demand.copy()
+    df_demand['dia_dashboard'] = pd.to_datetime(
+        df_demand['datetime'], errors='coerce'
+    ).dt.day
+    graf_media_evol_mes = px.line(df_demand, x = 'dia_dashboard', y = 'media_mensual', 
         color = 'año', 
-        #color_discrete_sequence = colores_años,
+        color_discrete_map={
+            año_actual: '#ff8700',
+            año_actual - 1: '#83c9ff',
+            str(año_actual): '#ff8700',
+            str(año_actual - 1): '#83c9ff',
+        },
         #width = 1000,
         #height= 600,
-        labels = {'media_mensual':'GW', 'fecha_ficticia':'día'},
+        labels = {'media_mensual':'GW', 'dia_dashboard':'Día'},
         #title = f'Evolución mensual de la {tecnologia} - media diaria (GWh)',
         title = f'Evolución mensual de la demanda media diaria (GW) en {mes_nombre_actual} de {año_actual}',
         custom_data = df_demand[['short_name', 'año', 'mes_nombre']],
@@ -188,23 +204,62 @@ def graficar_media_diaria(df_demand, años_visibles, mes_nombre_actual, año_act
         if año_trace not in map(str, años_visibles):
             trace.visible = 'legendonly'
 
+    if incluir_barras_diarias:
+        datos_barras = df_demand[
+            df_demand['año'].astype(str).isin(map(str, años_visibles))
+        ]
+        colores_barras = {
+            'Demanda real': '#83c9ff',
+            'Previsión diaria': '#ff8700',
+            'Previsión diaria peninsular de demanda en el mercado': '#ff8700',
+        }
+        nombres_barras = {
+            'Demanda real': 'Demanda diaria real',
+            'Previsión diaria': 'Demanda diaria prevista',
+            'Previsión diaria peninsular de demanda en el mercado': 'Demanda diaria prevista',
+        }
+        for tipo_demanda, serie in datos_barras.groupby('short_name'):
+            graf_media_evol_mes.add_trace(go.Bar(
+                x=serie['dia_dashboard'],
+                y=serie['GW'],
+                name=nombres_barras.get(tipo_demanda, tipo_demanda),
+                marker_color=colores_barras.get(tipo_demanda, '#83c9ff'),
+                opacity=0.42,
+                hovertemplate=(
+                    'Día %{x}: %{y:.2f} GW'
+                    '<extra>' + nombres_barras.get(
+                        tipo_demanda, tipo_demanda
+                    ) + '</extra>'
+                ),
+            ))
+
     graf_media_evol_mes.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
 
     # Rotos los ejes para que no se sincronicen todos (sol un mes en cada facet col)
     graf_media_evol_mes.update_xaxes(matches=None)
     graf_media_evol_mes.update_xaxes(
-        #tickformat='%d-%b',
-        tickformat='%d', 
-        hoverformat="%d %B",                  # Forza formato uniforme
+        tickmode='linear',
+        tick0=1,
+        dtick=1,
         showgrid=True
     )
 
+    if not df_demand.empty:
+        mes_num = int(df_demand['mes'].iloc[0])
+        ultimo_dia_mes = calendar.monthrange(año_actual, mes_num)[1]
+        graf_media_evol_mes.update_xaxes(
+            tickmode='linear',
+            tick0=1,
+            dtick=1,
+            range=[0.5, ultimo_dia_mes + 0.5],
+        )
+
     graf_media_evol_mes.update_layout(
+        barmode='overlay',
         xaxis = dict(
-            #tickformat = '%d-%b',
-            tickformat = '%d',
-            #tick0='2020-01-01',       # Primer tick el 1-Ene
-            dtick='D1',               # Un tick por mes
+            tickmode='linear',
+            tick0=1,
+            dtick=1,
             showgrid=True,            # Asegura grid visible
             matches = None 
             ),
@@ -224,12 +279,13 @@ def graficar_media_diaria(df_demand, años_visibles, mes_nombre_actual, año_act
     #)
     graf_media_evol_mes.update_traces(
         hovertemplate=(
-            "Año %{fullData.name}: %{y:.2f} GW"
+            "Media acumulada %{fullData.name}: %{y:.2f} GW"
             "<extra></extra>"
-        )
+        ),
+        selector=dict(type='scatter'),
     )
 
-    return graf_media_evol_mes 
+    return aplicar_estilo(graf_media_evol_mes)
 
 def actualizar_historicos(datos_mensual):
     historicos=pd.read_csv('local_bbdd/demanda_mensual.csv',sep=';')

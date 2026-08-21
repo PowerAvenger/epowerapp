@@ -89,14 +89,21 @@ def obtener_file(file):
 
     demanda=round(df_origen['demanda'].sum(),2)
     vertido=round(df_origen['vertido'].sum(),2)
-    demanda_neteo=round(df_origen['demanda_neteo'].sum(),2)
-    vertido_neteo=round(df_origen['vertido_neteo'].sum(),2)
+    demanda_neteo_sin_redondear = df_origen['demanda_neteo'].sum()
+    vertido_neteo_sin_redondear = df_origen['vertido_neteo'].sum()
+    demanda_neteo=round(demanda_neteo_sin_redondear,2)
+    vertido_neteo=round(vertido_neteo_sin_redondear,2)
 
-    coste_exc=round(df_origen['coste_exc'].sum(),2)
-    coste_pvpc=round(df_origen['coste_pvpc'].sum(),2)
-
-    precio_medio_exc=round(coste_exc/vertido_neteo,3)
-    precio_medio_pvpc=round(coste_pvpc/demanda_neteo,3)
+    coste_exc_sin_redondear = df_origen['coste_exc'].sum()
+    coste_pvpc_sin_redondear = df_origen['coste_pvpc'].sum()
+    precio_medio_exc = round(
+        coste_exc_sin_redondear / vertido_neteo_sin_redondear, 3
+    )
+    precio_medio_pvpc = round(
+        coste_pvpc_sin_redondear / demanda_neteo_sin_redondear, 3
+    )
+    coste_exc = round(coste_exc_sin_redondear, 2)
+    coste_pvpc = round(coste_pvpc_sin_redondear, 2)
 
     df_coste_24h=df_origen.groupby('hora')[['vertido_neteo', 'coste_exc','demanda_neteo','coste_pvpc']].sum()
     df_coste_24h.reset_index(inplace=True)
@@ -175,14 +182,21 @@ def obtener_dfs(df_norm):
 
     demanda=round(df_origen['demanda'].sum(),2)
     vertido=round(df_origen['vertido'].sum(),2)
-    demanda_neteo=round(df_origen['demanda_neteo'].sum(),2)
-    vertido_neteo=round(df_origen['vertido_neteo'].sum(),2)
+    demanda_neteo_sin_redondear = df_origen['demanda_neteo'].sum()
+    vertido_neteo_sin_redondear = df_origen['vertido_neteo'].sum()
+    demanda_neteo=round(demanda_neteo_sin_redondear,2)
+    vertido_neteo=round(vertido_neteo_sin_redondear,2)
 
-    coste_exc=round(df_origen['coste_exc'].sum(),2)
-    coste_pvpc=round(df_origen['coste_pvpc'].sum(),2)
-
-    precio_medio_exc=round(coste_exc/vertido_neteo,3)
-    precio_medio_pvpc=round(coste_pvpc/demanda_neteo,3)
+    coste_exc_sin_redondear = df_origen['coste_exc'].sum()
+    coste_pvpc_sin_redondear = df_origen['coste_pvpc'].sum()
+    precio_medio_exc = round(
+        coste_exc_sin_redondear / vertido_neteo_sin_redondear, 3
+    )
+    precio_medio_pvpc = round(
+        coste_pvpc_sin_redondear / demanda_neteo_sin_redondear, 3
+    )
+    coste_exc = round(coste_exc_sin_redondear, 2)
+    coste_pvpc = round(coste_pvpc_sin_redondear, 2)
 
     df_coste_24h=df_origen.groupby('hora')[['vertido_neteo', 'coste_exc','demanda_neteo','coste_pvpc']].sum()
     df_coste_24h.reset_index(inplace=True)

@@ -415,7 +415,9 @@ def init_app_json_escalacv():
 
  
 
-def persist_widget(widget_func, label, *args, key=None, default=None, **kwargs):
+def persist_widget(
+    widget_func, label, *args, key=None, default=None, widget_suffix=None, **kwargs
+):
     """
     Hace persistente un widget entre páginas usando:
     - key permanente: key
@@ -425,7 +427,7 @@ def persist_widget(widget_func, label, *args, key=None, default=None, **kwargs):
     if key is None:
         raise ValueError("persist_widget requiere argumento 'key'")
 
-    temp_key = f"_{key}"
+    temp_key = f"_{key}_{widget_suffix}" if widget_suffix else f"_{key}"
 
     # 1️⃣ Inicializar valor permanente solo la primera vez
     if key not in st.session_state:
@@ -446,7 +448,7 @@ def persist_widget(widget_func, label, *args, key=None, default=None, **kwargs):
     )
 
 
-def mostrar_parametros_formula_indexado():
+def mostrar_parametros_formula_indexado(widget_suffix=None):
     """Dibuja la configuración de fórmula compartida por los indexados."""
 
     persist_widget(
@@ -457,6 +459,7 @@ def mostrar_parametros_formula_indexado():
         step=0.1,
         key="desvios_apant",
         default=1.0,
+        widget_suffix=widget_suffix,
     )
     persist_widget(
         st.number_input,
@@ -466,6 +469,7 @@ def mostrar_parametros_formula_indexado():
         step=0.1,
         key="margen_telemindex",
         default=5.0,
+        widget_suffix=widget_suffix,
     )
     persist_widget(
         st.selectbox,
@@ -473,12 +477,14 @@ def mostrar_parametros_formula_indexado():
         ["perdidas", "tm", "neto"],
         key="cfg_margen_pos",
         default="tm",
+        widget_suffix=widget_suffix,
     )
     persist_widget(
         st.checkbox,
         "Incluye FNEE",
         key="cfg_fnee",
         default=True,
+        widget_suffix=widget_suffix,
     )
     if st.session_state.get("cfg_fnee", False):
         persist_widget(
@@ -487,6 +493,7 @@ def mostrar_parametros_formula_indexado():
             ["perdidas", "tm", "neto"],
             key="cfg_fnee_pos",
             default="perdidas",
+            widget_suffix=widget_suffix,
         )
     persist_widget(
         st.number_input,
@@ -496,4 +503,5 @@ def mostrar_parametros_formula_indexado():
         step=0.01,
         key="cf_pct",
         default=0.0,
+        widget_suffix=widget_suffix,
     )

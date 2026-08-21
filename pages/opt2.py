@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 from utilidades import generar_menu
-from backend_opt2 import (leer_curva_normalizada, calcular_costes, calcular_optimizacion, pyc_tp, tepp45, tepp123, meses, normalizar_tabla_maximetros)
+from backend_opt2 import (leer_curva_normalizada, calcular_costes, calcular_optimizacion, pyc_tp, tepp45, tepp123, meses, normalizar_tabla_maximetros, prorratear_excesos_ciclo_tipo_123)
 from backend_curvadecarga import colores_periodo
 from backend_comun import aplicar_estilo
 from report_generator import preparar_informe, generar_formato_informe
@@ -223,6 +223,24 @@ else:
             st.sidebar.write(f'El peaje del suministro es **:orange[{st.session_state.atr_dfnorm}]**')
             st.sidebar.info('Pincha en la opción activada')
             fecha_ini, fecha_fin = st.session_state.rango_curvadecarga
+            fechas_verificacion_disponibles = pd.to_datetime(
+                df_in['fecha_hora'], errors='coerce'
+            ).dropna()
+            fecha_min_verificacion = fechas_verificacion_disponibles.min().date()
+            fecha_max_verificacion = fechas_verificacion_disponibles.max().date()
+            rango_verificacion = st.sidebar.date_input(
+                'Rango de fechas de la verificación',
+                value=(fecha_min_verificacion, fecha_max_verificacion),
+                min_value=fecha_min_verificacion,
+                max_value=fecha_max_verificacion,
+                format='DD/MM/YYYY',
+                key='rango_verificacion_excesos',
+            )
+            if (
+                isinstance(rango_verificacion, (tuple, list))
+                and len(rango_verificacion) == 2
+            ):
+                fecha_ini, fecha_fin = rango_verificacion
             dias_rango = (fecha_fin - fecha_ini).days + 1
             año_ver = fecha_ini.year
 
@@ -639,15 +657,91 @@ if resultados is None:
 
 # VERIFICACIÓN DE EXCESOS. NO SE USA EN MODO DEMO
 if submit_ver and st.session_state.df_norm is not None:
-        coste_potfra_potcon, coste_excesos_potcon, coste_tp_potcon, df_coste_potfra_potcon, df_coste_excesos_potcon = calcular_costes(df_in, tarifa, pyc_tp_ver, tepp_ver, meses, pot_con)
+        fechas_df_verificacion = pd.to_datetime(
+            df_in['fecha_hora'], errors='coerce'
+        )
+        df_verificacion = df_in.loc[
+            (fechas_df_verificacion.dt.date >= fecha_ini)
+            & (fechas_df_verificacion.dt.date <= fecha_fin)
+        ].copy()
+        if df_verificacion.empty:
+            st.error('No hay datos en el rango seleccionado para verificar.')
+            st.stop()
+        coste_potfra_potcon, coste_excesos_potcon, coste_tp_potcon, df_coste_potfra_potcon, df_coste_excesos_potcon = calcular_costes(df_verificacion, tarifa, pyc_tp_ver, tepp_ver, meses, pot_con)
+        df_excesos_brutos_verificacion = df_coste_excesos_potcon.copy()
+        df_coste_excesos_potcon, factores_prorrateo_excesos = (
+            prorratear_excesos_ciclo_tipo_123(
+                df_coste_excesos_potcon,
+                df_verificacion,
+                pot_con.get("P6", 0.0),
+            )
+        )
+        coste_excesos_potcon = float(df_coste_excesos_potcon.to_numpy().sum())
+        coste_tp_potcon = round(coste_potfra_potcon + coste_excesos_potcon, 2)
 
-        mes_verificado = df_coste_potfra_potcon.index[0]
-        df_pot_mes = df_coste_potfra_potcon.loc[[mes_verificado]].copy()
-        df_exc_mes = df_coste_excesos_potcon.loc[[mes_verificado]].copy()
+        filas_detalle_verificacion = []
+        for periodo_mes in df_coste_potfra_potcon.index:
+            for periodo in pot_con:
+                coste_potencia = float(
+                    df_coste_potfra_potcon.at[periodo_mes, periodo]
+                )
+                coste_exceso_bruto = float(
+                    df_excesos_brutos_verificacion.at[periodo_mes, periodo]
+                )
+                coste_exceso = float(
+                    df_coste_excesos_potcon.at[periodo_mes, periodo]
+                )
+                potencia = float(pot_con[periodo])
+                precio_potencia = float(pyc_tp_ver[periodo])
+                precio_exceso = float(tepp_ver[periodo])
+                denominador_potencia = potencia * precio_potencia
+                prorrata = (
+                    coste_potencia * 12 / denominador_potencia
+                    if denominador_potencia else 0.0
+                )
+                datos_prorrateo = factores_prorrateo_excesos.loc[periodo_mes]
+                mascara_detalle = (
+                    pd.to_datetime(df_verificacion['fecha_hora'], errors='coerce')
+                    .dt.to_period('M').astype(str).eq(str(periodo_mes))
+                    & df_verificacion['periodo'].eq(periodo)
+                )
+                excesos_intervalo = (
+                    pd.to_numeric(
+                        df_verificacion.loc[mascara_detalle, 'potencia'], errors='coerce'
+                    ).fillna(0) - potencia
+                ).clip(lower=0)
+                suma_excesos_cuadrado = float((excesos_intervalo ** 2).sum())
+                raiz_excesos = math.sqrt(suma_excesos_cuadrado)
+                filas_detalle_verificacion.append({
+                    'Mes': str(periodo_mes),
+                    'Periodo': periodo,
+                    'Potencia contratada (kW)': potencia,
+                    'Precio potencia (€/kW año)': precio_potencia,
+                    'Prorrata mensual': prorrata,
+                    'Potencia (€)': coste_potencia,
+                    'N.º sobrepasamientos': int(excesos_intervalo.gt(0).sum()),
+                    'Σ excesos² (kW²)': suma_excesos_cuadrado,
+                    'Raíz Σ excesos² (kW)': raiz_excesos,
+                    'TEPp (€/kW)': precio_exceso,
+                    'Excesos brutos (€)': coste_exceso_bruto,
+                    'Días ciclo': int(datos_prorrateo['Días ciclo']),
+                    'Días mes': int(datos_prorrateo['Días mes']),
+                    'Factor prorrateo': float(datos_prorrateo['Factor prorrateo']),
+                    'Excesos (€)': coste_exceso,
+                    'Total (€)': coste_potencia + coste_exceso,
+                })
+        df_detalle_verificacion = pd.DataFrame(filas_detalle_verificacion)
+
+        df_pot_mes = pd.DataFrame(
+            [df_coste_potfra_potcon.sum(axis=0)],
+            index=['Potencia contratada'],
+        )
+        df_exc_mes = pd.DataFrame(
+            [df_coste_excesos_potcon.sum(axis=0)],
+            index=['Excesos'],
+        )
         df_pot_mes['Total (€)'] = df_pot_mes.sum(axis=1)
         df_exc_mes['Total (€)'] = df_exc_mes.sum(axis=1)
-        df_pot_mes.index = ['Potencia contratada']
-        df_exc_mes.index = ['Excesos']
 
 
         df_coste = pd.concat([df_pot_mes, df_exc_mes])
@@ -658,14 +752,14 @@ if submit_ver and st.session_state.df_norm is not None:
             lambda valor: formato_numero_es(valor, 2)
         )
 
-        fecha_inicio = st.session_state.df_norm["fecha_hora"].min().strftime("%d.%m.%Y")
-        fecha_final = st.session_state.df_norm["fecha_hora"].max().strftime("%d.%m.%Y")
+        fecha_inicio = df_verificacion["fecha_hora"].min().strftime("%d.%m.%Y")
+        fecha_final = df_verificacion["fecha_hora"].max().strftime("%d.%m.%Y")
 
         df_pie = pd.DataFrame({
             'Tipo coste': ['Potencia contratada', 'Excesos'],
             'Coste (€)': [
-                df_coste_potfra_potcon.loc[mes_verificado].sum(),
-                df_coste_excesos_potcon.loc[mes_verificado].sum()
+                df_coste_potfra_potcon.to_numpy().sum(),
+                df_coste_excesos_potcon.to_numpy().sum()
             ]
         })
         fig_pie = px.pie(
@@ -684,7 +778,7 @@ if submit_ver and st.session_state.df_norm is not None:
 
 
         orden_periodos = [f'P{i}' for i in range(1, 7)]
-        periodos_presentes = set(df_in['periodo'].dropna().unique())
+        periodos_presentes = set(df_verificacion['periodo'].dropna().unique())
         orden_visual = [p for p in orden_periodos if p in periodos_presentes]
 
         fig_detalle_demanda = make_subplots(
@@ -695,10 +789,10 @@ if submit_ver and st.session_state.df_norm is not None:
             vertical_spacing=0.07
         )
 
-        fecha_min = df_in['fecha_hora'].min()
-        fecha_max = df_in['fecha_hora'].max()
+        fecha_min = df_verificacion['fecha_hora'].min()
+        fecha_max = df_verificacion['fecha_hora'].max()
         demanda_max_global = pd.to_numeric(
-            df_in['potencia'], errors='coerce'
+            df_verificacion['potencia'], errors='coerce'
         ).max()
         potencia_contratada_max = max(
             float(pot_con[p]) for p in orden_visual
@@ -717,7 +811,7 @@ if submit_ver and st.session_state.df_norm is not None:
         limite_superior = ultimo_tick + paso_eje * 0.08
         
         for fila, periodo in enumerate(orden_visual, start=1):
-            df_p = df_in[df_in['periodo'] == periodo]
+            df_p = df_verificacion[df_verificacion['periodo'] == periodo]
             color_periodo = colores_periodo[periodo]
 
             fig_detalle_demanda.add_trace(
@@ -777,9 +871,11 @@ if submit_ver and st.session_state.df_norm is not None:
             'fecha_final': fecha_final,
             'df_coste': df_coste,
             'df_pot_mes': df_pot_mes,
+            'df_detalle': df_detalle_verificacion,
             'fig_pie': fig_pie,
             'fig_detalle_demanda': fig_detalle_demanda,
             'coste_excesos': coste_excesos_potcon,
+            'factores_prorrateo_excesos': factores_prorrateo_excesos,
             'potencias': pot_con.copy(),
         }
 
@@ -816,6 +912,82 @@ with tab_verificacion:
                 hide_index=True,
                 use_container_width=True
             )
+            st.subheader('Justificación de excesos')
+            df_detalle_verificacion = verificacion.get('df_detalle')
+            columnas_excesos = [
+                'Mes',
+                'Periodo',
+                'N.º sobrepasamientos',
+                'Σ excesos² (kW²)',
+                'Raíz Σ excesos² (kW)',
+                'TEPp (€/kW)',
+                'Excesos brutos (€)',
+                'Días ciclo',
+                'Días mes',
+                'Factor prorrateo',
+                'Excesos (€)',
+            ]
+            if (
+                df_detalle_verificacion is None
+                or not set(columnas_excesos).issubset(
+                    df_detalle_verificacion.columns
+                )
+            ):
+                st.info(
+                    'Pulsa de nuevo «Realizar verificación» para generar el '
+                    'detalle justificativo de excesos.'
+                )
+            else:
+                st.dataframe(
+                    df_detalle_verificacion[columnas_excesos],
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={
+                        'Σ excesos² (kW²)': st.column_config.NumberColumn(
+                            format='%.6f'
+                        ),
+                        'Raíz Σ excesos² (kW)': st.column_config.NumberColumn(
+                            format='%.6f'
+                        ),
+                        'TEPp (€/kW)': st.column_config.NumberColumn(format='%.6f'),
+                        'Excesos brutos (€)': st.column_config.NumberColumn(
+                            format='%.2f €'
+                        ),
+                        'Días ciclo': st.column_config.NumberColumn(format='%d'),
+                        'Días mes': st.column_config.NumberColumn(format='%d'),
+                        'Factor prorrateo': st.column_config.NumberColumn(
+                            format='%.6f'
+                        ),
+                        'Excesos (€)': st.column_config.NumberColumn(format='%.2f €'),
+                    },
+                )
+                coste_excesos_sin_prorrateo = float(
+                    df_detalle_verificacion['Excesos brutos (€)'].sum()
+                )
+                st.caption(
+                    '**Coste de los excesos sin prorrateo:** '
+                    f'{formato_euros(coste_excesos_sin_prorrateo)}. '
+                    'El cálculo de los sobrepasamientos no se modifica; el '
+                    'prorrateo se aplica únicamente sobre su coste.'
+                )
+                factores_prorrateo = verificacion.get(
+                    'factores_prorrateo_excesos'
+                )
+                if (
+                    factores_prorrateo is not None
+                    and factores_prorrateo['Prorrateo aplicable'].any()
+                ):
+                    st.info(
+                        'Suministro tipo 1–3 (P6 > 50 kW) con ciclo parcial: '
+                        'se aplica al coste bruto de los excesos el factor '
+                        'días del ciclo / días naturales del mes.'
+                    )
+                else:
+                    st.caption(
+                        'Excesos (€) = TEPp × √Σ(demanda − potencia '
+                        'contratada)², considerando únicamente los intervalos '
+                        'con sobrepasamiento.'
+                    )
             st.plotly_chart(verificacion['fig_pie'], use_container_width=True)
             c21,c22,c23 = st.columns(3)
             with c21:
@@ -950,7 +1122,7 @@ with tab_comparacion:
 
                 filas_comparacion = []
                 for nombre_escenario, potencias_escenario in escenarios.items():
-                    coste_potencia, coste_excesos, coste_total, _, _ = calcular_costes(
+                    coste_potencia, _, _, _, costes_excesos_brutos = calcular_costes(
                         df_periodo_comparacion,
                         tarifa,
                         pyc_tp_opt,
@@ -958,6 +1130,17 @@ with tab_comparacion:
                         meses,
                         potencias_escenario
                     )
+                    costes_excesos_prorrateados, _ = (
+                        prorratear_excesos_ciclo_tipo_123(
+                            costes_excesos_brutos,
+                            df_periodo_comparacion,
+                            pot_con.get('P6', 0.0),
+                        )
+                    )
+                    coste_excesos = float(
+                        costes_excesos_prorrateados.to_numpy().sum()
+                    )
+                    coste_total = round(coste_potencia + coste_excesos, 2)
                     filas_comparacion.append({
                         'Escenario': nombre_escenario,
                         **potencias_escenario,

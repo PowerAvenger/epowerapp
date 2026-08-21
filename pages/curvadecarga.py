@@ -12,8 +12,10 @@ import plotly.express as px
 from jinja2 import Environment, FileSystemLoader
 from backend_curvadecarga import (
     normalize_curve_simple, detectar_hojas_curva_excel, obtener_datos_contador,
-    obtener_suministros_datadis, obtener_consumo_datadis,
+    obtener_suministros_datadis,
     obtener_detalle_contrato_datadis, extraer_potencias_contratadas_datadis,
+    obtener_consumo_datadis_cacheado, dataframe_como_archivo_curva,
+    completar_periodos_curva, agrupar_curva_horaria,
     analizar_calidad_curva,
     graficar_curva_horaria, graficar_diario_apilado, graficar_mensual_apilado, tabla_mensual_periodos, formatear_tabla_mensual_es, graficar_queso_periodos,
     graficar_media_horaria, graficar_media_horaria_combinada, graficar_boxplot_horario,
@@ -23,7 +25,8 @@ from backend_curvadecarga import (
     resumir_atipicos_por_dia, calcular_kpis_atipicos, mostrar_kpis_atipicos, graficar_top_dias_revisables, graficar_heatmap_alertas, calcular_patron_horario_boxplot, obtener_top_horas_revisables,
     calcular_tabla_excesos_reactiva, calcular_tabla_factor_potencia, estilo_factor_potencia, calcular_tabla_precio_penalizacion_reactiva, calcular_tabla_coste_excesos_reactiva, estilo_coste_penalizacion,
     calcular_tabla_potencia_media_qh,calcular_tabla_coef_k, calcular_tabla_q_condensadores,
-    calcular_comparacion, calcular_comparacion_costes
+    calcular_comparacion, calcular_comparacion_costes,
+    preparar_costes_mensuales_rango,
     )
 from backend_comun import (
     aplicar_estilo,
@@ -34,12 +37,24 @@ from formato_es import formato_euros, formato_kwh, formato_numero_es
 
 
 
-from utilidades import generar_menu
+from utilidades import (
+    actualizar_df_index_por_zona,
+    generar_menu,
+    init_app,
+    init_app_index,
+)
+from backend_telemindex import (
+    añadir_costes_curva,
+    construir_df_curva_sheets,
+    evol_mensual,
+)
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
 
 generar_menu()
+
+VERSION_CURVA_UI = 2
 
 if 'zona_periodos_cdc' not in st.session_state:
     st.session_state.zona_periodos_cdc = 'peninsula'
@@ -49,6 +64,16 @@ if 'zona_periodos_cdc' not in st.session_state:
 # ===============================
 
 hoja_curva_excel = None
+
+
+def guardar_credenciales_axon_sesion():
+    """Conserva las credenciales de Axon solo en la sesión de Streamlit."""
+    st.session_state.axon_usuario_sesion = st.session_state.get(
+        "_axon_usuario_input", ""
+    )
+    st.session_state.axon_password_sesion = st.session_state.get(
+        "_axon_password_input", ""
+    )
 
 
 def limpiar_curva_cargada():
@@ -67,6 +92,8 @@ def limpiar_curva_cargada():
         "vertido_neto",
         "rango_curvadecarga",
         "rango_fechas_comparativa",
+        "rango_fechas_comparativa_guardado",
+        "_rango_fechas_comparativa",
         "precios_mensuales",
         "df_axon_raw",
         "frec_axon_raw",
@@ -169,8 +196,28 @@ with tab_curva:
                         elif len(opciones_hoja) == 1:
                             hoja_curva_excel = opciones_hoja[0]
             elif origen_curva == "Axon":
-                usuario_axon = st.text_input("Usuario Axon")
-                password_axon = st.text_input("Contraseña Axon", type="password")
+                # Las claves "sesión" no pertenecen a widgets, por lo que
+                # sobreviven al cambiar de origen o de página. Session State
+                # es individual por conexión y no se comparte entre usuarios.
+                st.session_state.setdefault(
+                    "_axon_usuario_input",
+                    st.session_state.get("axon_usuario_sesion", ""),
+                )
+                st.session_state.setdefault(
+                    "_axon_password_input",
+                    st.session_state.get("axon_password_sesion", ""),
+                )
+                usuario_axon = st.text_input(
+                    "Usuario Axon",
+                    key="_axon_usuario_input",
+                    on_change=guardar_credenciales_axon_sesion,
+                )
+                password_axon = st.text_input(
+                    "Contraseña Axon",
+                    type="password",
+                    key="_axon_password_input",
+                    on_change=guardar_credenciales_axon_sesion,
+                )
                 cups_axon = st.text_input("CUPS")
                 hoy_axon = pd.Timestamp.today().date()
                 rango_axon = st.date_input(
@@ -363,9 +410,15 @@ with tab_curva:
                     )
                 st.caption("Datadis recibirá las fechas en formato AAAA/MM.")
                 preferir_qh_datadis = st.checkbox(
-                    "Intentar curva cuartohoraria",
-                    value=True,
-                    help="Para tipos 4 y 5 se solicitará directamente curva horaria.",
+                    "Intentar curva cuartohoraria (opción avanzada)",
+                    value=False,
+                    key="preferir_qh_datadis_v2",
+                    help=(
+                        "Por defecto se solicita curva horaria. Datadis no ofrece "
+                        "QH para todos los tipos de punto ni distribuidoras; los "
+                        "tipos 4 y 5 se consultan siempre en horario. No se realiza "
+                        "fallback automático para evitar consumir otra consulta."
+                    ),
                 )
             atr_dfnorm = st.selectbox(
                 "Selecciona peaje de acceso",
@@ -476,44 +529,32 @@ if normalizar and origen_curva == "Datadis":
     try:
         if suministro_datadis is None:
             raise ValueError("Consulta y selecciona primero un suministro.")
-        fecha_inicio_datadis = pd.Timestamp(f"{mes_inicio_datadis.replace('/', '-')}-01")
-        fecha_fin_datadis = (
-            pd.Timestamp(f"{mes_fin_datadis.replace('/', '-')}-01")
-            + pd.offsets.MonthEnd(0)
+        fecha_inicio_datadis = pd.Timestamp(
+            f"{mes_inicio_datadis.replace('/', '-')}-01"
         )
-        if fecha_inicio_datadis > fecha_fin_datadis:
-            raise ValueError("El mes inicial no puede ser posterior al mes final.")
-        clave_datadis = (
-            str(usuario_datadis or "").strip().upper(),
-            str(authorized_nif_datadis or "").strip().upper(),
-            str(suministro_datadis.get("cups", "")).strip().upper(),
-            str(suministro_datadis.get("distributorCode", "")).strip(),
-            mes_inicio_datadis,
-            mes_fin_datadis,
-            bool(preferir_qh_datadis),
-        )
-        resultado_cacheado = st.session_state.datadis_curvas_cache.get(clave_datadis)
-        if resultado_cacheado is not None:
-            curva_datadis, frecuencia_datadis, aviso_fallback = resultado_cacheado
-            curva_datadis = curva_datadis.copy()
-            zona_mensajes2.info(
-                "Se reutiliza la descarga Datadis de esta sesión para no repetir la llamada."
-            )
-        else:
-            with st.spinner("Conectando con Datadis y descargando consumos…"):
-                curva_datadis, frecuencia_datadis, aviso_fallback = obtener_consumo_datadis(
-                    usuario_datadis,
-                    password_datadis,
-                    suministro_datadis,
-                    fecha_inicio_datadis,
-                    fecha_fin_datadis,
-                    authorized_nif=authorized_nif_datadis,
-                    preferir_qh=preferir_qh_datadis,
-                )
-            st.session_state.datadis_curvas_cache[clave_datadis] = (
-                curva_datadis.copy(),
+        fecha_fin_datadis = pd.Timestamp(
+            f"{mes_fin_datadis.replace('/', '-')}-01"
+        ) + pd.offsets.MonthEnd(0)
+        with st.spinner("Conectando con Datadis y descargando consumos…"):
+            (
+                curva_datadis,
                 frecuencia_datadis,
                 aviso_fallback,
+                clave_datadis,
+                reutilizado_datadis,
+            ) = obtener_consumo_datadis_cacheado(
+                st.session_state.datadis_curvas_cache,
+                usuario_datadis,
+                password_datadis,
+                suministro_datadis,
+                fecha_inicio_datadis,
+                fecha_fin_datadis,
+                authorized_nif=authorized_nif_datadis,
+                preferir_qh=preferir_qh_datadis,
+            )
+        if reutilizado_datadis:
+            zona_mensajes2.info(
+                "Se reutiliza la descarga Datadis de esta sesión para no repetir la llamada."
             )
         st.session_state.df_datadis_raw = curva_datadis
         st.session_state.frec_datadis_raw = frecuencia_datadis
@@ -539,10 +580,10 @@ if normalizar and origen_curva == "Datadis":
         if detalle_datadis:
             st.session_state.detalle_datadis_actual = detalle_datadis
             st.session_state.detalle_datadis_clave = clave_detalle_datadis
-        archivo_datadis = io.BytesIO(
-            curva_datadis.to_csv(index=False, sep=";").encode("utf-8")
+        archivo_datadis = dataframe_como_archivo_curva(
+            curva_datadis,
+            f"datadis_{frecuencia_datadis.lower()}.csv",
         )
-        archivo_datadis.name = f"datadis_{frecuencia_datadis.lower()}.csv"
         uploaded = archivo_datadis
         zona_mensajes.success(
             f"✅ Curva de Datadis obtenida: "
@@ -553,7 +594,7 @@ if normalizar and origen_curva == "Datadis":
                 "La curva cuartohoraria no estaba disponible; "
                 "se ha descargado la curva horaria."
             )
-        elif resultado_cacheado is None:
+        elif not reutilizado_datadis:
             zona_mensajes2.info(f"Resolución recibida: {frecuencia_datadis}.")
     except Exception as e:
         st.session_state.pop("df_datadis_raw", None)
@@ -636,6 +677,9 @@ if normalizar and uploaded:
                 file,
                 origin=file.name if hasattr(file, "name") else file,
                 excel_sheet=hoja_curva_excel,
+                zona_periodos=st.session_state.get(
+                    "zona_periodos_cdc", "peninsula"
+                ),
             )
             dfs_norm.append(df_norm_i)
             dfs_in.append(df_in_i)
@@ -673,34 +717,9 @@ if normalizar and uploaded:
             msg_periodos = 'Cargados periodos desde fichero auxiliar.'
             zona_mensajes3.warning(msg_periodos, icon="⚠️")
 
-            # --- Determinar ATR y tipo de calendario ---
-            if atr_dfnorm == "2.0":
-                tipo_periodo = "dh_3p"
-            else:
-                tipo_periodo = "dh_6p"   # ambos ATR 3.0 y 6.1 usan 6 periodos
-
-            # --- Si la columna 'periodo' no existe o está vacía ---
-            if "periodo" not in df_norm.columns or df_norm["periodo"].isna().all():
-                if "periodo" in df_norm.columns:
-                    df_norm = df_norm.drop(columns=["periodo"])
-
-                df_norm = pd.merge(
-                    df_norm,
-                    df_periodos[["fecha_hora", tipo_periodo]].rename(columns={tipo_periodo: "periodo"}),
-                    on="fecha_hora",
-                    how='left'
-                )
-
-            # --- Normalizar la columna 'periodo' ---
-            df_norm["periodo"] = df_norm["periodo"].astype(str).str.strip()
-
-            # --- Rellenar periodos faltantes (curvas QH) ---
-            if df_norm["periodo"].isna().any() or (df_norm["periodo"] == "nan").any():
-                df_norm["periodo"] = (
-                    df_norm["periodo"]
-                    .replace("nan", np.nan)
-                    .ffill()
-                )
+            df_norm = completar_periodos_curva(
+                df_norm, df_periodos, atr_dfnorm
+            )
 
         else:
             msg_periodos = 'Cargados periodos desde fichero origen'
@@ -728,54 +747,7 @@ if normalizar and uploaded:
                 atr_dfnorm = "3.0"
 
 
-        #if frec =='QH':
-        if frec in ["QH", "10MIN"]:
-
-            # Agregar cada 4 muestras por hora
-            # Agrupar a nivel horario (suma de los 4 cuartos horarios)
-            df_norm_h = (
-                df_norm.groupby(["fecha", "hora"], as_index=False)
-                .agg({
-                    "consumo_neto_kWh": "sum",
-                    "reactiva_kVArh":"sum",
-                    "vertido_neto_kWh": "sum",
-                    "generacion_kWh": "sum",
-                    "periodo": "first",
-                    "tipo_dia":"first"
-                })
-            )
-            df_norm_h["fecha_hora"] = pd.to_datetime(
-                df_norm_h["fecha"].astype(str)
-                + " "
-                + df_norm_h["hora"].astype(str)
-                + ":00",
-                dayfirst=True,
-                errors="coerce"
-            )
-            # 🔑 reconstrucción correcta de fecha_hora
-            df_norm_h["fecha_hora"] = (
-                pd.to_datetime(df_norm_h["fecha"])
-                + pd.to_timedelta(df_norm_h["hora"], unit="h")
-            )
-        else:
-            # Ya está en frecuencia horaria → copiar
-            df_norm_h = df_norm[["fecha_hora", "fecha", "hora","consumo_neto_kWh", "reactiva_kVArh","vertido_neto_kWh", "generacion_kWh", "periodo", "tipo_dia"]].copy()
-
-        df_norm_h = (
-            df_norm_h.groupby("fecha_hora", as_index=False)
-            .agg({
-                "fecha": "first",
-                "hora": "first",
-                "consumo_neto_kWh": "sum",
-                "reactiva_kVArh":"sum",
-                "vertido_neto_kWh": "sum",
-                "generacion_kWh": "sum",
-                "periodo": "first",
-                "tipo_dia": "first"
-            })
-            .sort_values("fecha_hora")
-            .reset_index(drop=True)
-        )
+        df_norm_h = agrupar_curva_horaria(df_norm, frec)
 
 
         csv_bytes_norm = df_norm.reset_index(drop=True).to_csv(index=False, sep=";", decimal=",", float_format="%.3f").encode("utf-8")
@@ -1255,6 +1227,9 @@ if st.session_state.get("df_norm") is not None:
     resumen_html = res["resumen_html"]
     fig_total = res["fig_total"]
     fig_mensual = res["fig_mensual"]
+    etiqueta_base_consumo, etiqueta_comp_consumo = res.get(
+        "etiquetas_periodos", ("Base", "+1 año")
+    )
 
     with tab4:
         with st.container():
@@ -1279,19 +1254,45 @@ if st.session_state.get("df_norm") is not None:
 
                     with c1:
                         with st.form('Seleccionar'):
-                            st.date_input("Selecciona periodo base", min_value=fecha_ini_global, max_value=fecha_max_comparable, key="rango_fechas_comparativa", format="DD.MM.YYYY")
-                            st.form_submit_button('Actualizar periodo de comparación')
+                            if "_rango_fechas_comparativa" not in st.session_state:
+                                st.session_state._rango_fechas_comparativa = (
+                                    st.session_state.rango_fechas_comparativa_guardado
+                                )
+                            st.date_input(
+                                "Selecciona periodo base",
+                                min_value=fecha_ini_global,
+                                max_value=fecha_max_comparable,
+                                key="_rango_fechas_comparativa",
+                                format="DD.MM.YYYY",
+                            )
+                            actualizar_comparacion = st.form_submit_button(
+                                'Actualizar periodo de comparación'
+                            )
+                        if actualizar_comparacion:
+                            st.session_state.rango_fechas_comparativa_guardado = (
+                                st.session_state._rango_fechas_comparativa
+                            )
+                            st.rerun()
                     with c2:
+                        st.markdown(resumen_html, unsafe_allow_html=True)
                         st.subheader('Tabla de resultados')
                         #df_pivot_fmt = formatear_resumen_mixto(df_pivot)
                         df_pivot_fmt = formatear_columnas_tabla(
                             df_pivot,
-                            columnas_kwh=["Base", "+1 año", "Δ"],
+                            columnas_kwh=[
+                                etiqueta_base_consumo,
+                                etiqueta_comp_consumo,
+                                "Δ",
+                            ],
                             columnas_pct=["Δ %"],
                             incluir_unidades=False
                         )
-                        st.dataframe(df_pivot_fmt, use_container_width=True, hide_index=True)
-                        st.markdown(resumen_html, unsafe_allow_html=True)
+                        st.dataframe(
+                            df_pivot_fmt,
+                            use_container_width=True,
+                            hide_index=True,
+                            height=178,
+                        )
 
                     with c3:
                         if fig_total is not None:
@@ -1300,20 +1301,66 @@ if st.session_state.get("df_norm") is not None:
                         if fig_mensual is not None:
                             st.plotly_chart(fig_mensual, use_container_width=True)
 
-        with st.container():
-            c1, c2, c3, c4 = st.columns(4)
-            with c1:
+        coste_c1, coste_c2, coste_c3, coste_c4 = st.columns(4)
+        with coste_c1:
+                st.subheader("Comparación de costes de energía")
                 precios_mensuales = st.session_state.get("precios_mensuales", None)
                 if precios_mensuales is None:
-                    st.warning('Accede a Telemindex para obtender datos de indexado de la curva introducida')
+                    st.warning(
+                        'Todavía no se han cargado precios indexados para la curva.'
+                    )
                 else:
                     st.success('Disponibles datos de indexado para la curva introducida')
+                cargar_indexados = st.button(
+                    "Cargar precios indexados",
+                    use_container_width=True,
+                    key="cargar_indexados_comparaciones",
+                )
+                st.caption(
+                    "Usa la fórmula vigente de Telemindex y la curva horaria "
+                    "cargada, sin salir de este módulo."
+                )
+
+                if cargar_indexados:
+                    try:
+                        with st.spinner("Cargando precios horarios indexados…"):
+                            init_app()
+                            st.session_state.zona_periodos_index = "peninsula"
+                            init_app_index()
+                            actualizar_df_index_por_zona(forzar=True)
+                            df_curva_indexada = construir_df_curva_sheets(
+                                st.session_state.df_sheets.copy()
+                            )
+                            df_curva_indexada = añadir_costes_curva(
+                                df_curva_indexada
+                            ).drop_duplicates(
+                                subset=["fecha", "hora"], keep="first"
+                            )
+                            st.session_state.df_curva_sheets = df_curva_indexada
+                            precios_mensuales, _ = evol_mensual(
+                                df_curva_indexada, {}
+                            )
+                            st.session_state.precios_mensuales = precios_mensuales
+                    except Exception as exc:
+                        st.error(f"No se han podido cargar los indexados: {exc}")
+                    else:
+                        st.success("Precios indexados cargados correctamente.")
+                        st.rerun()
 
         if precios_mensuales is not None and rango_valido is not None:
 
+            rango_costes = st.session_state.get(
+                "rango_fechas_comparativa_guardado", None
+            )
+            precios_costes = preparar_costes_mensuales_rango(
+                st.session_state.get("df_curva_sheets"), rango_costes
+            )
+            if precios_costes.empty:
+                precios_costes = precios_mensuales
+
             res_costes = calcular_comparacion_costes(
-                precios_mensuales=precios_mensuales,
-                rango_base=st.session_state.get("rango_fechas_comparativa", None)
+                precios_mensuales=precios_costes,
+                rango_base=rango_costes,
             )
 
             if not res_costes["ok"]:
@@ -1322,83 +1369,88 @@ if st.session_state.get("df_norm") is not None:
             else:
                 df_costes = res_costes["df_costes"]
                 df_efectos = res_costes["df_efectos"]
+                etiqueta_base_coste, etiqueta_comp_coste = res_costes.get(
+                    "etiquetas_periodos", ("Base", "+1 año")
+                )
+                df_costes_fmt = formatear_columnas_tabla(
+                    df_costes,
+                    columnas_kwh=[
+                        f"Consumo {etiqueta_base_coste}",
+                        f"Consumo {etiqueta_comp_coste}",
+                    ],
+                    columnas_euros=[
+                        f"Coste {etiqueta_base_coste}",
+                        f"Coste {etiqueta_comp_coste}",
+                        "Δ coste",
+                    ],
+                    columnas_pct=["Δ coste %"],
+                    incluir_unidades=False,
+                )
+                df_efectos_fmt = formatear_columnas_tabla(
+                    df_efectos,
+                    columnas_euros=[
+                        "Δ coste real",
+                        "Efecto precio",
+                        "Efecto consumo",
+                        "Coste con consumo base y precio +1 año",
+                    ],
+                    incluir_unidades=False,
+                )
 
-                with st.container():
-
-                    #st.markdown("---")
-                    st.header("Comparativa de costes de energía", divider='rainbow')
-
-                    c1, c2, c3, c4 = st.columns(4)
-
-                    with c1:
-                        #st.markdown("##### Resumen económico")
-                        st.subheader('Resumen económico')
+                with coste_c1:
+                    st.markdown(
+                        res_costes.get("impacto_total_html_costes", ""),
+                        unsafe_allow_html=True,
+                    )
+                    with st.expander("Resumen económico"):
                         st.markdown(
                             res_costes["resumen_html_costes"],
-                            unsafe_allow_html=True
+                            unsafe_allow_html=True,
                         )
-                        st.markdown("##### Tabla de costes")
-
-                        df_costes_fmt = formatear_columnas_tabla(
-                            df_costes,
-                            columnas_kwh=["Consumo base", "+1 año"],
-                            columnas_euros=["Coste base", "Coste +1 año", "Δ coste"],
-                            columnas_pct=["Δ coste %"],
-                            incluir_unidades=False
-                        )
-
+                    with st.expander("Tabla de costes"):
                         st.dataframe(
                             df_costes_fmt,
                             use_container_width=True,
-                            hide_index=True
+                            hide_index=True,
                         )
-
-                    with c2:
-                        if res_costes["fig_coste_total"] is not None:
-                            st.plotly_chart(
-                                res_costes["fig_coste_total"],
-                                use_container_width=True
-                            )
-
-                    with c3:
-                        if res_costes["fig_efectos"] is not None:
-                            st.plotly_chart(
-                                res_costes["fig_efectos"],
-                                use_container_width=True
-                            )
-
-                    with c4:
-                        if res_costes["fig_precio_medio"] is not None:
-                            st.plotly_chart(
-                                res_costes["fig_precio_medio"],
-                                use_container_width=True
-                            )
-
-                with st.container():
-
-                    c1, c2, c3, c4 = st.columns(4)
-
-                    with c1:
-                        st.markdown("##### Descomposición de la variación")
-
-                        df_efectos_fmt = formatear_columnas_tabla(
-                            df_efectos,
-                            columnas_euros=[
-                                "Δ coste real",
-                                "Efecto precio",
-                                "Efecto consumo",
-                                "Coste con consumo base y precio +1 año"
-                            ],
-                            incluir_unidades=False
-                        )
-
+                    with st.expander("Descomposición de la variación"):
                         st.dataframe(
                             df_efectos_fmt,
                             use_container_width=True,
-                            hide_index=True
+                            hide_index=True,
+                        )
+                    st.subheader("Efecto PRECIO / CONSUMO")
+                    st.markdown(
+                        res_costes.get("impacto_html_costes", ""),
+                        unsafe_allow_html=True,
+                    )
+
+                with coste_c2:
+                    if res_costes.get("fig_resumen_costes") is not None:
+                        st.plotly_chart(
+                            res_costes["fig_resumen_costes"],
+                            use_container_width=True,
+                        )
+                    if res_costes["fig_efectos"] is not None:
+                        st.plotly_chart(
+                            res_costes["fig_efectos"],
+                            use_container_width=True,
                         )
 
-                    #with c2:
+                with coste_c3:
+                    if res_costes["fig_precio_medio"] is not None:
+                        st.plotly_chart(
+                            res_costes["fig_precio_medio"],
+                            use_container_width=True,
+                        )
+
+                with coste_c4:
+                    if res_costes["fig_coste_total"] is not None:
+                        st.plotly_chart(
+                            res_costes["fig_coste_total"],
+                            use_container_width=True,
+                        )
+
 
 
     # ======================================================================================================================================================

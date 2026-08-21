@@ -54,11 +54,11 @@ TRAMOS_IEE: tuple[TramoIEE, ...] = (
     ),
     TramoIEE(
         date(2026, 3, 22), date(2026, 5, 31), 0.5,
-        "RDL 7/2026, artículo 40",
+        "RDL 7/2026, artículo 40; periodo efectivo 22/03/2026-31/05/2026",
     ),
     TramoIEE(
-        date(2026, 6, 1), date(2026, 7, 31), TIPO_GENERAL_IEE,
-        "RDL 7/2026, artículo 40.2; condición de IPC para junio",
+        date(2026, 6, 1), date.max, TIPO_GENERAL_IEE,
+        "Ley 38/1992, artículo 99; desactivación por IPC del RDL 7/2026",
     ),
 )
 

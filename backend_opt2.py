@@ -9,6 +9,7 @@ import math
 import streamlit as st
 import gc
 from backend_comun import aplicar_estilo
+from calculo_excesos import prorratear_costes_excesos_mensuales
 import re
 from datetime import datetime, date 
 
@@ -601,13 +602,30 @@ def normalizar_tabla_maximetros(df, meses):
 
     df["periodo_mes"] = df[col_mes].apply(convertir_a_periodo_mes)
 
+    def calcular_dias_facturacion(valor):
+        txt = str(valor).strip()
+        fechas_txt = re.findall(r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}", txt)
+        fechas = pd.to_datetime(
+            fechas_txt,
+            dayfirst=True,
+            errors="coerce"
+        )
+        fechas = fechas[fechas.notna()]
+        if len(fechas) >= 2:
+            return int((fechas[-1].normalize() - fechas[0].normalize()).days + 1)
+        if len(fechas) == 1:
+            return int(fechas[0].days_in_month)
+        return None
+
+    df["dias_facturacion"] = df[col_mes].apply(calcular_dias_facturacion)
+
     if df["mes_nom"].isna().any():
         filas_malas = df[df["mes_nom"].isna()].index.tolist()
         raise ValueError(
             f"No he podido interpretar el mes en estas filas: {filas_malas}"
         )
 
-    df = df[["periodo_mes", "mes_nom"] + periodos].copy()
+    df = df[["periodo_mes", "mes_nom", "dias_facturacion"] + periodos].copy()
 
     for p in periodos:
         df[p] = pd.to_numeric(df[p], errors="coerce").fillna(0)
@@ -615,7 +633,11 @@ def normalizar_tabla_maximetros(df, meses):
     # Si hay meses duplicados, nos quedamos con el máximo por periodo
     df = (
         df.groupby("periodo_mes", as_index=False)
-        .agg({"mes_nom": "first", **{p: "max" for p in periodos}})
+        .agg({
+            "mes_nom": "first",
+            "dias_facturacion": "first",
+            **{p: "max" for p in periodos},
+        })
     )
 
     orden_mes = {mes: i for i, mes in enumerate(meses, start=1)}
@@ -742,10 +764,34 @@ def calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, potencias):
                 0
             )
 
-        # Aplicar coeficientes de exceso específicos, por ejemplo tepp_45
+        # Tipos de medida 4 y 5: el TEPp está expresado en €/kW y día.
+        # No se prorratea un precio mensual; se multiplica directamente por
+        # los días facturados. Cuando solo se informa el mes, se toman sus
+        # días naturales y se conserva 30 como respaldo para etiquetas sin año.
+        dias_facturados = pd.Series(30.0, index=df_excesos_temp.index)
+        indices_con_dias_informados = set()
+        if 'dias_facturacion' in df_temp.columns:
+            dias_informados = pd.to_numeric(
+                df_temp.set_index(columna_indice)['dias_facturacion'],
+                errors='coerce'
+            ).dropna()
+            dias_facturados.update(dias_informados)
+            indices_con_dias_informados = set(dias_informados.index)
+        for indice in df_excesos_temp.index:
+            if indice in indices_con_dias_informados:
+                continue
+            try:
+                periodo_mes = pd.Period(str(indice), freq='M')
+                dias_facturados.loc[indice] = periodo_mes.days_in_month
+            except (TypeError, ValueError):
+                pass
+
+        # Aplicar los términos diarios de exceso específicos de tipos 4 y 5.
         for periodo, x in tepp.items():
             if periodo in df_excesos_temp.columns:
-                df_excesos_temp[periodo] = df_excesos_temp[periodo] * x * 30
+                df_excesos_temp[periodo] = (
+                    df_excesos_temp[periodo] * x * dias_facturados
+                )
 
     else:
         raise ValueError(f"Modo de cálculo no reconocido: {modo_calc}")
@@ -762,6 +808,24 @@ def calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, potencias):
     coste_tp_temp = round(coste_potfra_temp + coste_excesos_temp, 2)
 
     return coste_potfra_temp, coste_excesos_temp, coste_tp_temp, df_coste_potfra_temp, df_excesos_temp
+
+
+def prorratear_excesos_ciclo_tipo_123(
+    df_excesos,
+    curva,
+    potencia_p6,
+    umbral_tipo_123_kw=50.0,
+):
+    """Compatibilidad: delega el prorrateo en el motor normativo común."""
+    if float(potencia_p6 or 0.0) <= float(umbral_tipo_123_kw):
+        excesos = df_excesos.copy()
+        factores = pd.DataFrame(index=excesos.index)
+        factores["Días ciclo"] = 0
+        factores["Días mes"] = 0
+        factores["Factor prorrateo"] = 1.0
+        factores["Prorrateo aplicable"] = False
+        return excesos, factores
+    return prorratear_costes_excesos_mensuales(df_excesos, curva)
 
 
 def funcion_objetivo(pot_opt, df_in, tarifa, pyc_tp, tepp, meses, pot_con):
