@@ -6,6 +6,7 @@ import streamlit as st
 from backend_comun import carga_mibgas, colores_precios
 from backend_escalacv import (
     cargar_datos_escalacv,
+    graficar_comparativa_spot_horaria_mensual,
     graficar_comparativa_spot_mensual,
     graficar_media_acumulada_periodo,
 )
@@ -18,15 +19,25 @@ from backend_telemindex import (
     graficar_media_acumulada_mensual_atr,
     graficar_precios_medios_horarios,
 )
-from backend_mibgas import filtrar_por_producto, graficar_da_2026_acumulado
+from backend_mibgas import (
+    filtrar_por_producto,
+    graficar_comparativa_gas_mensual,
+    graficar_da_2026_acumulado,
+)
 from backend_redata_potgen import (
     COLORES_MIX_GENERACION,
+    graficar_mix_comparativo,
     graficar_mix_queso,
     leer_json as leer_json_redata,
     preparar_mix_generacion_mensual,
 )
 from utilidades import generar_menu, init_app, init_app_index
-from formato_es import formato_cent_eur_kwh, formato_eur_mwh, formato_pct
+from formato_es import (
+    formato_cent_eur_kwh,
+    formato_eur_mwh,
+    formato_numero_es,
+    formato_pct,
+)
 
 
 if (
@@ -40,6 +51,7 @@ generar_menu()
 fecha_hoy = date.today()
 ALTURA_GRAFICOS = 500
 TAMAÑO_TITULOS_GRAFICOS = 22
+TAMAÑO_LEYENDAS_GRAFICOS = 14
 
 
 def configurar_figura_dashboard(figura, titulo=None):
@@ -54,7 +66,7 @@ def configurar_figura_dashboard(figura, titulo=None):
             xanchor="center",
             x=0.5,
             title_text=None,
-            font=dict(size=12),
+            font=dict(size=TAMAÑO_LEYENDAS_GRAFICOS),
         ),
         "yaxis": dict(domain=[0.0, 0.74]),
     }
@@ -123,6 +135,18 @@ if componente == "SPOT+SSAA":
         key="indicadores_escala_predator",
     )
 
+st.sidebar.header("Comparativa de generación")
+tipo_mix_comparativo = st.sidebar.selectbox(
+    "Visualización del mix",
+    options=["Barras", "Quesos concéntricos", "Quesos paralelos"],
+    key="indicadores_tipo_mix_comparativo_v2",
+)
+unidad_mix_comparativo = st.sidebar.selectbox(
+    "Unidad de generación",
+    options=["% del mix", "GWh"],
+    key="indicadores_unidad_mix_comparativo",
+)
+
 st.subheader(f"Evolución del mes de {meses[mes_dashboard]}.")
 
 with st.spinner("Cargando datos de mercado..."):
@@ -187,6 +211,35 @@ with st.spinner("Preparando mix de generación..."):
         datos_generacion,
         año=año_dashboard,
         mes=mes_dashboard,
+    )
+
+    año_actual_mix = fecha_hoy.year
+    año_base_mix = 2025
+    fechas_mix_actual = datos_generacion.loc[
+        (datos_generacion["año"] == año_actual_mix)
+        & (datos_generacion["mes_num"] == mes_dashboard),
+        "fecha",
+    ]
+    ultima_fecha_mix_actual = (
+        fechas_mix_actual.max() if not fechas_mix_actual.empty else None
+    )
+    dia_limite_mix = (
+        ultima_fecha_mix_actual.day
+        if ultima_fecha_mix_actual is not None
+        and not pd.isna(ultima_fecha_mix_actual)
+        else None
+    )
+    datos_mix_actual_comparativa = preparar_mix_generacion_mensual(
+        datos_generacion,
+        año=año_actual_mix,
+        mes=mes_dashboard,
+        hasta_dia=dia_limite_mix,
+    )
+    datos_mix_base_comparativa = preparar_mix_generacion_mensual(
+        datos_generacion,
+        año=año_base_mix,
+        mes=mes_dashboard,
+        hasta_dia=dia_limite_mix,
     )
 
 tab_evolucion, tab_comparativa = st.tabs(
@@ -273,15 +326,19 @@ with col3:
     if datos_demanda.empty:
         st.warning("No hay datos de demanda para el período seleccionado.")
     else:
+        datos_demanda_evolucion = datos_demanda[
+            datos_demanda["año"] == año_dashboard
+        ].copy()
         figura_demanda = graficar_media_diaria(
-            datos_demanda,
-            años_visibles=[str(año_dashboard - 1), str(año_dashboard)],
+            datos_demanda_evolucion,
+            años_visibles=[str(año_dashboard)],
             mes_nombre_actual=meses[mes_dashboard].capitalize(),
             año_actual=año_dashboard,
+            incluir_barras_diarias=True,
         )
         figura_demanda = configurar_figura_dashboard(
             figura_demanda,
-            "Demanda real y prevista",
+            "Demanda diaria y media acumulada",
         )
         st.plotly_chart(figura_demanda, use_container_width=True)
 
@@ -317,7 +374,7 @@ with col3:
                 xanchor="left",
                 x=0.69,
                 title_text=None,
-                font=dict(size=12),
+                font=dict(size=TAMAÑO_LEYENDAS_GRAFICOS),
             )
         )
         st.plotly_chart(figura_mix, use_container_width=True)
@@ -331,6 +388,22 @@ _, figura_spot_comparativa, medias_spot = graficar_comparativa_spot_mensual(
     mes=mes_dashboard,
     año_actual=año_actual_comparativa,
     año_comparacion=año_base_comparativa,
+)
+datos_spot_horaria_comparativa, figura_spot_horaria_comparativa = (
+    graficar_comparativa_spot_horaria_mensual(
+        datos_spot_comparativa,
+        mes=mes_dashboard,
+        año_actual=año_actual_comparativa,
+        año_comparacion=año_base_comparativa,
+    )
+)
+datos_gas_comparativa, figura_gas_comparativa = (
+    graficar_comparativa_gas_mensual(
+    datos_mibgas_da,
+    mes=mes_dashboard,
+    año_actual=año_actual_comparativa,
+    año_comparacion=año_base_comparativa,
+    )
 )
 media_spot_actual = medias_spot.get(año_actual_comparativa)
 media_spot_base = medias_spot.get(año_base_comparativa)
@@ -386,6 +459,93 @@ with comp_col1:
         )
         st.plotly_chart(figura_spot_comparativa, use_container_width=True)
 
+        st.caption(
+            "Diferenciales del perfil horario medio · "
+            f"{año_actual_comparativa} − {año_base_comparativa} · "
+            "valores en €/MWh"
+        )
+        perfiles_spot_horarios = datos_spot_horaria_comparativa.pivot(
+            index="hora",
+            columns="año",
+            values="value",
+        )
+        metrica_spot_h_media, metrica_spot_h_min, metrica_spot_h_max = (
+            comp_col1.columns(3)
+        )
+        if not {
+            año_actual_comparativa,
+            año_base_comparativa,
+        }.issubset(perfiles_spot_horarios.columns):
+            valor_spot_h_media = valor_spot_h_min = valor_spot_h_max = (
+                "Sin datos"
+            )
+            hora_diferencial_min = hora_diferencial_max = None
+        else:
+            diferencial_spot_horario = (
+                perfiles_spot_horarios[año_actual_comparativa]
+                - perfiles_spot_horarios[año_base_comparativa]
+            ).dropna()
+            if diferencial_spot_horario.empty:
+                valor_spot_h_media = valor_spot_h_min = valor_spot_h_max = (
+                    "Sin datos"
+                )
+                hora_diferencial_min = hora_diferencial_max = None
+            else:
+                estadisticas_diferencial = (
+                    diferencial_spot_horario.mean(),
+                    diferencial_spot_horario.min(),
+                    diferencial_spot_horario.max(),
+                )
+                valores_diferencial = [
+                    ("+" if valor > 0 else "")
+                    + formato_eur_mwh(valor, 2, False)
+                    for valor in estadisticas_diferencial
+                ]
+                (
+                    valor_spot_h_media,
+                    valor_spot_h_min,
+                    valor_spot_h_max,
+                ) = valores_diferencial
+                hora_diferencial_min = int(
+                    diferencial_spot_horario.idxmin()
+                )
+                hora_diferencial_max = int(
+                    diferencial_spot_horario.idxmax()
+                )
+        metrica_spot_h_media.metric(
+            "Diferencial horario medio",
+            valor_spot_h_media,
+        )
+        metrica_spot_h_min.metric(
+            "Diferencial horario mínimo",
+            valor_spot_h_min,
+            delta=(
+                f"Hora {hora_diferencial_min:02d}"
+                if hora_diferencial_min is not None
+                else None
+            ),
+            delta_color="off",
+        )
+        metrica_spot_h_max.metric(
+            "Diferencial horario máximo",
+            valor_spot_h_max,
+            delta=(
+                f"Hora {hora_diferencial_max:02d}"
+                if hora_diferencial_max is not None
+                else None
+            ),
+            delta_color="off",
+        )
+
+        figura_spot_horaria_comparativa = configurar_figura_dashboard(
+            figura_spot_horaria_comparativa,
+            f"Perfil horario medio del SPOT · {meses[mes_dashboard]}",
+        )
+        st.plotly_chart(
+            figura_spot_horaria_comparativa,
+            use_container_width=True,
+        )
+
 with comp_col2:
     st.caption(
         "Precios finales según ATR · diferencias en c€/kWh · "
@@ -429,3 +589,263 @@ with comp_col2:
                 f"Diferencia real de precios (%) · {meses[mes_dashboard]}",
             )
             st.plotly_chart(figura_diferencial, use_container_width=True)
+
+    st.caption(
+        "MIBGAS D+1 · precios en €/MWh · "
+        f"{año_actual_comparativa} frente a {año_base_comparativa}"
+    )
+    medias_gas = (
+        datos_gas_comparativa.groupby("año")["precio_gas"].mean().to_dict()
+        if not datos_gas_comparativa.empty
+        else {}
+    )
+    media_gas_actual = medias_gas.get(año_actual_comparativa)
+    media_gas_base = medias_gas.get(año_base_comparativa)
+    metrica_gas_actual, metrica_gas_base, metrica_gas_diferencia = (
+        comp_col2.columns(3)
+    )
+    metrica_gas_actual.metric(
+        f"MIBGAS medio {año_actual_comparativa}",
+        formato_eur_mwh(media_gas_actual, 2, False) or "Sin datos",
+    )
+    metrica_gas_base.metric(
+        f"MIBGAS medio {año_base_comparativa}",
+        formato_eur_mwh(media_gas_base, 2, False) or "Sin datos",
+    )
+    if media_gas_actual is None or media_gas_base is None:
+        texto_diferencia_gas = "Sin datos"
+        delta_gas = None
+    else:
+        diferencia_gas = media_gas_actual - media_gas_base
+        signo_gas = "+" if diferencia_gas > 0 else ""
+        texto_diferencia_gas = signo_gas + formato_eur_mwh(
+            diferencia_gas, 2, False
+        )
+        if media_gas_base == 0:
+            delta_gas = None
+        else:
+            diferencia_gas_pct = diferencia_gas / media_gas_base * 100
+            signo_gas_pct = "+" if diferencia_gas_pct > 0 else ""
+            delta_gas = signo_gas_pct + formato_pct(
+                diferencia_gas_pct, 2, True
+            )
+    metrica_gas_diferencia.metric(
+        f"Diferencia {año_actual_comparativa} − {año_base_comparativa}",
+        texto_diferencia_gas,
+        delta=delta_gas,
+        delta_color="inverse",
+    )
+
+    if not figura_gas_comparativa.data:
+        st.warning("No hay datos MIBGAS suficientes para comparar.")
+    else:
+        figura_gas_comparativa = configurar_figura_dashboard(
+            figura_gas_comparativa,
+            f"MIBGAS D+1 diario y acumulado · {meses[mes_dashboard]}",
+        )
+        st.plotly_chart(figura_gas_comparativa, use_container_width=True)
+
+with comp_col3:
+    if dia_limite_mix is None:
+        st.caption(
+            "Estructura de generación REData · comparación equiparada"
+        )
+    else:
+        st.caption(
+            "Estructura de generación REData · "
+            f"ambos años hasta el día {dia_limite_mix}"
+        )
+
+    if (
+        datos_mix_actual_comparativa.empty
+        or datos_mix_base_comparativa.empty
+    ):
+        st.warning("No hay datos de generación suficientes para comparar.")
+    else:
+        total_mix_actual = datos_mix_actual_comparativa[
+            "generacion_GWh"
+        ].sum()
+        total_mix_base = datos_mix_base_comparativa[
+            "generacion_GWh"
+        ].sum()
+        diferencia_mix = total_mix_actual - total_mix_base
+        diferencia_mix_pct = (
+            diferencia_mix / total_mix_base * 100
+            if total_mix_base != 0
+            else None
+        )
+        metrica_mix_actual, metrica_mix_base, metrica_mix_diferencia = (
+            comp_col3.columns(3)
+        )
+        metrica_mix_actual.metric(
+            f"Generación {año_actual_mix}",
+            formato_numero_es(total_mix_actual, 0),
+        )
+        metrica_mix_base.metric(
+            f"Generación {año_base_mix}",
+            formato_numero_es(total_mix_base, 0),
+        )
+        signo_mix = "+" if diferencia_mix > 0 else ""
+        delta_mix = None
+        if diferencia_mix_pct is not None:
+            signo_mix_pct = "+" if diferencia_mix_pct > 0 else ""
+            delta_mix = signo_mix_pct + formato_pct(
+                diferencia_mix_pct, 2, True
+            )
+        metrica_mix_diferencia.metric(
+            f"Diferencia {año_actual_mix} − {año_base_mix}",
+            signo_mix + formato_numero_es(diferencia_mix, 0),
+            delta=delta_mix,
+            delta_color="inverse",
+        )
+
+        figura_mix_comparativa = graficar_mix_comparativo(
+            datos_mix_actual_comparativa,
+            datos_mix_base_comparativa,
+            año_actual=año_actual_mix,
+            año_base=año_base_mix,
+            tipo=tipo_mix_comparativo,
+            unidad=unidad_mix_comparativo,
+            colores_tecnologia=COLORES_MIX_GENERACION,
+        )
+        figura_mix_comparativa = configurar_figura_dashboard(
+            figura_mix_comparativa,
+            (
+                "Generación comparada (GWh)"
+                if unidad_mix_comparativo == "GWh"
+                else "Mix de generación comparado (%)"
+            )
+            + f" · {meses[mes_dashboard]}",
+        )
+        if tipo_mix_comparativo != "Barras":
+            figura_mix_comparativa.update_layout(
+                legend=dict(
+                    orientation="h",
+                    yanchor="top",
+                    y=-0.02,
+                    xanchor="center",
+                    x=0.5,
+                    title_text=None,
+                    font=dict(size=TAMAÑO_LEYENDAS_GRAFICOS),
+                )
+            )
+        st.plotly_chart(figura_mix_comparativa, use_container_width=True)
+
+    if datos_demanda.empty:
+        st.warning("No hay datos de demanda para comparar.")
+    else:
+        st.caption(
+            "Demanda real media · valores en GW · "
+            f"{año_dashboard} frente a {año_dashboard - 1}"
+            + (
+                " · ambos hasta el día "
+                f"{pd.Timestamp(ultimo_real_demanda).day}"
+                if ultimo_real_demanda is not None
+                else ""
+            )
+        )
+        demanda_real_metricas = datos_demanda[
+            datos_demanda["short_name"] == "Demanda real"
+        ].copy()
+        if ultimo_real_demanda is not None:
+            dia_limite_demanda = pd.Timestamp(ultimo_real_demanda).day
+            demanda_real_metricas = demanda_real_metricas[
+                (demanda_real_metricas["año"] != año_dashboard - 1)
+                | (
+                    demanda_real_metricas["datetime"].dt.day
+                    <= dia_limite_demanda
+                )
+            ]
+        medias_demanda_real = (
+            demanda_real_metricas
+            .groupby("año")["GW"]
+            .mean()
+            .to_dict()
+        )
+        energia_demanda_real_gwh = (
+            demanda_real_metricas
+            .groupby("año")["GW"]
+            .sum()
+            .mul(24)
+            .to_dict()
+        )
+        media_demanda_actual = medias_demanda_real.get(año_dashboard)
+        media_demanda_base = medias_demanda_real.get(año_dashboard - 1)
+        energia_demanda_actual = energia_demanda_real_gwh.get(año_dashboard)
+        energia_demanda_base = energia_demanda_real_gwh.get(
+            año_dashboard - 1
+        )
+        metrica_demanda_actual, metrica_demanda_base, metrica_demanda_dif = (
+            comp_col3.columns(3)
+        )
+        metrica_demanda_actual.metric(
+            f"Demanda real {año_dashboard}",
+            (
+                formato_numero_es(media_demanda_actual, 2)
+                if media_demanda_actual is not None
+                else "Sin datos"
+            ),
+            delta=(
+                f"{formato_numero_es(energia_demanda_actual, 0)} GWh"
+                if energia_demanda_actual is not None
+                else None
+            ),
+            delta_color="off",
+        )
+        metrica_demanda_base.metric(
+            f"Demanda real {año_dashboard - 1}",
+            (
+                formato_numero_es(media_demanda_base, 2)
+                if media_demanda_base is not None
+                else "Sin datos"
+            ),
+            delta=(
+                f"{formato_numero_es(energia_demanda_base, 0)} GWh"
+                if energia_demanda_base is not None
+                else None
+            ),
+            delta_color="off",
+        )
+        if media_demanda_actual is None or media_demanda_base is None:
+            texto_diferencia_demanda = "Sin datos"
+            delta_demanda = None
+        else:
+            diferencia_demanda = media_demanda_actual - media_demanda_base
+            signo_demanda = "+" if diferencia_demanda > 0 else ""
+            texto_diferencia_demanda = signo_demanda + formato_numero_es(
+                diferencia_demanda, 2
+            )
+            if media_demanda_base == 0:
+                delta_demanda = None
+            else:
+                diferencia_demanda_pct = (
+                    diferencia_demanda / media_demanda_base * 100
+                )
+                signo_demanda_pct = "+" if diferencia_demanda_pct > 0 else ""
+                delta_demanda = signo_demanda_pct + formato_pct(
+                    diferencia_demanda_pct, 2, True
+                )
+        metrica_demanda_dif.metric(
+            f"Diferencia {año_dashboard} − {año_dashboard - 1}",
+            texto_diferencia_demanda,
+            delta=delta_demanda,
+            delta_color="inverse",
+        )
+
+        figura_demanda_comparativa = graficar_media_diaria(
+            datos_demanda,
+            años_visibles=[
+                str(año_dashboard - 1),
+                str(año_dashboard),
+            ],
+            mes_nombre_actual=meses[mes_dashboard].capitalize(),
+            año_actual=año_dashboard,
+        )
+        figura_demanda_comparativa = configurar_figura_dashboard(
+            figura_demanda_comparativa,
+            "Demanda media acumulada comparada",
+        )
+        st.plotly_chart(
+            figura_demanda_comparativa,
+            use_container_width=True,
+        )

@@ -3229,6 +3229,94 @@ def añadir_costes_curva(df):
     return df
 
 
+def calcular_verificacion_ssaa(
+    df_curva,
+    referencia_inferior=13.0,
+    referencia_superior=16.0,
+    perdidas_pct=17.0,
+    apuntamiento=1.02,
+    hacienda_local=1.015,
+    columna_perdidas_horarias=None,
+):
+    """Compara la regularización SSAA mensual y la aplicada hora a hora.
+
+    Solo devuelve meses naturales completos. Un mes se considera completo si la
+    curva contiene todos sus días y no hay valores nulos de SSAA o consumo.
+    """
+    columnas = ["fecha", "ssaa", "consumo_neto_kWh"]
+    if columna_perdidas_horarias:
+        columnas.append(columna_perdidas_horarias)
+    if df_curva is None or df_curva.empty or not set(columnas).issubset(df_curva.columns):
+        return pd.DataFrame(), []
+
+    df = df_curva[columnas].copy()
+    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+    df["ssaa"] = pd.to_numeric(df["ssaa"], errors="coerce")
+    df["consumo_neto_kWh"] = pd.to_numeric(df["consumo_neto_kWh"], errors="coerce")
+    if columna_perdidas_horarias:
+        df[columna_perdidas_horarias] = pd.to_numeric(
+            df[columna_perdidas_horarias], errors="coerce"
+        )
+    df = df.dropna(subset=["fecha"])
+    df["periodo"] = df["fecha"].dt.to_period("M")
+
+    factor_mensual = (1 + perdidas_pct / 100) * apuntamiento * hacienda_local
+    filas = []
+    meses_excluidos = []
+
+    for periodo, grupo in df.groupby("periodo", sort=True):
+        dias_presentes = grupo["fecha"].dt.normalize().nunique()
+        dias_esperados = periodo.days_in_month
+        mes_completo = (
+            dias_presentes == dias_esperados
+            and grupo[columnas[1:]].notna().all().all()
+        )
+        if not mes_completo:
+            meses_excluidos.append(str(periodo))
+            continue
+
+        ssaa_medio = grupo["ssaa"].mean()
+        diferencia_mensual = (
+            ssaa_medio - referencia_superior
+            if ssaa_medio > referencia_superior
+            else ssaa_medio - referencia_inferior
+            if ssaa_medio < referencia_inferior
+            else 0.0
+        )
+
+        diferencia_horaria = np.select(
+            [grupo["ssaa"] > referencia_superior, grupo["ssaa"] < referencia_inferior],
+            [grupo["ssaa"] - referencia_superior, grupo["ssaa"] - referencia_inferior],
+            default=0.0,
+        )
+        consumo_mwh = grupo["consumo_neto_kWh"] / 1000
+        consumo_total_mwh = consumo_mwh.sum()
+        regularizacion_mensual = diferencia_mensual * consumo_total_mwh * factor_mensual
+        # El consumo real horario ya incorpora el perfil; no se aplica Ap adicional.
+        factor_horario = hacienda_local
+        if columna_perdidas_horarias:
+            factor_horario = factor_horario * (1 + grupo[columna_perdidas_horarias])
+        else:
+            factor_horario = factor_horario * (1 + perdidas_pct / 100)
+        regularizacion_horaria = (
+            diferencia_horaria * consumo_mwh * factor_horario
+        ).sum()
+
+        filas.append({
+            "Periodo": str(periodo),
+            "Año": periodo.year,
+            "Trimestre": f"{periodo.year}-T{periodo.quarter}",
+            "SSAA medio (€/MWh)": ssaa_medio,
+            "Diferencia mensual (€/MWh)": diferencia_mensual,
+            "Consumo (MWh)": consumo_total_mwh,
+            "Regularización media mensual (€)": regularizacion_mensual,
+            "Regularización hora a hora (€)": regularizacion_horaria,
+            "Diferencia entre métodos (€)": regularizacion_horaria - regularizacion_mensual,
+        })
+
+    return pd.DataFrame(filas), meses_excluidos
+
+
 def check_medias(df, atr="2.0"):
     
     print("---- MEDIAS COMPONENTES ----")

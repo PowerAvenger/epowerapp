@@ -2,6 +2,7 @@ import requests
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 import numpy as np
 from backend_comun import aplicar_estilo
@@ -54,12 +55,15 @@ def preparar_mix_generacion_mensual(
     año,
     mes,
     tecnologias=None,
+    hasta_dia=None,
 ):
     """Agrega el mix mensual con las tecnologías principales y Resto."""
     tecnologias = tecnologias or TECNOLOGIAS_MIX_PRINCIPALES
     df = df_generacion[
         (df_generacion['año'] == año) & (df_generacion['mes_num'] == mes)
     ].copy()
+    if hasta_dia is not None:
+        df = df[df['fecha'].dt.day <= hasta_dia]
     if df.empty:
         return pd.DataFrame(
             columns=['tecnologia', 'generacion_GWh', '%_mix_gen']
@@ -100,6 +104,161 @@ def preparar_mix_generacion_mensual(
     return principales.sort_values('%_mix_gen', ascending=False).reset_index(
         drop=True
     )
+
+
+def graficar_mix_comparativo(
+    mix_actual,
+    mix_base,
+    año_actual,
+    año_base,
+    tipo="Barras",
+    unidad="% del mix",
+    colores_tecnologia=None,
+):
+    """Compara dos mixes equiparados mediante donuts o barras."""
+    colores = colores_tecnologia or COLORES_MIX_GENERACION
+    tecnologias = list(dict.fromkeys(
+        TECNOLOGIAS_MIX_PRINCIPALES
+        + ["Resto"]
+        + mix_actual.get('tecnologia', pd.Series(dtype=str)).tolist()
+        + mix_base.get('tecnologia', pd.Series(dtype=str)).tolist()
+    ))
+
+    def completar_mix(df):
+        completo = pd.DataFrame({'tecnologia': tecnologias}).merge(
+            df[['tecnologia', 'generacion_GWh', '%_mix_gen']],
+            on='tecnologia',
+            how='left',
+        )
+        return completo.fillna({'generacion_GWh': 0, '%_mix_gen': 0})
+
+    actual = completar_mix(mix_actual)
+    base = completar_mix(mix_base)
+    mostrar_gwh = unidad == "GWh"
+    colores_slice = [colores.get(tec, '#B0B0B0') for tec in tecnologias]
+    hover = (
+        '<b>%{label}</b><br>'
+        'Generación: %{value:.0f} GWh<br>'
+        'Mix: %{percent:.1%}<extra>%{data.name}</extra>'
+    )
+
+    if tipo == "Quesos concéntricos":
+        figura = go.Figure()
+        figura.add_trace(go.Pie(
+            labels=tecnologias,
+            values=actual['generacion_GWh'],
+            name=str(año_actual),
+            hole=0.72,
+            domain=dict(x=[0.0, 1.0], y=[0.0, 0.72]),
+            sort=False,
+            marker=dict(colors=colores_slice),
+            textinfo='value' if mostrar_gwh else 'percent',
+            texttemplate='%{value:.0f}' if mostrar_gwh else '%{percent:.1%}',
+            textfont=dict(size=12),
+            hovertemplate=hover,
+        ))
+        figura.add_trace(go.Pie(
+            labels=tecnologias,
+            values=base['generacion_GWh'],
+            name=str(año_base),
+            hole=0.50,
+            domain=dict(x=[0.22, 0.78], y=[0.16, 0.56]),
+            sort=False,
+            marker=dict(colors=colores_slice),
+            textinfo='value' if mostrar_gwh else 'percent',
+            texttemplate='%{value:.0f}' if mostrar_gwh else '%{percent:.1%}',
+            textfont=dict(size=11),
+            hovertemplate=hover,
+            showlegend=False,
+        ))
+        figura.add_annotation(
+            text=f"<b>{año_base}</b><br>interior<br><b>{año_actual}</b><br>exterior",
+            x=0.5,
+            y=0.5,
+            showarrow=False,
+            font=dict(size=12),
+        )
+    elif tipo == "Quesos paralelos":
+        figura = make_subplots(
+            rows=1,
+            cols=2,
+            specs=[[{'type': 'domain'}, {'type': 'domain'}]],
+            subplot_titles=(str(año_actual), str(año_base)),
+        )
+        for columna, (mix, año) in enumerate(
+            ((actual, año_actual), (base, año_base)), start=1
+        ):
+            figura.add_trace(go.Pie(
+                labels=tecnologias,
+                values=mix['generacion_GWh'],
+                name=str(año),
+                hole=0.42,
+                sort=False,
+                marker=dict(colors=colores_slice),
+                textinfo='value' if mostrar_gwh else 'percent',
+                texttemplate=(
+                    '%{value:.0f}' if mostrar_gwh else '%{percent:.1%}'
+                ),
+                textfont=dict(size=12),
+                hovertemplate=hover,
+                showlegend=columna == 1,
+            ), row=1, col=columna)
+        figura.update_traces(domain_y=[0.0, 0.72], selector=dict(type='pie'))
+        for anotacion in figura.layout.annotations:
+            anotacion.y = 0.78
+    else:
+        columna_valor = 'generacion_GWh' if mostrar_gwh else '%_mix_gen'
+        plantilla_texto = '%{text:.0f}' if mostrar_gwh else '%{text:.1%}'
+        plantilla_hover = '%{x:.0f} GWh' if mostrar_gwh else '%{x:.1%}'
+        figura = go.Figure()
+        figura.add_trace(go.Bar(
+            x=base[columna_valor],
+            y=tecnologias,
+            name=str(año_base),
+            orientation='h',
+            marker=dict(color=colores_slice, opacity=0.42),
+            text=base[columna_valor],
+            texttemplate=plantilla_texto,
+            textposition='outside',
+            textfont=dict(size=14, color='white'),
+            cliponaxis=False,
+            hovertemplate=(
+                '<b>%{y}</b><br>' + str(año_base)
+                + ': ' + plantilla_hover + '<extra></extra>'
+            ),
+        ))
+        figura.add_trace(go.Bar(
+            x=actual[columna_valor],
+            y=tecnologias,
+            name=str(año_actual),
+            orientation='h',
+            marker=dict(color=colores_slice),
+            text=actual[columna_valor],
+            texttemplate=plantilla_texto,
+            textposition='outside',
+            textfont=dict(size=14, color='white'),
+            cliponaxis=False,
+            hovertemplate=(
+                '<b>%{y}</b><br>' + str(año_actual)
+                + ': ' + plantilla_hover + '<extra></extra>'
+            ),
+        ))
+        figura.update_layout(
+            barmode='group',
+            bargap=0.28,
+            bargroupgap=0.08,
+            uniformtext_minsize=14,
+            uniformtext_mode='show',
+        )
+        figura.update_xaxes(
+            tickformat=None if mostrar_gwh else '.0%',
+            title_text='Generación (GWh)' if mostrar_gwh else None,
+            showgrid=True,
+        )
+        figura.update_yaxes(title_text=None, autorange='reversed')
+
+    figura.update_layout(title="")
+    return aplicar_estilo(figura)
     
      
 # TABLA CON DATOS DIARIOS DE CADA TECNOLOGÍA

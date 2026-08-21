@@ -12,8 +12,11 @@ from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
 import calendar
+import math
+import os
 from pathlib import Path
 import re
+import shutil
 from typing import Callable
 
 import pandas as pd
@@ -152,6 +155,8 @@ class PotenciaFacturadaPeriodo:
     coste_calculado_eur: float | None = None
     meses: float | None = None
     precio_facturado_eur_kw_mes: float | None = None
+    periodo_inicio: str | None = None
+    periodo_fin: str | None = None
 
 
 @dataclass
@@ -245,7 +250,7 @@ class FacturaLeida:
         return round(sum(
             item.sobrecoste_eur
             for item in self.potencia_periodos
-            if item.resultado == "Superior a BOE"
+            if item.resultado != "No verificado"
         ), 2)
 
     @property
@@ -256,7 +261,7 @@ class FacturaLeida:
         )
         if not coste_facturado:
             return 0.0
-        return max(0.0, self.sobrecoste_potencia / coste_facturado * 100)
+        return self.sobrecoste_potencia / coste_facturado * 100
 
     @property
     def sobrecoste_anual_potencia(self) -> float:
@@ -268,10 +273,9 @@ class FacturaLeida:
             ejercicio = datetime.now().year
         dias_ejercicio = 366 if calendar.isleap(ejercicio) else 365
         return round(sum(
-            max(
-                0.0,
+            (
                 item.precio_facturado_eur_kw_dia
-                - item.precio_boe_eur_kw_dia,
+                - item.precio_boe_eur_kw_dia
             )
             * item.potencia_kw
             * dias_ejercicio
@@ -461,10 +465,70 @@ def extraer_texto_pdf(contenido: bytes) -> tuple[str, int]:
 
     texto = "\n".join(paginas).strip()
     if not texto:
-        raise FacturaError(
-            "El PDF no contiene texto extraíble. Puede ser un documento escaneado."
-        )
+        texto = _extraer_texto_pdf_con_ocr(contenido)
     return texto, len(paginas)
+
+
+def _extraer_texto_pdf_con_ocr(contenido: bytes) -> str:
+    """Aplica OCR local solo cuando el PDF carece de capa de texto."""
+    try:
+        import pymupdf
+        import pytesseract
+        from PIL import Image
+    except ImportError as exc:
+        raise FacturaError(
+            "El PDF es un documento escaneado y el OCR local no está disponible."
+        ) from exc
+
+    if not shutil.which("tesseract") and os.name == "nt":
+        rutas_tesseract = (
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+            / "Tesseract-OCR"
+            / "tesseract.exe",
+            Path(os.environ.get("LOCALAPPDATA", ""))
+            / "Programs"
+            / "Tesseract-OCR"
+            / "tesseract.exe",
+        )
+        for ruta_tesseract in rutas_tesseract:
+            if ruta_tesseract.is_file():
+                pytesseract.pytesseract.tesseract_cmd = str(ruta_tesseract)
+                break
+
+    paginas_ocr = []
+    try:
+        with pymupdf.open(stream=contenido, filetype="pdf") as pdf:
+            for pagina in pdf:
+                # 250 ppp conserva bien las tablas sin disparar el uso de memoria.
+                pixmap = pagina.get_pixmap(
+                    matrix=pymupdf.Matrix(250 / 72, 250 / 72),
+                    colorspace=pymupdf.csGRAY,
+                    alpha=False,
+                )
+                imagen = Image.frombytes(
+                    "L", (pixmap.width, pixmap.height), pixmap.samples
+                )
+                try:
+                    texto_pagina = pytesseract.image_to_string(
+                        imagen, lang="spa+eng", config="--psm 3"
+                    )
+                except pytesseract.TesseractError:
+                    # Permite ejecutar en equipos sin el idioma español.
+                    texto_pagina = pytesseract.image_to_string(
+                        imagen, config="--psm 3"
+                    )
+                paginas_ocr.append(texto_pagina)
+    except Exception as exc:
+        raise FacturaError(
+            "No se ha podido leer el documento escaneado mediante OCR local."
+        ) from exc
+
+    texto = "\n".join(paginas_ocr).strip()
+    if not texto:
+        raise FacturaError(
+            "El OCR local no ha encontrado texto legible en el PDF escaneado."
+        )
+    return texto
 
 
 def numero_es(valor: str | None) -> float:
@@ -1246,10 +1310,6 @@ def semaforo_otro_segun_factura(
                 concepto.importe, importe_impreso, "componentes"
             )
         ) else "🔴"
-    if "alquiler" in nombre:
-        # Criterio provisional: se acepta el cargo publicado por la
-        # comercializadora hasta disponer de datos contractuales del cliente.
-        return "🟢 ⚠️"
     if "bono social" in nombre:
         return "🟡"
     if "fnee" in nombre:
@@ -1359,10 +1419,39 @@ def estado_otro_segun_factura(
 ) -> str:
     """Devuelve el estado efectivo de un concepto del bloque Otros."""
     nombre = concepto.concepto.lower()
+    if "alquiler" in nombre:
+        # El importe se acepta documentalmente, pero su validez contractual
+        # requiere conocer el equipo de medida instalado.
+        return "🟢 ⚠️"
     if "bono social" in nombre and factura.verificacion_fbs:
         return factura.verificacion_fbs.estado
     if "fnee" in nombre and factura.verificacion_fnee:
         return factura.verificacion_fnee.estado
+    return semaforo_otro_segun_factura(texto, concepto)
+
+
+def estado_otro_calculo_factura(
+    factura: FacturaLeida,
+    texto: str,
+    concepto: OtroConcepto,
+) -> str:
+    """Comprueba la fórmula impresa sin mezclarla con la referencia real."""
+    nombre = concepto.concepto.lower()
+    if "bono social" in nombre and factura.verificacion_fbs:
+        verificacion = factura.verificacion_fbs
+        calculado = round(
+            verificacion.dias * verificacion.precio_facturado_eur_dia, 2
+        )
+        return "🟢" if (
+            importes_coinciden(
+                verificacion.importe_facturado_eur, calculado, "fbs"
+            )
+            and importes_coinciden(
+                concepto.importe,
+                verificacion.importe_facturado_eur,
+                "componentes",
+            )
+        ) else "🔴"
     return semaforo_otro_segun_factura(texto, concepto)
 
 
@@ -1898,7 +1987,7 @@ def _verificar_impuestos(factura: FacturaLeida, texto: str) -> None:
         from regulacion_iee import obtener_referencia_iee
 
         fecha_iee = _parsear_fecha_factura(
-            factura.fecha_factura or factura.periodo_fin
+            factura.periodo_fin or factura.fecha_factura
         )
         referencia_iee = (
             obtener_referencia_iee(fecha_iee, factura.atr)
@@ -2036,7 +2125,7 @@ def _verificar_impuestos(factura: FacturaLeida, texto: str) -> None:
         from regulacion_iee import obtener_referencia_iee
 
         fecha_iee = _parsear_fecha_factura(
-            factura.fecha_factura or factura.periodo_fin
+            factura.periodo_fin or factura.fecha_factura
         )
         referencia_iee = (
             obtener_referencia_iee(fecha_iee, factura.atr)
@@ -2273,6 +2362,26 @@ def _verificar_impuestos(factura: FacturaLeida, texto: str) -> None:
         )
         return
 
+    coincidencia_iva_visalia_tabla = re.search(
+        r"^I\.?V\.?A\.?\s+([\d.,]+)\s*%\s+([\d.,]+)\s*€\s+"
+        r"([\d.,]+)\s*%\s+([\d.,]+)\s*€\s*$",
+        texto,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    if coincidencia_iva_visalia_tabla:
+        tipo, base, tipo_repetido, importe = coincidencia_iva_visalia_tabla.groups()
+        factura.verificacion_iva = _crear_verificacion_iva(
+            factura, base, tipo_repetido, importe
+        )
+        if not importes_coinciden(
+            numero_es(tipo), numero_es(tipo_repetido), "impuestos"
+        ):
+            factura.verificacion_iva.estado = "🔴"
+            factura.verificacion_iva.mensaje = (
+                "La fila de IVA muestra dos tipos impositivos distintos."
+            )
+        return
+
     coincidencia_iva_visalia = re.search(
         r"^I\.?V\.?A\.?\s+([\d.,]+)\s*%\s*\(Base\s+Imponible\s+"
         r"([\d.,]+)\s*€\)\s*=\s*([\d.,]+)\s*€\s*$",
@@ -2437,7 +2546,7 @@ def _verificar_impuestos(factura: FacturaLeida, texto: str) -> None:
 
     coincidencia_iva_fila_base = re.search(
         r"^Base\s+Imponible\s+\d+\s+([\d.,]+)\s+([\d.,]+)\s+"
-        r"([\d.,]+)\s+[\d.,]+\s*$",
+        r"([\d.]+\s*,\s*\d+|[\d.,]+)\s+[\d.,]+\s*$",
         texto,
         re.IGNORECASE | re.MULTILINE,
     )
@@ -2455,7 +2564,7 @@ def _aplicar_referencia_iee(
     from regulacion_iee import obtener_referencia_iee
 
     fecha = _parsear_fecha_factura(
-        factura.fecha_factura or factura.periodo_fin
+        factura.periodo_fin or factura.fecha_factura
     )
     if not fecha:
         verificacion.estado = "🟡"
@@ -2524,7 +2633,7 @@ def _verificar_iee_minimo(
     importe_facturado = numero_es(importe)
     importe_calculado = round(tarifa * consumo, 2)
     fecha = _parsear_fecha_factura(
-        factura.fecha_factura or factura.periodo_fin
+        factura.periodo_fin or factura.fecha_factura
     )
     referencia = obtener_referencia_iee(fecha, factura.atr) if fecha else None
     correcto = (
@@ -2561,7 +2670,7 @@ def _verificar_iee_por_minimo_sin_base(
     """Valida una cuota minima cuando el PDF muestra el tipo, pero no su base."""
     from regulacion_iee import obtener_referencia_iee
 
-    fecha = _parsear_fecha_factura(factura.fecha_factura or factura.periodo_fin)
+    fecha = _parsear_fecha_factura(factura.periodo_fin or factura.fecha_factura)
     referencia = obtener_referencia_iee(fecha, factura.atr) if fecha else None
     tipo_pct = numero_es(tipo_impreso)
     base_estimada = round(
@@ -4115,6 +4224,38 @@ def extraer_sobrepasamientos_matriciales(
     ] if len(valores) >= 6 else []
 
 
+def extraer_sobrepasamientos_medidas_ocr(
+    texto: str,
+) -> list[SobrepasamientoPeriodo]:
+    """Empareja las etiquetas de medidas con su columna Cantidad tras OCR."""
+    etiquetas = re.findall(
+        r"(?:Potencia\s+Maxima|Energ[ií]a\s+Activa|"
+        r"Energ[ií]a\s+Reactiva|(Excesos\s+de\s+Potencia))\s+"
+        r"Periodo\s+([1-6])\s*\([^)]*\)",
+        texto,
+        re.IGNORECASE,
+    )
+    posicion_tabla = texto.lower().find("fecha desde lectura desde")
+    if not etiquetas or posicion_tabla < 0:
+        return []
+    cantidades = re.findall(
+        r"^\d{2}/\d{2}/\d{4}\s+[\d.,]+\s+[\d.,]+\s+"
+        r"\d{2}/\d{2}/\d{4}\s+([\d.,]+)\s*$",
+        texto[posicion_tabla:],
+        re.MULTILINE,
+    )
+    if len(cantidades) < len(etiquetas):
+        return []
+    return [
+        SobrepasamientoPeriodo(
+            periodo=f"P{periodo}",
+            exceso_kw=numero_es(cantidad) / 1000,
+        )
+        for (es_exceso, periodo), cantidad in zip(etiquetas, cantidades)
+        if es_exceso
+    ]
+
+
 def extraer_total_excesos_horizontal(texto: str) -> float:
     valores = _fila_numerica_tras_periodo(
         texto, r"Total\s+excesos\s+de\s+potencia"
@@ -4562,6 +4703,19 @@ def _generico(texto: str) -> FacturaLeida:
     inicio = _fecha_es_a_ddmmyyyy(inicio.replace("-", "/")) if inicio else None
     fin = _fecha_es_a_ddmmyyyy(fin.replace("-", "/")) if fin else None
     potencias = extraer_potencias_contratadas(texto)
+    linea_potencias_contigo = buscar_texto(texto, [
+        r"Potencia\s+contratada\s*\(kW\)\s*:\s*([^\n]+)",
+    ])
+    if linea_potencias_contigo:
+        potencias_contigo = [
+            PotenciaContratadaPeriodo(f"P{periodo}", numero_es(valor))
+            for periodo, valor in re.findall(
+                r"P([1-6])\s*:\s*([\d.,]+)", linea_potencias_contigo,
+                re.IGNORECASE,
+            )
+        ]
+        if potencias_contigo:
+            potencias = potencias_contigo
     if not potencias and es_endesa:
         coincidencia_potencias_endesa = re.search(
             r"Potencias?\s+contratadas?\s*:\s*punta-llano\s+([\d.,]+)\s*kW\s*;\s*"
@@ -4720,6 +4874,44 @@ def _generico(texto: str) -> FacturaLeida:
         potencia_periodos = extraer_potencia_vertical_con_viñetas(texto)
     if not potencia_periodos:
         potencia_periodos = extraer_potencia_centimos_con_periodo(texto)
+    if not potencia_periodos:
+        # Contigo/Gesternova puede publicar el precio ya prorrateado para todo
+        # el ciclo, sin repetir los días en la fila de potencia. Es habitual
+        # al recuperar mediante OCR un PDF impreso como trazados.
+        filas_potencia_contigo = re.findall(
+            r"^P([1-6])\.\s*Potencia\s+facturada\s+"
+            r"([\d.,]+)\s*k[wW]\s+([\d.,]+)\s+([\d.,]+)\s*$",
+            texto,
+            re.IGNORECASE | re.MULTILINE,
+        )
+        if filas_potencia_contigo:
+            dias_ciclo_txt = buscar_texto(texto, [
+                r"P1\.\s*Precio\s*:\s*[\d.,]+\s*X\s*"
+                r"\(\s*(\d+)\s*/\s*365\s*\)",
+            ])
+            dias_ciclo = int(dias_ciclo_txt) if dias_ciclo_txt else 0
+            if not dias_ciclo and inicio and fin:
+                try:
+                    fecha_inicio = datetime.strptime(inicio, "%d/%m/%Y")
+                    fecha_fin = datetime.strptime(fin, "%d/%m/%Y")
+                    dias_ciclo = (fecha_fin - fecha_inicio).days + 1
+                except ValueError:
+                    pass
+            dias_ciclo = dias_ciclo or 1
+            for periodo, potencia_kw, precio_ciclo, coste in filas_potencia_contigo:
+                kw = numero_es(potencia_kw)
+                precio = numero_es(precio_ciclo) / dias_ciclo
+                coste_num = numero_es(coste)
+                potencia_periodos.append(PotenciaFacturadaPeriodo(
+                    periodo=f"P{periodo}",
+                    potencia_kw=kw,
+                    dias=dias_ciclo,
+                    precio_facturado_eur_kw_dia=precio,
+                    coste_facturado_eur=coste_num,
+                    coste_calculado_eur=round(
+                        kw * dias_ciclo * precio, 2
+                    ),
+                ))
     if not potencia_periodos:
         for periodo, potencia_kw, precio, dias, coste in re.findall(
             r"^(P[1-6]):\s*([\d.,]+)\s*kW\s*\*\s*([\d.,]+)\s*"
@@ -4981,6 +5173,8 @@ def _generico(texto: str) -> FacturaLeida:
     )
     if not excesos:
         excesos = buscar_numero(texto, [
+            r"^Importe\s+excesos\s+de\s+potencia\s+"
+            r"[\d.,]+\s+[\d.,]+\s+([\d.,]+)\s*$",
             r"Excesos\s+(?:de\s+)?Potencia\s+([-\d.,]+)\s*€?\s*$",
             r"T[eé]rmino\s+Excesos\s+Distribuidora[^\n]*?([-\d.,]+)\s*€\s*$",
         ])
@@ -5091,6 +5285,8 @@ def _generico(texto: str) -> FacturaLeida:
         r"(\d{1,2}\s+de\s+[a-záéíóúüñ]+\s+de\s+\d{4})",
     ])
     iva = buscar_numero(texto, [
+        r"^Base\s+Imponible\s+\d+\s+[\d.,]+\s+"
+        r"\d+(?:[.,]\d+)?\s+([\d.]+\s*,\s*\d{2})\s+[\d.,]+\s*$",
         r"^IVA\s+normal\s+[\d.,]+\s*%\s+s/\s*[\d.,]+[^\n]*?"
         r"([\d.,]+)\s*€",
         r"^IVA\s*\(GENERAL\)\s+[\d.,]+\s*€\s+[\d.,]+\s*%\s+"
@@ -5132,6 +5328,7 @@ def _generico(texto: str) -> FacturaLeida:
         r"^Impuesto\s+de\s+electricidad\s*:\s*([\d.,]+)\s*€\s*$",
     ])
     comercializadora = buscar_texto(texto, [
+        r"^(Contigo)\s+Factura\s+de\s+electricidad",
         r"^(IBERDROLA\s+CLIENTES)",
         r"\b([A-ZÁÉÍÓÚ][A-ZÁÉÍÓÚ ]+ENERG[IÍ]A)\s+-",
         r"^(Acciona\s+Green\s+Energy\s+Developments)",
@@ -5145,6 +5342,8 @@ def _generico(texto: str) -> FacturaLeida:
         comercializadora = f"{dominio.replace('-', ' ').title()} Energía" if dominio else None
     if comercializadora and comercializadora.lower() == "ignis":
         comercializadora = "Ignis Luz"
+    elif comercializadora and comercializadora.lower() == "contigo":
+        comercializadora = "Contigo Energía"
     comercializadora = comercializadora or "Comercializadora no identificada"
     if es_canaluz:
         comercializadora = "Canaluz"
@@ -5297,6 +5496,8 @@ def _generico(texto: str) -> FacturaLeida:
                 MaximetroPeriodo("P2", max_por_periodo["P3"].potencia_kw),
             ]
     sobrepasamientos = extraer_sobrepasamientos_matriciales(texto)
+    if not sobrepasamientos:
+        sobrepasamientos = extraer_sobrepasamientos_medidas_ocr(texto)
     if not sobrepasamientos:
         sobrepasamientos = excesos_detallados
     if not sobrepasamientos:
@@ -5629,53 +5830,94 @@ def _naturgy_grandes_clientes(texto: str) -> FacturaLeida:
             inicio, "%d/%m/%Y"
         )).days + 1
 
-    potencias = [
-        PotenciaContratadaPeriodo(f"P{periodo}", consumo_es(valor))
-        for periodo, valor in re.findall(
-            r"^P([1-6]):\s*([\d.,]+)\s*kW\s*$",
-            texto,
-            re.IGNORECASE | re.MULTILINE,
-        )
-    ]
-    potencias_kw = {item.periodo: item.potencia_kw for item in potencias}
-
-    potencia_agregada: dict[str, dict[str, float]] = {}
-    for _, periodo, meses, precio, coste in re.findall(
-        r"^POTENCIA\s+(ACCESO|CARGOS)\s+P([1-6])\s+[\d.,]+\s*kW\s+"
-        r"([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)\s+Eur\s*$",
+    potencias_por_periodo = {}
+    for periodo, valor in re.findall(
+        r"^P([1-6]):\s*([\d.,]+)(?:\s+\([^\n]+\))?\s*kW\s*$",
         texto,
         re.IGNORECASE | re.MULTILINE,
     ):
-        clave = f"P{periodo}"
+        potencias_por_periodo[f"P{periodo}"] = consumo_es(valor)
+    potencias = [
+        PotenciaContratadaPeriodo(periodo, valor)
+        for periodo, valor in sorted(potencias_por_periodo.items())
+    ]
+
+    potencia_agregada: dict[tuple, dict[str, float]] = {}
+    for _, periodo, tramo_inicio, tramo_fin, potencia_kw, meses, precio, coste in re.findall(
+        r"^POTENCIA\s+(ACCESO|CARGOS)\s+P([1-6])\s+"
+        r"(\d{2}\.\d{2}\.\d{4})\s+-\s+(\d{2}\.\d{2}\.\d{4})\s+"
+        r"([\d.,]+)\s*kW\s+([\d.,]+)\s+([\d.,]+)\s+"
+        r"([\d.,]+)\s+Eur\s*$",
+        texto,
+        re.IGNORECASE | re.MULTILINE,
+    ):
+        clave = (f"P{periodo}", tramo_inicio, tramo_fin, potencia_kw, meses)
         datos = potencia_agregada.setdefault(
             clave,
-            {"meses": numero_es(meses), "precio_mes": 0.0, "coste": 0.0},
+            {"precio_mes": 0.0, "coste": 0.0},
         )
         datos["precio_mes"] += numero_es(precio)
         datos["coste"] += numero_es(coste)
 
+    # Plantilla habitual: las líneas de potencia no repiten las fechas y
+    # heredan el único ciclo indicado en la cabecera de la factura.
+    if not potencia_agregada and inicio and fin:
+        for _, periodo, potencia_kw, meses, precio, coste in re.findall(
+            r"^POTENCIA\s+(ACCESO|CARGOS)\s+P([1-6])\s+"
+            r"([\d.,]+)\s*kW\s+([\d.,]+)\s+([\d.,]+)\s+"
+            r"([\d.,]+)\s+Eur\s*$",
+            texto,
+            re.IGNORECASE | re.MULTILINE,
+        ):
+            clave = (
+                f"P{periodo}",
+                inicio.replace("/", "."),
+                fin.replace("/", "."),
+                potencia_kw,
+                meses,
+            )
+            datos = potencia_agregada.setdefault(
+                clave,
+                {"precio_mes": 0.0, "coste": 0.0},
+            )
+            datos["precio_mes"] += numero_es(precio)
+            datos["coste"] += numero_es(coste)
+
     potencia_periodos = []
-    for periodo, datos in sorted(potencia_agregada.items()):
-        potencia_kw = potencias_kw.get(periodo, 0.0)
+    for clave, datos in sorted(potencia_agregada.items()):
+        periodo, tramo_inicio, tramo_fin, potencia_texto, meses_texto = clave
+        potencia_kw = consumo_es(potencia_texto)
+        meses_tramo = numero_es(meses_texto)
+        inicio_tramo = normalizar_fecha(tramo_inicio)
+        fin_tramo = normalizar_fecha(tramo_fin)
+        dias_tramo = (
+            datetime.strptime(fin_tramo, "%d/%m/%Y")
+            - datetime.strptime(inicio_tramo, "%d/%m/%Y")
+        ).days + 1
         coste = round(datos["coste"], 2)
-        precio_dia = coste / potencia_kw / dias if potencia_kw and dias else 0.0
+        precio_dia = (
+            coste / potencia_kw / dias_tramo
+            if potencia_kw and dias_tramo else 0.0
+        )
         potencia_periodos.append(PotenciaFacturadaPeriodo(
             periodo=periodo,
             potencia_kw=potencia_kw,
-            dias=dias,
+            dias=dias_tramo,
             precio_facturado_eur_kw_dia=precio_dia,
             coste_facturado_eur=coste,
             coste_calculado_eur=round(
-                potencia_kw * datos["meses"] * datos["precio_mes"], 2
+                potencia_kw * meses_tramo * datos["precio_mes"], 2
             ),
-            meses=datos["meses"],
+            meses=meses_tramo,
             precio_facturado_eur_kw_mes=round(datos["precio_mes"], 9),
+            periodo_inicio=inicio_tramo,
+            periodo_fin=fin_tramo,
         ))
 
     energia_agregada: dict[str, dict[str, float]] = {}
     for _, periodo, consumo, precio, coste in re.findall(
         r"^ENERG[IÍ]A\s+ACTIVA(?:\s+(CARGOS|ACCESO))?\s+P([1-6])\s+"
-        r"([\d.,]+)\s*kWh\s+([\d.,]+)\s+([\d.,]+)\s+Eur\s*$",
+        r"([\d.,]+)\s*kWh\s+([\d.,]+)\s*\*?\s+([\d.,]+)\s+Eur\s*$",
         texto,
         re.IGNORECASE | re.MULTILINE,
     ):
@@ -5695,6 +5937,75 @@ def _naturgy_grandes_clientes(texto: str) -> FacturaLeida:
         )
         for periodo, datos in sorted(energia_agregada.items())
     ]
+
+    # ``REACTIVA ACCESO`` expresa el exceso liquidado, no la lectura ER.
+    # Las magnitudes medidas se toman de la tabla de lecturas del contador.
+    lecturas_activas: dict[str, float] = {}
+    for periodo, consumo in re.findall(
+        r"^EA\s+P([1-6])\s+[^\n]*?R\s+1[,\.]00000\s+"
+        r"([\d.,]+)\s*kWh(?:\s|$)",
+        texto,
+        re.IGNORECASE | re.MULTILINE,
+    ):
+        lecturas_activas[f"P{periodo}"] = consumo_es(consumo)
+
+    lecturas_reactivas: dict[str, float] = {}
+    for periodo, consumo in re.findall(
+        r"^ER\s+P([1-6])\s+[^\n]*?R\s+1[,\.]00000\s+"
+        r"([\d.,]+)\s*kVArh(?:\s|$)",
+        texto,
+        re.IGNORECASE | re.MULTILINE,
+    ):
+        clave = f"P{periodo}"
+        lecturas_reactivas[clave] = (
+            lecturas_reactivas.get(clave, 0.0) + consumo_es(consumo)
+        )
+
+    reactiva_facturada: dict[str, dict[str, float]] = {}
+    for periodo, _, _, exceso_kvarh, precio, coste in re.findall(
+        r"^REACTIVA\s+ACCESO\s+P([1-6])\s+"
+        r"(\d{2}\.\d{2}\.\d{4})\s+-\s+(\d{2}\.\d{2}\.\d{4})\s+"
+        r"([\d.,]+)\s*kVArh\s+([\d.,]+)\s+([\d.,]+)\s+Eur\s*$",
+        texto,
+        re.IGNORECASE | re.MULTILINE,
+    ):
+        clave = f"P{periodo}"
+        datos = reactiva_facturada.setdefault(
+            clave,
+            {"exceso": 0.0, "coste": 0.0, "precio": numero_es(precio)},
+        )
+        datos["exceso"] += consumo_es(exceso_kvarh)
+        datos["coste"] += numero_es(coste)
+
+    reactiva_periodos = []
+    for clave, datos in sorted(reactiva_facturada.items()):
+        activa = lecturas_activas.get(
+            clave, energia_agregada.get(clave, {}).get("consumo", 0.0)
+        )
+        reactiva_valor = lecturas_reactivas.get(clave, 0.0)
+        exceso_facturado = datos["exceso"]
+        precio_valor = datos["precio"]
+        coste_valor = round(datos["coste"], 2)
+        exceso_calculado = max(reactiva_valor - activa * 0.33, 0.0)
+        coste_calculado = round(exceso_calculado * precio_valor, 2)
+        cos_phi = (
+            activa / math.sqrt(activa ** 2 + reactiva_valor ** 2)
+            if activa or reactiva_valor else None
+        )
+        reactiva_periodos.append(ReactivaPeriodo(
+            periodo=clave,
+            energia_activa_kwh=activa,
+            energia_reactiva_kvarh=reactiva_valor,
+            exceso_facturado_kvarh=exceso_facturado,
+            exceso_calculado_kvarh=exceso_calculado,
+            cos_phi=cos_phi,
+            precio_eur_kvarh=precio_valor,
+            coste_facturado_eur=coste_valor,
+            coste_calculado_eur=coste_calculado,
+            estado=(
+                "🟢" if abs(coste_valor - coste_calculado) <= 0.02 else "🟡"
+            ),
+        ))
 
     otros = []
     for concepto, patron in (
@@ -5721,6 +6032,11 @@ def _naturgy_grandes_clientes(texto: str) -> FacturaLeida:
         importe = buscar_numero(texto, [patron])
         if importe:
             otros.append(OtroConcepto(concepto, importe))
+    derechos_enganche = buscar_numero(texto, [
+        r"^DERECHOS\s+DE\s+ENGANCHE[^\n]*\n\s*([\d.,]+)\s+Eur",
+    ])
+    if derechos_enganche:
+        otros.append(OtroConcepto("Derechos de enganche", derechos_enganche))
 
     sobrepasamientos = [
         SobrepasamientoPeriodo(f"P{periodo}", consumo_es(valor))
@@ -5751,6 +6067,9 @@ def _naturgy_grandes_clientes(texto: str) -> FacturaLeida:
         excesos_potencia=buscar_numero(texto, [
             r"^EXCESOS\s+DE\s+POTENCIA\s+ACCESO\s+([\d.,]+)\s+Eur$",
         ]),
+        reactiva=round(sum(
+            item.coste_facturado_eur for item in reactiva_periodos
+        ), 2),
         iee=buscar_numero(texto, [
             r"^IMPUESTO\s+EL[ÉE]CTRICO[^\n]*?([\d.,]+)\s+Eur$",
         ]),
@@ -5762,6 +6081,7 @@ def _naturgy_grandes_clientes(texto: str) -> FacturaLeida:
         potencias_contratadas=potencias,
         potencia_periodos=potencia_periodos,
         sobrepasamientos=sobrepasamientos,
+        reactiva_periodos=reactiva_periodos,
         otros=otros,
     )
     return _completar_advertencias(factura)
@@ -7036,6 +7356,8 @@ def _semaforo_real_reactiva(factura: FacturaLeida) -> str:
     estados = {item.estado for item in factura.reactiva_periodos}
     if "🔴" in estados:
         return "🔴"
+    if "🟡" in estados:
+        return "🟡"
     return "🟢 ⚠️" if "🟢 ⚠️" in estados else "🟢"
 
 
@@ -7112,7 +7434,7 @@ def _semaforo_componente_otros(factura: FacturaLeida, texto: str) -> str:
 
 def _semaforo_otros_segun_factura(factura: FacturaLeida, texto: str) -> str:
     return _peor_semaforo([
-        estado_otro_segun_factura(factura, texto, item)
+        estado_otro_calculo_factura(factura, texto, item)
         for item in factura.otros
     ])
 

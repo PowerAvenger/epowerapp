@@ -6,3 +6,5 @@ libffi-dev
 shared-mime-info
 chromium
 chromium-driver
+tesseract-ocr
+tesseract-ocr-spa

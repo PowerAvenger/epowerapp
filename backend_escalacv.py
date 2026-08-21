@@ -240,6 +240,89 @@ def graficar_comparativa_spot_mensual(
     return diario, aplicar_estilo(fig), medias
 
 
+def graficar_comparativa_spot_horaria_mensual(
+    datos_spot,
+    mes,
+    año_actual,
+    año_comparacion=2025,
+):
+    """Compara el perfil horario medio del SPOT de dos años."""
+    datos = datos_spot.copy()
+    datos["fecha"] = pd.to_datetime(datos["fecha"], errors="coerce")
+    datos["value"] = pd.to_numeric(datos["value"], errors="coerce")
+    datos["hora"] = pd.to_numeric(datos["hora"], errors="coerce")
+    datos = datos[
+        (datos["fecha"].dt.month == mes)
+        & datos["fecha"].dt.year.isin([año_actual, año_comparacion])
+    ].dropna(subset=["fecha", "hora", "value"])
+    horario = (
+        datos.assign(año=lambda df: df["fecha"].dt.year)
+        .groupby(["año", "hora"], as_index=False)["value"]
+        .mean()
+        .sort_values(["año", "hora"])
+    )
+
+    figura = go.Figure()
+    colores_años = {
+        año_actual: "#09ab3b",
+        año_comparacion: "#83c9ff",
+    }
+    for año in (año_actual, año_comparacion):
+        serie = horario[horario["año"] == año]
+        if serie.empty:
+            continue
+        media_mes = serie["value"].mean()
+        figura.add_trace(go.Scatter(
+            x=serie["hora"],
+            y=serie["value"],
+            mode="lines+markers",
+            name=str(año),
+            line=dict(
+                color=colores_años[año],
+                width=3.5 if año == año_actual else 2.5,
+            ),
+            marker=dict(size=5),
+            hovertemplate=(
+                f"{año} · hora "
+                "%{x}: %{y:.2f} €/MWh<extra></extra>"
+            ),
+        ))
+        figura.add_trace(go.Scatter(
+            x=[0, 23],
+            y=[media_mes, media_mes],
+            mode="lines",
+            name=f"Media {año}",
+            line=dict(
+                color=colores_años[año],
+                width=2.5,
+                dash="dot",
+            ),
+            hovertemplate=(
+                f"Media {año}: {media_mes:.2f} €/MWh<extra></extra>"
+            ),
+        ))
+
+    figura.update_layout(
+        title="",
+        hovermode="x unified",
+        legend_title_text="",
+    )
+    figura.update_xaxes(
+        title_text="Hora",
+        tickmode="linear",
+        tick0=0,
+        dtick=2,
+        range=[0, 23],
+        showgrid=True,
+    )
+    figura.update_yaxes(
+        title_text="SPOT medio €/MWh",
+        rangemode="tozero",
+        showgrid=True,
+    )
+    return horario, aplicar_estilo(figura)
+
+
 def diarios_totales(datos, fecha_ini, fecha_fin):    
     datos_dia = datos.copy()
     datos_dia = datos_dia.drop(columns=['hora'])

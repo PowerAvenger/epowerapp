@@ -8,10 +8,20 @@ from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 from jinja2 import Environment, FileSystemLoader
 
 from backend_comun import aplicar_estilo
+from backend_curvadecarga import (
+    DatadisLimiteConsultas,
+    colores_periodo,
+    dataframe_como_archivo_curva,
+    obtener_datos_contador,
+    obtener_consumo_datadis_cacheado,
+    obtener_suministros_datadis,
+    rango_meses_datadis,
+)
 from backend_factura import (
     FacturaError,
     FormatoNoReconocido,
@@ -19,6 +29,7 @@ from backend_factura import (
     componentes_grafico,
     componentes_peso_grafico,
     es_servicio_adicional,
+    estado_otro_calculo_factura,
     estado_otro_segun_factura,
     extraer_texto_pdf,
     generar_resumen,
@@ -31,6 +42,17 @@ from formato_es import (
     formato_kwh,
     formato_pct,
     formatear_columnas_tabla,
+)
+from backend_verificacion_consumos import (
+    calcular_energia_indexada,
+    calcular_energia_fija,
+    calcular_excesos_desde_curva,
+    calcular_potencia_confirmada,
+    estado_verificacion_energia_real,
+    preparar_archivos_factura,
+    preparar_curva_factura,
+    reconstruir_total_beta,
+    tabla_conciliacion_consumos,
 )
 from utilidades import (
     actualizar_df_index_por_zona,
@@ -56,13 +78,13 @@ if not st.session_state.get("usuario_autenticado", False) and not st.session_sta
 with st.sidebar:
     st.header("🧾 Análisis de factura eléctrica")
     st.caption(
-        "Lectura local, sin IA y sin consultas externas. "
-        "No se guardarán ni compartirán datos sensibles de factura. "
-        "No es necesario anonimizar."
+        "Lectura local y sin IA. La consulta externa a Datadis solo se realiza "
+        "si la solicitas en la verificación de consumos; las credenciales se "
+        "mantienen únicamente durante esta sesión."
     )
 
 
-VERSION_LECTOR = 123
+VERSION_LECTOR = 133
 MOSTRAR_TABLA_MAXIMETROS = False
 
 with st.sidebar:
@@ -81,6 +103,8 @@ def limpiar_factura_sesion():
         "factura_pdf_nombre",
         "factura_uploader",
         "factura_comparativa_indexado",
+        "factura_verificacion_consumos",
+        "factura_suministros_datadis",
     ):
         st.session_state.pop(clave, None)
 
@@ -98,6 +122,79 @@ def _atr_indexado(atr_factura):
 def _fecha_factura(valor):
     fecha = pd.to_datetime(valor, dayfirst=True, errors="coerce")
     return None if pd.isna(fecha) else fecha.date()
+
+
+def _semaforo_energia_real_sesion(factura, huella):
+    """Obtiene el contraste real de energía guardado para esta factura."""
+    verificacion = st.session_state.get("factura_verificacion_consumos")
+    if not verificacion or verificacion.get("huella") != huella:
+        return "🟡"
+    resultado = verificacion.get("resultado")
+    if resultado is None:
+        return "🟡"
+    atr = _atr_indexado(factura.atr)
+    periodos = tuple(
+        f"P{indice}" for indice in range(1, 4 if atr == "2.0" else 7)
+    )
+    modo = st.session_state.get(
+        f"factura_verificacion_tipo_energia_{huella[:8]}", "Fijo"
+    )
+    if modo == "Indexado":
+        try:
+            _precios_indexado_periodo(factura)
+            _, importe_verificado = calcular_energia_indexada(
+                resultado.curva_periodo,
+                st.session_state.df_sheets,
+                atr,
+                resultado.frecuencia,
+            )
+        except Exception:
+            return "🟡"
+        fnee_facturado = (
+            sum(
+                float(item.importe) for item in factura.otros
+                if "fnee" in item.concepto.lower()
+            )
+            if st.session_state.get("cfg_fnee", True) else 0.0
+        )
+        return estado_verificacion_energia_real(
+            float(factura.energia) + fnee_facturado,
+            importe_verificado,
+            cobertura_completa=bool(resultado.cobertura.get("completa")),
+            precios_completos=True,
+        )
+    else:
+        precios_factura = {
+            item.periodo: item.precio_eur_kwh
+            for item in factura.energia_periodos
+            if item.periodo in periodos
+        }
+        precios = {
+            periodo: st.session_state.get(
+                f"factura_medida_precio_{periodo}_{huella[:8]}",
+                precios_factura.get(periodo),
+            )
+            for periodo in periodos
+        }
+    periodos_necesarios = {
+        periodo
+        for periodo, consumo in resultado.consumos_periodos.items()
+        if float(consumo) > 0
+    }
+    precios_completos = all(
+        precios.get(periodo) is not None and float(precios[periodo]) > 0
+        for periodo in periodos_necesarios
+    )
+    _, importe_verificado = calcular_energia_fija(
+        resultado.consumos_periodos,
+        {periodo: float(precio or 0.0) for periodo, precio in precios.items()},
+    )
+    return estado_verificacion_energia_real(
+        factura.energia,
+        importe_verificado,
+        cobertura_completa=bool(resultado.cobertura.get("completa")),
+        precios_completos=precios_completos,
+    )
 
 
 def _buscar_dato_informe(texto, patrones):
@@ -171,6 +268,28 @@ def _firma_formula_indexado():
         st.session_state.get("cfg_fnee_pos", "perdidas"),
         st.session_state.get("cf_pct", 0.0),
         st.session_state.get("zona_periodos_index", "peninsula"),
+    )
+
+
+def _factura_parece_indexada(factura, texto):
+    """Sugiere indexado sin convertir la heurística en una decisión cerrada."""
+    tarifa = " ".join(filter(None, (
+        getattr(factura, "tipo_suministro", None),
+        getattr(factura, "formato", None),
+    )))
+    return bool(
+        re.search(r"\b(?:indexad[oa]|spot|omie)\b", tarifa, re.IGNORECASE)
+        or re.search(
+            r"(?:tarifa|producto|modalidad|contrato)[^\n]{0,80}"
+            r"\b(?:indexad[oa]|spot|omie)\b",
+            texto,
+            re.IGNORECASE,
+        )
+        or re.search(
+            r"^ENERG[IÍ]A\s+ACTIVA\s+P[1-6].*?[\d.,]+\s*\*\s+",
+            texto,
+            re.IGNORECASE | re.MULTILINE,
+        )
     )
 
 
@@ -271,7 +390,7 @@ def _crear_resultado_energia(factura, atr, inicio, fin, consumos, precios, tipo)
     }
 
 
-def _calcular_comparativa_indexado(factura):
+def _precios_indexado_periodo(factura):
     atr = _atr_indexado(factura.atr)
     if atr is None:
         raise ValueError(
@@ -282,14 +401,6 @@ def _calcular_comparativa_indexado(factura):
     fin = _fecha_factura(factura.periodo_fin)
     if inicio is None or fin is None or inicio > fin:
         raise ValueError("No se ha podido obtener un periodo de facturación válido.")
-
-    numero_periodos = 3 if atr == "2.0" else 6
-    periodos_requeridos = [
-        f"P{i}" for i in range(1, numero_periodos + 1)
-    ]
-    consumos = _consumos_factura_por_periodo(
-        factura, periodos_requeridos=periodos_requeridos
-    )
 
     init_app()
     init_app_index()
@@ -324,6 +435,16 @@ def _calcular_comparativa_indexado(factura):
         .groupby("_periodo", observed=False)[columna_precio]
         .mean()
         .div(1000)
+    ).to_dict()
+    return atr, inicio, fin, precios
+
+
+def _calcular_comparativa_indexado(factura):
+    atr, inicio, fin, precios = _precios_indexado_periodo(factura)
+    numero_periodos = 3 if atr == "2.0" else 6
+    periodos_requeridos = [f"P{i}" for i in range(1, numero_periodos + 1)]
+    consumos = _consumos_factura_por_periodo(
+        factura, periodos_requeridos=periodos_requeridos
     )
 
     return _crear_resultado_energia(
@@ -577,8 +698,8 @@ def _estilar_diferencias_comparativa(tabla_numerica):
     return tabla_formateada.style.apply(lambda _: estilos, axis=None)
 
 
-tab_analisis, tab_comparativa, tab_informe = st.tabs(
-    ["Análisis", "Propuesta", "Informe"]
+tab_analisis, tab_verificacion, tab_comparativa, tab_informe = st.tabs(
+    ["Análisis", "Verificación", "Propuesta", "Informe"]
 )
 
 with tab_analisis:
@@ -635,6 +756,7 @@ if contenido is not None:
         with col_entrada:
             st.error(f"No se ha podido completar la lectura: {exc}")
     else:
+        es_20td = (factura.atr or "").replace(" ", "").upper() == "2.0TD"
         reconstruccion_total_completa = factura.reconstruccion_total_completa
         verificacion_total_ok = reconstruccion_total_completa and importes_coinciden(
             factura.total,
@@ -663,9 +785,16 @@ if contenido is not None:
             )
             if factura.sobrecoste_potencia > 0:
                 st.warning(
-                    "⚠️ Sobrecoste en el término de potencia: "
+                    "⚠️ Sobrecoste neto en el término de potencia: "
                     f"{formato_euros(factura.sobrecoste_potencia)} "
                     f"({formato_pct(factura.porcentaje_sobrecoste_potencia, 1)} "
+                    "del término facturado)."
+                )
+            elif factura.sobrecoste_potencia < 0:
+                st.success(
+                    "✅ El término de potencia presenta un ahorro neto frente a BOE de "
+                    f"{formato_euros(abs(factura.sobrecoste_potencia))} "
+                    f"({formato_pct(abs(factura.porcentaje_sobrecoste_potencia), 1)} "
                     "del término facturado)."
                 )
             elif potencia_verificada:
@@ -679,17 +808,25 @@ if contenido is not None:
                     f"{formato_euros(factura.excesos_potencia)}."
                 )
             else:
-                st.info("ℹ️ La factura no incluye excesos de potencia.")
+                st.info(
+                    "ℹ️ La factura no incluye excesos de potencia."
+                    + (
+                        " Para este suministro 2.0TD se asume control por ICP, "
+                        "salvo que las condiciones contractuales indiquen modo excesos."
+                        if es_20td else ""
+                    )
+                )
 
-            if factura.reactiva:
-                st.error(
-                    "🔴 La factura incluye penalización por energía reactiva: "
-                    f"{formato_euros(factura.reactiva)}."
-                )
-            else:
-                st.success(
-                    "✅ La factura no incluye penalización por energía reactiva."
-                )
+            if not es_20td:
+                if factura.reactiva:
+                    st.error(
+                        "🔴 La factura incluye penalización por energía reactiva: "
+                        f"{formato_euros(factura.reactiva)}."
+                    )
+                else:
+                    st.success(
+                        "✅ La factura no incluye penalización por energía reactiva."
+                    )
 
             servicios_adicionales = [
                 item for item in factura.otros
@@ -832,6 +969,11 @@ if contenido is not None:
                     unsafe_allow_html=True,
                 )
         componentes = componentes_grafico(factura, texto)
+        semaforo_energia_real = _semaforo_energia_real_sesion(factura, huella)
+        for componente in componentes:
+            if componente["Componente"] == "Energía":
+                componente["Verificación real"] = semaforo_energia_real
+                break
         df_componentes = pd.DataFrame(componentes)
         semaforos_reales = {
             item["Componente"]: item["Verificación real"]
@@ -1160,6 +1302,49 @@ if contenido is not None:
                         and item.precio_facturado_eur_kw_mes is not None
                         for item in factura.potencia_periodos
                     )
+                    tramos_detectados = sorted({
+                        (item.periodo_inicio, item.periodo_fin)
+                        for item in factura.potencia_periodos
+                        if item.periodo_inicio and item.periodo_fin
+                    })
+                    if tramos_detectados:
+                        filas_potencias_tramos = []
+                        for numero_tramo, (inicio_tramo, fin_tramo) in enumerate(
+                            tramos_detectados, start=1
+                        ):
+                            fila_tramo = {
+                                "Tramo": f"Tramo {numero_tramo}",
+                                "Periodo facturado": (
+                                    f"{inicio_tramo} – {fin_tramo}"
+                                ),
+                            }
+                            for item in factura.potencia_periodos:
+                                if (
+                                    item.periodo_inicio == inicio_tramo
+                                    and item.periodo_fin == fin_tramo
+                                ):
+                                    fila_tramo[item.periodo] = item.potencia_kw
+                            filas_potencias_tramos.append(fila_tramo)
+                        df_potencias_tramos = pd.DataFrame(
+                            filas_potencias_tramos,
+                            columns=[
+                                "Tramo", "Periodo facturado",
+                                "P1", "P2", "P3", "P4", "P5", "P6",
+                            ],
+                        )
+                        st.markdown("#### Potencias contratadas por tramo")
+                        st.dataframe(
+                            formatear_columnas_tabla(
+                                df_potencias_tramos,
+                                columnas_kw=[
+                                    "P1", "P2", "P3", "P4", "P5", "P6"
+                                ],
+                                decimales_kw=3,
+                                incluir_unidades=False,
+                            ),
+                            hide_index=True,
+                            use_container_width=True,
+                        )
                     df_potencia = pd.DataFrame(
                         [
                             ({
@@ -1268,15 +1453,27 @@ if contenido is not None:
                         if item.resultado != "No verificado"
                     ]
                     if any(item.resultado == "Superior a BOE" for item in verificadas):
-                        st.warning(
-                            "El término de potencia incluye precios superiores a los "
-                            f"regulados. Sobrecoste en el periodo facturado: "
-                            f"{formato_euros(factura.sobrecoste_potencia)} "
-                            f"({formato_pct(factura.porcentaje_sobrecoste_potencia, 1)} "
-                            "del término facturado). De mantenerse las mismas potencias y "
-                            "precios durante un año completo, el sobrecoste anual estimado "
-                            f"sería de {formato_euros(factura.sobrecoste_anual_potencia)}."
-                        )
+                        if factura.sobrecoste_potencia > 0:
+                            st.warning(
+                                "El término de potencia incluye precios superiores a los "
+                                "regulados. Diferencia neta en el periodo facturado, "
+                                "incluidos los periodos inferiores a BOE: "
+                                f"{formato_euros(factura.sobrecoste_potencia)} "
+                                f"({formato_pct(factura.porcentaje_sobrecoste_potencia, 1)} "
+                                "del término facturado). De mantenerse las mismas potencias "
+                                "y precios durante un año completo, el sobrecoste neto anual "
+                                "estimado sería de "
+                                f"{formato_euros(factura.sobrecoste_anual_potencia)}."
+                            )
+                        else:
+                            st.info(
+                                "Aunque algún periodo tiene un precio superior a BOE, los "
+                                "periodos inferiores lo compensan. Ahorro neto en el periodo "
+                                f"facturado: {formato_euros(abs(factura.sobrecoste_potencia))}. "
+                                "De mantenerse las mismas potencias y precios durante un año "
+                                "completo, el ahorro neto anual estimado sería de "
+                                f"{formato_euros(abs(factura.sobrecoste_anual_potencia))}."
+                            )
                     elif verificadas:
                         st.success("El término de potencia está facturado a precios BOE.")
                     else:
@@ -1383,6 +1580,11 @@ if contenido is not None:
             if not factura.excesos_potencia:
                 desplegable_excesos.info(
                     "🔵 La factura no incluye excesos de potencia."
+                    + (
+                        " En 2.0TD se presupone control de potencia mediante ICP, "
+                        "salvo que el contrato establezca expresamente modo excesos."
+                        if es_20td else ""
+                    )
                 )
             elif factura.excesos_verificados or factura.verificacion_excesos:
                 with desplegable_excesos:
@@ -1408,7 +1610,12 @@ if contenido is not None:
                                     "Días": item.dias,
                                     "Coste (€)": item.coste_calculado_eur,
                                 })
-                                for item in factura.excesos_verificados
+                                for item in sorted(
+                                    factura.excesos_verificados,
+                                    key=lambda detalle: int(
+                                        detalle.periodo.upper().removeprefix("P")
+                                    ),
+                                )
                             ]
                         )
                         st.dataframe(
@@ -1449,7 +1656,8 @@ if contenido is not None:
                         else:
                             st.info(factura.verificacion_excesos)
 
-            with st.expander(
+            zona_detalle_reactiva = st.empty()
+            with zona_detalle_reactiva.expander(
                 etiqueta_expander("Reactiva", "Energía reactiva")
             ):
                 if factura.reactiva:
@@ -1549,6 +1757,8 @@ if contenido is not None:
                         "reactiva desglosadas por periodo. Si el PDF solo publica el "
                         "coste, se detecta la penalización, pero no se reconstruye."
                     )
+            if es_20td:
+                zona_detalle_reactiva.empty()
 
             if factura.iee or factura.iva:
                 estados_impuestos = [
@@ -1633,7 +1843,17 @@ if contenido is not None:
                             {
                                 "Concepto": item.concepto,
                                 "Importe factura (€)": item.importe,
-                                "Importe calculado (€)": (
+                                "Importe calculado s/factura (€)": (
+                                    round(
+                                        factura.verificacion_fbs.dias
+                                        * factura.verificacion_fbs.precio_facturado_eur_dia,
+                                        2,
+                                    )
+                                    if factura.verificacion_fbs
+                                    and "bono social" in item.concepto.lower()
+                                    else None
+                                ),
+                                "Referencia regulada (€)": (
                                     factura.verificacion_fbs.importe_regulado_eur
                                     if factura.verificacion_fbs
                                     and "bono social" in item.concepto.lower()
@@ -1642,19 +1862,15 @@ if contenido is not None:
                                     and "fnee" in item.concepto.lower()
                                     else None
                                 ),
-                                "Verificación": (
+                                "Verif s/cálculo": (
                                     "🟡"
                                     if "ssaa/ree" in item.concepto.lower()
-                                    else
-                                    factura.verificacion_fbs.estado
-                                    if factura.verificacion_fbs
-                                    and "bono social" in item.concepto.lower()
-                                    else factura.verificacion_fnee.estado
-                                    if factura.verificacion_fnee
-                                    and "fnee" in item.concepto.lower()
-                                    else estado_otro_segun_factura(
+                                    else estado_otro_calculo_factura(
                                         factura, texto, item
                                     )
+                                ),
+                                "Verificación real": estado_otro_segun_factura(
+                                    factura, texto, item
                                 ),
                                 "Observación": (
                                     "No verificable: la factura no identifica el "
@@ -1687,7 +1903,8 @@ if contenido is not None:
                             df_otros,
                             columnas_euros=[
                                 "Importe factura (€)",
-                                "Importe calculado (€)",
+                                "Importe calculado s/factura (€)",
+                                "Referencia regulada (€)",
                             ],
                             incluir_unidades=True,
                         ),
@@ -1700,19 +1917,30 @@ if contenido is not None:
                         col_unitario_fbs, col_unitario_fnee, col_referencia_fnee = (
                             st.columns(3)
                         )
+                        precio_regulado_fbs = (
+                            fbs.precio_regulado_eur_dia
+                            if fbs and fbs.precio_regulado_eur_dia is not None
+                            else (
+                                fbs.importe_regulado_eur / fbs.dias
+                                if fbs
+                                and fbs.importe_regulado_eur is not None
+                                and fbs.dias
+                                else None
+                            )
+                        )
                         col_unitario_fbs.metric(
                             "FBS regulado",
-                            formato_euros(fbs.precio_regulado_eur_dia) + "/día"
-                            if fbs and fbs.precio_regulado_eur_dia is not None
+                            formato_euros(precio_regulado_fbs) + "/día"
+                            if precio_regulado_fbs is not None
                             else "No disponible",
                             delta=(
                                 formato_euros(
                                     fbs.precio_facturado_eur_dia
-                                    - fbs.precio_regulado_eur_dia
+                                    - precio_regulado_fbs
                                 )
                                 if fbs
                                 and fbs.precio_facturado_eur_dia is not None
-                                and fbs.precio_regulado_eur_dia is not None
+                                and precio_regulado_fbs is not None
                                 else None
                             ),
                             delta_color="inverse",
@@ -1750,6 +1978,1561 @@ if contenido is not None:
                 st.write(f"Identificador local del PDF: `{huella[:16]}`")
                 st.json(factura.como_dict())
                 st.text_area("Texto extraído", texto, height=240)
+
+
+with tab_verificacion:
+    if factura is None:
+        st.info("Carga una factura válida para preparar la verificación con medida.")
+    elif _atr_indexado(factura.atr) is None:
+        st.info("El peaje de la factura no está soportado en esta verificación.")
+    elif not factura.periodo_inicio or not factura.periodo_fin:
+        st.warning("La factura no contiene un periodo de consumo completo.")
+    else:
+        atr_medida = _atr_indexado(factura.atr)
+        periodos_medida = tuple(
+            f"P{indice}" for indice in range(1, 4 if atr_medida == "2.0" else 7)
+        )
+        tab_medida, tab_condiciones, tab_resultado_medida = st.columns(
+            [0.30, 0.30, 0.40], gap="large"
+        )
+        fecha_inicio_medida = _fecha_factura(factura.periodo_inicio)
+        fecha_fin_medida = _fecha_factura(factura.periodo_fin)
+        resultado_medida_sesion = st.session_state.get(
+            "factura_verificacion_consumos"
+        )
+        resultado_medida = None
+        if (
+            resultado_medida_sesion
+            and resultado_medida_sesion.get("huella") == huella
+        ):
+            resultado_medida = resultado_medida_sesion.get("resultado")
+
+        with tab_medida:
+            st.subheader("1 · Datos de medida", divider="rainbow")
+            origen_medida_factura = st.selectbox(
+                "Origen de datos",
+                ("Datadis", "Axon", "Archivo CSV/Excel"),
+                key="factura_origen_medida",
+            )
+            if origen_medida_factura == "Axon":
+                with st.expander("Acceso y descarga Axon", expanded=True):
+                    usuario_axon_factura = st.text_input(
+                        "Usuario Axon",
+                        value=st.session_state.get("axon_usuario_sesion", ""),
+                        key="factura_axon_usuario",
+                    )
+                    password_axon_factura = st.text_input(
+                        "Contraseña Axon",
+                        value=st.session_state.get("axon_password_sesion", ""),
+                        type="password",
+                        key="factura_axon_password",
+                    )
+                    cups_axon_factura = st.text_input(
+                        "CUPS",
+                        value=(factura.cups or "")[:20],
+                        max_chars=20,
+                        key=f"factura_axon_cups_{huella[:8]}",
+                        help="Axon utiliza el CUPS base de 20 caracteres, sin los dos caracteres finales.",
+                    )
+                    tipo_axon_factura = st.selectbox(
+                        "Resolución solicitada",
+                        ("TM1 · Horaria", "TM2 · Cuartohoraria"),
+                        key="factura_axon_tipo",
+                        help=(
+                            "TM2 solo está disponible para determinados equipos "
+                            "y suministros."
+                        ),
+                    )
+                    descargar_axon_factura = st.button(
+                        "Obtener y verificar consumos",
+                        type="primary",
+                        use_container_width=True,
+                        key="factura_obtener_consumos_axon",
+                    )
+                    if descargar_axon_factura:
+                        try:
+                            cups_axon_factura = "".join(
+                                str(cups_axon_factura or "").split()
+                            ).upper()[:20]
+                            with st.spinner("Descargando y preparando la curva Axon…"):
+                                curva_axon, frecuencia_axon = obtener_datos_contador(
+                                    usuario_axon_factura,
+                                    password_axon_factura,
+                                    cups_axon_factura,
+                                    fecha_inicio_medida,
+                                    fecha_fin_medida,
+                                    "TM1" if tipo_axon_factura.startswith("TM1") else "TM2",
+                                )
+                                preparado = preparar_curva_factura(
+                                    curva_axon,
+                                    fecha_inicio_medida,
+                                    fecha_fin_medida,
+                                    atr=atr_medida,
+                                    zona_periodos="peninsula",
+                                    nombre_origen=f"axon_{frecuencia_axon.lower()}.csv",
+                                )
+                            st.session_state.axon_usuario_sesion = usuario_axon_factura
+                            st.session_state.axon_password_sesion = password_axon_factura
+                            st.session_state.factura_verificacion_consumos = {
+                                "huella": huella,
+                                "origen": "axon",
+                                "resultado": preparado,
+                            }
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"No se ha podido verificar la curva Axon: {exc}")
+            if origen_medida_factura == "Archivo CSV/Excel":
+                with st.expander(
+                    "Usar un CSV/Excel ya descargado",
+                    expanded=origen_medida_factura == "Archivo CSV/Excel",
+                ):
+                    archivo_medida_factura = st.file_uploader(
+                        "Curvas de carga",
+                        type=["csv", "xlsx"],
+                        accept_multiple_files=True,
+                        key="factura_archivo_medida",
+                        help=(
+                            "Se procesa con el mismo normalizador que utiliza "
+                            "Curva de carga."
+                        ),
+                    )
+                    usar_archivo_medida = st.button(
+                        "Verificar con estos archivos",
+                        disabled=not archivo_medida_factura,
+                        key="factura_usar_archivo_medida",
+                    )
+                    if usar_archivo_medida:
+                        try:
+                            with st.spinner("Normalizando y recortando la curva…"):
+                                preparado = preparar_archivos_factura(
+                                    archivo_medida_factura,
+                                    fecha_inicio_medida,
+                                    fecha_fin_medida,
+                                    atr=atr_medida,
+                                    zona_periodos="peninsula",
+                                )
+                            st.session_state.factura_verificacion_consumos = {
+                                "huella": huella,
+                                "origen": "archivo",
+                                "resultado": preparado,
+                            }
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"No se ha podido preparar el archivo: {exc}")
+
+            if origen_medida_factura == "Datadis":
+                col_acceso, col_suministro, col_estado = st.columns([0.30, 0.34, 0.36])
+                with col_acceso:
+                    st.markdown("#### Acceso Datadis")
+                    usuario_datadis_factura = st.text_input(
+                        "Usuario Datadis", key="factura_datadis_usuario"
+                    )
+                    password_datadis_factura = st.text_input(
+                        "Contraseña Datadis",
+                        type="password",
+                        key="factura_datadis_password",
+                    )
+                    acceso_datadis_factura = st.radio(
+                        "Acceso",
+                        ("Titular", "Autorizado"),
+                        horizontal=True,
+                        key="factura_datadis_acceso",
+                    )
+                    authorized_nif_factura = ""
+                    if acceso_datadis_factura == "Autorizado":
+                        authorized_nif_factura = st.text_input(
+                            "NIF del titular", key="factura_datadis_nif"
+                        )
+                    consultar_suministros_factura = st.button(
+                        "Consultar suministros",
+                        use_container_width=True,
+                        key="factura_consultar_suministros_datadis",
+                    )
+                    if consultar_suministros_factura:
+                        try:
+                            with st.spinner("Consultando suministros en Datadis…"):
+                                st.session_state.factura_suministros_datadis = (
+                                    obtener_suministros_datadis(
+                                        usuario_datadis_factura,
+                                        password_datadis_factura,
+                                        authorized_nif=authorized_nif_factura,
+                                    )
+                                )
+                        except Exception as exc:
+                            st.session_state.pop("factura_suministros_datadis", None)
+                            st.error(f"No se pudieron consultar los suministros: {exc}")
+
+                suministro_factura = None
+                with col_suministro:
+                    st.markdown("#### Suministro y periodo")
+                    suministros_factura = st.session_state.get(
+                        "factura_suministros_datadis"
+                    )
+                    if suministros_factura is not None and not suministros_factura.empty:
+                        indices = list(suministros_factura.index)
+                        cups_factura = (factura.cups or "").strip().upper()
+                        indice_defecto = next(
+                            (
+                                posicion for posicion, indice in enumerate(indices)
+                                if str(suministros_factura.loc[indice].get("cups", ""))
+                                .strip().upper() == cups_factura
+                            ),
+                            0,
+                        )
+
+                        def etiqueta_suministro_factura(indice):
+                            fila = suministros_factura.loc[indice]
+                            cups = str(fila.get("cups", ""))
+                            direccion = str(fila.get("address", "") or "").strip()
+                            return f"{cups} · {direccion}" if direccion else cups
+
+                        indice_suministro = st.selectbox(
+                            "Suministro",
+                            indices,
+                            index=indice_defecto,
+                            format_func=etiqueta_suministro_factura,
+                            key="factura_suministro_datadis",
+                        )
+                        suministro_factura = suministros_factura.loc[
+                            indice_suministro
+                        ].to_dict()
+                        if (
+                            cups_factura
+                            and str(suministro_factura.get("cups", "")).strip().upper()
+                            != cups_factura
+                        ):
+                            st.warning("El CUPS seleccionado no coincide con el de la factura.")
+                    else:
+                        st.info("Consulta los suministros para seleccionar el CUPS.")
+
+                    inicio_mes, fin_mes = rango_meses_datadis(
+                        factura.periodo_inicio, factura.periodo_fin
+                    )
+                    st.write(
+                        f"Factura: **{factura.periodo_inicio} – {factura.periodo_fin}**"
+                    )
+                    st.write(
+                        f"Consulta Datadis: **{inicio_mes:%m/%Y} – {fin_mes:%m/%Y}**"
+                    )
+                    preferir_qh_factura = st.checkbox(
+                        "Intentar curva cuartohoraria (opción avanzada)",
+                        value=False,
+                        key="factura_datadis_preferir_qh_v2",
+                        help=(
+                            "Por defecto se solicita curva horaria. Datadis no ofrece "
+                            "QH para todos los tipos de punto ni distribuidoras; los "
+                            "tipos 4 y 5 se consultan siempre en horario. No se realiza "
+                            "fallback automático para evitar consumir otra consulta."
+                        ),
+                    )
+                    obtener_medida = st.button(
+                        "Obtener y verificar consumos",
+                        type="primary",
+                        use_container_width=True,
+                        disabled=suministro_factura is None,
+                        key="factura_obtener_consumos_datadis",
+                    )
+                    if obtener_medida:
+                        try:
+                            cache_curvas = st.session_state.setdefault(
+                                "datadis_curvas_cache", {}
+                            )
+                            with st.spinner("Descargando y preparando la curva…"):
+                                (
+                                    curva_original,
+                                    frecuencia_datadis,
+                                    aviso_fallback,
+                                    clave_datadis,
+                                    reutilizado,
+                                ) = obtener_consumo_datadis_cacheado(
+                                    cache_curvas,
+                                    usuario_datadis_factura,
+                                    password_datadis_factura,
+                                    suministro_factura,
+                                    fecha_inicio_medida,
+                                    fecha_fin_medida,
+                                    authorized_nif=authorized_nif_factura,
+                                    preferir_qh=preferir_qh_factura,
+                                )
+                                preparado = preparar_curva_factura(
+                                    curva_original,
+                                    fecha_inicio_medida,
+                                    fecha_fin_medida,
+                                    atr=atr_medida,
+                                    zona_periodos="peninsula",
+                                    nombre_origen=(
+                                        f"datadis_{frecuencia_datadis.lower()}.csv"
+                                    ),
+                                )
+                            st.session_state.factura_verificacion_consumos = {
+                                "huella": huella,
+                                "clave_datadis": clave_datadis,
+                                "reutilizado": reutilizado,
+                                "aviso_fallback": aviso_fallback,
+                                "resultado": preparado,
+                            }
+                            st.rerun()
+                        except DatadisLimiteConsultas as exc:
+                            st.warning(
+                                f"{exc} Datadis aplica el límite al CUPS/consulta, "
+                                "aunque el rango solicitado sea diferente. Usa arriba "
+                                "el CSV ya descargado o espera a que venza el plazo."
+                            )
+                        except Exception as exc:
+                            st.session_state.pop("factura_verificacion_consumos", None)
+                            st.error(f"No se ha podido verificar la curva: {exc}")
+
+                with col_estado:
+                    st.markdown("#### Estado de la medida")
+                    if resultado_medida is None:
+                        st.info("Todavía no se ha obtenido una curva para esta factura.")
+                    else:
+                        cobertura = resultado_medida.cobertura
+                        if cobertura["completa"]:
+                            st.success("Cobertura completa del periodo facturado.")
+                        else:
+                            st.warning(
+                                "La curva tiene incidencias de cobertura: "
+                                f"{cobertura['intervalos_ausentes']} intervalos ausentes y "
+                                f"{cobertura['registros_duplicados']} registros duplicados."
+                            )
+                        st.metric("Resolución", resultado_medida.frecuencia)
+                        st.metric(
+                            "Registros del ciclo",
+                            cobertura["intervalos_unicos"],
+                            delta=(
+                                cobertura["intervalos_unicos"]
+                                - cobertura["intervalos_esperados"]
+                            ),
+                        )
+                        original_csv = dataframe_como_archivo_curva(
+                            resultado_medida.curva_original, "datadis_original.csv"
+                        ).getvalue()
+                        recorte_csv = dataframe_como_archivo_curva(
+                            resultado_medida.curva_periodo,
+                            "datadis_periodo_factura.csv",
+                        ).getvalue()
+                        st.download_button(
+                            "Descargar curva original",
+                            original_csv,
+                            "datadis_original.csv",
+                            "text/csv",
+                            use_container_width=True,
+                        )
+                        st.download_button(
+                            "Descargar periodo facturado",
+                            recorte_csv,
+                            "datadis_periodo_factura.csv",
+                            "text/csv",
+                            use_container_width=True,
+                        )
+
+            if resultado_medida is not None:
+                curva_graficos = resultado_medida.curva_periodo.copy()
+                curva_graficos["fecha_hora"] = pd.to_datetime(
+                    curva_graficos["fecha_hora"], errors="coerce"
+                )
+                curva_graficos["consumo_neto_kWh"] = pd.to_numeric(
+                    curva_graficos["consumo_neto_kWh"], errors="coerce"
+                ).fillna(0.0)
+                curva_graficos = curva_graficos.dropna(subset=["fecha_hora"])
+                col_graficos_izq, col_graficos_der = st.columns(
+                    2, gap="small"
+                )
+
+                def estilo_grafico_medida(figura):
+                    figura = aplicar_estilo(figura)
+                    figura.update_layout(height=300)
+                    return figura
+
+                consumo_diario = (
+                    curva_graficos.assign(
+                        Fecha=curva_graficos["fecha_hora"].dt.date
+                    )
+                    .groupby("Fecha", as_index=False)["consumo_neto_kWh"]
+                    .sum()
+                    .rename(columns={"consumo_neto_kWh": "Consumo diario (kWh)"})
+                )
+                media_diaria_grafico = consumo_diario[
+                    "Consumo diario (kWh)"
+                ].mean()
+                figura_diaria = px.bar(
+                    consumo_diario,
+                    x="Fecha",
+                    y="Consumo diario (kWh)",
+                    title="Consumo diario y medio",
+                )
+                figura_diaria.add_scatter(
+                    x=consumo_diario["Fecha"],
+                    y=[media_diaria_grafico] * len(consumo_diario),
+                    name="Media diaria",
+                    mode="lines",
+                    line=dict(color="#f59e0b", width=2.5),
+                )
+                figura_diaria.update_layout(
+                    height=170,
+                    margin=dict(l=5, r=5, t=38, b=5),
+                    yaxis_title="Consumo diario (kWh)",
+                    legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center"),
+                )
+                col_graficos_izq.plotly_chart(
+                    estilo_grafico_medida(figura_diaria),
+                    use_container_width=True,
+                    key=f"factura_consumo_diario_{huella[:8]}",
+                )
+
+                consumo_horario_dia = (
+                    curva_graficos.assign(
+                        Fecha=curva_graficos["fecha_hora"].dt.date,
+                        Hora=curva_graficos["fecha_hora"].dt.hour,
+                    )
+                    .groupby(["Fecha", "Hora"], as_index=False)[
+                        "consumo_neto_kWh"
+                    ]
+                    .sum()
+                )
+                perfil_medio = (
+                    consumo_horario_dia.groupby("Hora", as_index=False)[
+                        "consumo_neto_kWh"
+                    ]
+                    .mean()
+                    .rename(
+                        columns={"consumo_neto_kWh": "Consumo medio (kWh)"}
+                    )
+                )
+                figura_perfil = px.line(
+                    perfil_medio,
+                    x="Hora",
+                    y="Consumo medio (kWh)",
+                    markers=False,
+                    title="Perfil medio horario",
+                )
+                figura_perfil.update_layout(
+                    height=170,
+                    margin=dict(l=5, r=5, t=38, b=5),
+                )
+                figura_perfil.update_xaxes(dtick=2, range=[0, 23])
+                figura_perfil.update_yaxes(rangemode="tozero")
+                col_graficos_der.plotly_chart(
+                    estilo_grafico_medida(figura_perfil),
+                    use_container_width=True,
+                    key=f"factura_perfil_horario_{huella[:8]}",
+                )
+
+                consumo_periodos_grafico = (
+                    curva_graficos.groupby("periodo", as_index=False)[
+                        "consumo_neto_kWh"
+                    ]
+                    .sum()
+                    .rename(columns={"consumo_neto_kWh": "Consumo (kWh)"})
+                )
+                figura_periodos = px.pie(
+                    consumo_periodos_grafico,
+                    names="periodo",
+                    values="Consumo (kWh)",
+                    hole=0.42,
+                    title="Consumo por periodos",
+                    color="periodo",
+                    color_discrete_map=colores_periodo,
+                )
+                figura_periodos.update_traces(
+                    textinfo="none",
+                    texttemplate="<b>%{label}</b><br><b>%{percent}</b>",
+                    textfont=dict(size=14, family="Arial Black"),
+                    textposition="inside",
+                    hovertemplate=(
+                        "%{label}<br>%{value:,.2f} kWh<br>"
+                        "%{percent}<extra></extra>"
+                    ),
+                )
+                figura_periodos.update_layout(
+                    height=170,
+                    margin=dict(l=5, r=5, t=38, b=5),
+                    showlegend=False,
+                )
+                col_graficos_izq.plotly_chart(
+                    estilo_grafico_medida(figura_periodos),
+                    use_container_width=True,
+                    key=f"factura_consumo_periodos_{huella[:8]}",
+                )
+
+                tabla_calor = curva_graficos.assign(
+                    Fecha=curva_graficos["fecha_hora"].dt.strftime("%d/%m"),
+                    Hora=curva_graficos["fecha_hora"].dt.hour,
+                ).pivot_table(
+                    index="Fecha",
+                    columns="Hora",
+                    values="consumo_neto_kWh",
+                    aggfunc="sum",
+                    fill_value=0,
+                    sort=False,
+                )
+                figura_calor = go.Figure(go.Heatmap(
+                    z=tabla_calor.to_numpy(),
+                    x=tabla_calor.columns,
+                    y=tabla_calor.index,
+                    colorscale="YlOrRd",
+                    colorbar=dict(title="kWh", thickness=10),
+                    hovertemplate=(
+                        "Fecha: %{y}<br>Hora: %{x}:00<br>"
+                        "Consumo: %{z:.2f} kWh<extra></extra>"
+                    ),
+                ))
+                figura_calor.update_layout(
+                    title="Mapa de calor del consumo",
+                    height=170,
+                    margin=dict(l=5, r=5, t=38, b=20),
+                    xaxis_title="Hora",
+                    yaxis=dict(title="", autorange="reversed"),
+                )
+                col_graficos_der.plotly_chart(
+                    estilo_grafico_medida(figura_calor),
+                    use_container_width=True,
+                    key=f"factura_mapa_calor_{huella[:8]}",
+                )
+
+                consumo_medio_diario = consumo_diario[
+                    "Consumo diario (kWh)"
+                ].mean()
+                consumo_medio_horario = consumo_horario_dia[
+                    "consumo_neto_kWh"
+                ].mean()
+                fila_max_diario = consumo_diario.loc[
+                    consumo_diario["Consumo diario (kWh)"].idxmax()
+                ]
+                fila_max_horario = consumo_horario_dia.loc[
+                    consumo_horario_dia["consumo_neto_kWh"].idxmax()
+                ]
+                fecha_hora_maxima = (
+                    pd.Timestamp(fila_max_horario["Fecha"]).normalize()
+                    + pd.Timedelta(hours=int(fila_max_horario["Hora"]))
+                )
+
+                metric_medio_dia, metric_medio_hora, metric_max_dia, metric_max_hora = (
+                    st.columns(4, gap="small")
+                )
+                metric_medio_dia.metric(
+                    "Consumo medio diario",
+                    formato_kwh(consumo_medio_diario),
+                )
+                metric_medio_hora.metric(
+                    "Consumo medio horario",
+                    formato_kwh(consumo_medio_horario),
+                )
+                metric_max_dia.metric(
+                    "Máximo diario",
+                    formato_kwh(fila_max_diario["Consumo diario (kWh)"]),
+                    delta=pd.Timestamp(fila_max_diario["Fecha"]).strftime("%d/%m/%Y"),
+                    delta_color="off",
+                )
+                metric_max_hora.metric(
+                    "Máximo horario",
+                    formato_kwh(fila_max_horario["consumo_neto_kWh"]),
+                    delta=fecha_hora_maxima.strftime("%d/%m/%Y %H:%M"),
+                    delta_color="off",
+                )
+
+        precios_confirmados = {}
+        potencia_confirmada = []
+        detalle_excesos_beta = pd.DataFrame()
+        coste_excesos_beta = None
+        componentes_confirmados = {}
+        componentes_facturados_beta = {}
+        fnee_incluido_indexado = 0.0
+        clave_tipo_energia_verificacion = (
+            f"factura_verificacion_tipo_energia_{huella[:8]}"
+        )
+        with tab_condiciones:
+            st.subheader("2 · Datos de contrato", divider="rainbow")
+            if resultado_medida is None:
+                st.info("Obtén primero la curva de medida en la pestaña anterior.")
+            else:
+                if clave_tipo_energia_verificacion not in st.session_state:
+                    st.session_state[clave_tipo_energia_verificacion] = (
+                        "Indexado"
+                        if _factura_parece_indexada(factura, texto)
+                        else "Fijo"
+                    )
+                tipo_energia_verificacion = st.radio(
+                    "Tipo de precio de energía",
+                    ["Fijo", "Indexado"],
+                    key=clave_tipo_energia_verificacion,
+                    horizontal=True,
+                )
+                if tipo_energia_verificacion == "Fijo":
+                    st.markdown("#### Confirma los precios fijos de energía")
+                    st.caption(
+                        "Se proponen los precios extraídos de la factura. "
+                        "Modifícalos si las condiciones contractuales son distintas."
+                    )
+                    precios_factura = {
+                        item.periodo: item.precio_eur_kwh
+                        for item in factura.energia_periodos
+                        if item.periodo in periodos_medida
+                    }
+                    columnas_precio = st.columns(3)
+                    for indice, periodo in enumerate(periodos_medida):
+                        with columnas_precio[indice % 3]:
+                            precios_confirmados[periodo] = st.number_input(
+                                f"{periodo} (€/kWh)",
+                                min_value=0.0,
+                                max_value=2.0,
+                                value=float(precios_factura.get(periodo, 0.0)),
+                                step=0.001,
+                                format="%.6f",
+                                key=(
+                                    f"factura_medida_precio_{periodo}_{huella[:8]}"
+                                ),
+                            )
+                else:
+                    st.markdown("#### Confirma la fórmula indexada de energía")
+                    st.caption(
+                        "Configuración común con Telemindex. Se aplicará a los "
+                        "consumos reales de la curva para el periodo de la factura."
+                    )
+                    mostrar_parametros_formula_indexado(
+                        widget_suffix="factura_verificacion"
+                    )
+                    if st.session_state.get("cfg_fnee", True):
+                        fnee_incluido_indexado = sum(
+                            float(item.importe)
+                            for item in factura.otros
+                            if "fnee" in item.concepto.lower()
+                        )
+
+                st.markdown("#### Confirma potencia y precio de potencia")
+                items_potencia = [
+                    item for item in factura.potencia_periodos
+                    if item.periodo in periodos_medida
+                ]
+                st.caption(
+                    "Los precios están normalizados en €/kW día. Los cambios "
+                    "de potencia dentro del ciclo se muestran por tramos."
+                )
+                tramos_potencia = {}
+                for item in items_potencia:
+                    clave_tramo = (
+                        item.periodo_inicio or factura.periodo_inicio,
+                        item.periodo_fin or factura.periodo_fin,
+                    )
+                    tramos_potencia.setdefault(clave_tramo, []).append(item)
+
+                for numero_tramo, (fechas_tramo, items_tramo) in enumerate(
+                    sorted(tramos_potencia.items()), start=1
+                ):
+                    inicio_tramo, fin_tramo = fechas_tramo
+                    dias_tramo = sorted({int(item.dias) for item in items_tramo})
+                    st.markdown(
+                        f"**Tramo {numero_tramo}: {inicio_tramo}–{fin_tramo} "
+                        f"· {', '.join(map(str, dias_tramo))} días**"
+                    )
+                    sufijo_tramo = re.sub(
+                        r"\D", "", f"{inicio_tramo}_{fin_tramo}"
+                    )
+                    st.caption("Potencias contratadas (kW)")
+                    columnas_potencia_kw = st.columns(3)
+                    potencias_tramo = {}
+                    for indice, item in enumerate(items_tramo):
+                        with columnas_potencia_kw[indice % 3]:
+                            potencias_tramo[item.periodo] = st.number_input(
+                                f"{item.periodo} (kW)",
+                                min_value=0.0,
+                                value=float(item.potencia_kw),
+                                step=0.1,
+                                format="%.3f",
+                                key=(
+                                    f"factura_medida_potencia_kw_{item.periodo}_"
+                                    f"{sufijo_tramo}_{huella[:8]}"
+                                ),
+                            )
+                    st.caption("Precios de potencia (€/kW día)")
+                    columnas_precio_potencia = st.columns(3)
+                    precios_tramo = {}
+                    for indice, item in enumerate(items_tramo):
+                        with columnas_precio_potencia[indice % 3]:
+                            precios_tramo[item.periodo] = st.number_input(
+                                f"{item.periodo} (€/kW día)",
+                                min_value=0.0,
+                                value=float(item.precio_facturado_eur_kw_dia),
+                                step=0.0001,
+                                format="%.8f",
+                                key=(
+                                    f"factura_medida_precio_potencia_{item.periodo}_"
+                                    f"{sufijo_tramo}_{huella[:8]}"
+                                ),
+                            )
+                    potencia_confirmada.extend({
+                        "periodo": item.periodo,
+                        "potencia_kw": potencias_tramo[item.periodo],
+                        "dias": item.dias,
+                        "precio_eur_kw_dia": precios_tramo[item.periodo],
+                        "periodo_inicio": inicio_tramo,
+                        "periodo_fin": fin_tramo,
+                    } for item in items_tramo)
+
+                if (
+                    factura.excesos_potencia is not None
+                    and potencia_confirmada
+                ):
+                    try:
+                        detalles_tramos_excesos = []
+                        coste_excesos_beta = 0.0
+                        grupos_confirmados = {}
+                        for item in potencia_confirmada:
+                            clave_tramo = (
+                                item.get("periodo_inicio") or factura.periodo_inicio,
+                                item.get("periodo_fin") or factura.periodo_fin,
+                            )
+                            grupos_confirmados.setdefault(clave_tramo, []).append(item)
+                        for (inicio_tramo, fin_tramo), items_tramo in sorted(
+                            grupos_confirmados.items()
+                        ):
+                            inicio_dt = pd.to_datetime(
+                                inicio_tramo, dayfirst=True
+                            ).normalize()
+                            fin_dt = pd.to_datetime(
+                                fin_tramo, dayfirst=True
+                            ).normalize() + pd.Timedelta(days=1)
+                            fechas_curva = pd.to_datetime(
+                                resultado_medida.curva_periodo["fecha_hora"],
+                                errors="coerce",
+                            )
+                            curva_tramo = resultado_medida.curva_periodo.loc[
+                                (fechas_curva >= inicio_dt) & (fechas_curva < fin_dt)
+                            ].copy()
+                            potencias_tramo = {
+                                item["periodo"]: item["potencia_kw"]
+                                for item in items_tramo
+                            }
+                            detalle_tramo, coste_tramo = calcular_excesos_desde_curva(
+                                curva_tramo,
+                                resultado_medida.frecuencia,
+                                atr_medida,
+                                inicio_dt.year,
+                                potencias_tramo,
+                            )
+                            detalle_tramo.insert(
+                                0, "Tramo", f"{inicio_tramo}–{fin_tramo}"
+                            )
+                            detalles_tramos_excesos.append(detalle_tramo)
+                            coste_excesos_beta += coste_tramo
+                        detalle_excesos_beta = pd.concat(
+                            detalles_tramos_excesos, ignore_index=True
+                        )
+                        coste_excesos_beta = round(coste_excesos_beta, 2)
+                        componentes_facturados_beta["excesos_potencia"] = float(
+                            factura.excesos_potencia
+                        )
+                        componentes_confirmados["excesos_potencia"] = (
+                            coste_excesos_beta
+                        )
+                    except Exception as exc:
+                        componentes_facturados_beta["excesos_potencia"] = float(
+                            factura.excesos_potencia
+                        )
+                        componentes_confirmados["excesos_potencia"] = float(
+                            factura.excesos_potencia
+                        )
+                        st.warning(
+                            "No se han podido verificar los excesos de potencia: "
+                            f"{exc}"
+                        )
+
+                st.markdown("#### Confirma el resto de componentes")
+                filas_componentes_beta = []
+                for indice, item in enumerate(factura.otros):
+                    clave_otro = f"otro_{indice}"
+                    if (
+                        fnee_incluido_indexado
+                        and "fnee" in item.concepto.lower()
+                    ):
+                        # Ya forma parte del precio horario Telemindex.
+                        continue
+                    if (
+                        "bono social" in item.concepto.lower()
+                        and factura.verificacion_fbs
+                        and factura.verificacion_fbs.importe_regulado_eur
+                        is not None
+                    ):
+                        componentes_facturados_beta[clave_otro] = float(
+                            item.importe
+                        )
+                        componentes_confirmados[clave_otro] = float(
+                            factura.verificacion_fbs.importe_regulado_eur
+                        )
+                        continue
+                    if (
+                        "fnee" in item.concepto.lower()
+                        and factura.verificacion_fnee
+                        and factura.verificacion_fnee.importe_referencia_eur
+                        is not None
+                    ):
+                        componentes_facturados_beta[clave_otro] = float(
+                            item.importe
+                        )
+                        componentes_confirmados[clave_otro] = float(
+                            factura.verificacion_fnee.importe_referencia_eur
+                        )
+                        continue
+                    filas_componentes_beta.append({
+                        "Clave": clave_otro,
+                        "Componente": item.concepto,
+                        "Importe factura (€)": item.importe,
+                        "Confirmado": True,
+                        "Importe verificación (€)": item.importe,
+                    })
+                if (
+                    factura.verificacion_fbs
+                    and factura.verificacion_fbs.importe_regulado_eur
+                    is not None
+                ):
+                    st.caption(
+                        "FBS verificado automáticamente con el precio regulado: "
+                        f"{formato_euros(factura.verificacion_fbs.importe_regulado_eur)}."
+                    )
+                if (
+                    factura.verificacion_fnee
+                    and factura.verificacion_fnee.importe_referencia_eur
+                    is not None
+                ):
+                    st.caption(
+                        "FNEE verificado automáticamente con la referencia "
+                        f"regulatoria: {formato_euros(factura.verificacion_fnee.importe_referencia_eur)}."
+                    )
+                df_componentes_beta = pd.DataFrame(filas_componentes_beta)
+                if df_componentes_beta.empty:
+                    st.info("No se han extraído otros componentes de la factura.")
+                else:
+                    editor_componentes = st.data_editor(
+                        df_componentes_beta,
+                        hide_index=True,
+                        use_container_width=True,
+                        disabled=["Clave", "Componente", "Importe factura (€)"],
+                        column_config={
+                            "Clave": None,
+                            "Confirmado": st.column_config.CheckboxColumn(
+                                "OK", help="Mantiene el importe de la factura."
+                            ),
+                            "Importe verificación (€)": st.column_config.NumberColumn(
+                                "Importe si no está OK (€)",
+                                min_value=0.0,
+                                format="%.2f €",
+                            ),
+                        },
+                        key=f"factura_componentes_beta_{huella[:8]}",
+                    )
+                    for _, fila in editor_componentes.iterrows():
+                        clave = str(fila["Clave"])
+                        importe_facturado = float(fila["Importe factura (€)"])
+                        componentes_facturados_beta[clave] = importe_facturado
+                        componentes_confirmados[clave] = (
+                            importe_facturado
+                            if bool(fila["Confirmado"])
+                            else float(fila["Importe verificación (€)"])
+                        )
+                st.caption(
+                    "IEE e IVA se recalculan automáticamente con sus tipos "
+                    "regulatorios sobre las bases ajustadas."
+                )
+
+            reparto_energia_potencia = pd.DataFrame({
+                "Componente": ["Energía", "Potencia"],
+                "Importe (€)": [
+                    max(float(factura.energia), 0.0),
+                    max(float(factura.potencia), 0.0),
+                ],
+            })
+            reparto_energia_potencia = reparto_energia_potencia[
+                reparto_energia_potencia["Importe (€)"] > 0
+            ]
+
+        with tab_resultado_medida:
+            if resultado_medida is not None:
+                st.subheader("3 · Resultado", divider="rainbow")
+                subcol_resultado, subcol_metricas = st.columns(
+                    [0.70, 0.30], gap="medium"
+                )
+                estado_resumen_real = subcol_resultado.empty()
+                gauge_resumen_real = subcol_resultado.empty()
+                metric_factura_resumen = subcol_metricas.empty()
+                metric_verificado_resumen = subcol_metricas.empty()
+                metric_diferencia_resumen = subcol_metricas.empty()
+            st.subheader("4 · Detalles de la verificación", divider="rainbow")
+            if resultado_medida is None:
+                st.info("Obtén primero la curva de medida.")
+            else:
+                col_tabla_reconstruccion, col_metricas_resultado = st.columns(
+                    [0.70, 0.30], gap="medium"
+                )
+                titulo_resumen_componentes = col_tabla_reconstruccion.empty()
+                tabla_resumen_componentes = col_tabla_reconstruccion.empty()
+                detalle_costes = col_tabla_reconstruccion.container()
+                grafico_componentes = col_metricas_resultado.container()
+                col_medida_resultado, _ = st.columns(
+                    [0.70, 0.30], gap="medium"
+                )
+                col_costes_resultado = st.container()
+                consumos_factura = {
+                    item.periodo: item.consumo_kwh
+                    for item in factura.energia_periodos
+                    if item.periodo in periodos_medida
+                }
+                tabla_consumos = tabla_conciliacion_consumos(
+                    consumos_factura,
+                    resultado_medida.consumos_periodos,
+                )
+                col_medida_resultado.markdown("#### Comparativa de consumos")
+                col_medida_resultado.dataframe(
+                    formatear_columnas_tabla(
+                        tabla_consumos,
+                        columnas_kwh=[
+                            "Factura (kWh)", "Medida (kWh)", "Diferencia (kWh)"
+                        ],
+                        columnas_pct=["Diferencia (%)"],
+                        incluir_unidades=False,
+                    ),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+                tipo_energia_verificacion = st.session_state.get(
+                    clave_tipo_energia_verificacion, "Fijo"
+                )
+                if tipo_energia_verificacion == "Indexado":
+                    try:
+                        _precios_indexado_periodo(
+                            factura
+                        )
+                        detalle_coste, coste_energia_medida = (
+                            calcular_energia_indexada(
+                                resultado_medida.curva_periodo,
+                                st.session_state.df_sheets,
+                                _atr_indexado(factura.atr),
+                                resultado_medida.frecuencia,
+                            )
+                        )
+                    except Exception as exc:
+                        precios_resultado = {}
+                        detalle_costes.error(
+                            "No se ha podido calcular la fórmula indexada con "
+                            f"Telemindex: {exc}"
+                        )
+                        detalle_coste, coste_energia_medida = calcular_energia_fija(
+                            resultado_medida.consumos_periodos, {}
+                        )
+                else:
+                    precios_resultado = {
+                        periodo: st.session_state.get(
+                            f"factura_medida_precio_{periodo}_{huella[:8]}",
+                            next(
+                                (
+                                    item.precio_eur_kwh
+                                    for item in factura.energia_periodos
+                                    if item.periodo == periodo
+                                ),
+                                0.0,
+                            ),
+                        )
+                        for periodo in periodos_medida
+                    }
+                    detalle_coste, coste_energia_medida = calcular_energia_fija(
+                        resultado_medida.consumos_periodos,
+                        precios_resultado,
+                    )
+                    detalle_coste = detalle_coste.rename(columns={
+                        "Precio confirmado (€/kWh)":
+                        "Precio verificación (€/kWh)"
+                    })
+                consumo_total_medida = detalle_coste[
+                    "Consumo medida (kWh)"
+                ].sum()
+                precio_medio_ponderado = (
+                    coste_energia_medida / consumo_total_medida
+                    if consumo_total_medida > 0 else 0.0
+                )
+                energia_facturada_comparable = round(
+                    float(factura.energia) + fnee_incluido_indexado, 2
+                )
+                detalle_coste_mostrar = pd.concat(
+                    [
+                        detalle_coste,
+                        pd.DataFrame([{
+                            "Periodo": "TOTAL",
+                            "Consumo medida (kWh)": consumo_total_medida,
+                            "Precio verificación (€/kWh)": precio_medio_ponderado,
+                            "Coste verificado (€)": coste_energia_medida,
+                        }]),
+                    ],
+                    ignore_index=True,
+                )
+                detalle_costes.markdown(
+                    "#### Coste previsto del consumo"
+                )
+                detalle_costes.dataframe(
+                    formatear_columnas_tabla(
+                        detalle_coste_mostrar,
+                        columnas_kwh=["Consumo medida (kWh)"],
+                        columnas_eur_kwh=["Precio verificación (€/kWh)"],
+                        columnas_euros=["Coste verificado (€)"],
+                        incluir_unidades=False,
+                    ),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+                detalle_potencia_beta, coste_potencia_beta = (
+                    calcular_potencia_confirmada(potencia_confirmada)
+                )
+                detalle_potencia_mostrar = pd.concat(
+                    [
+                        detalle_potencia_beta,
+                        pd.DataFrame([{
+                            "Periodo": "TOTAL",
+                            "Potencia confirmada (kW)": None,
+                            "Días": None,
+                            "Precio confirmado (€/kW día)": None,
+                            "Coste verificado (€)": coste_potencia_beta,
+                        }]),
+                    ],
+                    ignore_index=True,
+                )
+                detalle_costes.markdown(
+                    "#### Coste previsto de la potencia facturada"
+                )
+                tabla_potencia_mostrar = formatear_columnas_tabla(
+                        detalle_potencia_mostrar,
+                        columnas_kw=["Potencia confirmada (kW)"],
+                        columnas_eur_kw_dia=[
+                            "Precio confirmado (€/kW día)"
+                        ],
+                        columnas_euros=["Coste verificado (€)"],
+                        incluir_unidades=False,
+                    ).fillna("")
+                detalle_costes.table(tabla_potencia_mostrar)
+
+                if coste_excesos_beta is not None:
+                    col_excesos_tabla, col_excesos_metricas = st.columns(
+                        [0.70, 0.30], gap="medium"
+                    )
+                    col_excesos_tabla.markdown(
+                        "#### Excesos de potencia según medida"
+                    )
+                    tabla_excesos_mostrar = formatear_columnas_tabla(
+                        detalle_excesos_beta,
+                        columnas_kw=[
+                            "Potencia contratada (kW)",
+                            "Raíz Σ excesos² (kW)",
+                        ],
+                        columnas_euros=[
+                            "Excesos sin prorrateo (€)",
+                            "Excesos verificados (€)",
+                        ],
+                        incluir_unidades=False,
+                    )
+                    col_excesos_tabla.table(tabla_excesos_mostrar)
+                    coste_excesos_bruto_beta = float(
+                        detalle_excesos_beta[
+                            "Excesos sin prorrateo (€)"
+                        ].sum()
+                    )
+                    col_excesos_tabla.caption(
+                        "Coste de excesos sin prorrateo: "
+                        f"{formato_euros(coste_excesos_bruto_beta)}. "
+                        "El prorrateo se aplica al coste de cada tramo; no "
+                        "modifica sus sobrepasamientos."
+                    )
+                    col_excesos_metricas.markdown("#### Excesos")
+                    col_excesos_metricas.metric(
+                        "Excesos facturados",
+                        formato_euros(factura.excesos_potencia),
+                    )
+                    col_excesos_metricas.metric(
+                        "Excesos según Axon",
+                        formato_euros(coste_excesos_beta),
+                        delta=formato_euros(
+                            coste_excesos_beta - factura.excesos_potencia
+                        ),
+                        delta_color="inverse",
+                    )
+
+                verificacion_iee_beta = factura.verificacion_iee
+                verificacion_iva_beta = factura.verificacion_iva
+                reconstruccion_beta = reconstruir_total_beta(
+                    total_factura=factura.total,
+                    potencia_facturada=factura.potencia,
+                    potencia_verificada=coste_potencia_beta,
+                    energia_facturada=energia_facturada_comparable,
+                    energia_verificada=coste_energia_medida,
+                    otros_facturados=componentes_facturados_beta,
+                    otros_confirmados=componentes_confirmados,
+                    iee_facturado=factura.iee,
+                    iva_facturado=factura.iva,
+                    base_iee_factura=(
+                        verificacion_iee_beta.base_eur
+                        if verificacion_iee_beta else None
+                    ),
+                    tipo_iee_pct=(
+                        verificacion_iee_beta.tipo_regulado_pct
+                        or verificacion_iee_beta.tipo_pct
+                        if verificacion_iee_beta else None
+                    ),
+                    base_iva_factura=(
+                        verificacion_iva_beta.base_eur
+                        if verificacion_iva_beta else None
+                    ),
+                    tipo_iva_pct=(
+                        verificacion_iva_beta.tipo_regulado_pct
+                        or verificacion_iva_beta.tipo_pct
+                        if verificacion_iva_beta else None
+                    ),
+                )
+                filas_total_beta = [
+                    {
+                        "Componente": "Potencia",
+                        "Factura (€)": factura.potencia,
+                        "Verificado (€)": coste_potencia_beta,
+                    },
+                    {
+                        "Componente": "Energía",
+                        "Factura (€)": energia_facturada_comparable,
+                        "Verificado (€)": coste_energia_medida,
+                    },
+                ]
+                nombres_componentes_beta = {
+                    "excesos_potencia": "Excesos de potencia",
+                    **{
+                        f"otro_{indice}": item.concepto
+                        for indice, item in enumerate(factura.otros)
+                    },
+                }
+                filas_otros_beta = [
+                    {
+                        "Componente": nombres_componentes_beta.get(clave, clave),
+                        "Factura (€)": importe,
+                        "Verificado (€)": componentes_confirmados.get(
+                            clave, importe
+                        ),
+                    }
+                    for clave, importe in componentes_facturados_beta.items()
+                ]
+                filas_alquiler_beta = [
+                    fila for fila in filas_otros_beta
+                    if "alquiler" in fila["Componente"].lower()
+                    and any(
+                        termino in fila["Componente"].lower()
+                        for termino in ("medida", "contador", "equipo")
+                    )
+                ]
+                filas_total_beta.extend(
+                    fila for fila in filas_otros_beta
+                    if fila not in filas_alquiler_beta
+                )
+                filas_total_beta.append(
+                    {
+                        "Componente": "IEE",
+                        "Factura (€)": factura.iee,
+                        "Verificado (€)": reconstruccion_beta["iee_verificado"],
+                    }
+                )
+                filas_total_beta.extend(filas_alquiler_beta)
+                filas_total_beta.extend([
+                    {
+                        "Componente": "IVA",
+                        "Factura (€)": factura.iva,
+                        "Verificado (€)": reconstruccion_beta["iva_verificado"],
+                    },
+                    {
+                        "Componente": "TOTAL",
+                        "Factura (€)": factura.total,
+                        "Verificado (€)": reconstruccion_beta["total_verificado"],
+                    },
+                ])
+                tabla_total_beta = pd.DataFrame(filas_total_beta)
+                tabla_total_beta["Diferencia (€)"] = (
+                    tabla_total_beta["Factura (€)"]
+                    - tabla_total_beta["Verificado (€)"]
+                )
+                tabla_total_beta["Desvío (%)"] = tabla_total_beta.apply(
+                    lambda fila: (
+                        fila["Diferencia (€)"] / fila["Verificado (€)"] * 100
+                        if abs(fila["Verificado (€)"]) > 0.000001
+                        else (0.0 if abs(fila["Diferencia (€)"]) <= 0.02 else None)
+                    ),
+                    axis=1,
+                )
+                def impacto_fila(fila):
+                    tipo_tolerancia = (
+                        "total_factura"
+                        if fila["Componente"] == "TOTAL" else "componentes"
+                    )
+                    if importes_coinciden(
+                        fila["Factura (€)"],
+                        fila["Verificado (€)"],
+                        tipo_tolerancia,
+                    ):
+                        return "correcto"
+                    # Factura − verificado < 0: se ha cobrado menos que la
+                    # referencia; hay desviación, pero favorece al cliente.
+                    return "favorable" if fila["Diferencia (€)"] < 0 else "contra"
+
+                impactos_tabla_beta = tabla_total_beta.apply(
+                    impacto_fila, axis=1
+                )
+                tabla_total_beta["Estado"] = impactos_tabla_beta.map(
+                    {"correcto": "✔", "favorable": "✖", "contra": "✖"}
+                )
+                verificacion_beta_ok = importes_coinciden(
+                    factura.total,
+                    reconstruccion_beta["total_verificado"],
+                    "total_factura",
+                )
+                verificacion_beta_favorable = (
+                    not verificacion_beta_ok
+                    and reconstruccion_beta["diferencia_total"] < 0
+                )
+                if verificacion_beta_ok:
+                    beta_texto, beta_icono, beta_color = (
+                        "CORRECTO", "✓", "#00c853"
+                    )
+                elif verificacion_beta_favorable:
+                    beta_texto, beta_icono, beta_color = (
+                        "INCORRECTO", "✕", "#00c853"
+                    )
+                else:
+                    beta_texto, beta_icono, beta_color = (
+                        "INCORRECTO", "✕", "#ef4444"
+                    )
+                beta_fondo = (
+                    "rgba(0,200,83,.12)"
+                    if verificacion_beta_ok or verificacion_beta_favorable
+                    else "rgba(239,68,68,.12)"
+                )
+                beta_borde = (
+                    "rgba(0,200,83,.55)"
+                    if verificacion_beta_ok or verificacion_beta_favorable
+                    else "rgba(239,68,68,.55)"
+                )
+                estado_resumen_real.markdown(
+                        "<div style='display:flex;align-items:center;"
+                        "justify-content:space-between;gap:.8rem;margin:0 0 .8rem 0;"
+                        f"padding:.75rem .9rem;border:1px solid {beta_borde};"
+                        f"border-radius:1rem;background:{beta_fondo};'>"
+                        "<div style='font-size:1.4rem;font-weight:700;"
+                        "line-height:1.15;white-space:nowrap;'>"
+                        "Resultado de la verificación real: "
+                        f"<span style='display:inline;color:{beta_color};"
+                        f"font-size:2.4rem;font-weight:800;margin-left:.35rem;'"
+                        f">{beta_texto}</span>"
+                        "</div>"
+                        f"<div style='color:{beta_color};font-size:2.8rem;"
+                        f"font-weight:800;'>{beta_icono}</div></div>",
+                        unsafe_allow_html=True,
+                )
+                metric_factura_resumen.metric(
+                    "Total factura", formato_euros(factura.total)
+                )
+                metric_verificado_resumen.metric(
+                    "Total verificado",
+                    formato_euros(reconstruccion_beta["total_verificado"]),
+                )
+                metric_diferencia_resumen.metric(
+                    "Factura − verificado",
+                    formato_euros(reconstruccion_beta["diferencia_total"]),
+                    delta=(
+                        formato_pct(
+                            reconstruccion_beta["diferencia_total"]
+                            / reconstruccion_beta["total_verificado"]
+                            * 100
+                        )
+                        if abs(reconstruccion_beta["total_verificado"]) > 0.000001
+                        else None
+                    ),
+                    delta_color="inverse",
+                )
+                titulo_resumen_componentes.markdown(
+                    "#### Resumen verificación componentes"
+                )
+                tabla_total_beta_mostrar = formatear_columnas_tabla(
+                    tabla_total_beta,
+                    columnas_euros=[
+                        "Factura (€)",
+                        "Verificado (€)",
+                        "Diferencia (€)",
+                    ],
+                    columnas_pct=["Desvío (%)"],
+                    incluir_unidades=False,
+                )
+
+                def colorear_estados(dataframe):
+                    estilos = pd.DataFrame(
+                        "", index=dataframe.index, columns=dataframe.columns
+                    )
+                    for indice in dataframe.index:
+                        impacto = impactos_tabla_beta.loc[indice]
+                        color = "#00c853" if impacto != "contra" else "#ef4444"
+                        estilos.loc[indice, "Estado"] = (
+                            f"color:{color};font-size:1.5rem;font-weight:900;"
+                            f"-webkit-text-stroke:0.65px {color};"
+                            "background-color:transparent;"
+                            "text-align:center !important"
+                        )
+                        if impacto != "correcto":
+                            estilo_diferencia = (
+                                f"color:{color};font-weight:800;"
+                                "background-color:transparent;"
+                            )
+                            estilos.loc[indice, "Diferencia (€)"] = (
+                                estilo_diferencia
+                            )
+                            estilos.loc[indice, "Desvío (%)"] = (
+                                estilo_diferencia
+                            )
+                    return estilos
+
+                tabla_resumen_componentes.dataframe(
+                        tabla_total_beta_mostrar.style.apply(
+                            colorear_estados, axis=None
+                        ).set_properties(
+                            subset=["Estado"],
+                            **{"text-align": "center"},
+                        ).set_table_styles([{
+                            "selector": "th.col_heading.level0.col5",
+                            "props": [("text-align", "center")],
+                        }]),
+                        hide_index=True,
+                        use_container_width=True,
+                )
+                if not reparto_energia_potencia.empty:
+                    grafico_componentes.markdown("#### Potencia y Energía")
+                    figura_reparto_contrato = px.pie(
+                        reparto_energia_potencia,
+                        names="Componente",
+                        values="Importe (€)",
+                        hole=0.48,
+                        color="Componente",
+                        color_discrete_map={
+                            "Energía": "#e74c3c",
+                            "Potencia": "#3498db",
+                        },
+                    )
+                    figura_reparto_contrato.update_traces(
+                        textinfo="label+percent",
+                        textposition="inside",
+                        textfont=dict(size=17, color="white"),
+                        hovertemplate=(
+                            "%{label}<br>%{value:.2f} €<br>"
+                            "%{percent}<extra></extra>"
+                        ),
+                    )
+                    figura_reparto_contrato.update_layout(
+                        height=165,
+                        margin=dict(l=5, r=5, t=0, b=0),
+                        showlegend=False,
+                    )
+                    figura_reparto_contrato = aplicar_estilo(
+                        figura_reparto_contrato
+                    )
+                    figura_reparto_contrato.update_layout(
+                        title=None,
+                        title_text=None,
+                        height=400,
+                        margin=dict(l=0, r=0, t=0, b=0),
+                        showlegend=False,
+                    )
+                    grafico_componentes.plotly_chart(
+                        figura_reparto_contrato,
+                        use_container_width=True,
+                        key=f"factura_reparto_contrato_{huella[:8]}",
+                        config={"displayModeBar": False},
+                    )
+
+                def categoria_componente(nombre):
+                    texto_componente = str(nombre).lower()
+                    if nombre in {"Potencia", "Energía", "IEE", "IVA"}:
+                        return nombre
+                    if "exceso" in texto_componente:
+                        return "Excesos"
+                    if "reactiva" in texto_componente:
+                        return "Reactiva"
+                    if (
+                        "alquiler" in texto_componente
+                        and any(
+                            termino in texto_componente
+                            for termino in ("medida", "contador", "equipo")
+                        )
+                    ):
+                        return "AM"
+                    return "Otros"
+
+                reparto_todos_componentes = tabla_total_beta.loc[
+                    tabla_total_beta["Componente"] != "TOTAL",
+                    ["Componente", "Verificado (€)"],
+                ].copy()
+                reparto_todos_componentes["Categoría"] = (
+                    reparto_todos_componentes["Componente"].map(
+                        categoria_componente
+                    )
+                )
+                reparto_todos_componentes = (
+                    reparto_todos_componentes.groupby(
+                        "Categoría", as_index=False
+                    )["Verificado (€)"].sum()
+                )
+                reparto_todos_componentes = reparto_todos_componentes[
+                    reparto_todos_componentes["Verificado (€)"] > 0
+                ]
+                if not reparto_todos_componentes.empty:
+                    figura_todos_componentes = px.pie(
+                        reparto_todos_componentes,
+                        names="Categoría",
+                        values="Verificado (€)",
+                        hole=0.48,
+                        title="Todos los componentes",
+                    )
+                    figura_todos_componentes.update_traces(
+                        textinfo="label+percent",
+                        textposition="inside",
+                        textfont=dict(size=16, family="Arial"),
+                        hovertemplate=(
+                            "%{label}<br>%{value:.2f} €<br>"
+                            "%{percent}<extra></extra>"
+                        ),
+                    )
+                    figura_todos_componentes.update_layout(
+                        height=400,
+                        margin=dict(l=0, r=0, t=55, b=0),
+                        showlegend=False,
+                    )
+                    figura_todos_componentes = aplicar_estilo(
+                        figura_todos_componentes
+                    )
+                    figura_todos_componentes.update_layout(
+                        height=400, showlegend=False
+                    )
+                    grafico_componentes.plotly_chart(
+                        figura_todos_componentes,
+                        use_container_width=True,
+                        key=f"factura_todos_componentes_{huella[:8]}",
+                        config={"displayModeBar": False},
+                    )
+                grafico_componentes.metric(
+                    "Energía facturada",
+                    formato_euros(energia_facturada_comparable),
+                )
+                grafico_componentes.metric(
+                    "Energía según medida",
+                    formato_euros(coste_energia_medida),
+                )
+                grafico_componentes.metric(
+                    "Diferencia energía",
+                    formato_euros(
+                        energia_facturada_comparable - coste_energia_medida
+                    ),
+                    delta_color="inverse",
+                )
+                desvio_total_pct = (
+                    reconstruccion_beta["diferencia_total"]
+                    / reconstruccion_beta["total_verificado"]
+                    * 100
+                    if abs(reconstruccion_beta["total_verificado"]) > 0.000001
+                    else 0.0
+                )
+                maximo_gauge_pct = 1.0
+                valor_gauge = max(
+                    -maximo_gauge_pct,
+                    min(maximo_gauge_pct, desvio_total_pct),
+                )
+                color_gauge = (
+                    "#00a651" if desvio_total_pct <= 0.5 else "#ef4444"
+                )
+                ancho_arco = abs(valor_gauge) / maximo_gauge_pct * 90
+                centro_arco = (
+                    90 - ancho_arco / 2
+                    if valor_gauge >= 0 else 90 + ancho_arco / 2
+                )
+                figura_desvio = go.Figure()
+                figura_desvio.add_trace(go.Barpolar(
+                    r=[0.28, 0.28],
+                    theta=[135, 45],
+                    width=[90, 90],
+                    base=[0.72, 0.72],
+                    marker_color=["rgba(0,166,81,.16)", "rgba(239,68,68,.16)"],
+                    marker_line_width=0,
+                    hoverinfo="skip",
+                    showlegend=False,
+                ))
+                if ancho_arco > 0:
+                    figura_desvio.add_trace(go.Barpolar(
+                        r=[0.28],
+                        theta=[centro_arco],
+                        width=[ancho_arco],
+                        base=[0.72],
+                        marker_color=color_gauge,
+                        marker_line_width=0,
+                        hovertemplate=(
+                            f"Desvío: {desvio_total_pct:.2f} %<extra></extra>"
+                        ),
+                        showlegend=False,
+                    ))
+                figura_desvio.add_trace(go.Scatterpolar(
+                    r=[0.68, 1.05],
+                    theta=[45, 45],
+                    mode="lines",
+                    line=dict(color="#ef4444", width=3),
+                    hoverinfo="skip",
+                    showlegend=False,
+                ))
+                figura_desvio.add_annotation(
+                    x=0.5,
+                    y=1.18,
+                    text="<b>Desvío total</b>",
+                    showarrow=False,
+                    font=dict(size=17),
+                )
+                figura_desvio.add_annotation(
+                    x=0.5,
+                    y=0.02,
+                    xref="paper",
+                    yref="paper",
+                    text=f"<b>{desvio_total_pct:.2f} %</b>",
+                    showarrow=False,
+                    font=dict(size=42, color=color_gauge),
+                )
+                for posicion_x, posicion_y, etiqueta in (
+                    (0.13, 0.02, "−1 %"),
+                    (0.5, 1.07, "0 %"),
+                    (0.87, 0.02, "+1 %"),
+                ):
+                    figura_desvio.add_annotation(
+                        x=posicion_x,
+                        y=posicion_y,
+                        text=etiqueta,
+                        showarrow=False,
+                        font=dict(size=15),
+                    )
+                figura_desvio.update_layout(
+                    height=235,
+                    margin=dict(l=12, r=12, t=45, b=5),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    font=dict(family="Arial"),
+                    polar=dict(
+                        sector=[0, 180],
+                        radialaxis=dict(visible=False, range=[0, 1.08]),
+                        angularaxis=dict(visible=False),
+                        bgcolor="rgba(0,0,0,0)",
+                    ),
+                    barmode="overlay",
+                    showlegend=False,
+                )
+                gauge_resumen_real.plotly_chart(
+                    figura_desvio,
+                    use_container_width=True,
+                    config={"displayModeBar": False},
+                    key=f"factura_gauge_desvio_{huella[:8]}",
+                )
+                if not verificacion_iee_beta or not verificacion_iva_beta:
+                    col_costes_resultado.warning(
+                        "No se ha podido recalcular completamente IEE o IVA; se "
+                        "mantiene el importe facturado del impuesto sin referencia."
+                    )
 
 
 with tab_comparativa:
@@ -1832,7 +3615,9 @@ with tab_comparativa:
                     st.caption(
                         "Configuración compartida con Telemindex durante esta sesión."
                     )
-                    mostrar_parametros_formula_indexado()
+                    mostrar_parametros_formula_indexado(
+                        widget_suffix="factura_propuesta"
+                    )
 
             if st.session_state.get("factura_tipo_energia") == "Indexado":
                 if inicio_indexado and fin_indexado:

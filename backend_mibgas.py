@@ -377,6 +377,101 @@ def graficar_da_2026_acumulado(df, año=2026, mes=None):
     return fig
 
 
+def graficar_comparativa_gas_mensual(
+    df,
+    mes,
+    año_actual,
+    año_comparacion=2025,
+):
+    """Compara precio diario y media acumulada MIBGAS D+1 por día."""
+    datos = df.copy()
+    datos["fecha_entrega"] = pd.to_datetime(
+        datos["fecha_entrega"], errors="coerce"
+    )
+    datos["precio_gas"] = pd.to_numeric(
+        datos["precio_gas"], errors="coerce"
+    )
+    datos = datos[
+        (datos["fecha_entrega"].dt.month == mes)
+        & datos["fecha_entrega"].dt.year.isin(
+            [año_actual, año_comparacion]
+        )
+    ].dropna(subset=["fecha_entrega", "precio_gas"])
+    diario = (
+        datos.assign(año=lambda tabla: tabla["fecha_entrega"].dt.year)
+        .groupby(["año", "fecha_entrega"], as_index=False)["precio_gas"]
+        .mean()
+        .sort_values(["año", "fecha_entrega"])
+    )
+    diario["día"] = diario["fecha_entrega"].dt.day
+    diario["media_acumulada"] = (
+        diario.groupby("año")["precio_gas"]
+        .expanding()
+        .mean()
+        .reset_index(level=0, drop=True)
+    )
+
+    figura = go.Figure()
+    colores_años = {
+        año_actual: colores.get(año_actual, COLOR_MIBGAS_2026),
+        año_comparacion: colores.get(año_comparacion, "#1E90FF"),
+    }
+    for año in (año_actual, año_comparacion):
+        serie = diario[diario["año"] == año]
+        if serie.empty:
+            continue
+        figura.add_trace(go.Scatter(
+            x=serie["día"],
+            y=serie["precio_gas"],
+            mode="lines+markers",
+            name=str(año),
+            line=dict(
+                color=colores_años[año],
+                width=3.5 if año == año_actual else 2.5,
+            ),
+            marker=dict(size=5),
+            hovertemplate=(
+                f"{año} · día "
+                "%{x}: %{y:.2f} €/MWh<extra></extra>"
+            ),
+        ))
+        figura.add_trace(go.Scatter(
+            x=serie["día"],
+            y=serie["media_acumulada"],
+            mode="lines",
+            name=f"Media acumulada {año}",
+            line=dict(
+                color=colores_años[año],
+                width=3,
+                dash="dot",
+            ),
+            hovertemplate=(
+                f"Media acumulada {año} · día "
+                "%{x}: %{y:.2f} €/MWh<extra></extra>"
+            ),
+        ))
+
+    figura.update_layout(
+        title="",
+        hovermode="x unified",
+        legend_title_text="",
+    )
+    figura.update_xaxes(
+        title_text="Día",
+        tickmode="linear",
+        tick0=1,
+        dtick=2,
+        range=[1, 31],
+        showgrid=True,
+    )
+    figura.update_yaxes(
+        title_text="MIBGAS D+1 €/MWh",
+        rangemode="tozero",
+        showgrid=True,
+    )
+    return diario, aplicar_estilo(figura)
+
+
 def construir_comparativa_diaria_mibgas_omie(
     df_mg_da, df_spot_diario, año=2026
 ):

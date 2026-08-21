@@ -16,6 +16,10 @@ AXON_API_BASE = "https://api.twinmeter.es"
 DATADIS_API_BASE = "https://datadis.es"
 BASE_DIR = Path(__file__).resolve().parent
 
+
+class DatadisLimiteConsultas(RuntimeError):
+    """Datadis rechaza repetir una consulta antes de que venza su límite."""
+
 colores_periodo = {
         "P1": "red",
         "P2": "#FF7518", #"orange",
@@ -427,6 +431,8 @@ def _datadis_json(response, contexto):
         mensaje = f"Datadis no ha podido completar {contexto} (HTTP {response.status_code})."
         if detalle:
             mensaje += f" {detalle}"
+        if response.status_code == 429:
+            raise DatadisLimiteConsultas(mensaje) from exc
         raise RuntimeError(mensaje) from exc
     try:
         return response.json()
@@ -597,6 +603,48 @@ def _descargar_consumo_datadis(
     return pd.DataFrame(datos)
 
 
+def _descargar_consumo_datadis_con_reintentos(
+    cliente,
+    token,
+    suministro,
+    fecha_inicio,
+    fecha_fin,
+    measurement_type,
+    authorized_nif=None,
+    timeout=60,
+    max_intentos=3,
+):
+    """Reintenta Datadis; ante 429 amplía el inicio un mes en cada intento."""
+    max_intentos = max(1, int(max_intentos))
+    ultimo_limite = None
+    inicio_intento = pd.Timestamp(fecha_inicio)
+    for intento in range(max_intentos):
+        try:
+            curva = _descargar_consumo_datadis(
+                cliente,
+                token,
+                suministro,
+                inicio_intento,
+                fecha_fin,
+                measurement_type,
+                authorized_nif=authorized_nif,
+                timeout=timeout,
+            )
+        except DatadisLimiteConsultas as exc:
+            ultimo_limite = exc
+            if intento + 1 == max_intentos:
+                raise
+            inicio_intento = (
+                pd.Timestamp(fecha_inicio) - pd.DateOffset(months=intento + 1)
+            ).to_period("M").start_time
+            continue
+        if not curva.empty:
+            return curva
+    if ultimo_limite is not None:
+        raise ultimo_limite
+    return curva
+
+
 def obtener_consumo_datadis(
     usuario,
     password,
@@ -604,13 +652,14 @@ def obtener_consumo_datadis(
     fecha_inicio,
     fecha_fin,
     authorized_nif=None,
-    preferir_qh=True,
+    preferir_qh=False,
     timeout=60,
     session=None,
+    max_intentos=3,
 ):
-    """Descarga solo energía activa; intenta QH y, si falla, usa H."""
-    inicio = pd.to_datetime(fecha_inicio, errors="coerce")
-    fin = pd.to_datetime(fecha_fin, errors="coerce")
+    """Descarga activa H o QH, reintentando hasta tres respuestas vacías."""
+    inicio = pd.to_datetime(fecha_inicio, errors="coerce", dayfirst=True)
+    fin = pd.to_datetime(fecha_fin, errors="coerce", dayfirst=True)
     if pd.isna(inicio) or pd.isna(fin) or inicio.date() > fin.date():
         raise ValueError("El rango de fechas de Datadis no es válido.")
 
@@ -629,23 +678,17 @@ def obtener_consumo_datadis(
         intentar_qh = bool(preferir_qh and point_type not in {"4", "5"})
         aviso_fallback = None
         if intentar_qh:
-            try:
-                curva = _descargar_consumo_datadis(
-                    cliente, token, suministro, inicio, fin, "1",
-                    authorized_nif=authorized_nif, timeout=timeout,
-                )
-                frecuencia = "QH"
-            except Exception as exc:
-                aviso_fallback = str(exc)
-                curva = _descargar_consumo_datadis(
-                    cliente, token, suministro, inicio, fin, "0",
-                    authorized_nif=authorized_nif, timeout=timeout,
-                )
-                frecuencia = "H"
+            curva = _descargar_consumo_datadis_con_reintentos(
+                cliente, token, suministro, inicio, fin, "1",
+                authorized_nif=authorized_nif, timeout=timeout,
+                max_intentos=max_intentos,
+            )
+            frecuencia = "QH"
         else:
-            curva = _descargar_consumo_datadis(
+            curva = _descargar_consumo_datadis_con_reintentos(
                 cliente, token, suministro, inicio, fin, "0",
                 authorized_nif=authorized_nif, timeout=timeout,
+                max_intentos=max_intentos,
             )
             frecuencia = "H"
     finally:
@@ -675,6 +718,198 @@ def obtener_consumo_datadis(
     if salida.empty:
         raise ValueError("Datadis no ha devuelto consumos utilizables en las fechas elegidas.")
     return salida.reset_index(drop=True), frecuencia, aviso_fallback
+
+
+def rango_meses_datadis(fecha_inicio, fecha_fin):
+    """Amplía un ciclo de consumo a los meses completos exigidos por Datadis."""
+    inicio = pd.to_datetime(fecha_inicio, errors="coerce", dayfirst=True)
+    fin = pd.to_datetime(fecha_fin, errors="coerce", dayfirst=True)
+    if pd.isna(inicio) or pd.isna(fin) or inicio.normalize() > fin.normalize():
+        raise ValueError("El periodo de facturación no es válido.")
+    inicio_mes = inicio.to_period("M").start_time
+    fin_mes = fin.to_period("M").end_time.normalize()
+    return inicio_mes, fin_mes
+
+
+def clave_cache_consumo_datadis(
+    usuario,
+    authorized_nif,
+    suministro,
+    fecha_inicio,
+    fecha_fin,
+    preferir_qh=False,
+):
+    """Crea una clave estable sin incluir la contraseña de Datadis."""
+    inicio_mes, fin_mes = rango_meses_datadis(fecha_inicio, fecha_fin)
+    return (
+        str(usuario or "").strip().upper(),
+        str(authorized_nif or "").strip().upper(),
+        str(suministro.get("cups", "")).strip().upper(),
+        str(suministro.get("distributorCode", "")).strip(),
+        inicio_mes.strftime("%Y/%m"),
+        fin_mes.strftime("%Y/%m"),
+        bool(preferir_qh),
+    )
+
+
+def obtener_consumo_datadis_cacheado(
+    cache,
+    usuario,
+    password,
+    suministro,
+    fecha_inicio,
+    fecha_fin,
+    authorized_nif=None,
+    preferir_qh=False,
+    **kwargs,
+):
+    """Descarga meses completos una sola vez y reutiliza copias desde ``cache``."""
+    inicio_mes, fin_mes = rango_meses_datadis(fecha_inicio, fecha_fin)
+    clave = clave_cache_consumo_datadis(
+        usuario,
+        authorized_nif,
+        suministro,
+        inicio_mes,
+        fin_mes,
+        preferir_qh,
+    )
+    resultado = cache.get(clave)
+    reutilizado = resultado is not None
+    if resultado is None:
+        resultado = obtener_consumo_datadis(
+            usuario,
+            password,
+            suministro,
+            inicio_mes,
+            fin_mes,
+            authorized_nif=authorized_nif,
+            preferir_qh=preferir_qh,
+            **kwargs,
+        )
+        curva, frecuencia, aviso_fallback = resultado
+        cache[clave] = (curva.copy(), frecuencia, aviso_fallback)
+    curva, frecuencia, aviso_fallback = cache[clave]
+    return curva.copy(), frecuencia, aviso_fallback, clave, reutilizado
+
+
+def dataframe_como_archivo_curva(df, nombre="curva.csv"):
+    """Convierte una curva en un archivo CSV en memoria aceptado por el normalizador."""
+    archivo = io.BytesIO(df.to_csv(index=False, sep=";").encode("utf-8"))
+    archivo.name = nombre
+    return archivo
+
+
+def completar_periodos_curva(df_norm, df_periodos, atr):
+    """Asigna o normaliza periodos tarifarios sin depender de la interfaz."""
+    salida = df_norm.copy()
+    if "periodo" not in salida.columns or salida["periodo"].isna().all():
+        tipo_periodo = "dh_3p" if str(atr).startswith("2.0") else "dh_6p"
+        salida = salida.drop(columns=["periodo"], errors="ignore")
+        salida = pd.merge(
+            salida,
+            df_periodos[["fecha_hora", tipo_periodo]].rename(
+                columns={tipo_periodo: "periodo"}
+            ),
+            on="fecha_hora",
+            how="left",
+        )
+    salida["periodo"] = (
+        salida["periodo"]
+        .astype("string")
+        .str.strip()
+        .replace("nan", pd.NA)
+        .ffill()
+    )
+    return salida
+
+
+def agrupar_curva_horaria(df_norm, frecuencia):
+    """Devuelve una copia horaria común para curvas H, QH o diezminutales."""
+    columnas_agregadas = {
+        "fecha": "first",
+        "hora": "first",
+        "consumo_neto_kWh": "sum",
+        "reactiva_kVArh": "sum",
+        "vertido_neto_kWh": "sum",
+        "generacion_kWh": "sum",
+        "periodo": "first",
+        "tipo_dia": "first",
+    }
+    if frecuencia in {"QH", "10MIN"}:
+        salida = (
+            df_norm.groupby(["fecha", "hora"], as_index=False)
+            .agg({clave: valor for clave, valor in columnas_agregadas.items()
+                  if clave not in {"fecha", "hora"}})
+        )
+        salida["fecha_hora"] = (
+            pd.to_datetime(salida["fecha"])
+            + pd.to_timedelta(salida["hora"], unit="h")
+        )
+    else:
+        salida = df_norm[["fecha_hora", *columnas_agregadas]].copy()
+    return (
+        salida.groupby("fecha_hora", as_index=False)
+        .agg(columnas_agregadas)
+        .sort_values("fecha_hora")
+        .reset_index(drop=True)
+    )
+
+
+def recortar_curva_periodo(df_norm, fecha_inicio, fecha_fin):
+    """Recorta una curva normalizada incluyendo todos los intervalos del último día."""
+    inicio = pd.to_datetime(fecha_inicio, errors="coerce", dayfirst=True)
+    fin = pd.to_datetime(fecha_fin, errors="coerce", dayfirst=True)
+    if pd.isna(inicio) or pd.isna(fin) or inicio.normalize() > fin.normalize():
+        raise ValueError("El periodo de facturación no es válido.")
+    fechas = pd.to_datetime(df_norm.get("fecha_hora"), errors="coerce")
+    limite_fin = fin.normalize() + pd.Timedelta(days=1)
+    salida = df_norm.loc[
+        (fechas >= inicio.normalize()) & (fechas < limite_fin)
+    ].copy()
+    if salida.empty:
+        raise ValueError("La curva no contiene datos del periodo de facturación.")
+    return salida.reset_index(drop=True)
+
+
+def analizar_cobertura_periodo(df_norm, fecha_inicio, fecha_fin, frecuencia):
+    """Comprueba cobertura, huecos y duplicados dentro de un ciclo facturado."""
+    recortada = recortar_curva_periodo(df_norm, fecha_inicio, fecha_fin)
+    paso = {"H": "1h", "QH": "15min", "10MIN": "10min"}.get(frecuencia)
+    if paso is None:
+        raise ValueError("No se puede validar una frecuencia desconocida.")
+    inicio = pd.to_datetime(fecha_inicio, dayfirst=True).normalize()
+    limite_fin = (
+        pd.to_datetime(fecha_fin, dayfirst=True).normalize()
+        + pd.Timedelta(days=1)
+    )
+    esperadas = pd.date_range(inicio, limite_fin, freq=paso, inclusive="left")
+    fechas = pd.to_datetime(recortada["fecha_hora"], errors="coerce").dropna()
+    unicas = pd.DatetimeIndex(fechas.drop_duplicates().sort_values())
+    ausentes = esperadas.difference(unicas)
+    fuera_secuencia = unicas.difference(esperadas)
+    duplicados = int(fechas.duplicated(keep=False).sum())
+    return {
+        "completa": not len(ausentes) and not len(fuera_secuencia) and not duplicados,
+        "intervalos_esperados": int(len(esperadas)),
+        "intervalos_unicos": int(len(unicas)),
+        "intervalos_ausentes": int(len(ausentes)),
+        "intervalos_fuera_secuencia": int(len(fuera_secuencia)),
+        "registros_duplicados": duplicados,
+        "primer_intervalo": unicas.min() if len(unicas) else None,
+        "ultimo_intervalo": unicas.max() if len(unicas) else None,
+    }
+
+
+def resumir_consumo_por_periodo(df_norm):
+    """Suma el consumo neto de una curva ya periodificada."""
+    if "periodo" not in df_norm or "consumo_neto_kWh" not in df_norm:
+        raise ValueError("La curva no contiene periodos o consumo neto.")
+    resumen = (
+        df_norm.groupby("periodo", observed=True)["consumo_neto_kWh"]
+        .sum()
+        .sort_index()
+    )
+    return {str(periodo): float(consumo) for periodo, consumo in resumen.items()}
 
 def _clean(s: str) -> str:
     s = unidecode(str(s)).lower().strip()
@@ -1011,6 +1246,7 @@ def normalize_curve_simple(
     uploaded,
     origin="archivo",
     excel_sheet=None,
+    zona_periodos="peninsula",
 ) -> tuple[pd.DataFrame, pd.DataFrame, str]:
 
     #Lee y normaliza la curva, devolviendo (df_in, df_norm).
@@ -1202,7 +1438,6 @@ def normalize_curve_simple(
     else:
         freq = "desconocida"
         ajuste_tiempo = pd.Timedelta(0)
-        st.warning("Frecuencia no reconocida. No se aplica ajuste temporal.")
 
     if dt0.dt.hour.min() == 1:
         # Formato 1–24 → ajustar 24:00
@@ -1286,10 +1521,8 @@ def normalize_curve_simple(
                 "ceuta": BASE_DIR / "utils" / "periodos_horarios_ceuta.xlsx",
                 "melilla": BASE_DIR / "utils" / "periodos_horarios_melilla.xlsx",
             }
-            zona_periodos_cdc = st.session_state.get("zona_periodos_cdc", "peninsula")
-            #periodos_path = mapa_periodos_path[st.session_state.zona_periodos_cdc]
             periodos_path = mapa_periodos_path.get(
-                zona_periodos_cdc,
+                str(zona_periodos or "peninsula").lower(),
                 BASE_DIR / "utils" / "periodos_horarios.xlsx"
             )
             periodos_path = Path(periodos_path)
@@ -1306,8 +1539,7 @@ def normalize_curve_simple(
             #periodo = df_merge["periodo"].astype(str).str.upper().str.strip()
 
             #msg_periodos = 'Cargados periodos desde fichero auxiliar. Seleccione modo 3P/6P'
-        except Exception as e:
-            st.warning(f"No se pudieron cargar los periodos: {e}")
+        except Exception:
             periodo = np.nan
     
     ind = pd.to_numeric(df[c_ind], errors="coerce") if c_ind else np.nan
@@ -4080,14 +4312,18 @@ def calcular_comparacion():
     # =====================================================
     # 4. INICIALIZACIÓN / SANEADO DEL RANGO EN SESSION_STATE
     # =====================================================
-    if "rango_fechas_comparativa" not in st.session_state:
-        st.session_state.rango_fechas_comparativa = rango_valido
+    clave_rango = "rango_fechas_comparativa_guardado"
+    if clave_rango not in st.session_state:
+        # Migra el valor anterior si todavía existe en la sesión.
+        st.session_state[clave_rango] = st.session_state.get(
+            "rango_fechas_comparativa", rango_valido
+        )
 
     else:
-        rango_actual = st.session_state.rango_fechas_comparativa
+        rango_actual = st.session_state[clave_rango]
 
         if not isinstance(rango_actual, (list, tuple)) or len(rango_actual) != 2:
-            st.session_state.rango_fechas_comparativa = rango_valido
+            st.session_state[clave_rango] = rango_valido
 
         else:
             f_ini, f_fin = rango_actual
@@ -4100,15 +4336,15 @@ def calcular_comparacion():
 
             # Si tras recortar queda inválido, reset
             if f_ini > f_fin:
-                st.session_state.rango_fechas_comparativa = rango_valido
+                st.session_state[clave_rango] = rango_valido
             else:
-                st.session_state.rango_fechas_comparativa = (f_ini, f_fin)
+                st.session_state[clave_rango] = (f_ini, f_fin)
 
 
     # =====================================================
     # 5. RECUPERAR FECHAS SELECCIONADAS
     # =====================================================
-    rango = st.session_state.get("rango_fechas_comparativa")
+    rango = st.session_state.get(clave_rango)
 
     if rango is None or len(rango) != 2:
         resultado["mensaje"] = "No se ha seleccionado un rango válido."
@@ -4124,6 +4360,14 @@ def calcular_comparacion():
     # =====================================================
     inicio_1y = inicio + relativedelta(years=1)
     fin_1y = fin + relativedelta(years=1)
+    etiqueta_base = (
+        str(inicio.year) if inicio.year == fin.year
+        else f"{inicio.year}–{fin.year}"
+    )
+    etiqueta_comp = (
+        str(inicio_1y.year) if inicio_1y.year == fin_1y.year
+        else f"{inicio_1y.year}–{fin_1y.year}"
+    )
 
     resultado["debug"] = {
         "inicio": inicio,
@@ -4264,15 +4508,22 @@ def calcular_comparacion():
     delta_pct_str = formato_numero_es(delta_pct, 2)
 
     resumen_html = f"""
-    <div style="font-size:28px; text-align:center; color:white;">
-        El <b>{texto_tipo}</b> del consumo en el periodo seleccionado ha sido de:
-        <br>
-        <span style="font-size:36px; font-weight:bold;">
-            <span style="color:yellow;">{delta_str}</span> kWh
-        </span> 
-        (<span style="font-size:36px; font-weight:bold;">
-            <span style="color:yellow;">{delta_pct_str}</span> %
-        </span>)
+    <div style="
+        padding:1rem .8rem;
+        border:1px solid #e0b400;
+        border-left:6px solid #e0b400;
+        border-radius:.75rem;
+        background:#fff3bf;
+        color:#5f4b00;
+        text-align:center;
+        box-shadow:0 2px 8px rgba(224,180,0,.16);
+    ">
+        <div style="font-size:28px;line-height:1.15;">
+            El <b>{texto_tipo}</b> del consumo en el periodo seleccionado ha sido de:
+        </div>
+        <div style="font-size:36px;font-weight:bold;line-height:1.15;margin-top:.35rem;">
+            {delta_str} kWh&nbsp; (&nbsp;{delta_pct_str} %&nbsp;)
+        </div>
     </div>
     """
 
@@ -4282,20 +4533,26 @@ def calcular_comparacion():
     color_base = "#1f77b4"
     color_comp = "#ff7f0e"
 
-    df_plot = df_pivot[df_pivot["Mes"] != "TOTAL"]
+    df_plot = df_pivot[df_pivot["Mes"] != "TOTAL"].rename(columns={
+        "Base": etiqueta_base, "+1 año": etiqueta_comp,
+    })
 
     fig_mensual = px.bar(
         df_plot,
         x="Mes",
-        y=["Base", "+1 año"],
+        y=[etiqueta_base, etiqueta_comp],
         barmode="group",
     )
 
     fig_mensual.for_each_trace(
         lambda t: t.update(marker_color=color_base)
-        if t.name == "Base"
+        if t.name == etiqueta_base
         else t.update(marker_color=color_comp)
     )
+    fig_mensual.for_each_trace(lambda traza: traza.update(
+        customdata=[formato_numero_es(valor, 0) for valor in traza.y],
+        hovertemplate=f"{traza.name}: %{{customdata}} kWh<extra></extra>"
+    ))
 
     fig_mensual.update_layout(
         title=dict(
@@ -4306,30 +4563,41 @@ def calcular_comparacion():
         legend_title_text="Periodo",
         xaxis_title="Mes",
         yaxis_title="kWh",
+        hovermode="x unified",
+        hoverlabel=dict(font_size=16, font_family="Arial"),
+        barcornerradius="28%",
         bargap=0.25,
         bargroupgap=0.1
     )
 
-    df_total_plot = df_pivot[df_pivot["Mes"] == "TOTAL"]
+    df_total_plot = df_pivot[df_pivot["Mes"] == "TOTAL"].rename(columns={
+        "Base": etiqueta_base, "+1 año": etiqueta_comp,
+    })
 
     fig_total = px.bar(
         df_total_plot,
         x=["TOTAL"],
-        y=["Base", "+1 año"],
+        y=[etiqueta_base, etiqueta_comp],
         barmode="group",
     )
 
     fig_total.for_each_trace(
         lambda t: t.update(marker_color=color_base)
-        if t.name == "Base"
+        if t.name == etiqueta_base
         else t.update(marker_color=color_comp)
     )
+    fig_total.for_each_trace(lambda traza: traza.update(
+        customdata=[formato_numero_es(valor, 0) for valor in traza.y],
+        hovertemplate=f"{traza.name}: %{{customdata}} kWh<extra></extra>"
+    ))
 
-    fig_total.update_traces(
-        texttemplate="%{y:,.0f}",
-        textposition="inside",
-        textfont_size=20
-    )
+    fig_total.for_each_trace(lambda traza: traza.update(
+        text=[formato_numero_es(valor, 0) for valor in traza.y],
+        texttemplate="<b>%{text}</b>",
+        textposition="outside",
+        textfont_size=20,
+        cliponaxis=False,
+    ))
 
     fig_total.update_layout(
         title=dict(
@@ -4338,10 +4606,15 @@ def calcular_comparacion():
             xanchor="center"
         ),
         showlegend=True,
+        hovermode="x unified",
+        hoverlabel=dict(font_size=16, font_family="Arial"),
         xaxis_title="",
         yaxis_title="kWh",
-        bargap=0.4,
-        bargroupgap=0.1
+        barcornerradius="10%",
+        bargap=0.42,
+        bargroupgap=0.38,
+        uniformtext_minsize=18,
+        uniformtext_mode="show",
     )
 
     # =====================================================
@@ -4349,12 +4622,65 @@ def calcular_comparacion():
     # =====================================================
     resultado["ok"] = True
     resultado["mensaje"] = ""
-    resultado["df_pivot"] = df_pivot
+    resultado["df_pivot"] = df_pivot.rename(columns={
+        "Base": etiqueta_base, "+1 año": etiqueta_comp,
+    })
+    resultado["etiquetas_periodos"] = (etiqueta_base, etiqueta_comp)
     resultado["resumen_html"] = resumen_html
     resultado["fig_total"] = fig_total
     resultado["fig_mensual"] = fig_mensual
 
     return resultado
+
+def preparar_costes_mensuales_rango(df_horario, rango_base):
+    """Agrega costes horarios solo para el rango base y su réplica +1 año."""
+    if df_horario is None or df_horario.empty or rango_base is None:
+        return pd.DataFrame()
+    if not isinstance(rango_base, (tuple, list)) or len(rango_base) != 2:
+        return pd.DataFrame()
+
+    inicio = pd.to_datetime(rango_base[0]).normalize()
+    fin = pd.to_datetime(rango_base[1]).normalize()
+    inicio_1y = inicio + relativedelta(years=1)
+    fin_1y = fin + relativedelta(years=1)
+    etiqueta_base = (
+        str(inicio.year) if inicio.year == fin.year
+        else f"{inicio.year}–{fin.year}"
+    )
+    etiqueta_comp = (
+        str(inicio_1y.year) if inicio_1y.year == fin_1y.year
+        else f"{inicio_1y.year}–{fin_1y.year}"
+    )
+    df = df_horario.copy()
+    fechas = pd.to_datetime(df["fecha_hora"], errors="coerce")
+    mascara = (
+        ((fechas >= inicio) & (fechas < fin + pd.Timedelta(days=1)))
+        | ((fechas >= inicio_1y) & (fechas < fin_1y + pd.Timedelta(days=1)))
+    )
+    df = df.loc[mascara].copy()
+    df["fecha_hora"] = fechas.loc[mascara]
+    if df.empty:
+        return pd.DataFrame()
+    df["año"] = df["fecha_hora"].dt.year
+    df["mes_num"] = df["fecha_hora"].dt.month
+    nombres_meses = {
+        1: "enero", 2: "febrero", 3: "marzo", 4: "abril",
+        5: "mayo", 6: "junio", 7: "julio", 8: "agosto",
+        9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre",
+    }
+    df["mes_nombre"] = df["mes_num"].map(nombres_meses)
+    mensual = (
+        df.groupby(["año", "mes_num", "mes_nombre"], as_index=False)
+        .agg(
+            consumo_neto_kWh=("consumo_neto_kWh", "sum"),
+            coste_total=("coste_total", "sum"),
+        )
+    )
+    mensual["fecha"] = pd.to_datetime(dict(
+        year=mensual["año"], month=mensual["mes_num"], day=1
+    ))
+    return mensual
+
 
 def calcular_comparacion_costes(precios_mensuales, rango_base=None):
 
@@ -4434,7 +4760,8 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
             fecha_ini_base = pd.to_datetime(rango_base)
             fecha_fin_base = pd.to_datetime(rango_base)
 
-        # Llevamos el rango a meses completos
+        # Los datos recibidos pueden estar ya recortados hora a hora al rango
+        # exacto. La fecha mensual solo sirve aquí para seleccionar sus meses.
         fecha_ini_mes = fecha_ini_base.replace(day=1)
         fecha_fin_mes = fecha_fin_base.replace(day=1)
 
@@ -4512,6 +4839,24 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
             "fig_precio_medio": None,
         }
 
+    if isinstance(rango_base, (tuple, list)) and len(rango_base) == 2:
+        rango_ini = pd.to_datetime(rango_base[0])
+        rango_fin = pd.to_datetime(rango_base[1])
+        rango_ini_1y = rango_ini + relativedelta(years=1)
+        rango_fin_1y = rango_fin + relativedelta(years=1)
+        etiqueta_base = (
+            str(rango_ini.year) if rango_ini.year == rango_fin.year
+            else f"{rango_ini.year}–{rango_fin.year}"
+        )
+        etiqueta_comp = (
+            str(rango_ini_1y.year)
+            if rango_ini_1y.year == rango_fin_1y.year
+            else f"{rango_ini_1y.year}–{rango_fin_1y.year}"
+        )
+    else:
+        etiqueta_base = str(int(df_cmp["año_base"].min()))
+        etiqueta_comp = str(int(df_cmp["año_comp"].min()))
+
     # =====================================================
     # 3. CÁLCULOS DE PRECIO MEDIO E IMPACTOS
     # =====================================================
@@ -4587,14 +4932,14 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
     df_costes = df_costes.rename(
         columns={
             "mes_label": "Mes",
-            "consumo_base": "Consumo base",
-            "consumo_comp": "+1 año",
-            "coste_base": "Coste base",
-            "coste_comp": "Coste +1 año",
+            "consumo_base": f"Consumo {etiqueta_base}",
+            "consumo_comp": f"Consumo {etiqueta_comp}",
+            "coste_base": f"Coste {etiqueta_base}",
+            "coste_comp": f"Coste {etiqueta_comp}",
             "variacion_coste": "Δ coste",
             "variacion_coste_pct": "Δ coste %",
-            "precio_base_cent_kwh": "Precio base",
-            "precio_comp_cent_kwh": "Precio +1 año"
+            "precio_base_cent_kwh": f"Precio {etiqueta_base}",
+            "precio_comp_cent_kwh": f"Precio {etiqueta_comp}"
         }
     )
 
@@ -4645,6 +4990,28 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
     variacion_total = coste_comp_total - coste_base_total
     efecto_precio_total = coste_simulado_total - coste_base_total
     efecto_consumo_total = coste_comp_total - coste_simulado_total
+    variacion_coste_pct_total = (
+        variacion_total / coste_base_total * 100 if coste_base_total else 0.0
+    )
+    tipo_variacion_coste = (
+        "incremento" if variacion_total > 0
+        else "decremento" if variacion_total < 0
+        else "variación nula"
+    )
+    impacto_total_html_costes = f"""
+    <div style="padding:1rem .8rem;border:1px solid #e0b400;
+        border-left:6px solid #e0b400;border-radius:.75rem;
+        background:#fff3bf;color:#5f4b00;text-align:center;
+        box-shadow:0 2px 8px rgba(224,180,0,.16);">
+        <div style="font-size:28px;line-height:1.15;">
+            El <b>{tipo_variacion_coste}</b> del coste en el periodo seleccionado ha sido de:
+        </div>
+        <div style="font-size:36px;font-weight:bold;line-height:1.15;margin-top:.35rem;">
+            {formato_numero_es(variacion_total, 2)} €&nbsp;
+            (&nbsp;{formato_numero_es(variacion_coste_pct_total, 2)} %&nbsp;)
+        </div>
+    </div>
+    """
 
     def generar_resumen_html_costes(
         coste_base_total,
@@ -4709,20 +5076,6 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
             f'<b>{formato_numero_es(coste_simulado_total, 2)} €</b>.'
             '</p>'
 
-            '<div style="'
-            'margin-top:0.8rem;'
-            'padding-top:0.8rem;'
-            'border-top:1px solid rgba(255,255,255,0.18);'
-            '">'
-
-            '<b>Efecto precio:</b> '
-            f'<span style="font-weight:700;">{signo(efecto_precio_total)}{formato_numero_es(efecto_precio_total, 2)} €</span>'
-            '<br>'
-
-            '<b>Efecto consumo:</b> '
-            f'<span style="font-weight:700;">{signo(efecto_consumo_total)}{formato_numero_es(efecto_consumo_total, 2)} €</span>'
-
-            '</div>'
             '</div>'
         )
 
@@ -4739,6 +5092,51 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
         efecto_precio_total=efecto_precio_total,
         efecto_consumo_total=efecto_consumo_total
     )
+    signo_precio = "+" if efecto_precio_total > 0 else ""
+    signo_consumo = "+" if efecto_consumo_total > 0 else ""
+    impacto_html_costes = f"""
+    <div style="padding:.85rem 1rem;border:1px solid #e0b400;
+        border-left:6px solid #e0b400;border-radius:.75rem;
+        background:#fff3bf;color:#5f4b00;margin:.2rem 0 .8rem 0;
+        box-shadow:0 2px 8px rgba(224,180,0,.16);font-size:1rem;">
+        <div><b>Efecto precio:</b> {signo_precio}{formato_numero_es(efecto_precio_total, 2)} €</div>
+        <div><b>Efecto consumo:</b> {signo_consumo}{formato_numero_es(efecto_consumo_total, 2)} €</div>
+    </div>
+    """
+
+    fig_resumen_costes = go.Figure()
+    for nombre, valor, color in (
+        (etiqueta_base, coste_base_total, "#1f77b4"),
+        (etiqueta_comp, coste_comp_total, "#ff7f0e"),
+    ):
+        fig_resumen_costes.add_trace(go.Bar(
+            x=["TOTAL"],
+            y=[valor],
+            name=nombre,
+            marker_color=color,
+            text=[formato_numero_es(valor, 2) + " €"],
+            texttemplate="<b>%{text}</b>",
+            textposition="outside",
+            textfont=dict(size=20),
+            cliponaxis=False,
+            hovertemplate=(
+                f"{nombre}: {formato_numero_es(valor, 2)} €<extra></extra>"
+            ),
+        ))
+    fig_resumen_costes.update_layout(
+        title="Comparativa TOTAL de costes (€)",
+        barmode="group",
+        hovermode="x unified",
+        barcornerradius="10%",
+        bargap=.42,
+        bargroupgap=.38,
+        xaxis_title="",
+        yaxis_title="€",
+        uniformtext_minsize=18,
+        uniformtext_mode="show",
+        hoverlabel=dict(font_size=16, font_family="Arial"),
+    )
+    fig_resumen_costes = aplicar_estilo(fig_resumen_costes)
 
     # =====================================================
     # 6. GRÁFICO COSTE BASE VS +1 AÑO
@@ -4753,9 +5151,9 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
         go.Bar(
             x=df_cmp["mes_label"],
             y=df_cmp["coste_base"],
-            name="Coste base",
+            name=f"Coste {etiqueta_base}",
             marker_color = color_base,
-            hovertemplate="Coste base: %{y:.2f} €<extra></extra>"
+            hovertemplate=f"Coste {etiqueta_base}: %{{y:.2f}} €<extra></extra>"
         )
     )
 
@@ -4763,9 +5161,9 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
         go.Bar(
             x=df_cmp["mes_label"],
             y=df_cmp["coste_comp"],
-            name="Coste +1 año",
+            name=f"Coste {etiqueta_comp}",
             marker_color = color_comp,
-            hovertemplate="Coste +1 año: %{y:.2f} €<extra></extra>"
+            hovertemplate=f"Coste {etiqueta_comp}: %{{y:.2f}} €<extra></extra>"
         )
     )
 
@@ -4773,7 +5171,11 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
         title="Comparativa mensual de COSTES (€)",
         barmode="group",
         hovermode="x unified",
-        legend_title_text=""
+        legend_title_text="",
+        barcornerradius="28%",
+        bargap=0.25,
+        bargroupgap=0.1,
+        hoverlabel=dict(font_size=16, font_family="Arial"),
     )
 
     fig_coste_total.update_yaxes(
@@ -4845,6 +5247,7 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
         barmode="relative",
         hovermode="x unified",
         legend_title_text=""
+        ,hoverlabel=dict(font_size=16, font_family="Arial")
     )
 
     fig_efectos.update_yaxes(
@@ -4862,6 +5265,9 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
     # =====================================================
     # 8. GRÁFICO PRECIO MEDIO
     # =====================================================
+    diferencial_precio = (
+        df_cmp["precio_comp_cent_kwh"] - df_cmp["precio_base_cent_kwh"]
+    )
     fig_precio_medio = go.Figure()
 
     fig_precio_medio.add_trace(
@@ -4869,11 +5275,17 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
             x=df_cmp["mes_label"],
             y=df_cmp["precio_base_cent_kwh"],
             mode="lines+markers",
-            name="Precio base",
+            name=f"Precio {etiqueta_base}",
             marker_color = color_base,
             line=dict(width=3),
             marker=dict(size=7),
-            hovertemplate="Precio base: %{y:.2f} c€/kWh<extra></extra>"
+            customdata=diferencial_precio,
+            hovertemplate=(
+                f"Precio {etiqueta_base}: %{{y:.2f}} c€/kWh<br>"
+                f"Diferencial {etiqueta_comp}−{etiqueta_base}: "
+                "%{customdata:.2f} c€/kWh"
+                "<extra></extra>"
+            )
         )
     )
 
@@ -4882,11 +5294,17 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
             x=df_cmp["mes_label"],
             y=df_cmp["precio_comp_cent_kwh"],
             mode="lines+markers",
-            name="Precio +1 año",
+            name=f"Precio {etiqueta_comp}",
             marker_color = color_comp,
             line=dict(width=3),
             marker=dict(size=7),
-            hovertemplate="Precio +1 año: %{y:.2f} c€/kWh<extra></extra>"
+            customdata=diferencial_precio,
+            hovertemplate=(
+                f"Precio {etiqueta_comp}: %{{y:.2f}} c€/kWh<br>"
+                f"Diferencial {etiqueta_comp}−{etiqueta_base}: "
+                "%{customdata:.2f} c€/kWh"
+                "<extra></extra>"
+            )
         )
     )
 
@@ -4894,6 +5312,7 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
         title="Comparativa mensual de PRECIOS (c€/kWh)",
         hovermode="x unified",
         legend_title_text=""
+        ,hoverlabel=dict(font_size=16, font_family="Arial")
     )
 
     fig_precio_medio.update_yaxes(
@@ -4915,9 +5334,13 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
         "df_costes": df_costes,
         "df_efectos": df_efectos,
         "resumen_html_costes": resumen_html_costes,
+        "impacto_total_html_costes": impacto_total_html_costes,
+        "impacto_html_costes": impacto_html_costes,
         "fig_coste_total": fig_coste_total,
+        "fig_resumen_costes": fig_resumen_costes,
         "fig_efectos": fig_efectos,
         "fig_precio_medio": fig_precio_medio,
+        "etiquetas_periodos": (etiqueta_base, etiqueta_comp),
     }
 
 

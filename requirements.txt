@@ -3,6 +3,8 @@ requests
 openpyxl
 plotly.express
 pdfplumber
+PyMuPDF
+pytesseract
 #streamlit
 google-auth
 gspread
