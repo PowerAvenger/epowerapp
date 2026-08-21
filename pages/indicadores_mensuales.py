@@ -193,6 +193,20 @@ with st.spinner("Preparando demanda peninsular..."):
     datos_demanda, ultimo_real_demanda, hay_prevision_demanda = (
         obtener_demanda_mensual_dashboard(año_dashboard, mes_dashboard)
     )
+    if not datos_demanda.empty:
+        # Normalizamos también al salir de la caché: en Streamlit Cloud una
+        # respuesta antigua de ESIOS puede recuperar esta columna como object.
+        datos_demanda["datetime"] = (
+            pd.to_datetime(
+                datos_demanda["datetime"],
+                format="mixed",
+                errors="coerce",
+                utc=True,
+            )
+            .dt.tz_convert("Europe/Madrid")
+            .dt.tz_localize(None)
+        )
+        datos_demanda = datos_demanda.dropna(subset=["datetime"])
 
 with st.spinner("Preparando mercado de gas..."):
     datos_mibgas = carga_mibgas()
