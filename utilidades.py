@@ -27,6 +27,7 @@ def generar_menu():
         st.page_link('pages/balkoning_solar.py', label = 'Balkoning Solar', icon = "🏊‍♂️")
         st.page_link('pages/escalacv.py', label = 'Escala CV', icon = "📊")
         st.page_link('pages/indicadores_mensuales.py', label = 'Indicadores mensuales', icon = "📋")
+        st.page_link('pages/indicadores_anuales.py', label = 'Indicadores anuales', icon = "📅")
         st.page_link('pages/excedentes.py', label = 'Excedentes', icon = "💰")
         st.page_link('pages/demanda.py', label = 'Demanda', icon = "🏭")
         st.page_link('pages/redata_potgen.py', label = 'Tecnologías de generación', icon = "⚡️")

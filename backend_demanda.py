@@ -161,6 +161,64 @@ def obtener_demanda_mensual_dashboard(año, mes):
 
     return datos, ultimo_real, not previstas.empty
 
+
+def obtener_demanda_anual_dashboard(año):
+    """Prepara la demanda real diaria y su media acumulada para un año."""
+    hoy = date.today()
+    fecha_inicio = date(año, 1, 1)
+    fecha_fin = date(año, 12, 31)
+    if año == hoy.year:
+        fecha_fin = min(fecha_fin, hoy)
+
+    datos = download_esios(
+        1293,
+        fecha_inicio.isoformat(),
+        fecha_fin.isoformat(),
+        "day",
+        "average",
+    ).copy()
+    if datos.empty:
+        return datos, None
+
+    datos["datetime"] = pd.to_datetime(datos["datetime"], errors="coerce")
+    datos["GW"] = pd.to_numeric(datos["value"], errors="coerce") / 1000
+    datos = datos.dropna(subset=["datetime", "GW"]).sort_values("datetime")
+    datos = datos[datos["datetime"].dt.year == año].copy()
+    datos["media_anual"] = datos["GW"].expanding().mean()
+    ultimo_real = datos["datetime"].max() if not datos.empty else None
+    return datos, ultimo_real
+
+
+def graficar_demanda_anual(datos, año):
+    """Grafica demanda diaria y media acumulada con el eje anual completo."""
+    figura = go.Figure()
+    figura.add_trace(go.Bar(
+        x=datos["datetime"],
+        y=datos["GW"],
+        name="Demanda diaria real",
+        marker_color="#83c9ff",
+        opacity=0.42,
+        hovertemplate="%{x|%d/%m/%Y}: %{y:.2f} GW<extra></extra>",
+    ))
+    figura.add_trace(go.Scatter(
+        x=datos["datetime"],
+        y=datos["media_anual"],
+        mode="lines",
+        name="Media acumulada anual",
+        line=dict(color="#ff8700", width=3),
+        hovertemplate="Media acumulada: %{y:.2f} GW<extra></extra>",
+    ))
+    figura.update_layout(hovermode="x unified")
+    figura.update_xaxes(
+        range=[pd.Timestamp(año, 1, 1), pd.Timestamp(año, 12, 31)],
+        dtick="M1",
+        tickformat="%b",
+        title_text="Mes",
+        showgrid=True,
+    )
+    figura.update_yaxes(title_text="Demanda GW", rangemode="tozero")
+    return aplicar_estilo(figura)
+
 def graficar_media_diaria(
     df_demand,
     años_visibles,

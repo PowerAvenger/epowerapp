@@ -4,6 +4,8 @@ import pandas as pd
 import numpy as np
 import io, re
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from pathlib import Path
 from unidecode import unidecode
 import plotly.graph_objects as go
@@ -19,6 +21,28 @@ BASE_DIR = Path(__file__).resolve().parent
 
 class DatadisLimiteConsultas(RuntimeError):
     """Datadis rechaza repetir una consulta antes de que venza su límite."""
+
+
+AXON_RETRY_STATUS = (429, 500, 502, 503, 504)
+
+
+def crear_sesion_axon() -> requests.Session:
+    """Crea una sesión tolerante a fallos temporales de la API de Axon."""
+    reintentos = Retry(
+        total=3,
+        connect=3,
+        read=3,
+        status=3,
+        backoff_factor=0.75,
+        status_forcelist=AXON_RETRY_STATUS,
+        allowed_methods=frozenset({"GET"}),
+        respect_retry_after_header=True,
+        raise_on_status=False,
+    )
+    adaptador = HTTPAdapter(max_retries=reintentos)
+    sesion = requests.Session()
+    sesion.mount("https://", adaptador)
+    return sesion
 
 colores_periodo = {
         "P1": "red",
@@ -213,10 +237,20 @@ def obtener_datos_contador(
 
     usuario = str(usuario or "").strip()
     password = str(password or "")
-    cups = re.sub(r"\s+", "", str(cups or "")).upper()
+    # Axon identifica el suministro por el CUPS base de 20 caracteres. Las
+    # extensiones de dos caracteres que pueden aparecer en facturas no deben
+    # enviarse a su buscador.
+    cups = re.sub(
+        r"[^A-Z0-9]", "", str(cups or "").upper()
+    )[:20]
     tipo_curva = str(tipo_curva or "").strip().upper()
     if not usuario or not password or not cups:
         raise ValueError("Usuario, contraseña y CUPS son obligatorios.")
+    if len(cups) != 20:
+        raise ValueError(
+            "El CUPS base enviado a Axon debe contener 20 caracteres "
+            "alfanuméricos."
+        )
     if tipo_curva not in {"TM1", "TM2"}:
         raise ValueError("El tipo de curva debe ser TM1 o TM2.")
 
@@ -231,6 +265,12 @@ def obtener_datos_contador(
         try:
             respuesta.raise_for_status()
         except requests.RequestException as exc:
+            if respuesta.status_code in AXON_RETRY_STATUS:
+                raise RuntimeError(
+                    f"Axon no ha podido completar {contexto}: el servicio "
+                    f"sigue temporalmente no disponible después de varios "
+                    f"intentos (HTTP {respuesta.status_code})."
+                ) from exc
             raise RuntimeError(
                 f"Axon no ha podido completar {contexto} "
                 f"(HTTP {respuesta.status_code})."
@@ -243,7 +283,7 @@ def obtener_datos_contador(
             ) from exc
 
     try:
-        with requests.Session() as sesion:
+        with crear_sesion_axon() as sesion:
             autenticacion = respuesta_json(
                 sesion.get(
                     f"{AXON_API_BASE}/auth",
@@ -275,8 +315,10 @@ def obtener_datos_contador(
                         item
                         for item in datos_cups
                         if re.sub(
-                            r"\s+", "", str(item.get("cups", ""))
-                        ).upper() == cups
+                            r"[^A-Z0-9]",
+                            "",
+                            str(item.get("cups", "")).upper(),
+                        )[:20] == cups
                     ),
                     datos_cups[0] if datos_cups else {},
                 )

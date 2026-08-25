@@ -174,6 +174,20 @@ def recalcular_componentes_regulados(df):
     return df
 
 def calcular_precios_atr(df):
+    from backend_indexado import FormulaIndexada, calcular_precios_atr_formula
+
+    formula = FormulaIndexada(
+        desvios_apant=st.session_state.get("desvios_apant", 0.0),
+        margen=st.session_state.get("margen_telemindex", 0.0),
+        margen_pos=st.session_state.get("cfg_margen_pos", "tm"),
+        incluir_fnee=st.session_state.get("cfg_fnee", False),
+        fnee_pos=st.session_state.get("cfg_fnee_pos", "perdidas"),
+        cf_pct=st.session_state.get("cf_pct", 0.0),
+    )
+    return calcular_precios_atr_formula(df, formula)
+
+    # Implementación histórica conservada temporalmente para contrastar la
+    # equivalencia exacta durante la migración del motor compartido.
     
     tm_rate = 0.015
     cf = st.session_state.get("cf_pct", 0.0) / 100

@@ -66,6 +66,16 @@ if 'zona_periodos_cdc' not in st.session_state:
 hoja_curva_excel = None
 
 
+def ultimos_doce_meses_completos(fecha_referencia=None):
+    """Devuelve desde el primer día de M-12 hasta el último día de M-1."""
+    referencia = pd.Timestamp(
+        fecha_referencia if fecha_referencia is not None else pd.Timestamp.today()
+    ).normalize()
+    fin = referencia.replace(day=1) - pd.Timedelta(days=1)
+    inicio = (fin.to_period("M") - 11).start_time
+    return inicio.date(), fin.date()
+
+
 def guardar_credenciales_axon_sesion():
     """Conserva las credenciales de Axon solo en la sesión de Streamlit."""
     st.session_state.axon_usuario_sesion = st.session_state.get(
@@ -218,16 +228,43 @@ with tab_curva:
                     key="_axon_password_input",
                     on_change=guardar_credenciales_axon_sesion,
                 )
-                cups_axon = st.text_input("CUPS")
+                cups_axon = st.text_input(
+                    "CUPS",
+                    help=(
+                        "Puedes pegar el CUPS completo. Axon utilizará "
+                        "automáticamente los primeros 20 caracteres."
+                    ),
+                )
+                cups_axon_base = re.sub(
+                    r"[^A-Z0-9]", "", str(cups_axon or "").upper()
+                )[:20]
+                if cups_axon:
+                    st.caption(f"CUPS base enviado a Axon: `{cups_axon_base}`")
                 hoy_axon = pd.Timestamp.today().date()
-                rango_axon = st.date_input(
-                    "Periodo de la curva",
-                    value=(
+                inicio_12m, fin_12m = ultimos_doce_meses_completos(hoy_axon)
+                seleccionar_12m_axon = st.checkbox(
+                    "Seleccionar automáticamente los últimos 12 meses completos",
+                    key="seleccionar_12m_completos_axon",
+                    help=(
+                        "Excluye el mes actual. Por ejemplo, en agosto selecciona "
+                        "del 1 de agosto del año anterior al 31 de julio."
+                    ),
+                )
+                st.session_state.setdefault(
+                    "rango_axon_curva",
+                    (
                         hoy_axon - timedelta(days=30),
                         hoy_axon - timedelta(days=1),
                     ),
+                )
+                if seleccionar_12m_axon:
+                    st.session_state.rango_axon_curva = (inicio_12m, fin_12m)
+                rango_axon = st.date_input(
+                    "Periodo de la curva",
                     max_value=hoy_axon,
                     format="DD/MM/YYYY",
+                    key="rango_axon_curva",
+                    disabled=seleccionar_12m_axon,
                 )
                 tipo_curva_axon = st.selectbox(
                     "Tipo de curva",
@@ -393,6 +430,20 @@ with tab_curva:
                 ]
                 mes_anterior_datadis = str(mes_actual_datadis - 1).replace("-", "/")
                 indice_mes_defecto = meses_datadis.index(mes_anterior_datadis)
+                inicio_12m, fin_12m = ultimos_doce_meses_completos()
+                mes_inicio_12m = pd.Timestamp(inicio_12m).strftime("%Y/%m")
+                mes_fin_12m = pd.Timestamp(fin_12m).strftime("%Y/%m")
+                seleccionar_12m_datadis = st.checkbox(
+                    "Seleccionar automáticamente los últimos 12 meses completos",
+                    key="seleccionar_12m_completos_datadis",
+                    help=(
+                        "Excluye el mes actual. Por ejemplo, en agosto selecciona "
+                        "desde agosto del año anterior hasta julio."
+                    ),
+                )
+                if seleccionar_12m_datadis:
+                    st.session_state.mes_inicio_datadis = mes_inicio_12m
+                    st.session_state.mes_fin_datadis = mes_fin_12m
                 col_mes_inicio, col_mes_fin = st.columns(2)
                 with col_mes_inicio:
                     mes_inicio_datadis = st.selectbox(
@@ -400,6 +451,7 @@ with tab_curva:
                         meses_datadis,
                         index=indice_mes_defecto,
                         key="mes_inicio_datadis",
+                        disabled=seleccionar_12m_datadis,
                     )
                 with col_mes_fin:
                     mes_fin_datadis = st.selectbox(
@@ -407,6 +459,7 @@ with tab_curva:
                         meses_datadis,
                         index=indice_mes_defecto,
                         key="mes_fin_datadis",
+                        disabled=seleccionar_12m_datadis,
                     )
                 st.caption("Datadis recibirá las fechas en formato AAAA/MM.")
                 preferir_qh_datadis = st.checkbox(
@@ -509,6 +562,9 @@ if normalizar and origen_curva == "Axon":
             )
         st.session_state.df_axon_raw = curva_axon
         st.session_state.frec_axon_raw = frecuencia_axon
+        st.session_state.cups_curva = re.sub(
+            r"[^A-Z0-9]", "", str(cups_axon or "").upper()
+        )
         archivo_axon = io.BytesIO(
             curva_axon.to_csv(index=False, sep=";").encode("utf-8")
         )
@@ -558,6 +614,9 @@ if normalizar and origen_curva == "Datadis":
             )
         st.session_state.df_datadis_raw = curva_datadis
         st.session_state.frec_datadis_raw = frecuencia_datadis
+        st.session_state.cups_curva = str(
+            suministro_datadis.get("cups", "") or ""
+        ).strip().upper()
         cache_detalles = st.session_state.setdefault("datadis_detalles_cache", {})
         detalle_datadis = cache_detalles.get(clave_detalle_datadis)
         if detalle_datadis is None:
@@ -2023,6 +2082,24 @@ if st.session_state.get("df_norm") is not None:
                 "de preparar el informe."
             )
         else:
+            cups_disponible = str(
+                st.session_state.get("cups_curva", "") or ""
+            ).strip().upper()
+            cups_autocompletado_anterior = st.session_state.get(
+                "_reactiva_informe_cups_autocompletado", ""
+            )
+            cups_informe_actual = st.session_state.get(
+                "reactiva_informe_cups", ""
+            )
+            if cups_disponible and (
+                not cups_informe_actual
+                or cups_informe_actual == cups_autocompletado_anterior
+            ):
+                st.session_state.reactiva_informe_cups = cups_disponible
+            st.session_state._reactiva_informe_cups_autocompletado = (
+                cups_disponible
+            )
+
             col_datos_informe, col_previa_informe = st.columns([0.38, 0.62])
             with col_datos_informe:
                 st.caption(

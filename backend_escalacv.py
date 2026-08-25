@@ -143,6 +143,19 @@ def cargar_datos_escalacv(componente, file_id_spot, file_id_ssaa, creds_dict):
     )
 
 
+def _limitar_comparativa_spot_al_periodo_comun(datos, año_actual):
+    """Devuelve datos de ambos años hasta el último día del año actual."""
+    fechas_actuales = datos.loc[
+        datos["fecha"].dt.year == año_actual,
+        "fecha",
+    ].dropna()
+    if fechas_actuales.empty:
+        return datos
+
+    ultimo_dia_disponible = fechas_actuales.dt.day.max()
+    return datos[datos["fecha"].dt.day <= ultimo_dia_disponible].copy()
+
+
 def graficar_comparativa_spot_mensual(
     datos_spot,
     mes,
@@ -236,14 +249,18 @@ def graficar_comparativa_spot_mensual(
         rangemode="tozero",
         showgrid=True,
     )
-    medias = diario.groupby("año")["value"].mean().to_dict()
+    diario_periodo_comun = _limitar_comparativa_spot_al_periodo_comun(
+        diario,
+        año_actual,
+    )
+    medias = diario_periodo_comun.groupby("año")["value"].mean().to_dict()
     return diario, aplicar_estilo(fig), medias
 
 
 def graficar_comparativa_spot_horaria_mensual(
     datos_spot,
-    mes,
-    año_actual,
+    mes=None,
+    año_actual=None,
     año_comparacion=2025,
 ):
     """Compara el perfil horario medio del SPOT de dos años."""
@@ -252,9 +269,11 @@ def graficar_comparativa_spot_horaria_mensual(
     datos["value"] = pd.to_numeric(datos["value"], errors="coerce")
     datos["hora"] = pd.to_numeric(datos["hora"], errors="coerce")
     datos = datos[
-        (datos["fecha"].dt.month == mes)
-        & datos["fecha"].dt.year.isin([año_actual, año_comparacion])
-    ].dropna(subset=["fecha", "hora", "value"])
+        datos["fecha"].dt.year.isin([año_actual, año_comparacion])
+    ]
+    if mes is not None:
+        datos = datos[datos["fecha"].dt.month == mes]
+    datos = datos.dropna(subset=["fecha", "hora", "value"])
     horario = (
         datos.assign(año=lambda df: df["fecha"].dt.year)
         .groupby(["año", "hora"], as_index=False)["value"]
