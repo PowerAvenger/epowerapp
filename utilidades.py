@@ -449,10 +449,25 @@ def persist_widget(
     )
 
 
-def mostrar_parametros_formula_indexado(widget_suffix=None):
+def mostrar_parametros_formula_indexado(widget_suffix=None, diferido=False):
     """Dibuja la configuración de fórmula compartida por los indexados."""
 
-    persist_widget(
+    def widget(widget_func, label, *args, key, default, **kwargs):
+        if diferido:
+            if key not in st.session_state:
+                st.session_state[key] = default
+            return widget_func(label, *args, key=key, **kwargs)
+        return persist_widget(
+            widget_func,
+            label,
+            *args,
+            key=key,
+            default=default,
+            widget_suffix=widget_suffix,
+            **kwargs,
+        )
+
+    widget(
         st.number_input,
         "Desvíos apantallados (€/MWh)",
         min_value=0.0,
@@ -460,9 +475,8 @@ def mostrar_parametros_formula_indexado(widget_suffix=None):
         step=0.1,
         key="desvios_apant",
         default=1.0,
-        widget_suffix=widget_suffix,
     )
-    persist_widget(
+    widget(
         st.number_input,
         "Margen (€/MWh)",
         min_value=0.0,
@@ -470,33 +484,29 @@ def mostrar_parametros_formula_indexado(widget_suffix=None):
         step=0.1,
         key="margen_telemindex",
         default=5.0,
-        widget_suffix=widget_suffix,
     )
-    persist_widget(
+    widget(
         st.selectbox,
         "Ubicación margen",
         ["perdidas", "tm", "neto"],
         key="cfg_margen_pos",
         default="tm",
-        widget_suffix=widget_suffix,
     )
-    persist_widget(
+    widget(
         st.checkbox,
         "Incluye FNEE",
         key="cfg_fnee",
         default=True,
-        widget_suffix=widget_suffix,
     )
     if st.session_state.get("cfg_fnee", False):
-        persist_widget(
+        widget(
             st.selectbox,
             "Ubicación FNEE",
             ["perdidas", "tm", "neto"],
             key="cfg_fnee_pos",
             default="perdidas",
-            widget_suffix=widget_suffix,
         )
-    persist_widget(
+    widget(
         st.number_input,
         "Coste financiero (%)",
         min_value=0.0,
@@ -504,5 +514,4 @@ def mostrar_parametros_formula_indexado(widget_suffix=None):
         step=0.01,
         key="cf_pct",
         default=0.0,
-        widget_suffix=widget_suffix,
     )

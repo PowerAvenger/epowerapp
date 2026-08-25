@@ -48,6 +48,7 @@ from backend_verificacion_consumos import (
     calcular_energia_fija,
     calcular_excesos_desde_curva,
     calcular_potencia_confirmada,
+    debe_prorratear_excesos_tramo,
     estado_verificacion_energia_real,
     preparar_archivos_factura,
     preparar_curva_factura,
@@ -2770,9 +2771,10 @@ with tab_verificacion:
                             inicio_dt = pd.to_datetime(
                                 inicio_tramo, dayfirst=True
                             ).normalize()
-                            fin_dt = pd.to_datetime(
+                            fin_inclusivo_dt = pd.to_datetime(
                                 fin_tramo, dayfirst=True
-                            ).normalize() + pd.Timedelta(days=1)
+                            ).normalize()
+                            fin_dt = fin_inclusivo_dt + pd.Timedelta(days=1)
                             fechas_curva = pd.to_datetime(
                                 resultado_medida.curva_periodo["fecha_hora"],
                                 errors="coerce",
@@ -2790,7 +2792,12 @@ with tab_verificacion:
                                 atr_medida,
                                 inicio_dt.year,
                                 potencias_tramo,
-                                prorratear=len(grupos_confirmados) > 1,
+                                prorratear=debe_prorratear_excesos_tramo(
+                                    inicio_dt,
+                                    fin_inclusivo_dt,
+                                    len(grupos_confirmados),
+                                    factura.tipo_suministro,
+                                ),
                             )
                             detalle_tramo.insert(
                                 0, "Tramo", f"{inicio_tramo}–{fin_tramo}"
@@ -3675,6 +3682,7 @@ with tab_comparativa:
                     )
 
             st.markdown("#### Término de energía")
+            calcular = False
             with st.container(border=True):
                 persist_widget(
                     st.radio,
@@ -3686,32 +3694,55 @@ with tab_comparativa:
                 )
                 if st.session_state.get("factura_tipo_energia") == "Fijo":
                     numero_periodos = 3 if atr_indexado == "2.0" else 6
-                    columnas_precios = st.columns(3)
-                    for indice in range(1, numero_periodos + 1):
-                        with columnas_precios[(indice - 1) % 3]:
-                            persist_widget(
-                                st.number_input,
-                                f"P{indice} (€/kWh)",
-                                min_value=0.0,
-                                max_value=2.0,
-                                step=0.001,
-                                format="%.6f",
-                                key=f"factura_precio_fijo_p{indice}",
-                                default=0.0,
-                            )
-                    st.caption(
-                        "Introduce precios en los periodos con consumo real; los "
-                        "periodos sin consumo pueden quedar a cero. Si la factura "
-                        "no ofrece desglose y la propuesta tiene precio único, "
-                        f"introduce el mismo valor en las {numero_periodos} casillas."
-                    )
+                    with st.form(
+                        f"factura_form_precios_fijos_{huella[:8]}",
+                        border=False,
+                    ):
+                        columnas_precios = st.columns(3)
+                        for indice in range(1, numero_periodos + 1):
+                            clave_precio = f"factura_precio_fijo_p{indice}"
+                            if clave_precio not in st.session_state:
+                                st.session_state[clave_precio] = 0.0
+                            with columnas_precios[(indice - 1) % 3]:
+                                st.number_input(
+                                    f"P{indice} (€/kWh)",
+                                    min_value=0.0,
+                                    max_value=2.0,
+                                    step=0.001,
+                                    format="%.6f",
+                                    key=clave_precio,
+                                )
+                        st.caption(
+                            "Introduce precios en los periodos con consumo real; los "
+                            "periodos sin consumo pueden quedar a cero. Si la factura "
+                            "no ofrece desglose y la propuesta tiene precio único, "
+                            f"introduce el mismo valor en las {numero_periodos} casillas."
+                        )
+                        calcular = st.form_submit_button(
+                            "Calcular comparativa",
+                            type="primary",
+                            use_container_width=True,
+                            disabled=atr_indexado is None,
+                        )
                 else:
-                    st.caption(
-                        "Configuración compartida con Telemindex durante esta sesión."
-                    )
-                    mostrar_parametros_formula_indexado(
-                        widget_suffix="factura_propuesta"
-                    )
+                    with st.form(
+                        f"factura_form_indexado_{huella[:8]}",
+                        border=False,
+                    ):
+                        st.caption(
+                            "Configuración compartida con Telemindex durante "
+                            "esta sesión."
+                        )
+                        mostrar_parametros_formula_indexado(
+                            widget_suffix="factura_propuesta",
+                            diferido=True,
+                        )
+                        calcular = st.form_submit_button(
+                            "Calcular comparativa",
+                            type="primary",
+                            use_container_width=True,
+                            disabled=atr_indexado is None,
+                        )
 
             if st.session_state.get("factura_tipo_energia") == "Indexado":
                 if inicio_indexado and fin_indexado:
@@ -3722,13 +3753,6 @@ with tab_comparativa:
                     )
                 else:
                     st.warning("La factura no contiene un periodo válido.")
-
-            calcular = st.button(
-                "Calcular comparativa",
-                type="primary",
-                use_container_width=True,
-                disabled=atr_indexado is None,
-            )
 
             if calcular:
                 try:
