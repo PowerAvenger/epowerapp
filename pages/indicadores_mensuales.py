@@ -176,19 +176,6 @@ with st.spinner("Preparando precios de indexado..."):
         (datos_indexado["fecha"].dt.year == año_dashboard)
         & (datos_indexado["fecha"].dt.month == mes_dashboard)
     ].copy()
-    resumen_indexado_mensual = (
-        datos_indexado.assign(
-            año=lambda df: df["fecha"].dt.year,
-            mes_num=lambda df: df["fecha"].dt.month,
-        )
-        .groupby(["año", "mes_num"], as_index=False)[
-            ["spot", "precio_2.0", "precio_3.0", "precio_6.1"]
-        ]
-        .mean()
-    )
-    for columna_precio in ["spot", "precio_2.0", "precio_3.0", "precio_6.1"]:
-        resumen_indexado_mensual[columna_precio] /= 10
-
 with st.spinner("Preparando demanda peninsular..."):
     datos_demanda, ultimo_real_demanda, hay_prevision_demanda = (
         obtener_demanda_mensual_dashboard(año_dashboard, mes_dashboard)
@@ -561,13 +548,50 @@ with comp_col1:
         )
 
 with comp_col2:
+    columnas_indexado = ["spot", "precio_2.0", "precio_3.0", "precio_6.1"]
+    datos_indexado_comparativa = datos_indexado[
+        (datos_indexado["fecha"].dt.month == mes_dashboard)
+        & datos_indexado["fecha"].dt.year.isin(
+            [año_actual_comparativa, año_base_comparativa]
+        )
+    ].copy()
+    fechas_indexado_actual = datos_indexado_comparativa.loc[
+        datos_indexado_comparativa["fecha"].dt.year
+        == año_actual_comparativa,
+        "fecha",
+    ].dropna()
+    fecha_corte_indexado = (
+        fechas_indexado_actual.max()
+        if not fechas_indexado_actual.empty
+        else None
+    )
+    if fecha_corte_indexado is not None:
+        datos_indexado_comparativa = datos_indexado_comparativa[
+            datos_indexado_comparativa["fecha"].dt.day
+            <= fecha_corte_indexado.day
+        ]
+    resumen_indexado_comparativa = (
+        datos_indexado_comparativa.assign(
+            año=lambda df: df["fecha"].dt.year,
+            mes_num=lambda df: df["fecha"].dt.month,
+        )
+        .groupby(["año", "mes_num"], as_index=False)[columnas_indexado]
+        .mean()
+    )
+    resumen_indexado_comparativa[columnas_indexado] /= 10
+
     st.caption(
         "Precios finales según ATR · diferencias en c€/kWh · "
         f"{año_actual_comparativa} frente a {año_base_comparativa}"
+        + (
+            f" · ambos hasta el {fecha_corte_indexado.strftime('%d.%m')}"
+            if fecha_corte_indexado is not None
+            else ""
+        )
     )
     try:
         datos_diferencial, figura_diferencial = graficar_diferencial_precios_mensuales(
-            df_mensual=resumen_indexado_mensual,
+            df_mensual=resumen_indexado_comparativa,
             anio_base=año_base_comparativa,
             anio_comp=año_actual_comparativa,
             convertir_a_cent_kwh=False,
@@ -602,15 +626,35 @@ with comp_col2:
                 figura_diferencial,
                 f"Diferencia real de precios (%) · {meses[mes_dashboard]}",
             )
+            figura_diferencial.update_traces(textfont=dict(size=20))
+            figura_diferencial.update_xaxes(
+                tickfont=dict(size=16),
+                title_font=dict(size=18),
+            )
+            figura_diferencial.update_yaxes(
+                tickfont=dict(size=16),
+                title_font=dict(size=18),
+            )
             st.plotly_chart(figura_diferencial, use_container_width=True)
 
     st.caption(
         "MIBGAS D+1 · precios en €/MWh · "
         f"{año_actual_comparativa} frente a {año_base_comparativa}"
     )
+    datos_gas_metricas = datos_gas_comparativa
+    fechas_gas_actual = datos_gas_comparativa.loc[
+        datos_gas_comparativa["año"] == año_actual_comparativa,
+        "fecha_entrega",
+    ].dropna()
+    if not fechas_gas_actual.empty:
+        ultimo_dia_gas_actual = fechas_gas_actual.dt.day.max()
+        datos_gas_metricas = datos_gas_comparativa[
+            datos_gas_comparativa["fecha_entrega"].dt.day
+            <= ultimo_dia_gas_actual
+        ]
     medias_gas = (
-        datos_gas_comparativa.groupby("año")["precio_gas"].mean().to_dict()
-        if not datos_gas_comparativa.empty
+        datos_gas_metricas.groupby("año")["precio_gas"].mean().to_dict()
+        if not datos_gas_metricas.empty
         else {}
     )
     media_gas_actual = medias_gas.get(año_actual_comparativa)

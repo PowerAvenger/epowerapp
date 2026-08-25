@@ -2,3 +2,15 @@
 __pycache__/
 *.pyc
 facturas_prueba/
+
+# Base de datos beta y ficheros reales de importacion. Nunca versionar.
+.local_data/
+*.sqlite
+*.sqlite3
+*.db
+.env
+.env.*
+*.pem
+*.key
+*credentials*.json
+*service-account*.json

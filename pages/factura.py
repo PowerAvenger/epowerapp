@@ -84,7 +84,7 @@ with st.sidebar:
     )
 
 
-VERSION_LECTOR = 133
+VERSION_LECTOR = 134
 MOSTRAR_TABLA_MAXIMETROS = False
 
 with st.sidebar:
@@ -305,7 +305,31 @@ def _firma_propuesta_energia(atr):
                 for i in range(1, numero_periodos + 1)
             ),
         )
-    return ("energia_indexada_v1", modo, *_firma_formula_indexado())
+    medida_sesion = st.session_state.get("factura_verificacion_consumos")
+    firma_curva = None
+    if medida_sesion and medida_sesion.get("resultado") is not None:
+        resultado_medida = medida_sesion["resultado"]
+        curva = resultado_medida.curva_periodo
+        firma_curva = (
+            medida_sesion.get("huella"),
+            resultado_medida.frecuencia,
+            len(curva),
+            round(float(pd.to_numeric(
+                curva["consumo_neto_kWh"], errors="coerce"
+            ).sum()), 6),
+            str(pd.to_datetime(
+                curva["fecha_hora"], errors="coerce"
+            ).min()),
+            str(pd.to_datetime(
+                curva["fecha_hora"], errors="coerce"
+            ).max()),
+        )
+    return (
+        "energia_indexada_v2_curva",
+        modo,
+        firma_curva,
+        *_firma_formula_indexado(),
+    )
 
 
 def _consumos_factura_por_periodo(factura, periodos_requeridos=None):
@@ -439,17 +463,50 @@ def _precios_indexado_periodo(factura):
     return atr, inicio, fin, precios
 
 
-def _calcular_comparativa_indexado(factura):
+def _calcular_comparativa_indexado(factura, resultado_medida=None):
     atr, inicio, fin, precios = _precios_indexado_periodo(factura)
-    numero_periodos = 3 if atr == "2.0" else 6
-    periodos_requeridos = [f"P{i}" for i in range(1, numero_periodos + 1)]
-    consumos = _consumos_factura_por_periodo(
-        factura, periodos_requeridos=periodos_requeridos
-    )
-
-    return _crear_resultado_energia(
+    if resultado_medida is not None:
+        detalle, coste_propuesta = calcular_energia_indexada(
+            resultado_medida.curva_periodo,
+            st.session_state.df_sheets,
+            atr,
+            resultado_medida.frecuencia,
+        )
+        detalle = detalle.rename(columns={
+            "Consumo medida (kWh)": "Consumo (kWh)",
+            "Precio verificación (€/kWh)": "Precio propuesta (€/kWh)",
+            "Coste verificado (€)": "Coste propuesta (€)",
+        })
+        consumo_total = detalle["Consumo (kWh)"].sum()
+        detalle["Peso consumo (%)"] = (
+            detalle["Consumo (kWh)"] / consumo_total * 100
+        )
+        detalle["Precio ponderado (€/kWh)"] = (
+            detalle["Coste propuesta (€)"] / consumo_total
+        )
+        coste_facturado = sum(
+            item.coste_eur for item in factura.energia_periodos
+        )
+        return {
+            "tipo": "Indexado · curva real",
+            "atr": atr,
+            "inicio": inicio,
+            "fin": fin,
+            "detalle": detalle,
+            "consumo_total": consumo_total,
+            "coste_facturado": coste_facturado,
+            "coste_indexado": coste_propuesta,
+            "precio_facturado": coste_facturado / consumo_total,
+            "precio_indexado": coste_propuesta / consumo_total,
+            "diferencia": coste_propuesta - coste_facturado,
+            "metodo_calculo": "curva_horaria",
+        }
+    consumos = _consumos_factura_por_periodo(factura)
+    resultado = _crear_resultado_energia(
         factura, atr, inicio, fin, consumos, precios, "Indexado"
     )
+    resultado["metodo_calculo"] = "consumo_agregado_periodos"
+    return resultado
 
 
 def _calcular_comparativa_fijo(factura):
@@ -463,19 +520,12 @@ def _calcular_comparativa_fijo(factura):
         f"P{i}": st.session_state.get(f"factura_precio_fijo_p{i}", 0.0)
         for i in range(1, numero_periodos + 1)
     }
-    if any(precio <= 0 for precio in precios.values()):
-        raise ValueError(
-            f"Introduce un precio fijo mayor que cero en los {numero_periodos} periodos."
-        )
-    periodos_requeridos = [
-        f"P{i}" for i in range(1, numero_periodos + 1)
-    ]
     try:
-        consumos = _consumos_factura_por_periodo(
-            factura, periodos_requeridos=periodos_requeridos
-        )
+        consumos = _consumos_factura_por_periodo(factura)
     except ValueError as exc:
         precio_unico = (
+            all(precio > 0 for precio in precios.values())
+            and
             len({round(precio, 9) for precio in precios.values()}) == 1
         )
         if not precio_unico:
@@ -490,6 +540,17 @@ def _calcular_comparativa_fijo(factura):
             ) from exc
         consumos = {"Precio único": consumo_total}
         precios = {"Precio único": next(iter(precios.values()))}
+    else:
+        periodos_sin_precio = [
+            periodo
+            for periodo in consumos
+            if precios.get(periodo, 0.0) <= 0
+        ]
+        if periodos_sin_precio:
+            raise ValueError(
+                "Introduce un precio fijo mayor que cero únicamente en los "
+                "periodos con consumo: " + ", ".join(periodos_sin_precio) + "."
+            )
     return _crear_resultado_energia(
         factura,
         atr,
@@ -553,7 +614,7 @@ def _parametros_iee_propuesta(factura):
             verificacion.minimo_eur_mwh,
         )
 
-    fecha = _fecha_factura(factura.periodo_fin or factura.fecha_factura)
+    fecha = _fecha_factura(factura.fecha_factura or factura.periodo_fin)
     referencia = (
         obtener_referencia_iee(fecha, factura.atr) if fecha else None
     )
@@ -594,6 +655,19 @@ def _parametros_iee_propuesta(factura):
 def _componentes_propuesta(factura, resultado_energia):
     potencia_propuesta = _coste_potencia_propuesta(factura)
     energia_propuesta = resultado_energia["coste_indexado"]
+    fnee_integrado = (
+        sum(
+            float(item.importe)
+            for item in factura.otros
+            if "fnee" in item.concepto.lower()
+        )
+        if (
+            str(resultado_energia.get("tipo", "")).lower().startswith("indexado")
+            and st.session_state.get("cfg_fnee", False)
+        )
+        else 0.0
+    )
+    otros_propuesta = factura.total_otros - fnee_integrado
     if potencia_propuesta is None:
         diferencia_base = None
     else:
@@ -602,6 +676,8 @@ def _componentes_propuesta(factura, resultado_energia):
             - factura.potencia
             + energia_propuesta
             - factura.energia
+            + otros_propuesta
+            - factura.total_otros
         )
 
     iee_propuesta = None
@@ -644,7 +720,7 @@ def _componentes_propuesta(factura, resultado_energia):
         "Energía": energia_propuesta,
         "Excesos": factura.excesos_potencia,
         "Reactiva": factura.reactiva,
-        "Otros": factura.total_otros,
+        "Otros": otros_propuesta,
         "IEE": iee_propuesta if iee_propuesta is not None else factura.iee,
         "IVA": iva_propuesta if iva_propuesta is not None else factura.iva,
     }
@@ -1600,6 +1676,10 @@ if contenido is not None:
                                     "Maxímetro (kW)": item.maximetro_kw,
                                     "Sobrepasamiento equivalente (kW)": item.exceso_kw,
                                     "TEP (€/kW)": item.tepp_eur_kw_dia,
+                                    "Factor prorrateo": (
+                                        f"{item.factor_prorrateo:.4f}"
+                                        .replace(".", ",")
+                                    ),
                                     "Coste (€)": item.coste_calculado_eur,
                                 } if es_tipo_123 else {
                                     "Periodo": item.periodo,
@@ -2710,6 +2790,7 @@ with tab_verificacion:
                                 atr_medida,
                                 inicio_dt.year,
                                 potencias_tramo,
+                                prorratear=len(grupos_confirmados) > 1,
                             )
                             detalle_tramo.insert(
                                 0, "Tramo", f"{inicio_tramo}–{fin_tramo}"
@@ -2858,6 +2939,17 @@ with tab_verificacion:
                 metric_verificado_resumen = subcol_metricas.empty()
                 metric_diferencia_resumen = subcol_metricas.empty()
             st.subheader("4 · Detalles de la verificación", divider="rainbow")
+            cups_periodo = (factura.cups or "").strip().upper()
+            cups_enmascarado = (
+                f"{cups_periodo[:6]}***{cups_periodo[-6:]}"
+                if len(cups_periodo) > 12
+                else cups_periodo
+            )
+            st.caption(
+                f"Periodo analizado: {factura.periodo_inicio} – "
+                f"{factura.periodo_fin} · CUPS: {cups_enmascarado} · "
+                f"Factura: {factura.numero_factura or 'No disponible'}"
+            )
             if resultado_medida is None:
                 st.info("Obtén primero la curva de medida.")
             else:
@@ -3019,6 +3111,7 @@ with tab_verificacion:
                         detalle_excesos_beta,
                         columnas_kw=[
                             "Potencia contratada (kW)",
+                            "Maxímetro (kW)",
                             "Raíz Σ excesos² (kW)",
                         ],
                         columnas_euros=[
@@ -3607,9 +3700,10 @@ with tab_comparativa:
                                 default=0.0,
                             )
                     st.caption(
-                        "Si la propuesta tiene precio único, introduce el "
-                        f"mismo valor en las {numero_periodos} casillas. "
-                        "En ese caso se utiliza directamente el consumo total."
+                        "Introduce precios en los periodos con consumo real; los "
+                        "periodos sin consumo pueden quedar a cero. Si la factura "
+                        "no ofrece desglose y la propuesta tiene precio único, "
+                        f"introduce el mismo valor en las {numero_periodos} casillas."
                     )
                 else:
                     st.caption(
@@ -3642,7 +3736,18 @@ with tab_comparativa:
                         resultado_nuevo = _calcular_comparativa_fijo(factura)
                     else:
                         with st.spinner("Cargando precios y calculando el periodo…"):
-                            resultado_nuevo = _calcular_comparativa_indexado(factura)
+                            medida_sesion = st.session_state.get(
+                                "factura_verificacion_consumos"
+                            )
+                            medida_propuesta = (
+                                medida_sesion.get("resultado")
+                                if medida_sesion
+                                and medida_sesion.get("huella") == huella
+                                else None
+                            )
+                            resultado_nuevo = _calcular_comparativa_indexado(
+                                factura, medida_propuesta
+                            )
                 except Exception as exc:
                     st.session_state.pop("factura_comparativa_indexado", None)
                     st.error(str(exc))
@@ -3673,6 +3778,16 @@ with tab_comparativa:
             else:
                 tipo_propuesta = resultado.get("tipo", "Indexado")
                 tipo_propuesta_minusculas = tipo_propuesta.lower()
+                if resultado.get("metodo_calculo") == "curva_horaria":
+                    st.caption(
+                        "Método: precio horario Telemindex ponderado con la curva "
+                        "real de consumo."
+                    )
+                elif resultado.get("metodo_calculo") == "consumo_agregado_periodos":
+                    st.caption(
+                        "Método aproximado: precio medio por periodo tarifario "
+                        "ponderado con los consumos de la factura (sin curva)."
+                    )
                 diferencia_energia_pct = (
                     resultado["diferencia"] / resultado["coste_facturado"] * 100
                     if resultado["coste_facturado"]

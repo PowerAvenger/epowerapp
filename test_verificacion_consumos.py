@@ -4,6 +4,7 @@ import io
 import pandas as pd
 
 from backend_verificacion_consumos import (
+    calcular_energia_indexada,
     calcular_energia_fija,
     calcular_excesos_desde_curva,
     calcular_potencia_confirmada,
@@ -16,6 +17,45 @@ from backend_verificacion_consumos import (
 
 
 class VerificacionConsumosTest(unittest.TestCase):
+    def test_precio_final_ponderado_con_curva_cuartohoraria(self):
+        curva = pd.DataFrame({
+            "fecha_hora": pd.date_range(
+                "2026-07-01 00:00", periods=8, freq="15min"
+            ),
+            "periodo": ["P1"] * 4 + ["P2"] * 4,
+            "consumo_neto_kWh": [1.0] * 4 + [2.0] * 4,
+        })
+        precios = pd.DataFrame({
+            "fecha": ["2026-07-01", "2026-07-01"],
+            "hora": [0, 1],
+            "precio_6.1": [100.0, 200.0],
+        })
+
+        detalle, total = calcular_energia_indexada(
+            curva, precios, "6.1", "QH"
+        )
+
+        self.assertEqual(total, 2.0)
+        self.assertAlmostEqual(detalle["Consumo medida (kWh)"].sum(), 12.0)
+        self.assertAlmostEqual(total / 12.0, 1 / 6)
+
+    def test_precio_ponderado_rechaza_horas_sin_precio(self):
+        curva = pd.DataFrame({
+            "fecha_hora": pd.to_datetime([
+                "2026-07-01 00:00", "2026-07-01 01:00"
+            ]),
+            "periodo": ["P1", "P2"],
+            "consumo_neto_kWh": [1.0, 1.0],
+        })
+        precios = pd.DataFrame({
+            "fecha": ["2026-07-01"],
+            "hora": [0],
+            "precio_6.1": [100.0],
+        })
+
+        with self.assertRaisesRegex(ValueError, "Faltan precios Telemindex"):
+            calcular_energia_indexada(curva, precios, "6.1", "H")
+
     def test_prepara_ciclo_completo_y_resume_periodos(self):
         horas = [f"{hora:02d}:00" for hora in range(24)]
         curva = pd.DataFrame({
@@ -110,6 +150,9 @@ class VerificacionConsumosTest(unittest.TestCase):
             curva, "QH", "6.1", 2026, {"P1": 100.0}
         )
         self.assertAlmostEqual(total, 3.43, places=2)
+        self.assertAlmostEqual(
+            detalle.loc[0, "Maxímetro (kW)"], 101.0, places=6
+        )
         self.assertAlmostEqual(
             detalle.loc[0, "Raíz Σ excesos² (kW)"], 1.0, places=6
         )

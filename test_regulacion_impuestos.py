@@ -2,8 +2,11 @@ import unittest
 from datetime import date
 
 from backend_factura import (
+    EnergiaPeriodo,
     FacturaLeida,
     PotenciaContratadaPeriodo,
+    _aplicar_referencia_iee,
+    _crear_verificacion_impuesto,
     _verificar_impuestos,
 )
 from regulacion_iee import TIPO_GENERAL_IEE, obtener_referencia_iee
@@ -26,6 +29,28 @@ class RegulacionImpuestos2026Test(unittest.TestCase):
             obtener_referencia_iee(date(2026, 8, 1), "2.0TD").tipo_pct,
             TIPO_GENERAL_IEE,
         )
+
+    def test_iee_usa_fecha_emision_y_no_fin_periodo(self):
+        factura = FacturaLeida(
+            formato="naturgy",
+            comercializadora="Naturgy",
+            fecha_factura="05/06/2026",
+            periodo_fin="31/05/2026",
+            atr="6.1TD",
+            iee=51.13,
+            energia_periodos=[
+                EnergiaPeriodo("P1", 10_000, 0.1, 1_000)
+            ],
+        )
+        verificacion = _crear_verificacion_impuesto(
+            "1000", "5,11269632", "51,13", factura.iee, "IEE"
+        )
+
+        resultado = _aplicar_referencia_iee(factura, verificacion)
+
+        self.assertEqual(resultado.tipo_regulado_pct, TIPO_GENERAL_IEE)
+        self.assertEqual(resultado.importe_regulado_eur, 51.13)
+        self.assertEqual(resultado.estado, "🟢")
 
     def test_iva_reducido_solo_en_tramo_efectivo_y_hasta_10_kw(self):
         self.assertEqual(

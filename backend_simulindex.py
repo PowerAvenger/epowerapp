@@ -508,11 +508,37 @@ def obtener_graf_hist(df_hist, omip, colores_precios, añadir_hist):
     simul_61 = round(intercept_61 + slope_61 * omip + añadir_hist, 1)
 
     simul_curva = None
+    datos_hover_simulacion = [[
+        f"{omip:.2f}".replace(".", ","),
+        f"{simul_20:.2f}".replace(".", ","),
+        f"{simul_30:.2f}".replace(".", ","),
+        f"{simul_61:.2f}".replace(".", ","),
+    ]]
+    hover_simulacion_base = (
+        "<b>Simulación de precios finales</b><br>"
+        "OMIE previsto: %{customdata[0]} €/MWh<br>"
+        f"<span style='color:{colores_precios['precio_2.0']}'>"
+        "<b>Precio final 2.0:</b> %{customdata[1]} c€/kWh</span><br>"
+        f"<span style='color:{colores_precios['precio_3.0']}'>"
+        "<b>Precio final 3.0:</b> %{customdata[2]} c€/kWh</span><br>"
+        f"<span style='color:{colores_precios['precio_6.1']}'>"
+        "<b>Precio final 6.1:</b> %{customdata[3]} c€/kWh</span>"
+    )
+    hover_simulacion = hover_simulacion_base + "<extra></extra>"
 
     if 'precio_curva' in resultados and df_hist.shape[0] >= 5:
 
         intercept_curve, slope_curve, r2_curve = resultados['precio_curva']
         simul_curva = round(intercept_curve + slope_curve * omip + añadir_hist, 1)
+        datos_hover_simulacion[0].append(
+            f"{simul_curva:.2f}".replace(".", ",")
+        )
+        hover_simulacion = (
+            hover_simulacion_base
+            + f"<br><span style='color:{colores_precios['precio_curva']}'>"
+            + "<b>Precio curva de carga:</b> %{customdata[4]} c€/kWh</span>"
+            + "<extra></extra>"
+        )
 
         graf_hist.add_scatter(
             x=[omip],
@@ -523,7 +549,9 @@ def obtener_graf_hist(df_hist, omip, colores_precios, añadir_hist):
                 size=20,
                 line=dict(width=5, color=colores_precios['precio_curva'])
             ),
-            name='Simul Curva'
+            name='Simul Curva',
+            customdata=datos_hover_simulacion,
+            hovertemplate=hover_simulacion,
         )
 
         # línea vertical omie in - cruce recta regresión CURVA
@@ -541,21 +569,27 @@ def obtener_graf_hist(df_hist, omip, colores_precios, añadir_hist):
         x=[omip], y=[simul_20], mode='markers',
         marker=dict(color='rgba(255,255,255,0)', size=20,
         line=dict(width=5, color=colores_precios['precio_2.0'])),
-        name='Simul 2.0'
+        name='Simul 2.0',
+        customdata=datos_hover_simulacion,
+        hovertemplate=hover_simulacion,
     )
 
     graf_hist.add_scatter(
         x=[omip], y=[simul_30], mode='markers',
         marker=dict(color='rgba(255,255,255,0)', size=20,
         line=dict(width=5, color=colores_precios['precio_3.0'])),
-        name='Simul 3.0'
+        name='Simul 3.0',
+        customdata=datos_hover_simulacion,
+        hovertemplate=hover_simulacion,
     )
 
     graf_hist.add_scatter(
         x=[omip], y=[simul_61], mode='markers',
         marker=dict(color='rgba(255,255,255,0)', size=20,
         line=dict(width=5, color=colores_precios['precio_6.1'])),
-        name='Simul 6.1'
+        name='Simul 6.1',
+        customdata=datos_hover_simulacion,
+        hovertemplate=hover_simulacion,
     )
 
     # línea vertical omie in - cruce recta regresión 2.0
@@ -571,8 +605,8 @@ def obtener_graf_hist(df_hist, omip, colores_precios, añadir_hist):
     graf_hist.update_layout(
         title={'x':0.5,'xanchor':'center'}
     )
-
-
+    graf_hist = aplicar_estilo(graf_hist)
+    graf_hist.update_layout(height=800)
 
     return graf_hist, simul_20, simul_30, simul_61, simul_curva, resultados
 

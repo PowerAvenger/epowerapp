@@ -204,12 +204,36 @@ def calcular_energia_indexada(curva_periodo, precios_index, atr, frecuencia):
     if columna_precio not in precios_index.columns:
         raise ValueError(f"Telemindex no contiene la columna {columna_precio}.")
 
-    curva = agrupar_curva_horaria(curva_periodo, frecuencia)
+    curva = curva_periodo[[
+        "fecha_hora", "periodo", "consumo_neto_kWh"
+    ]].copy()
     curva["fecha_hora"] = pd.to_datetime(curva["fecha_hora"], errors="coerce")
     curva = curva.dropna(subset=["fecha_hora"])
+    curva["consumo_neto_kWh"] = pd.to_numeric(
+        curva["consumo_neto_kWh"], errors="coerce"
+    )
+    if curva["consumo_neto_kWh"].isna().any():
+        raise ValueError("La curva contiene consumos vacíos o no numéricos.")
+    if (curva["consumo_neto_kWh"] < 0).any():
+        raise ValueError("La curva contiene consumos negativos.")
+    if curva["consumo_neto_kWh"].sum() <= 0:
+        raise ValueError("La curva no contiene consumo positivo para ponderar.")
+    curva["fecha_hora"] = curva["fecha_hora"].dt.floor("h")
+    periodos_por_hora = curva.groupby("fecha_hora")["periodo"].nunique()
+    if (periodos_por_hora > 1).any():
+        raise ValueError(
+            "La curva asigna más de un periodo tarifario a una misma hora."
+        )
+    curva = (
+        curva.groupby("fecha_hora", as_index=False)
+        .agg({"periodo": "first", "consumo_neto_kWh": "sum"})
+    )
     curva["_fecha"] = curva["fecha_hora"].dt.date
     curva["_hora"] = curva["fecha_hora"].dt.hour
     curva["periodo"] = curva["periodo"].astype(str).str.strip().str.upper()
+    periodos_invalidos = ~curva["periodo"].str.fullmatch(r"P[1-6]")
+    if periodos_invalidos.any():
+        raise ValueError("La curva contiene periodos tarifarios no válidos.")
 
     precios = precios_index.copy()
     precios["_fecha"] = pd.to_datetime(precios["fecha"], errors="coerce").dt.date
@@ -306,6 +330,7 @@ def calcular_excesos_desde_curva(
     tarifa,
     anio,
     potencias,
+    prorratear=False,
 ):
     """Reutiliza el cálculo de Término de potencia para verificar excesos."""
     from backend_opt2 import calcular_costes, meses, pyc_tp, tepp123
@@ -325,6 +350,12 @@ def calcular_excesos_desde_curva(
     consumo = pd.to_numeric(curva["consumo_neto_kWh"], errors="coerce").fillna(0)
     multiplicador_potencia = 4 if str(frecuencia).upper() == "QH" else 1
     curva["potencia"] = consumo * multiplicador_potencia
+    curva["periodo_mes"] = curva["fecha_hora"].dt.to_period("M").astype(str)
+    maximetros = (
+        curva.groupby(["periodo_mes", "periodo"])["potencia"]
+        .max()
+        .to_dict()
+    )
 
     coeficiente_frecuencia = 2 if str(frecuencia).upper() == "H" else 1
     tepp = {
@@ -340,10 +371,18 @@ def calcular_excesos_desde_curva(
         meses,
         potencias,
     )
-    costes, factores_prorrateo = prorratear_costes_excesos_mensuales(
-        costes_brutos,
-        curva,
-    )
+    if prorratear:
+        costes, factores_prorrateo = prorratear_costes_excesos_mensuales(
+            costes_brutos,
+            curva,
+        )
+    else:
+        costes = costes_brutos.copy()
+        _, factores_prorrateo = prorratear_costes_excesos_mensuales(
+            costes_brutos,
+            curva,
+        )
+        factores_prorrateo.iloc[:, 2] = 1.0
     coste_excesos = float(costes.to_numpy().sum())
     filas = []
     for periodo_mes, fila in costes.iterrows():
@@ -358,6 +397,9 @@ def calcular_excesos_desde_curva(
                 "Mes": str(periodo_mes),
                 "Periodo": periodo,
                 "Potencia contratada (kW)": float(potencias[periodo]),
+                "Maxímetro (kW)": float(
+                    maximetros.get((str(periodo_mes), periodo), 0.0)
+                ),
                 "Raíz Σ excesos² (kW)": (
                     importe_bruto / termino if termino else 0.0
                 ),

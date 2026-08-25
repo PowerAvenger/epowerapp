@@ -1,6 +1,7 @@
 import hashlib
 import math
 import pathlib
+import re
 import tempfile
 
 import streamlit as st
@@ -597,6 +598,26 @@ if resultados is not None:
         if informe_vigente:
             st.success("✅ Informe preparado y conservado durante esta sesión")
             formatos = informe_vigente["formatos"]
+            partes_nombre_informe = [
+                "Informe de optimización de potencias",
+                str(cliente or "").strip(),
+                str(cups or "").strip(),
+                pd.Timestamp.today().strftime("%d-%m-%Y"),
+            ]
+            nombre_base_informe = "_".join(
+                parte for parte in partes_nombre_informe if parte
+            )
+            nombre_base_informe = re.sub(
+                r'[<>:"/\\|?*\x00-\x1f]+',
+                "_",
+                nombre_base_informe,
+            )
+            nombre_base_informe = re.sub(
+                r"\s+", "_", nombre_base_informe
+            )
+            nombre_base_informe = re.sub(
+                r"_+", "_", nombre_base_informe
+            ).strip("._")
             col1, col2, col3 = st.columns(3)
             with col1:
                 if "pdf" not in formatos and st.button(
@@ -610,7 +631,7 @@ if resultados is not None:
                     st.download_button(
                         "⬇️ Descargar PDF",
                         formatos["pdf"],
-                        "informe_potencias.pdf",
+                        f"{nombre_base_informe}.pdf",
                         "application/pdf",
                         use_container_width=True,
                     )
@@ -626,7 +647,7 @@ if resultados is not None:
                     st.download_button(
                         "⬇️ Descargar Word",
                         formatos["docx"],
-                        "informe_potencias.docx",
+                        f"{nombre_base_informe}.docx",
                         "application/vnd.openxmlformats-officedocument."
                         "wordprocessingml.document",
                         use_container_width=True,
@@ -635,7 +656,7 @@ if resultados is not None:
                 st.download_button(
                     "⬇️ Descargar HTML",
                     formatos["html"].encode("utf-8"),
-                    "informe_potencias.html",
+                    f"{nombre_base_informe}.html",
                     "text/html",
                     use_container_width=True,
                 )
@@ -705,10 +726,16 @@ if submit_ver and st.session_state.df_norm is not None:
                     .dt.to_period('M').astype(str).eq(str(periodo_mes))
                     & df_verificacion['periodo'].eq(periodo)
                 )
+                potencias_intervalo = pd.to_numeric(
+                    df_verificacion.loc[mascara_detalle, 'potencia'],
+                    errors='coerce',
+                ).dropna()
+                maximetro = (
+                    float(potencias_intervalo.max())
+                    if not potencias_intervalo.empty else 0.0
+                )
                 excesos_intervalo = (
-                    pd.to_numeric(
-                        df_verificacion.loc[mascara_detalle, 'potencia'], errors='coerce'
-                    ).fillna(0) - potencia
+                    potencias_intervalo - potencia
                 ).clip(lower=0)
                 suma_excesos_cuadrado = float((excesos_intervalo ** 2).sum())
                 raiz_excesos = math.sqrt(suma_excesos_cuadrado)
@@ -716,6 +743,7 @@ if submit_ver and st.session_state.df_norm is not None:
                     'Mes': str(periodo_mes),
                     'Periodo': periodo,
                     'Potencia contratada (kW)': potencia,
+                    'Maxímetro (kW)': maximetro,
                     'Precio potencia (€/kW año)': precio_potencia,
                     'Prorrata mensual': prorrata,
                     'Potencia (€)': coste_potencia,
@@ -917,6 +945,7 @@ with tab_verificacion:
             columnas_excesos = [
                 'Mes',
                 'Periodo',
+                'Maxímetro (kW)',
                 'N.º sobrepasamientos',
                 'Σ excesos² (kW²)',
                 'Raíz Σ excesos² (kW)',
@@ -943,6 +972,9 @@ with tab_verificacion:
                     hide_index=True,
                     use_container_width=True,
                     column_config={
+                        'Maxímetro (kW)': st.column_config.NumberColumn(
+                            format='%.2f kW'
+                        ),
                         'Σ excesos² (kW²)': st.column_config.NumberColumn(
                             format='%.6f'
                         ),

@@ -139,6 +139,8 @@ class PotenciaContratadaPeriodo:
 class SobrepasamientoPeriodo:
     periodo: str
     exceso_kw: float
+    periodo_inicio: str | None = None
+    periodo_fin: str | None = None
 
 
 @dataclass
@@ -168,6 +170,7 @@ class ExcesoVerificadoPeriodo:
     tepp_eur_kw_dia: float
     dias: int
     coste_calculado_eur: float
+    factor_prorrateo: float = 1.0
 
 
 @dataclass
@@ -896,18 +899,46 @@ def verificar_excesos_sobrepasamientos(factura: FacturaLeida) -> None:
         item.periodo: item.potencia_kw for item in factura.potencias_contratadas
     }
     maximetros = {item.periodo: item.potencia_kw for item in factura.maximetros}
+    hay_prorrateo = False
     for item in factura.sobrepasamientos:
         tepp = coeficientes.get(item.periodo)
         if tepp is None:
             continue
+        dias = 0
+        factor_prorrateo = 1.0
+        if item.periodo_inicio and item.periodo_fin:
+            try:
+                inicio_lectura = datetime.strptime(
+                    item.periodo_inicio, "%d/%m/%Y"
+                )
+                fin_lectura = datetime.strptime(
+                    item.periodo_fin, "%d/%m/%Y"
+                )
+                inicio_tramo = inicio_lectura + timedelta(days=1)
+                dias = (fin_lectura - inicio_lectura).days
+                if (
+                    dias > 0
+                    and inicio_tramo.year == fin_lectura.year
+                    and inicio_tramo.month == fin_lectura.month
+                ):
+                    dias_mes = calendar.monthrange(
+                        fin_lectura.year, fin_lectura.month
+                    )[1]
+                    factor_prorrateo = dias / dias_mes
+                    hay_prorrateo = hay_prorrateo or factor_prorrateo < 1.0
+            except ValueError:
+                dias = 0
         factura.excesos_verificados.append(ExcesoVerificadoPeriodo(
             periodo=item.periodo,
             potencia_contratada_kw=potencias.get(item.periodo, 0.0),
             maximetro_kw=maximetros.get(item.periodo, 0.0),
             exceso_kw=item.exceso_kw,
             tepp_eur_kw_dia=float(tepp),
-            dias=0,
-            coste_calculado_eur=round(item.exceso_kw * float(tepp), 2),
+            dias=dias,
+            coste_calculado_eur=round(
+                item.exceso_kw * float(tepp) * factor_prorrateo, 2
+            ),
+            factor_prorrateo=factor_prorrateo,
         ))
 
     if importes_coinciden(
@@ -917,12 +948,14 @@ def verificar_excesos_sobrepasamientos(factura: FacturaLeida) -> None:
     ):
         factura.verificacion_excesos = (
             "El coste de excesos es correcto según los sobrepasamientos "
-            "agregados declarados en la factura. No se reconstruye la curva de carga."
+            + ("prorrateados " if hay_prorrateo else "")
+            + "declarados en la factura. No se reconstruye la curva de carga."
         )
     else:
         factura.verificacion_excesos = (
-            "El coste de excesos no coincide con los sobrepasamientos agregados "
-            "declarados en la factura."
+            "El coste de excesos no coincide con los sobrepasamientos "
+            + ("prorrateados " if hay_prorrateo else "")
+            + "declarados en la factura."
         )
 
 
@@ -1475,6 +1508,13 @@ def _parsear_fecha_factura(valor: str | None):
         return None
 
 
+def _fecha_referencia_iee(factura: FacturaLeida):
+    """El IEE se determina por fecha de emisión; el periodo es solo respaldo."""
+    return _parsear_fecha_factura(
+        factura.fecha_factura or factura.periodo_fin
+    )
+
+
 def _crear_verificacion_impuesto(
     base: str,
     tipo: str,
@@ -1986,9 +2026,7 @@ def _verificar_impuestos(factura: FacturaLeida, texto: str) -> None:
     ):
         from regulacion_iee import obtener_referencia_iee
 
-        fecha_iee = _parsear_fecha_factura(
-            factura.periodo_fin or factura.fecha_factura
-        )
+        fecha_iee = _fecha_referencia_iee(factura)
         referencia_iee = (
             obtener_referencia_iee(fecha_iee, factura.atr)
             if fecha_iee else None
@@ -2124,9 +2162,7 @@ def _verificar_impuestos(factura: FacturaLeida, texto: str) -> None:
         # céntimo. En cualquier otro caso permanece no verificable.
         from regulacion_iee import obtener_referencia_iee
 
-        fecha_iee = _parsear_fecha_factura(
-            factura.periodo_fin or factura.fecha_factura
-        )
+        fecha_iee = _fecha_referencia_iee(factura)
         referencia_iee = (
             obtener_referencia_iee(fecha_iee, factura.atr)
             if fecha_iee else None
@@ -2563,9 +2599,7 @@ def _aplicar_referencia_iee(
 ) -> VerificacionImpuesto:
     from regulacion_iee import obtener_referencia_iee
 
-    fecha = _parsear_fecha_factura(
-        factura.periodo_fin or factura.fecha_factura
-    )
+    fecha = _fecha_referencia_iee(factura)
     if not fecha:
         verificacion.estado = "🟡"
         verificacion.mensaje = (
@@ -2632,9 +2666,7 @@ def _verificar_iee_minimo(
     consumo = numero_es(consumo_mwh)
     importe_facturado = numero_es(importe)
     importe_calculado = round(tarifa * consumo, 2)
-    fecha = _parsear_fecha_factura(
-        factura.periodo_fin or factura.fecha_factura
-    )
+    fecha = _fecha_referencia_iee(factura)
     referencia = obtener_referencia_iee(fecha, factura.atr) if fecha else None
     correcto = (
         importes_coinciden(importe_facturado, importe_calculado, "impuestos")
@@ -2670,7 +2702,7 @@ def _verificar_iee_por_minimo_sin_base(
     """Valida una cuota minima cuando el PDF muestra el tipo, pero no su base."""
     from regulacion_iee import obtener_referencia_iee
 
-    fecha = _parsear_fecha_factura(factura.periodo_fin or factura.fecha_factura)
+    fecha = _fecha_referencia_iee(factura)
     referencia = obtener_referencia_iee(fecha, factura.atr) if fecha else None
     tipo_pct = numero_es(tipo_impreso)
     base_estimada = round(
@@ -5794,8 +5826,115 @@ def _iberdrola_tramos(texto: str) -> FacturaLeida:
     return _completar_advertencias(factura)
 
 
+def extraer_reactiva_facturada_naturgy_gc(
+    texto: str,
+) -> dict[str, dict[str, float]]:
+    """Lee el exceso de reactiva Naturgy con o sin fechas en cada línea."""
+    resultado: dict[str, dict[str, float]] = {}
+    patrones = (
+        (
+            r"^REACTIVA\s+ACCESO\s+P([1-6])\s+"
+            r"\d{2}\.\d{2}\.\d{4}\s+-\s+\d{2}\.\d{2}\.\d{4}\s+"
+            r"([\d.,]+)\s*kVArh\s+([\d.,]+)\s+([\d.,]+)\s+Eur\s*$"
+        ),
+        (
+            r"^REACTIVA\s+ACCESO\s+P([1-6])\s+"
+            r"([\d.,]+)\s*kVArh\s+([\d.,]+)\s+([\d.,]+)\s+Eur\s*$"
+        ),
+    )
+    for patron in patrones:
+        for periodo, exceso_kvarh, precio, coste in re.findall(
+            patron, texto, re.IGNORECASE | re.MULTILINE
+        ):
+            clave = f"P{periodo}"
+            datos = resultado.setdefault(
+                clave,
+                {"exceso": 0.0, "coste": 0.0, "precio": numero_es(precio)},
+            )
+            datos["exceso"] += consumo_es(exceso_kvarh)
+            datos["coste"] += numero_es(coste)
+    return resultado
+
+
+def extraer_excesos_potencia_naturgy_gc(texto: str) -> float:
+    """Suma todos los tramos de excesos, incluso con el importe separado."""
+    patrones = (
+        r"^EXCESOS\s+DE\s+POTENCIA\s+ACCESO\s+([\d.,]+)\s+Eur\s*$",
+        r"^EXCESOS\s+DE\s+POTENCIA\s+ACCESO[^\n]*\n\s*"
+        r"([\d.,]+)\s+Eur\s*$",
+    )
+    importes: list[float] = []
+    for patron in patrones:
+        importes.extend(
+            numero_es(valor)
+            for valor in re.findall(
+                patron, texto, re.IGNORECASE | re.MULTILINE
+            )
+        )
+    return round(sum(importes), 2)
+
+
+def extraer_regularizaciones_ssaa_naturgy_gc(
+    texto: str,
+) -> list[OtroConcepto]:
+    """Lee cada periodo regularizado de servicios de ajuste de Naturgy."""
+    resultado = []
+    cabecera = (
+        r"^REGULARIZACI[ÓO]N\s+DE\s+SERVICIOS\s+DE\s+AJUSTE\s*\n\s*"
+    )
+    patrones = (
+        # Orden visual habitual: fechas, energía, precio e importe.
+        cabecera
+        + r"(\d{2}\.\d{2}\.\d{4})\s+-\s+"
+        r"(\d{2}\.\d{2}\.\d{4})\s+"
+        r"[\d.,]+\s*kWh\s+[\d.,]+\s+([\-\d.,]+)\s+Eur\s*$",
+        # Algunos PDF extraen las fechas después del importe, incluso en otra línea.
+        cabecera
+        + r"[\d.,]+\s*kWh\s+[\d.,]+\s+([\-\d.,]+)\s+Eur\s+"
+        r"(\d{2}\.\d{2}\.\d{4})\s+-\s+"
+        r"(\d{2}\.\d{2}\.\d{4})\s*$",
+    )
+    for indice, patron in enumerate(patrones):
+        for valores in re.findall(
+            patron, texto, re.IGNORECASE | re.MULTILINE
+        ):
+            if indice == 0:
+                inicio, fin, importe = valores
+            else:
+                importe, inicio, fin = valores
+            resultado.append(OtroConcepto(
+                f"Servicios de ajuste (SSAA/REE) · {inicio} - {fin}",
+                numero_es(importe),
+            ))
+    return resultado
+
+
+def extraer_ep_naturgy_gc(texto: str) -> list[SobrepasamientoPeriodo]:
+    """Lee todos los registros EP, conservando los cortes de lectura."""
+    resultado = []
+    for periodo, inicio, fin, valor in re.findall(
+        r"^EP\s+P([1-6])\s+"
+        r"(\d{2}\.\d{2}\.\d{4})\s+[\d.,]+\s*kW\s+"
+        r"(\d{2}\.\d{2}\.\d{4})\s+[\d.,]+\s*kW\s+"
+        r"R\s+[\d.,]+\s+([\d.,]+)\s*kW(?:\s|$)",
+        texto,
+        re.IGNORECASE | re.MULTILINE,
+    ):
+        resultado.append(SobrepasamientoPeriodo(
+            periodo=f"P{periodo}",
+            exceso_kw=consumo_es(valor),
+            periodo_inicio=inicio.replace(".", "/"),
+            periodo_fin=fin.replace(".", "/"),
+        ))
+    return resultado
+
+
 def _naturgy_grandes_clientes(texto: str) -> FacturaLeida:
     """Extrae Naturgy Clientes Empresas / Grandes Clientes."""
+    from regulacion_reactiva import (
+        exceso_reactiva_inductiva,
+        factor_potencia,
+    )
     cups = buscar_texto(texto, [
         r"FECHA\s+VENCIMIENTO\s+CUPS[^\n]*\n[^\n]*?\s(ES[A-Z0-9]+)\s+Tarifa",
         r"C[oó]digo\s+CUPS\s+CONTRATO\s+ATR\s*\n\s*(ES[A-Z0-9]+)",
@@ -5947,7 +6086,10 @@ def _naturgy_grandes_clientes(texto: str) -> FacturaLeida:
         texto,
         re.IGNORECASE | re.MULTILINE,
     ):
-        lecturas_activas[f"P{periodo}"] = consumo_es(consumo)
+        clave = f"P{periodo}"
+        lecturas_activas[clave] = (
+            lecturas_activas.get(clave, 0.0) + consumo_es(consumo)
+        )
 
     lecturas_reactivas: dict[str, float] = {}
     for periodo, consumo in re.findall(
@@ -5961,21 +6103,7 @@ def _naturgy_grandes_clientes(texto: str) -> FacturaLeida:
             lecturas_reactivas.get(clave, 0.0) + consumo_es(consumo)
         )
 
-    reactiva_facturada: dict[str, dict[str, float]] = {}
-    for periodo, _, _, exceso_kvarh, precio, coste in re.findall(
-        r"^REACTIVA\s+ACCESO\s+P([1-6])\s+"
-        r"(\d{2}\.\d{2}\.\d{4})\s+-\s+(\d{2}\.\d{2}\.\d{4})\s+"
-        r"([\d.,]+)\s*kVArh\s+([\d.,]+)\s+([\d.,]+)\s+Eur\s*$",
-        texto,
-        re.IGNORECASE | re.MULTILINE,
-    ):
-        clave = f"P{periodo}"
-        datos = reactiva_facturada.setdefault(
-            clave,
-            {"exceso": 0.0, "coste": 0.0, "precio": numero_es(precio)},
-        )
-        datos["exceso"] += consumo_es(exceso_kvarh)
-        datos["coste"] += numero_es(coste)
+    reactiva_facturada = extraer_reactiva_facturada_naturgy_gc(texto)
 
     reactiva_periodos = []
     for clave, datos in sorted(reactiva_facturada.items()):
@@ -5986,12 +6114,13 @@ def _naturgy_grandes_clientes(texto: str) -> FacturaLeida:
         exceso_facturado = datos["exceso"]
         precio_valor = datos["precio"]
         coste_valor = round(datos["coste"], 2)
-        exceso_calculado = max(reactiva_valor - activa * 0.33, 0.0)
-        coste_calculado = round(exceso_calculado * precio_valor, 2)
-        cos_phi = (
-            activa / math.sqrt(activa ** 2 + reactiva_valor ** 2)
-            if activa or reactiva_valor else None
+        # Naturgy publica y liquida el exceso en kVArh enteros. Se conserva el
+        # cálculo técnico decimal y se admite hasta 1 kVArh de redondeo.
+        exceso_calculado = exceso_reactiva_inductiva(
+            activa, reactiva_valor, clave
         )
+        coste_calculado = round(exceso_facturado * precio_valor, 2)
+        cos_phi = factor_potencia(activa, reactiva_valor)
         reactiva_periodos.append(ReactivaPeriodo(
             periodo=clave,
             energia_activa_kwh=activa,
@@ -6003,11 +6132,16 @@ def _naturgy_grandes_clientes(texto: str) -> FacturaLeida:
             coste_facturado_eur=coste_valor,
             coste_calculado_eur=coste_calculado,
             estado=(
-                "🟢" if abs(coste_valor - coste_calculado) <= 0.02 else "🟡"
+                "🟢"
+                if (
+                    abs(exceso_facturado - exceso_calculado) <= 1.0
+                    and abs(coste_valor - coste_calculado) <= 0.02
+                )
+                else "🟡"
             ),
         ))
 
-    otros = []
+    otros = extraer_regularizaciones_ssaa_naturgy_gc(texto)
     for concepto, patron in (
         (
             "Regularización pagos de capacidad",
@@ -6038,14 +6172,16 @@ def _naturgy_grandes_clientes(texto: str) -> FacturaLeida:
     if derechos_enganche:
         otros.append(OtroConcepto("Derechos de enganche", derechos_enganche))
 
-    sobrepasamientos = [
-        SobrepasamientoPeriodo(f"P{periodo}", consumo_es(valor))
-        for periodo, valor in re.findall(
-            r"^Ae([1-6])\s+([\d.,]+)\s*kW\s*$",
-            texto,
-            re.IGNORECASE | re.MULTILINE,
-        )
-    ]
+    sobrepasamientos = extraer_ep_naturgy_gc(texto)
+    if not sobrepasamientos:
+        sobrepasamientos = [
+            SobrepasamientoPeriodo(f"P{periodo}", consumo_es(valor))
+            for periodo, valor in re.findall(
+                r"^Ae([1-6])\s+([\d.,]+)\s*kW\s*$",
+                texto,
+                re.IGNORECASE | re.MULTILINE,
+            )
+        ]
 
     factura = FacturaLeida(
         formato="naturgy_grandes_clientes",
@@ -6064,9 +6200,7 @@ def _naturgy_grandes_clientes(texto: str) -> FacturaLeida:
             datos["coste"] for datos in potencia_agregada.values()
         ), 2),
         energia=round(sum(item.coste_eur for item in energia_periodos), 2),
-        excesos_potencia=buscar_numero(texto, [
-            r"^EXCESOS\s+DE\s+POTENCIA\s+ACCESO\s+([\d.,]+)\s+Eur$",
-        ]),
+        excesos_potencia=extraer_excesos_potencia_naturgy_gc(texto),
         reactiva=round(sum(
             item.coste_facturado_eur for item in reactiva_periodos
         ), 2),
