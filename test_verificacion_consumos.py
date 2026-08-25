@@ -8,6 +8,7 @@ from backend_verificacion_consumos import (
     calcular_energia_fija,
     calcular_excesos_desde_curva,
     calcular_potencia_confirmada,
+    debe_prorratear_excesos_tramo,
     estado_verificacion_energia_real,
     preparar_archivos_factura,
     preparar_curva_factura,
@@ -17,6 +18,70 @@ from backend_verificacion_consumos import (
 
 
 class VerificacionConsumosTest(unittest.TestCase):
+    def test_reconoce_los_tres_tipos_con_prorrateo_cuadratico(self):
+        for tipo in ("Tipo 1", "Tipo 2", "Tipo 3", "1", "2", "3"):
+            with self.subTest(tipo=tipo):
+                self.assertTrue(
+                    debe_prorratear_excesos_tramo(
+                        "01/07/2026", "16/07/2026",
+                        numero_tramos=1, tipo_suministro=tipo,
+                    )
+                )
+
+    def test_prorratea_ruptura_de_mes_natural_con_un_solo_tramo(self):
+        self.assertTrue(
+            debe_prorratear_excesos_tramo(
+                "01/07/2026", "16/07/2026", numero_tramos=1,
+                tipo_suministro="Tipo 2",
+            )
+        )
+
+    def test_prorratea_ruptura_de_mes_natural_en_tipo_3(self):
+        self.assertTrue(
+            debe_prorratear_excesos_tramo(
+                "01/07/2026", "16/07/2026", numero_tramos=1,
+                tipo_suministro="Tipo 3",
+            )
+        )
+
+    def test_no_prorratea_un_ciclo_ordinario_entre_dos_meses(self):
+        self.assertFalse(
+            debe_prorratear_excesos_tramo(
+                "15/07/2026", "14/08/2026", numero_tramos=1,
+                tipo_suministro="Tipo 2",
+            )
+        )
+
+    def test_no_prorratea_un_mes_natural_completo(self):
+        self.assertFalse(
+            debe_prorratear_excesos_tramo(
+                "01/07/2026", "31/07/2026", numero_tramos=1,
+                tipo_suministro="Tipo 1",
+            )
+        )
+
+    def test_varios_tramos_prorratean_solo_en_tipos_1_2_y_3(self):
+        self.assertTrue(
+            debe_prorratear_excesos_tramo(
+                "01/07/2026", "31/07/2026", numero_tramos=2,
+                tipo_suministro="Tipo 1",
+            )
+        )
+
+    def test_no_extiende_el_ciclo_natural_a_tipos_4_y_5(self):
+        self.assertFalse(
+            debe_prorratear_excesos_tramo(
+                "01/07/2026", "16/07/2026", numero_tramos=1,
+                tipo_suministro="Tipo 4",
+            )
+        )
+        self.assertFalse(
+            debe_prorratear_excesos_tramo(
+                "01/07/2026", "16/07/2026", numero_tramos=2,
+                tipo_suministro="Tipo 5",
+            )
+        )
+
     def test_precio_final_ponderado_con_curva_cuartohoraria(self):
         curva = pd.DataFrame({
             "fecha_hora": pd.date_range(
@@ -155,6 +220,42 @@ class VerificacionConsumosTest(unittest.TestCase):
         )
         self.assertAlmostEqual(
             detalle.loc[0, "Raíz Σ excesos² (kW)"], 1.0, places=6
+        )
+
+    def test_prorratea_coste_de_curva_16_31_sin_alterar_la_raiz(self):
+        tepp_p1 = 3.431797
+        raiz_objetivo = 9837.38 / tepp_p1
+        curva = pd.DataFrame({
+            "fecha_hora": [
+                pd.Timestamp("2026-07-01 00:00"),
+                pd.Timestamp("2026-07-16 23:45"),
+            ],
+            "periodo": ["P1", "P1"],
+            "consumo_neto_kWh": [
+                (100.0 + raiz_objetivo) / 4,
+                25.0,
+            ],
+        })
+
+        detalle_bruto, total_bruto = calcular_excesos_desde_curva(
+            curva, "QH", "6.1", 2026, {"P1": 100.0}, prorratear=False
+        )
+        detalle_prorrateado, total_prorrateado = calcular_excesos_desde_curva(
+            curva, "QH", "6.1", 2026, {"P1": 100.0}, prorratear=True
+        )
+
+        self.assertEqual(total_bruto, 9837.38)
+        self.assertEqual(total_prorrateado, 5077.36)
+        self.assertAlmostEqual(
+            detalle_prorrateado.loc[0, "Factor prorrateo"], 16 / 31
+        )
+        columna_raiz = next(
+            columna for columna in detalle_bruto.columns
+            if columna.startswith("Raíz")
+        )
+        self.assertAlmostEqual(
+            detalle_bruto.loc[0, columna_raiz],
+            detalle_prorrateado.loc[0, columna_raiz],
         )
 
     def test_un_exceso_confirmado_a_cero_modifica_el_total(self):

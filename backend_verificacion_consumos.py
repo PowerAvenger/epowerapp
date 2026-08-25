@@ -324,6 +324,25 @@ def calcular_potencia_confirmada(periodos):
     return detalle, round(detalle["Coste verificado (€)"].sum(), 2)
 
 
+def debe_prorratear_excesos_tramo(
+    inicio, fin, numero_tramos=1, tipo_suministro=None
+):
+    """Detecta cambios o una ruptura mensual en puntos de medida 1, 2 y 3."""
+    tipo = str(tipo_suministro or "").upper().replace(" ", "")
+    if tipo not in {"1", "2", "3", "TIPO1", "TIPO2", "TIPO3"}:
+        return False
+    if int(numero_tramos) > 1:
+        return True
+    inicio = pd.to_datetime(inicio, dayfirst=True, errors="coerce")
+    fin = pd.to_datetime(fin, dayfirst=True, errors="coerce")
+    if pd.isna(inicio) or pd.isna(fin) or fin < inicio:
+        return False
+    if inicio.to_period("M") != fin.to_period("M"):
+        return False
+    dias_ciclo = (fin.normalize() - inicio.normalize()).days + 1
+    return dias_ciclo < int(fin.days_in_month)
+
+
 def calcular_excesos_desde_curva(
     curva_periodo,
     frecuencia,
