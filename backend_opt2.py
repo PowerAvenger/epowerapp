@@ -480,6 +480,7 @@ def normalizar_tabla_maximetros(df, meses):
     )
 
     posibles_col_mes = [
+        "fecha_lectura_final", "fecha_fin", "fecha_final",
         "mes_nom", "mes", "meses", "fecha", "fechas",
         "periodo", "periodo_facturacion", "rango"
     ]
@@ -501,6 +502,16 @@ def normalizar_tabla_maximetros(df, meses):
         c_limpio = c.upper().replace(" ", "").replace("_", "")
         if c_limpio in ["P1", "P2", "P3", "P4", "P5", "P6"]:
             renombrar_periodos[c] = c_limpio
+            continue
+        coincidencia_maximetro = re.fullmatch(
+            r"(?:MAX[IÍ]?METRO|POTENCIAM[AÁ]XIMA)?(P[1-6])"
+            r"(?:MAX[IÍ]?METRO|POTENCIAM[AÁ]XIMA)?",
+            c_limpio,
+        )
+        if coincidencia_maximetro and (
+            "MAX" in c_limpio or "POTENCIA" in c_limpio
+        ):
+            renombrar_periodos[c] = coincidencia_maximetro.group(1)
 
     df = df.rename(columns=renombrar_periodos)
 
@@ -512,6 +523,15 @@ def normalizar_tabla_maximetros(df, meses):
             f"Faltan columnas de periodos: {columnas_faltantes}. "
             "El Excel debe tener P1, P2, P3, P4, P5 y P6."
         )
+
+    # Los SIPS suelen incluir una primera fila con el CUPS y sin lecturas.
+    # También descartamos posibles separadores vacíos antes de interpretar meses.
+    df = df.loc[
+        df[col_mes].notna()
+        & df[periodos].notna().any(axis=1)
+    ].copy()
+    if df.empty:
+        raise ValueError("No encuentro filas con fechas y maxímetros utilizables.")
 
     mapa_num_mes = dict(zip(range(1, 13), meses))
 
@@ -529,6 +549,15 @@ def normalizar_tabla_maximetros(df, meses):
         "nov": "nov", "noviembre": "nov",
         "dic": "dic", "diciembre": "dic",
     }
+
+    def parsear_fecha_flexible(valor):
+        txt = str(valor).strip()
+        es_iso = bool(re.match(r"^\d{4}-\d{1,2}-\d{1,2}(?:[T\s]|$)", txt))
+        return pd.to_datetime(
+            valor,
+            dayfirst=not es_iso,
+            errors="coerce",
+        )
 
     def convertir_a_mes_nom(valor):
         if pd.isna(valor):
@@ -571,11 +600,7 @@ def normalizar_tabla_maximetros(df, meses):
                 return mapa_num_mes.get(fecha.month)
 
         # Caso fecha interpretable por pandas
-        fecha = pd.to_datetime(
-            txt,
-            dayfirst=True,
-            errors="coerce"
-        )
+        fecha = parsear_fecha_flexible(txt)
 
         if pd.notna(fecha):
             return mapa_num_mes.get(fecha.month)
@@ -589,12 +614,11 @@ def normalizar_tabla_maximetros(df, meses):
             return pd.Timestamp(valor).to_period('M').strftime('%Y-%m')
 
         txt = str(valor).strip()
-        fechas = re.findall(r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}", txt)
-        fecha = pd.to_datetime(
-            fechas[0] if fechas else txt,
-            dayfirst=True,
-            errors="coerce"
-        )
+        if re.match(r"^\d{4}-\d{1,2}-\d{1,2}(?:[T\s]|$)", txt):
+            fecha = parsear_fecha_flexible(txt)
+        else:
+            fechas = re.findall(r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}", txt)
+            fecha = parsear_fecha_flexible(fechas[0] if fechas else txt)
         if pd.notna(fecha):
             return fecha.to_period('M').strftime('%Y-%m')
 
@@ -619,6 +643,20 @@ def normalizar_tabla_maximetros(df, meses):
 
     df["dias_facturacion"] = df[col_mes].apply(calcular_dias_facturacion)
 
+    es_tabla_sips = {
+        "fecha_lectura_inicial", "fecha_lectura_final"
+    }.issubset(df.columns)
+    if es_tabla_sips:
+        fechas_iniciales = pd.to_datetime(
+            df["fecha_lectura_inicial"], errors="coerce"
+        )
+        fechas_finales = pd.to_datetime(
+            df["fecha_lectura_final"], errors="coerce"
+        )
+        df["dias_facturacion"] = (
+            fechas_finales.dt.normalize() - fechas_iniciales.dt.normalize()
+        ).dt.days.where(lambda dias: dias > 0)
+
     if df["mes_nom"].isna().any():
         filas_malas = df[df["mes_nom"].isna()].index.tolist()
         raise ValueError(
@@ -635,7 +673,7 @@ def normalizar_tabla_maximetros(df, meses):
         df.groupby("periodo_mes", as_index=False)
         .agg({
             "mes_nom": "first",
-            "dias_facturacion": "first",
+            "dias_facturacion": "sum" if es_tabla_sips else "first",
             **{p: "max" for p in periodos},
         })
     )

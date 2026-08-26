@@ -252,11 +252,44 @@ col1, col2, col3 = tab_evolucion.columns(3)
 with col1:
     st.caption(
         "SPOT y SSAA ESIOS ID · "
+        "valores en €/MWh · "
         f"último dato: {fecha_fin.strftime('%d.%m.%Y')}"
     )
     if datos_mes.empty:
         st.warning("No hay datos para el período seleccionado.")
     else:
+        valores_mercado = (
+            datos_mes.assign(
+                fecha=pd.to_datetime(datos_mes["fecha"], errors="coerce").dt.floor("D"),
+                value=pd.to_numeric(datos_mes["value"], errors="coerce"),
+            )
+            .dropna(subset=["fecha", "value"])
+            .groupby("fecha")["value"]
+            .mean()
+        )
+        metricas_spot = st.columns(3)
+        metricas_spot[0].metric(
+            "Media mensual",
+            formato_eur_mwh(valores_mercado.mean(), 2, False) or "Sin datos",
+        )
+        metricas_spot[1].metric(
+            "Mínimo",
+            formato_eur_mwh(valores_mercado.min(), 2, False) or "Sin datos",
+            delta=(
+                valores_mercado.idxmin().strftime("%d.%m.%Y")
+                if not valores_mercado.empty else None
+            ),
+            delta_color="off",
+        )
+        metricas_spot[2].metric(
+            "Máximo",
+            formato_eur_mwh(valores_mercado.max(), 2, False) or "Sin datos",
+            delta=(
+                valores_mercado.idxmax().strftime("%d.%m.%Y")
+                if not valores_mercado.empty else None
+            ),
+            delta_color="off",
+        )
         _, figura = graficar_media_acumulada_periodo(
             datos_mes,
             mes_num=mes_dashboard,
@@ -272,8 +305,24 @@ with col1:
     else:
         ultima_fecha_gas = datos_mibgas_mes["fecha_entrega"].max()
         st.caption(
-            "MIBGAS D+1 · "
+            "MIBGAS D+1 · valores en €/MWh · "
             f"último dato del período: {ultima_fecha_gas.strftime('%d.%m.%Y')}"
+        )
+        valores_gas = pd.to_numeric(
+            datos_mibgas_mes["precio_gas"], errors="coerce"
+        ).dropna()
+        metricas_gas = st.columns(3)
+        metricas_gas[0].metric(
+            "Media mensual",
+            formato_eur_mwh(valores_gas.mean(), 2, False) or "Sin datos",
+        )
+        metricas_gas[1].metric(
+            "Mínimo",
+            formato_eur_mwh(valores_gas.min(), 2, False) or "Sin datos",
+        )
+        metricas_gas[2].metric(
+            "Máximo",
+            formato_eur_mwh(valores_gas.max(), 2, False) or "Sin datos",
         )
         figura_gas = graficar_da_2026_acumulado(
             datos_mibgas_da,
@@ -287,10 +336,44 @@ with col1:
         st.plotly_chart(figura_gas, use_container_width=True)
 
 with col2:
-    st.caption("Perfil horario medio · sin ponderación por curva de carga")
+    ultima_fecha_indexado = (
+        datos_indexado_mes["fecha"].max()
+        if not datos_indexado_mes.empty else None
+    )
+    st.caption(
+        "Perfil horario medio mensual · sin ponderación por curva de carga"
+        + (
+            f" · último dato: {ultima_fecha_indexado.strftime('%d.%m.%Y')}"
+            if ultima_fecha_indexado is not None else ""
+        )
+    )
     if datos_indexado_mes.empty:
         st.warning("No hay datos de indexado para el período seleccionado.")
     else:
+        metricas_peso_spot = st.columns(3)
+        for contenedor, atr in zip(
+            metricas_peso_spot, ("2.0", "3.0", "6.1")
+        ):
+            spot_medio = pd.to_numeric(
+                datos_indexado_mes["spot"], errors="coerce"
+            ).mean()
+            precio_medio_atr = pd.to_numeric(
+                datos_indexado_mes[f"precio_{atr}"], errors="coerce"
+            ).mean()
+            peso_spot = (
+                spot_medio / precio_medio_atr
+                if pd.notna(spot_medio)
+                and pd.notna(precio_medio_atr)
+                and precio_medio_atr != 0
+                else None
+            )
+            contenedor.metric(
+                f"Peso SPOT ATR {atr}",
+                (
+                    formato_pct(peso_spot * 100, 1, True)
+                    if peso_spot is not None else "Sin datos"
+                ),
+            )
         figura_indexado = graficar_precios_medios_horarios(
             datos_indexado_mes,
             colores_precios,
@@ -303,6 +386,27 @@ with col2:
         )
         st.plotly_chart(figura_indexado, use_container_width=True)
 
+        st.caption(
+            "Media acumulada diaria mensual según ATR · valores en c€/kWh · "
+            "sin ponderación por curva de carga"
+            + (
+                f" · último dato: {ultima_fecha_indexado.strftime('%d.%m.%Y')}"
+                if ultima_fecha_indexado is not None else ""
+            )
+        )
+        metricas_indexado = st.columns(3)
+        for contenedor, columna, atr in zip(
+            metricas_indexado,
+            ("precio_2.0", "precio_3.0", "precio_6.1"),
+            ("2.0", "3.0", "6.1"),
+        ):
+            precio_medio = pd.to_numeric(
+                datos_indexado_mes[columna], errors="coerce"
+            ).mean() / 10
+            contenedor.metric(
+                f"Precio medio {atr}",
+                formato_cent_eur_kwh(precio_medio, 2, False) or "Sin datos",
+            )
         _, figura_indexado_acumulada = graficar_media_acumulada_mensual_atr(
             datos_indexado_mes,
             colores_precios,
@@ -317,11 +421,12 @@ with col2:
 
 with col3:
     if ultimo_real_demanda is None:
-        st.caption("Demanda real peninsular · ESIOS")
+        st.caption("Demanda real peninsular · ESIOS · valores en GW")
     else:
         st.caption(
             "Demanda real peninsular"
             + (" y prevista" if hay_prevision_demanda else "")
+            + " · valores en GW"
             + f" · último real: {ultimo_real_demanda.strftime('%d.%m.%Y')}"
         )
     if datos_demanda.empty:
@@ -330,6 +435,46 @@ with col3:
         datos_demanda_evolucion = datos_demanda[
             datos_demanda["año"] == año_dashboard
         ].copy()
+        valores_demanda = (
+            datos_demanda_evolucion[
+                datos_demanda_evolucion["short_name"] == "Demanda real"
+            ]
+            .assign(
+                datetime=lambda datos_: pd.to_datetime(
+                    datos_["datetime"], errors="coerce"
+                ).dt.floor("D"),
+                GW=lambda datos_: pd.to_numeric(datos_["GW"], errors="coerce"),
+            )
+            .dropna(subset=["datetime", "GW"])
+            .groupby("datetime")["GW"]
+            .mean()
+        )
+        metricas_demanda = st.columns(3)
+        metricas_demanda[0].metric(
+            "Media mensual",
+            formato_numero_es(valores_demanda.mean(), 2)
+            if not valores_demanda.empty else "Sin datos",
+        )
+        metricas_demanda[1].metric(
+            "Mínimo",
+            formato_numero_es(valores_demanda.min(), 2)
+            if not valores_demanda.empty else "Sin datos",
+            delta=(
+                valores_demanda.idxmin().strftime("%d.%m.%Y")
+                if not valores_demanda.empty else None
+            ),
+            delta_color="off",
+        )
+        metricas_demanda[2].metric(
+            "Máximo",
+            formato_numero_es(valores_demanda.max(), 2)
+            if not valores_demanda.empty else "Sin datos",
+            delta=(
+                valores_demanda.idxmax().strftime("%d.%m.%Y")
+                if not valores_demanda.empty else None
+            ),
+            delta_color="off",
+        )
         figura_demanda = graficar_media_diaria(
             datos_demanda_evolucion,
             años_visibles=[str(año_dashboard)],
@@ -352,9 +497,26 @@ with col3:
             "fecha",
         ].max()
         st.caption(
-            "Estructura de generación REData · "
+            "Estructura de generación REData · valores en GWh · "
             f"último dato del período: {ultima_fecha_generacion.strftime('%d.%m.%Y')}"
         )
+        tecnologias_lideres = (
+            datos_mix_generacion[
+                datos_mix_generacion["tecnologia"] != "Resto"
+            ]
+            .nlargest(3, "generacion_GWh")
+            .reset_index(drop=True)
+        )
+        metricas_generacion = st.columns(3)
+        for posicion, contenedor in enumerate(metricas_generacion):
+            if posicion < len(tecnologias_lideres):
+                tecnologia = tecnologias_lideres.iloc[posicion]
+                contenedor.metric(
+                    tecnologia["tecnologia"],
+                    formato_numero_es(tecnologia["generacion_GWh"], 0),
+                )
+            else:
+                contenedor.metric("Sin tecnología", "Sin datos")
         figura_mix = graficar_mix_queso(
             datos_mix_generacion,
             COLORES_MIX_GENERACION,

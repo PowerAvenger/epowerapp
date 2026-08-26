@@ -85,7 +85,7 @@ with st.sidebar:
     )
 
 
-VERSION_LECTOR = 134
+VERSION_LECTOR = 136
 MOSTRAR_TABLA_MAXIMETROS = False
 
 with st.sidebar:
@@ -1093,10 +1093,10 @@ if contenido is not None:
                     )
                 else:
                     resultado_texto = "NO VERIFICABLE"
-                    resultado_icono = "?"
+                    resultado_icono = "⚠"
                     resultado_color = "#f59e0b"
-                    resultado_fondo = "rgba(100,116,139,.12)"
-                    resultado_borde = "rgba(100,116,139,.5)"
+                    resultado_fondo = "rgba(245,158,11,.14)"
+                    resultado_borde = "rgba(245,158,11,.58)"
                 st.markdown(
                     "<div style='display:flex;align-items:center;justify-content:"
                     "space-between;gap:1rem;flex-wrap:wrap;margin:1rem 0 .8rem 0;"
@@ -1169,8 +1169,8 @@ if contenido is not None:
                             "el IVA no dispone de referencia regulatoria"
                         )
                     detalle_no_verificable = "; ".join(motivos_no_verificable)
-                    st.info(
-                        "ℹ️ No se puede completar la verificación: "
+                    st.warning(
+                        "⚠️ No se puede completar la verificación: "
                         + (detalle_no_verificable or
                            "faltan datos suficientes en la factura")
                         + "."
@@ -2407,6 +2407,25 @@ with tab_verificacion:
                             "text/csv",
                             use_container_width=True,
                         )
+
+            if resultado_medida is not None:
+                frecuencia_medida = str(resultado_medida.frecuencia).upper()
+                if frecuencia_medida == "QH":
+                    st.info(
+                        "🕒 Resolución detectada: QH (cuartohoraria, intervalos "
+                        "de 15 minutos)."
+                    )
+                elif frecuencia_medida == "H":
+                    st.warning(
+                        "⚠️ Resolución detectada: H (horaria, intervalos de 60 "
+                        "minutos). Con esta resolución no se podrán verificar los "
+                        "excesos de potencia de los suministros tipos 1, 2 y 3."
+                    )
+                else:
+                    st.info(
+                        "🕒 Resolución detectada: "
+                        f"{frecuencia_medida or 'desconocida'}."
+                    )
 
             if resultado_medida is not None:
                 curva_graficos = resultado_medida.curva_periodo.copy()

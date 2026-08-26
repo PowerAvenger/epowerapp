@@ -10,6 +10,103 @@ import plotly.graph_objects as go
 from backend_comun import aplicar_estilo
 
 
+def construir_historico_mensual_pvpc(
+    df_horario,
+    consumo_anual,
+    potencia_contratada,
+    precios_potencia_boe,
+    margen_comercializacion,
+    tipo_iee,
+    tipo_iva,
+    fecha_inicio="2024-01-01",
+    fecha_referencia=None,
+):
+    """Calcula precio ponderado y componentes mensuales de la factura PVPC."""
+    columnas = [
+        "fecha_mes", "año", "mes", "dias_calculados", "consumo_kwh",
+        "precio_ponderado_eur_mwh", "precio_ponderado_cent_kwh",
+        "Potencia BOE", "Margen comercialización", "Energía", "IEE", "IVA",
+        "Total factura",
+    ]
+    if df_horario is None or df_horario.empty:
+        return pd.DataFrame(columns=columnas)
+
+    datos = df_horario.copy()
+    datos["fecha"] = pd.to_datetime(datos["fecha"], errors="coerce").dt.normalize()
+    datos["pvpc"] = pd.to_numeric(datos["pvpc"], errors="coerce")
+    datos["perfil_20"] = pd.to_numeric(datos["perfil_20"], errors="coerce")
+    datos = datos.dropna(subset=["fecha", "pvpc", "perfil_20"])
+    datos = datos[datos["fecha"] >= pd.Timestamp(fecha_inicio)].copy()
+    if datos.empty:
+        return pd.DataFrame(columns=columnas)
+
+    referencia = pd.Timestamp(fecha_referencia or pd.Timestamp.today()).normalize()
+    ultima_fecha = datos["fecha"].max()
+    limite = min(referencia, ultima_fecha)
+    datos = datos[datos["fecha"] <= limite].copy()
+
+    # Si el histórico alcanza el mes natural en curso, se aplica su último día
+    # disponible al mismo mes de años anteriores para hacerlos comparables.
+    mes_en_curso = (
+        limite.year == referencia.year and limite.month == referencia.month
+    )
+    if mes_en_curso:
+        datos = datos[
+            (datos["fecha"].dt.month != limite.month)
+            | (datos["fecha"].dt.day <= limite.day)
+        ].copy()
+
+    filas = []
+    for (año, mes), grupo in datos.groupby(
+        [datos["fecha"].dt.year, datos["fecha"].dt.month], sort=True
+    ):
+        año = int(año)
+        mes = int(mes)
+        if año not in precios_potencia_boe:
+            continue
+        suma_perfil = grupo["perfil_20"].sum()
+        if not np.isfinite(suma_perfil) or suma_perfil <= 0:
+            continue
+        precio_ponderado = float(
+            (grupo["pvpc"] * grupo["perfil_20"]).sum() / suma_perfil
+        )
+        dias_calculados = int(grupo["fecha"].nunique())
+        dias_año = 366 if pd.Timestamp(año, 12, 31).is_leap_year else 365
+        fraccion_anual = dias_calculados / dias_año
+        consumo_kwh = float(consumo_anual) * fraccion_anual
+        coste_potencia_boe = (
+            float(precios_potencia_boe[año])
+            * float(potencia_contratada)
+            * fraccion_anual
+        )
+        coste_margen = (
+            float(margen_comercializacion)
+            * float(potencia_contratada)
+            * fraccion_anual
+        )
+        coste_energia = precio_ponderado / 1000 * consumo_kwh
+        base_iee = coste_potencia_boe + coste_margen + coste_energia
+        coste_iee = base_iee * float(tipo_iee)
+        coste_iva = (base_iee + coste_iee) * float(tipo_iva)
+        filas.append({
+            "fecha_mes": pd.Timestamp(año, mes, 1),
+            "año": año,
+            "mes": mes,
+            "dias_calculados": dias_calculados,
+            "consumo_kwh": consumo_kwh,
+            "precio_ponderado_eur_mwh": precio_ponderado,
+            "precio_ponderado_cent_kwh": precio_ponderado / 10,
+            "Potencia BOE": coste_potencia_boe,
+            "Margen comercialización": coste_margen,
+            "Energía": coste_energia,
+            "IEE": coste_iee,
+            "IVA": coste_iva,
+            "Total factura": base_iee + coste_iee + coste_iva,
+        })
+
+    return pd.DataFrame(filas, columns=columnas)
+
+
 
 def download_esios_id(id, fecha_ini, fecha_fin, agrupacion):
                        
