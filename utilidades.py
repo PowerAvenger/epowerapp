@@ -1,5 +1,6 @@
 import streamlit as st
 import datetime
+from pathlib import Path
 import pandas as pd
 from backend_comun import autenticar_google_sheets, carga_total_sheets, cargar_componentes_csv, calcular_precios_atr
 from backend_escalacv import leer_json
@@ -33,6 +34,8 @@ def generar_menu():
         st.page_link('pages/redata_potgen.py', label = 'Tecnologías de generación', icon = "⚡️")
         st.page_link('pages/mibgas.py', label = 'Gas & Furious', icon = "🔥")
         st.page_link('pages/marginales.py', label = 'Marginales', icon = "🔀")
+        if (Path(__file__).resolve().parent / '.local_data' / 'epower_beta.sqlite3').exists():
+            st.page_link('pages/bbdd_beta.py', label='BBDD beta local', icon='🗃️')
         st.sidebar.header('', divider='rainbow')
 
 

@@ -1,4 +1,5 @@
 import streamlit as st
+from pathlib import Path
 
 from utilidades import generar_menu
 
@@ -30,6 +31,18 @@ MODULOS = [
     ("SPO: Super Power OMIE", None, "Gana el MVPStarPower del año y bate a OMIP", None, "images/spo.jpg", "https://spo-epowerapp.streamlit.app/"),
     ("Interpolados qh REE", None, "Cuando la interpolación REE apenas tiene impacto", None, "images/interpolados.jpg", "https://interpolados-epowerapp.streamlit.app/"),
 ]
+
+if (Path(__file__).resolve().parents[1] / ".local_data" / "epower_beta.sqlite3").exists():
+    MODULOS.append(
+        (
+            "BBDD beta local",
+            "pages/bbdd_beta.py",
+            "Consulta la migración de titulares, suministros y contratos",
+            "🗃️",
+            "images/lector_facturas.jpg",
+            None,
+        )
+    )
 
 
 for inicio in range(0, len(MODULOS), 5):

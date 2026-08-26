@@ -1674,6 +1674,21 @@ def _verificar_iva_multiple(
 
 
 def _verificar_impuestos(factura: FacturaLeida, texto: str) -> None:
+    coincidencia_iva_iner = re.search(
+        r"^I\.?V\.?A\.?\s+(\d+(?:[.,]\d+)?)\s*%\s+"
+        r"Base\s+Imponible\s+([\d.,]+)\s*€\s+([\d.,]+)\s*€\s*$",
+        texto,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    if (
+        coincidencia_iva_iner
+        and "iner energia castilla la mancha" in texto.lower()
+    ):
+        tipo, base, importe = coincidencia_iva_iner.groups()
+        factura.verificacion_iva = _crear_verificacion_iva(
+            factura, base, tipo, importe
+        )
+
     coincidencia_iva_iberdrola_reducido = re.search(
         r"IVA\s+Reducido(?:\s*\([^\n]*?\))?\s+([\d.,]+)\s*%\s+"
         r"s/\s*([\d.,]+)\s*€\s+([\d.,]+)\s*€",
@@ -4237,6 +4252,106 @@ def extraer_maximetros_demanda_parcial(
     ]
 
 
+def extraer_maximetros_iner(texto: str) -> list[MaximetroPeriodo]:
+    """Lee la columna Real de la tabla ACTIVA/REACTIVA/MAXÍMETRO de INER."""
+    if "iner energia castilla la mancha" not in texto.lower():
+        return []
+    bloque = _seccion(
+        texto,
+        r"Detalle\s+de\s+Consumos",
+        r"Concepto\s+Importe\s+en\s+€",
+    )
+    filas = re.findall(
+        r"^P([1-6])\s+"
+        r"[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+"  # activa
+        r"[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+"  # reactiva
+        r"([\d.,]+)\s*$",                    # maxímetro real
+        bloque,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    return [
+        MaximetroPeriodo(f"P{periodo}", numero_es(valor))
+        for periodo, valor in filas
+    ] if len(filas) == 6 else []
+
+
+def extraer_reactiva_iner(texto: str) -> list[ReactivaPeriodo]:
+    """Calcula la reactiva P1-P6 de INER desde su tabla de lecturas."""
+    from regulacion_reactiva import (
+        exceso_reactiva_inductiva,
+        factor_potencia,
+        precio_reactiva_inductiva,
+    )
+
+    if "iner energia castilla la mancha" not in texto.lower():
+        return []
+    bloque = _seccion(
+        texto,
+        r"Detalle\s+de\s+Consumos",
+        r"Concepto\s+Importe\s+en\s+€",
+    )
+    filas = re.findall(
+        r"^(P[1-6])\s+[\d.,]+\s+[\d.,]+\s+([\d.,]+)\s+"
+        r"[\d.,]+\s+[\d.,]+\s+([\d.,]+)\s+[\d.,]+\s*$",
+        bloque,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    if len(filas) != 6:
+        return []
+
+    importe_facturado = buscar_numero(texto, [
+        r"T[eé]rmino\s+Reactiva\s+Distribuidora[^\n]*?([\d.,]+)\s*€\s*$",
+    ])
+    calculos = []
+    for periodo, activa_txt, reactiva_txt in filas:
+        activa = consumo_es(activa_txt)
+        reactiva = consumo_es(reactiva_txt)
+        cos_phi = factor_potencia(activa, reactiva)
+        exceso = exceso_reactiva_inductiva(activa, reactiva, periodo)
+        precio = precio_reactiva_inductiva(cos_phi, periodo)
+        calculos.append((
+            periodo.upper(), activa, reactiva, exceso, cos_phi, precio,
+            round(exceso * precio, 2),
+        ))
+
+    total_calculado = round(sum(item[6] for item in calculos), 2)
+    estado_total = semaforo_desviacion_coste(
+        importe_facturado, total_calculado, "componentes"
+    )
+    facturados = [0.0] * 6
+    indices_con_coste = [i for i, item in enumerate(calculos) if item[6] > 0]
+    if importe_facturado and total_calculado and indices_con_coste:
+        acumulado = 0.0
+        for indice in indices_con_coste[:-1]:
+            coste = round(
+                importe_facturado * calculos[indice][6] / total_calculado, 2
+            )
+            facturados[indice] = coste
+            acumulado += coste
+        facturados[indices_con_coste[-1]] = round(
+            importe_facturado - acumulado, 2
+        )
+
+    return [
+        ReactivaPeriodo(
+            periodo=periodo,
+            energia_activa_kwh=activa,
+            energia_reactiva_kvarh=reactiva,
+            exceso_facturado_kvarh=None,
+            exceso_calculado_kvarh=round(exceso, 3),
+            cos_phi=round(cos_phi, 4) if cos_phi is not None else None,
+            precio_eur_kvarh=precio,
+            coste_facturado_eur=facturados[indice],
+            coste_calculado_eur=coste_calculado,
+            estado=estado_total,
+            detalle_coste_facturado=False,
+        )
+        for indice, (
+            periodo, activa, reactiva, exceso, cos_phi, precio, coste_calculado
+        ) in enumerate(calculos)
+    ]
+
+
 def extraer_sobrepasamientos_matriciales(
     texto: str,
 ) -> list[SobrepasamientoPeriodo]:
@@ -4685,6 +4800,7 @@ def _generico(texto: str) -> FacturaLeida:
     es_clara = "clara@claraenergia.com" in texto.lower()
     es_octopus = "hola@octopusenergy.es" in texto.lower()
     es_renovae = "renovae consulting" in texto.lower()
+    es_iner = "iner energia castilla la mancha" in texto.lower()
     es_endesa_open_20 = es_endesa and bool(re.search(
         r"Potencias?\s+contratadas?\s*:\s*punta-llano", texto, re.IGNORECASE
     ))
@@ -4734,6 +4850,13 @@ def _generico(texto: str) -> FacturaLeida:
     ])
     inicio = _fecha_es_a_ddmmyyyy(inicio.replace("-", "/")) if inicio else None
     fin = _fecha_es_a_ddmmyyyy(fin.replace("-", "/")) if fin else None
+    if es_iner and (not inicio or not fin):
+        inicio_detalle, fin_detalle = buscar_periodo(texto, [
+            r"Detalle\s+de\s+Consumos[\s\S]{0,300}?\bFecha\s+"
+            r"(\d{2}/\d{2}/\d{4})\s+(\d{2}/\d{2}/\d{4})",
+        ])
+        inicio = inicio or inicio_detalle
+        fin = fin or fin_detalle
     potencias = extraer_potencias_contratadas(texto)
     linea_potencias_contigo = buscar_texto(texto, [
         r"Potencia\s+contratada\s*\(kW\)\s*:\s*([^\n]+)",
@@ -5295,7 +5418,7 @@ def _generico(texto: str) -> FacturaLeida:
             otros.append(OtroConcepto(concepto, importe))
     fecha_factura_txt = buscar_texto(texto, [
         r"Fecha\s+Factura\s*:?[ \t]+(\d{2}/\d{2}/\d{4})",
-        r"Emitida\s*:\s*(\d{2}/\d{2}/\d{4})",
+        r"Emitida\s*:?\s*(\d{2}/\d{2}/\d{4})",
         r"ATENCO\s+ENERGIA[^\n]*?FAT-\d{4}-\d+\s+"
         r"(\d{1,2}\s+de\s+[^\s]+\s+de\s+\d{4})",
         r"FECHA\s+DE\s+EMISI[ÓO]N\s+DE\s+FACTURA\s*:\s*"
@@ -5339,6 +5462,11 @@ def _generico(texto: str) -> FacturaLeida:
         r"IVA\s*normal\s+[\d.,]+\s*%\s+s/[\d.,]+[^\n]*?([\d.,]+)\s*€",
         r"^Impuesto\s+de\s+aplicaci[oó]n\s*:\s*([\d.,]+)\s*€\s*$",
     ])
+    if es_iner and not iva:
+        iva = buscar_numero(texto, [
+            r"^I\.?V\.?A\.?\s+\d+(?:[.,]\d+)?\s*%\s+Base\s+Imponible\s+"
+            r"[\d.,]+\s*€\s+([\d.,]+)\s*€\s*$",
+        ])
     iee = buscar_numero(texto, [
         r"^Impuesto\s+El[eé]ctrico\s+[\d.,]+\s*€\s+[\d.,]+\s*%\s+"
         r"([\d.,]+)\s*€\s*$",
@@ -5387,6 +5515,8 @@ def _generico(texto: str) -> FacturaLeida:
         comercializadora = "Eni Plenitude"
     elif es_renovae:
         comercializadora = "Renovae Consulting"
+    elif es_iner:
+        comercializadora = "INER Energía Castilla-La Mancha"
 
     if es_renovae:
         potencia_periodos = [
@@ -5500,6 +5630,8 @@ def _generico(texto: str) -> FacturaLeida:
         maximetros = []
     if es_eni_plenitude:
         maximetros = extraer_maximetros_eni_plenitude(texto)
+    if es_iner:
+        maximetros = extraer_maximetros_iner(texto) or maximetros
     if es_renovae:
         bloque_maximetros = _seccion(
             texto, r"Fecha\s+Procedencia\s+Maximetro", r"Fecha\s+Procedencia\s+Reactiva"
@@ -5546,29 +5678,44 @@ def _generico(texto: str) -> FacturaLeida:
         reactiva_periodos = extraer_reactiva_lecturas_compactas(texto)
     if not reactiva_periodos:
         reactiva_periodos = extraer_reactiva_canaluz(texto, energia_periodos)
+    if not reactiva_periodos and es_iner:
+        reactiva_periodos = extraer_reactiva_iner(texto)
+    numero_factura = buscar_texto(texto, [
+        r"N[º°o]?\s*Factura\s*:\s*([^\s]+)\s+Emitida\b",
+        r"N[uú]mero\s+de\s+Factura\s*:?\s*([A-Z0-9-]+)",
+        r"N[uú]mero\s+de\s+factura\s*:\s*([^\s]+)",
+        r"N[º°o]?\s*de\s*factura\s*:\s*([A-Z]\d+[A-Z]+\d+)",
+        r"N[º°o]?\s*factura\s*:\s*([A-Z]\d+[A-Z]+\d+)",
+        r"N[º°o]?\s*Factura\s*:\s*([A-Z]+/\d{2}/\d+)",
+        r"ATENCO\s+ENERGIA[^\n]*?\s(FAT-\d{4}-\d+)",
+        r"N[º°o]?\s*FACTURA\s*:\s*([A-Z]+-\d{4}-\d+)",
+        r"N[º°o]?\s*Factura\s*:\s*([^\n]+)",
+        r"N[º°o]?\s*de\s*Factura\s*:\s*([^\n]+)",
+        r"N[º°o]?\s*Factura\s*:\s*(IGNIS\s+\d+)",
+        r"PERIODO\s+DE\s+FACTURACI.N:\s+N[º°o]?\s+FACTURA:\s*\n"
+        r"(?:[^\n]*\n)?\s*\d{2}/\d{2}/\d{4}\s*-\s*\d{2}/\d{2}/\d{4}\s+(\d+)",
+        r"N[º°o]?\s*FACTURA\s*\.*\s*:\s*([^\s]+)",
+        r"N[º°o]?\s*factura\s+([^\s]+)",
+    ])
+    # Algunas plantillas imprimen ambos datos en una sola línea y el patrón
+    # genérico amplio puede capturarlos juntos. Solo corregimos ese caso si no
+    # había una fecha independiente y el valor termina en una fecha completa.
+    if numero_factura and not fecha_factura_txt:
+        numero_y_fecha = re.fullmatch(
+            r"\s*(.+?)\s+(\d{1,2}[./-]\d{1,2}[./-]\d{4})\s*",
+            numero_factura,
+        )
+        if numero_y_fecha:
+            numero_factura, fecha_factura_txt = numero_y_fecha.groups()
     factura = FacturaLeida(
         formato="generico",
         comercializadora=comercializadora.title(),
-        numero_factura=buscar_texto(texto, [
-            r"N[uú]mero\s+de\s+Factura\s*:?\s*([A-Z0-9-]+)",
-            r"N[uú]mero\s+de\s+factura\s*:\s*([^\s]+)",
-            r"N[º°o]?\s*de\s*factura\s*:\s*([A-Z]\d+[A-Z]+\d+)",
-            r"N[º°o]?\s*factura\s*:\s*([A-Z]\d+[A-Z]+\d+)",
-            r"N[º°o]?\s*Factura\s*:\s*([A-Z]+/\d{2}/\d+)",
-            r"ATENCO\s+ENERGIA[^\n]*?\s(FAT-\d{4}-\d+)",
-            r"N[º°o]?\s*FACTURA\s*:\s*([A-Z]+-\d{4}-\d+)",
-            r"N[º°o]?\s*Factura\s*:\s*([^\n]+)",
-            r"N[º°o]?\s*de\s*Factura\s*:\s*([^\n]+)",
-            r"N[º°o]?\s*Factura\s*:\s*(IGNIS\s+\d+)",
-            r"PERIODO\s+DE\s+FACTURACI.N:\s+N[º°o]?\s+FACTURA:\s*\n"
-            r"(?:[^\n]*\n)?\s*\d{2}/\d{2}/\d{4}\s*-\s*\d{2}/\d{2}/\d{4}\s+(\d+)",
-            r"N[º°o]?\s*FACTURA\s*\.*\s*:\s*([^\s]+)",
-            r"N[º°o]?\s*factura\s+([^\s]+)",
-        ]),
+        numero_factura=numero_factura,
         cups=cups,
         atr=atr,
         fecha_factura=_fecha_es_a_ddmmyyyy(
-            fecha_factura_txt.replace("-", "/") if fecha_factura_txt else None
+            re.sub(r"[.-]", "/", fecha_factura_txt)
+            if fecha_factura_txt else None
         ),
         periodo_inicio=inicio,
         periodo_fin=fin,

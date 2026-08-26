@@ -2,7 +2,8 @@ import streamlit as st
 import pandas as pd
 from backend_fijovspvpc import (obtener_datos_horarios, obtener_tabla_filtrada, grafico_horario_consumo, grafico_horario_coste, grafico_horario_precio, 
                                 obtener_datos_por_periodo,graf_consumos_queso,graf_costes_queso,
-                                optimizar_consumo_media_horaria, grafico_comparativo_perfiles, optimizar_consumo_suavizado, mapa_diferencias)
+                                optimizar_consumo_media_horaria, grafico_comparativo_perfiles, optimizar_consumo_suavizado, mapa_diferencias,
+                                construir_historico_mensual_pvpc)
 import datetime
 import numpy as np
 from dateutil.relativedelta import relativedelta
@@ -153,6 +154,15 @@ sobrecoste_tp_anual = round(tp_coste_fijo_anual - tp_coste_pvpc_anual, 2)
 grafico_consumo=grafico_horario_consumo(pt_horario_filtrado)
 grafico_coste=grafico_horario_coste(pt_horario_filtrado)
 grafico_precio=grafico_horario_precio(pt_horario_filtrado)
+grafico_precio.update_layout(
+    legend=dict(
+        orientation='h',
+        yanchor='bottom',
+        y=1.02,
+        xanchor='center',
+        x=0.5,
+    )
+)
 
 try:
     pt_periodos_filtrado, pt_periodos_filtrado_porc, totales_periodo = obtener_datos_por_periodo(df_datos_horarios_combo_filtrado_consumo)
@@ -231,6 +241,124 @@ def dibujar_queso_peso(df, titulo):
 graf_queso_comp_pvpc = dibujar_queso_peso(df_pie_pvpc,title_pvpc )
 graf_queso_comp_fijo = dibujar_queso_peso(df_pie_fijo, title_fijo)
 
+historico_mensual_pvpc = construir_historico_mensual_pvpc(
+    df_datos_horarios_combo,
+    consumo_anual=st.session_state.consumo_anual,
+    potencia_contratada=st.session_state.pot_con,
+    precios_potencia_boe=tp_boe,
+    margen_comercializacion=tp_margen_pvpc,
+    tipo_iee=iee,
+    tipo_iva=iva,
+    fecha_referencia=pd.Timestamp.today(),
+)
+
+datos_media_anual = df_datos_horarios_combo[['fecha', 'pvpc', 'perfil_20']].copy()
+datos_media_anual['fecha'] = pd.to_datetime(
+    datos_media_anual['fecha'], errors='coerce'
+)
+datos_media_anual['pvpc'] = pd.to_numeric(
+    datos_media_anual['pvpc'], errors='coerce'
+)
+datos_media_anual['perfil_20'] = pd.to_numeric(
+    datos_media_anual['perfil_20'], errors='coerce'
+)
+datos_media_anual = datos_media_anual.dropna(
+    subset=['fecha', 'pvpc', 'perfil_20']
+)
+datos_media_anual = datos_media_anual[
+    datos_media_anual['fecha'].dt.year.between(2024, 2026)
+].copy()
+datos_media_anual['pvpc_perfil'] = (
+    datos_media_anual['pvpc'] * datos_media_anual['perfil_20']
+)
+medias_anuales_pvpc = (
+    datos_media_anual.assign(año=datos_media_anual['fecha'].dt.year)
+    .groupby('año', as_index=False)
+    .agg(
+        suma_pvpc_perfil=('pvpc_perfil', 'sum'),
+        suma_perfil=('perfil_20', 'sum'),
+        ultima_fecha=('fecha', 'max'),
+    )
+)
+medias_anuales_pvpc = medias_anuales_pvpc[
+    medias_anuales_pvpc['suma_perfil'] > 0
+].copy()
+medias_anuales_pvpc['media_ponderada_cent_kwh'] = (
+    medias_anuales_pvpc['suma_pvpc_perfil']
+    / medias_anuales_pvpc['suma_perfil']
+    / 10
+)
+
+graf_historico_precio_pvpc = px.line(
+    historico_mensual_pvpc,
+    x="fecha_mes",
+    y="precio_ponderado_cent_kwh",
+    markers=True,
+    title="Evolución mensual del precio medio ponderado PVPC",
+    labels={
+        "fecha_mes": "Mes",
+        "precio_ponderado_cent_kwh": "Precio ponderado (c€/kWh)",
+    },
+)
+graf_historico_precio_pvpc.update_traces(
+    line=dict(width=3),
+    hovertemplate=(
+        "%{x|%b %Y}<br>Precio ponderado: %{y:.2f} c€/kWh"
+        "<extra></extra>"
+    ),
+)
+graf_historico_precio_pvpc.update_xaxes(dtick="M1", tickformat="%b\n%Y")
+for anio in sorted(historico_mensual_pvpc["fecha_mes"].dt.year.unique())[1:]:
+    graf_historico_precio_pvpc.add_vline(
+        x=pd.Timestamp(int(anio), 1, 1).timestamp() * 1000,
+        line_width=1,
+        line_dash="dash",
+        line_color="rgba(180, 180, 180, 0.65)",
+    )
+for media_anual in medias_anuales_pvpc.itertuples():
+    inicio_anio = pd.Timestamp(int(media_anual.año), 1, 1)
+    fin_anio = min(
+        pd.Timestamp(int(media_anual.año), 12, 31),
+        pd.Timestamp(media_anual.ultima_fecha),
+    )
+    graf_historico_precio_pvpc.add_shape(
+        type='line',
+        x0=inicio_anio.timestamp() * 1000,
+        x1=fin_anio.timestamp() * 1000,
+        y0=media_anual.media_ponderada_cent_kwh,
+        y1=media_anual.media_ponderada_cent_kwh,
+        line=dict(color='#FFD54F', width=3, dash='dot'),
+        layer='above',
+    )
+
+componentes_historicos = [
+    "Potencia BOE", "Margen comercialización", "Energía", "IEE", "IVA"
+]
+historico_componentes_largo = historico_mensual_pvpc.melt(
+    id_vars=["fecha_mes", "dias_calculados"],
+    value_vars=componentes_historicos,
+    var_name="Componente",
+    value_name="Importe (€)",
+)
+graf_historico_componentes = px.bar(
+    historico_componentes_largo,
+    x="fecha_mes",
+    y="Importe (€)",
+    color="Componente",
+    title="Evolución mensual de los componentes de la factura PVPC",
+    labels={"fecha_mes": "Mes"},
+    category_orders={"Componente": componentes_historicos},
+    custom_data=["dias_calculados"],
+)
+graf_historico_componentes.update_traces(
+    hovertemplate=(
+        "%{x|%b %Y}<br>%{fullData.name}: %{y:.2f} €<br>"
+        "Días calculados: %{customdata[0]}<extra></extra>"
+    )
+)
+graf_historico_componentes.update_layout(barmode="stack")
+graf_historico_componentes.update_xaxes(dtick="M1", tickformat="%b\n%Y")
+
 
 # BARRA LATERAL-----------------------------------------------------------------------------
 st.sidebar.header('Herramientas adicionales')
@@ -252,7 +380,22 @@ with st.sidebar.form('form2'):
 
 
 # LAYAOUT DE DATOS++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-col1, col2, col3 = st.columns([.3, .4, .4])
+(
+    tab_principal,
+    tab_factura,
+    tab_comparativa,
+    tab_pvpc_te,
+    tab_optimizacion,
+) = st.tabs(
+    ['Principal', 'Factura', 'Comparativa', 'PVPC Te', 'Optimización']
+)
+col1, col2, col3 = tab_principal.columns([.3, .4, .4])
+factura_col1, factura_col2, factura_col3 = tab_factura.columns(3)
+comparativa_col1, comparativa_col2, comparativa_col3 = tab_comparativa.columns(3)
+pvpc_te_col1, pvpc_te_col2, pvpc_te_col3 = tab_pvpc_te.columns(3)
+optimizacion_col1, optimizacion_col2, optimizacion_col3 = (
+    tab_optimizacion.columns(3)
+)
 with col1:
     st.header('Zona de interacción', divider = 'gray')
     #with st.form('form1'):
@@ -304,9 +447,35 @@ with col1:
             )
         st.form_submit_button('Actualizar cálculos')
     
-    st.header('Peso de los componentes de la factura', divider = 'gray')
+with factura_col1:
+    st.header('Peso de los componentes de la factura', divider='gray')
     st.plotly_chart(graf_queso_comp_pvpc, use_container_width=True)
     st.plotly_chart(graf_queso_comp_fijo, use_container_width=True)
+
+with pvpc_te_col1:
+    st.header('Evolución mensual del PVPC', divider='gray')
+    st.caption(
+        "Precio de energía ponderado con el perfil 2.0TD. Para el mes en curso "
+        "se aplica el mismo corte diario a ese mes de los años anteriores."
+    )
+    columnas_medias_anuales = st.columns(3)
+    medias_por_anio = medias_anuales_pvpc.set_index('año')
+    for columna_media, anio_media in zip(columnas_medias_anuales, [2024, 2025, 2026]):
+        if anio_media in medias_por_anio.index:
+            valor_media = medias_por_anio.loc[
+                anio_media, 'media_ponderada_cent_kwh'
+            ]
+            etiqueta_media = f'Media {anio_media}'
+            if anio_media == 2026:
+                etiqueta_media += ' (acum.)'
+            columna_media.metric(
+                etiqueta_media,
+                f'{valor_media:.2f} c€/kWh'.replace('.', ','),
+            )
+    st.plotly_chart(graf_historico_precio_pvpc, use_container_width=True)
+
+with comparativa_col1:
+    st.plotly_chart(graf_historico_componentes, use_container_width=True)
 
 
     
@@ -366,10 +535,10 @@ with col2:
 
     
 
-    st.subheader('Distribución de consumos y costes en %') #, divider = 'gray')
+    col3.subheader('Distribución de consumos y costes en %') #, divider = 'gray')
     
     if error_periodos == False:
-        col301, col302 = st.columns(2)
+        col301, col302 = col3.columns(2)
         with col301:
             st.write(graf_consumos_queso)
             #if error_periodos == False:
@@ -380,23 +549,142 @@ with col2:
             #if error_periodos == False:
             #    st.write(totales_periodo)
     else:
-        st.error('No se disponen de datos de periodos dh para el mes en curso.')   
+        col3.error('No se disponen de datos de periodos dh para el mes en curso.')
 
-    st.header('Mapa comparativo FIJO vs PVPC', divider = 'gray')
-    st.write(graf_mapa)
+    col3.header('Mapa comparativo FIJO vs PVPC', divider='gray')
+    col3.write(graf_mapa)
 
-        
-with col3:
+    comparativa_col2.header('Comparativa mensual PVPC', divider='gray')
+    nombres_meses = {
+        1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
+        5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto',
+        9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre',
+    }
+    fechas_historico = pd.to_datetime(
+        df_datos_horarios_combo['fecha'], errors='coerce'
+    )
+    anio_comparacion = min(pd.Timestamp.today().year, fechas_historico.dt.year.max())
+    meses_disponibles = sorted(
+        fechas_historico.loc[fechas_historico.dt.year == anio_comparacion]
+        .dt.month.dropna().astype(int).unique(),
+        reverse=True,
+    )
+
+    if meses_disponibles:
+        mes_comparacion = comparativa_col2.selectbox(
+            f'Mes de {anio_comparacion}',
+            options=meses_disponibles,
+            format_func=lambda mes: nombres_meses[mes],
+            key='mes_comparacion_pvpc',
+        )
+        mascara_mes = (
+            fechas_historico.dt.month.eq(mes_comparacion)
+            & fechas_historico.dt.year.between(anio_comparacion - 2, anio_comparacion)
+        )
+        datos_mes_comparacion = df_datos_horarios_combo.loc[mascara_mes].copy()
+        ultima_fecha_mes = fechas_historico.loc[
+            fechas_historico.dt.year.eq(anio_comparacion)
+            & fechas_historico.dt.month.eq(mes_comparacion)
+        ].max()
+        comparativa_mes = construir_historico_mensual_pvpc(
+            datos_mes_comparacion,
+            consumo_anual=st.session_state.consumo_anual,
+            potencia_contratada=st.session_state.pot_con,
+            precios_potencia_boe=tp_boe,
+            margen_comercializacion=tp_margen_pvpc,
+            tipo_iee=iee,
+            tipo_iva=iva,
+            fecha_referencia=ultima_fecha_mes,
+        ).sort_values('año')
+
+        if not comparativa_mes.empty:
+            dia_corte = int(comparativa_mes['dias_calculados'].min())
+            comparativa_col2.caption(
+                f'{nombres_meses[mes_comparacion]} comparado del día 1 al '
+                f'{dia_corte}, con el mismo consumo anual y potencia seleccionados.'
+            )
+            columnas_metricas = comparativa_col2.columns(len(comparativa_mes))
+            precio_anterior = None
+            for columna, fila in zip(columnas_metricas, comparativa_mes.itertuples()):
+                precio = fila.precio_ponderado_cent_kwh
+                delta = None
+                if precio_anterior not in (None, 0):
+                    delta = f'{(precio / precio_anterior - 1) * 100:+.2f} %'
+                columna.metric(
+                    f'{int(fila.año)} · PVPC ponderado',
+                    f'{precio:.2f} c€/kWh'.replace('.', ','),
+                    delta,
+                    delta_color='inverse',
+                )
+                precio_anterior = precio
+
+            componentes_comparacion = [
+                'Potencia BOE', 'Margen comercialización', 'Energía', 'IEE', 'IVA'
+            ]
+            comparativa_componentes = comparativa_mes.melt(
+                id_vars=['año'],
+                value_vars=componentes_comparacion,
+                var_name='Componente',
+                value_name='Importe (€)',
+            )
+            graf_comparativa_mes = px.bar(
+                comparativa_componentes,
+                x='año',
+                y='Importe (€)',
+                color='Componente',
+                category_orders={'Componente': componentes_comparacion},
+                title=f'Factura estimada · {nombres_meses[mes_comparacion]}',
+                labels={'año': 'Año'},
+            )
+            graf_comparativa_mes.update_layout(
+                barmode='stack',
+                bargap=0.55,
+                barcornerradius=8,
+            )
+            graf_comparativa_mes.update_xaxes(dtick=1)
+            graf_comparativa_mes.update_traces(
+                hovertemplate=(
+                    'Año %{x}<br>%{fullData.name}: %{y:.2f} €<extra></extra>'
+                )
+            )
+            textos_totales = []
+            total_anterior = None
+            for total in comparativa_mes['Total factura']:
+                total_formateado = (
+                    f'{total:,.2f} €'.replace(',', 'X').replace('.', ',').replace('X', '.')
+                )
+                if total_anterior not in (None, 0):
+                    variacion = (total / total_anterior - 1) * 100
+                    total_formateado += f'<br>{variacion:+.2f} %'.replace('.', ',')
+                textos_totales.append(total_formateado)
+                total_anterior = total
+            graf_comparativa_mes.add_scatter(
+                x=comparativa_mes['año'],
+                y=comparativa_mes['Total factura'],
+                mode='text',
+                text=textos_totales,
+                textposition='top center',
+                textfont=dict(size=14),
+                cliponaxis=False,
+                hoverinfo='skip',
+                showlegend=False,
+            )
+            comparativa_col2.plotly_chart(
+                graf_comparativa_mes, use_container_width=True
+            )
+    else:
+        comparativa_col2.info(
+            f'No hay datos mensuales disponibles para {anio_comparacion}.'
+        )
+
+with pvpc_te_col3:
     st.header('Curvas horarias perfiladas del PVPC', divider = 'gray')
-    #st.subheader('Gráfico de consumo perfilado REE 2.0TD', divider = 'gray')
     st.write(grafico_consumo)
-    
-    #st.subheader('Gráfico de coste del PVPC perfilado', divider = 'gray')
     st.write(grafico_coste)
-
-    #st.subheader('Gráfico del PVPC medio horario perfilado', divider = 'gray')
     st.write(grafico_precio)
 
+
+with optimizacion_col1:
     #st.header('Optimización burda del consumo', divider = 'gray')
     #st.plotly_chart(grafico_comparativo_perfiles(df_perfiles))
 

@@ -15,6 +15,7 @@ from backend_mibgas import (
     graficar_modelo_lineal_omie_gas,
     construir_relacion_horaria_omie_mibgas, graficar_mapa_calor_relacion_omie_mibgas,
     graficar_relacion_omie_mibgas_por_mes, graficar_relacion_omie_mibgas_por_hora,
+    construir_ratios_maximos_horarios_por_mes,
     descargar_sendeco, obtener_sendeco, graficar_gas_co2,
     obtener_spot_mensual, construir_df_mensual, graf_simul_spot, obtener_spot_diario,
     obtener_mibgas_mensual, graficar_mibgas_mensual_historico, construir_curva_mibgas_2026, graficar_curva_mibgas_2026,
@@ -197,6 +198,9 @@ graf_relacion_por_hora, df_relacion_por_hora = (
         df_relacion_horaria_omie_mibgas
     )
 )
+df_ratios_maximos_horarios_mes = construir_ratios_maximos_horarios_por_mes(
+    df_relacion_horaria_omie_mibgas
+)
 
 
 df_validacion = pd.DataFrame({
@@ -316,6 +320,53 @@ with tab1:
             st.metric("Precio medio gas 2024 (€/MWh)", df_medias.loc[df_medias["año_entrega"] == 2024, "precio_str"].values[0])
             st.metric("Precio medio gas 2025 (€/MWh)", df_medias.loc[df_medias["año_entrega"] == 2025, "precio_str"].values[0])
             st.metric("Precio medio gas 2026 (€/MWh)", df_medias.loc[df_medias["año_entrega"] == 2026, "precio_str"].values[0])
+
+    st.subheader("Ratios máximos horarios OMIE/MIBGAS por mes")
+    st.caption(
+        "Máximo ratio observado en cada hora dentro de cada mes · año 2026"
+    )
+    if df_ratios_maximos_horarios_mes.empty:
+        st.info("No hay datos horarios coincidentes para calcular los máximos.")
+    else:
+        columnas_horarias = [
+            columna
+            for columna in df_ratios_maximos_horarios_mes.columns
+            if columna != "Mes"
+        ]
+
+        def resaltar_maximos_horarios(fila):
+            estilos = pd.Series("", index=fila.index)
+            valores = pd.to_numeric(
+                fila[columnas_horarias], errors="coerce"
+            )
+            if valores.notna().any():
+                maximo = valores.max()
+                estilos.loc[
+                    columnas_horarias
+                ] = valores.eq(maximo).map(
+                    lambda es_maximo: (
+                        "background-color: #FFD700; color: #111111; "
+                        "font-weight: 700"
+                        if es_maximo else ""
+                    )
+                )
+            return estilos
+
+        st.dataframe(
+            df_ratios_maximos_horarios_mes.style.apply(
+                resaltar_maximos_horarios,
+                axis=1,
+            ).format({
+                columna: "{:.2f}" for columna in columnas_horarias
+            }, na_rep=""),
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                columna: st.column_config.NumberColumn(format="%.2f")
+                for columna in df_ratios_maximos_horarios_mes.columns
+                if columna != "Mes"
+            },
+        )
 
 
 

@@ -182,7 +182,8 @@ if modo1:
         habilitar_ver = False
 
     else:
-        df_in = st.session_state.df_maximetros.copy()
+        df_maximetros_disponibles = st.session_state.df_maximetros.copy()
+        df_in = df_maximetros_disponibles.tail(12).reset_index(drop=True)
 
         año_opt = 2026
         pyc_tp_opt = pyc_tp[año_opt][tarifa]
@@ -194,6 +195,11 @@ if modo1:
 
         meses_maximetros = len(df_in)
         st.sidebar.caption('Costes regulados aplicados: 2026')
+        if len(df_maximetros_disponibles) > 12:
+            st.sidebar.caption(
+                f'Se usan los 12 meses más recientes de '
+                f'{len(df_maximetros_disponibles)} disponibles.'
+            )
         if meses_maximetros < 12:
             st.sidebar.warning(
                 f'Optimización basada en {meses_maximetros} mes(es) de '

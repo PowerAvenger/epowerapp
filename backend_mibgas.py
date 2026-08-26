@@ -1143,6 +1143,44 @@ def graficar_relacion_omie_mibgas_por_hora(df_relacion, año=2026):
     return fig, resumen
 
 
+def construir_ratios_maximos_horarios_por_mes(df_relacion):
+    """Devuelve el máximo OMIE/MIBGAS de cada hora para cada mes."""
+    columnas = ["Mes"] + [f"{hora:02d}:00" for hora in range(24)]
+    if df_relacion is None or df_relacion.empty:
+        return pd.DataFrame(columns=columnas)
+
+    datos = df_relacion[["mes", "hora", "rel_omie_gas"]].copy()
+    datos["mes"] = pd.to_numeric(datos["mes"], errors="coerce")
+    datos["hora"] = pd.to_numeric(datos["hora"], errors="coerce")
+    datos["rel_omie_gas"] = pd.to_numeric(
+        datos["rel_omie_gas"], errors="coerce"
+    )
+    datos = datos.dropna(subset=["mes", "hora", "rel_omie_gas"])
+    datos = datos[
+        datos["mes"].between(1, 12) & datos["hora"].between(0, 23)
+    ].copy()
+    if datos.empty:
+        return pd.DataFrame(columns=columnas)
+
+    tabla = datos.pivot_table(
+        index="mes",
+        columns="hora",
+        values="rel_omie_gas",
+        aggfunc="max",
+    ).reindex(columns=range(24))
+    nombres_meses = {
+        1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+        5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+        9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre",
+    }
+    tabla.index = tabla.index.astype(int)
+    tabla = tabla.sort_index().rename(columns={
+        hora: f"{hora:02d}:00" for hora in range(24)
+    })
+    tabla.insert(0, "Mes", tabla.index.map(nombres_meses))
+    return tabla.reset_index(drop=True)[columnas]
+
+
 def graficar_da_comparado(df):
 
     df = df.copy()
