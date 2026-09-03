@@ -101,6 +101,5 @@ class MotorIndexadoTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "spot"):
             calcular_precios_atr_formula(df, FormulaIndexada())
 
-
 if __name__ == "__main__":
     unittest.main()

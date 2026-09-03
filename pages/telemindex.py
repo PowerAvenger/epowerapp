@@ -16,8 +16,13 @@ from backend_telemindex import (
     analizar_dependencia_omie, graficar_elasticidad_lineal,
     
 ) 
-from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, aplicar_estilo, aplicar_dh6p_zona, NOMBRE_ZONA_PERIODOS, calcular_precios_atr
+from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, aplicar_estilo, NOMBRE_ZONA_PERIODOS, calcular_precios_atr
 from backend_curvadecarga import graficar_media_horaria, graficar_queso_periodos
+from backend_previsiones import obtener_prevision_omie_anual
+from backend_simulindex import (
+    construir_prevision_indexados_2026,
+    obtener_hist_mensual,
+)
 from utilidades import (
     generar_menu,
     init_app,
@@ -73,7 +78,6 @@ if st.session_state.get('atr_dfnorm') in ['6.3', '6.4']:
     st.stop()  
 
 init_app()
-st.session_state.zona_periodos_index = "peninsula"
 
 st.sidebar.header('⚡ Histórico de indexados ⚡')
 zona_mensajes = st.sidebar.empty()
@@ -84,7 +88,6 @@ if 'df_sheets_old' not in st.session_state:
 init_app_index()
 
 st.session_state.df_sheets = calcular_precios_atr(st.session_state.df_sheets)
-print('df sheets con fnee y margen según fórmula')
 print (st.session_state.df_sheets)
 
 if "rango_curvadecarga" in st.session_state:
@@ -117,7 +120,6 @@ def check_componentes_ssaa_simple(df):
     print("\nTOTAL SSAA (reconstruido):", round(suma, 4))
     print("SSAA en df:", round(df["ssaa"].mean(), 4))
 
-check_componentes_ssaa_simple(df_filtrado_sheets)
 
 
 
@@ -136,12 +138,9 @@ if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None an
     df_curva_sheets = construir_df_curva_sheets(df_filtrado)
     df_curva_sheets = añadir_costes_curva(df_curva_sheets)
     
-    print("df_curva_sheets generado correctamente")
     df_uso = df_curva_sheets.copy()
     df_uso = df_uso.drop_duplicates(subset=["fecha", "hora", "spot"])
     st.session_state.df_curva_sheets = df_uso
-    print('st.session_state.df_curva_sheets = df_uso')
-    print(df_uso)
 
     #consumo total curva
     consumo_total_curva = df_uso['consumo_neto_kWh'].sum()
@@ -156,7 +155,6 @@ if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None an
     
 else:
     st.session_state.df_curva_sheets = None
-    print("df_norm_h no está disponible → no se genera df_curva_sheets")
     df_uso = df_filtrado.copy()
     #para usar en simulindex
     #st.session_state.df_uso = df_uso
@@ -175,8 +173,6 @@ df_tabla_costes, media_curva_coste = tabla_costes(df_uso)
 df_tabla_pyc, media_curva_pyc = tabla_pyc(df_uso)
 df_tabla_margen, media_curva_margen = tabla_margen(df_uso)
 df_tabla_apuntamiento = tabla_apuntamiento_spot(df_uso)
-print(f'Media precio curva en €/MWh: {media_curva_precio}')
-print(f'Media precio 3.0 en €/MWh: {media_30}')
 
 #media_20 = round(media_20 / 10, 1)
 media_20 = media_20 / 10
@@ -208,8 +204,6 @@ if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None an
     desvio_coste_total = coste_total_curva-coste_sin_ponderar
     desvio_coste_total_porc = (desvio_coste_total / coste_sin_ponderar) * 100
 
-    print(f'Coste sin ponderar: {coste_sin_ponderar}€')
-    print(f'Coste ponderado: {coste_total_curva}€')
 
 
     df_filtrado_cober = df_filtrado_sheets.copy()
@@ -395,10 +389,38 @@ else:
     )
     df_evol_precios_diarios, graf_evol_precios_diarios = evol_precios_diarios(st.session_state.df_curva_sheets, colores_precios)
 
-print('precios mensuales')
-print(df_precios_mensuales)
 
-df_precios_diarios, graf_precios_diarios = evol_diario(st.session_state.df_sheets)
+df_prevision_indexados_2026 = pd.DataFrame()
+error_prevision_indexados = None
+try:
+    df_hist_simulindex = obtener_hist_mensual(st.session_state.df_sheets)
+    media_ssaa_prev = st.session_state.get("media_ssaa_prev", 20.0)
+    media_fnee_prev = st.session_state.get("media_fnee_prev", 2.68)
+    media_rad3_prev = st.session_state.get("media_rad3_prev", 1.7)
+    media_rad3_hist = df_hist_simulindex["rad3"].mean()
+    media_ssaa_hist = df_hist_simulindex["ssaa"].mean() - media_rad3_hist
+    media_fnee_hist = df_hist_simulindex["fnee"].mean()
+    ajuste_hist_simulindex = (
+        (media_ssaa_prev - media_ssaa_hist)
+        + (media_fnee_prev - media_fnee_hist)
+        + (media_rad3_prev - media_rad3_hist)
+    ) * 1.1 * 1.015 / 10
+    df_spot_prevision = st.session_state.df_sheets.copy()
+    df_spot_prevision["fecha"] = pd.to_datetime(df_spot_prevision["fecha"])
+    df_spot_prevision = df_spot_prevision.set_index("fecha")[["spot"]]
+    prevision_omie_2026 = obtener_prevision_omie_anual(df_spot_prevision)
+    df_prevision_indexados_2026 = construir_prevision_indexados_2026(
+        df_hist_simulindex,
+        prevision_omie_2026["curva_mensual"],
+        ajuste_hist=ajuste_hist_simulindex,
+    )
+except Exception as exc:
+    error_prevision_indexados = str(exc)
+
+df_precios_diarios, graf_precios_diarios = evol_diario(
+    st.session_state.df_sheets,
+    df_prevision_2026=df_prevision_indexados_2026,
+)
 
 #ELEMENTOS DE LA BARRA LATERAL ---------------------------------------------------------------------------------------
 zona_mensajes.info(
@@ -440,12 +462,12 @@ with st.sidebar.container(border=True):
 
     persist_widget(
         st.selectbox,
-        "Selecciona zona de periodos horarios",
+        "Selecciona sistema eléctrico",
         options=opciones_zona_periodos,
         index=0,
         key="zona_periodos_index",
         default="peninsula",
-        disabled=True,
+        disabled=not bool(st.secrets.get("CSV_SNP")),
         format_func=lambda x: {
             "peninsula": "Península",
             "baleares": "Baleares",
@@ -454,6 +476,8 @@ with st.sidebar.container(border=True):
             "melilla": "Melilla",
         }[x]
     )
+    if not st.secrets.get("CSV_SNP"):
+        st.caption("Configura `CSV_SNP` para habilitar Baleares, Canarias, Ceuta y Melilla.")
 st.sidebar.subheader('Parámetros de fórmula')
     
 with st.sidebar.container(border=True):
@@ -629,6 +653,11 @@ with tab2:
     # gráfico de evolución de los precios medios mensuales
     st.subheader("Comparativa anual de los precios medios de indexado, por peaje de acceso (media acumulada)", divider='rainbow')
     st.plotly_chart(graf_precios_diarios, use_container_width=True)
+    if error_prevision_indexados:
+        st.caption(
+            "La previsión de Simulindex no está disponible temporalmente: "
+            f"{error_prevision_indexados}"
+        )
     st.subheader("Evolución de los precios medios de indexado, por meses", divider='rainbow')
     st.plotly_chart(graf_mensual)
     st.subheader("Evolución de los precios medios de indexado, por días", divider='rainbow')
@@ -689,8 +718,6 @@ with tab3:
         
         # TABLA RESUMEN DE CONSUMOS, COSTES Y PRECIOS MEDIOS DE INDEXADO PONDERADOS A LA CURVA DE CARGA
 
-        print('df_uso para usar en resumen')
-        print(df_uso)
         df_resumen = obtener_df_resumen(df_uso, None, 0.0)
         from backend_comun import formatear_resumen_mixto
         #df_resumen_view = formatear_df_resumen(df_resumen)
@@ -753,11 +780,6 @@ with tab3:
         st.caption("Los precios de las columnas P1…P6 deben indicarse en €/kWh.")
 
         st.markdown("**Introducción manual de precios fijos (€/kWh)**")
-        nombre_oferta_manual = st.text_input(
-            "Nombre de la oferta manual",
-            value="Oferta manual",
-            key="nombre_oferta_fija_manual",
-        )
         es_20td_manual = (
             str(st.session_state.get("atr_dfnorm", ""))
             .replace(" ", "")
@@ -768,27 +790,35 @@ with tab3:
             ["P1", "P2", "P3"]
             if es_20td_manual else [f"P{i}" for i in range(1, 7)]
         )
-        columnas_precios_manuales = st.columns(len(periodos_manuales))
-        precios_manuales = {}
-        for columna, periodo in zip(
-            columnas_precios_manuales, periodos_manuales
-        ):
-            with columna:
-                precios_manuales[periodo] = st.number_input(
-                    periodo,
-                    min_value=0.0,
-                    max_value=2.0,
-                    value=0.0,
-                    step=0.001,
-                    format="%.6f",
-                    key=f"precio_fijo_manual_{periodo}",
-                    help="Precio fijo en €/kWh.",
-                )
-        if st.button(
-            "Añadir o actualizar oferta manual",
-            key="guardar_oferta_fija_manual",
-            type="primary",
-        ):
+        with st.form("form_oferta_fija_manual", clear_on_submit=False):
+            nombre_oferta_manual = st.text_input(
+                "Nombre de la oferta manual",
+                value="Oferta manual",
+                key="nombre_oferta_fija_manual",
+            )
+            columnas_precios_manuales = st.columns(len(periodos_manuales))
+            precios_manuales = {}
+            for columna, periodo in zip(
+                columnas_precios_manuales, periodos_manuales
+            ):
+                with columna:
+                    precios_manuales[periodo] = st.number_input(
+                        periodo,
+                        min_value=0.0,
+                        max_value=2.0,
+                        value=0.0,
+                        step=0.001,
+                        format="%.6f",
+                        key=f"precio_fijo_manual_{periodo}",
+                        help="Precio fijo en €/kWh.",
+                    )
+            guardar_oferta_manual = st.form_submit_button(
+                "Añadir o actualizar oferta manual",
+                type="primary",
+                use_container_width=True,
+            )
+
+        if guardar_oferta_manual:
             nombre_limpio = nombre_oferta_manual.strip()
             if not nombre_limpio:
                 st.error("Indica un nombre para la oferta manual.")

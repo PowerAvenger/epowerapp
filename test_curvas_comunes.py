@@ -6,10 +6,13 @@ import pandas as pd
 
 from backend_curvadecarga import (
     DatadisLimiteConsultas,
+    _normalizar_maximetros_datadis,
+    _normalizar_reactiva_datadis,
     agrupar_curva_horaria,
     analizar_cobertura_periodo,
     clave_cache_consumo_datadis,
     dataframe_como_archivo_curva,
+    dividir_energias_curva,
     normalize_curve_simple,
     obtener_consumo_datadis,
     obtener_consumo_datadis_cacheado,
@@ -20,6 +23,129 @@ from backend_curvadecarga import (
 
 
 class CurvasComunesTest(unittest.TestCase):
+    def test_dividir_energias_no_modifica_fechas_horas_ni_periodos(self):
+        original = pd.DataFrame({
+            "fecha_hora": pd.to_datetime(["2025-07-01 00:00"]),
+            "hora": [0],
+            "periodo": ["P6"],
+            "consumo_kWh": [5255.0],
+            "consumo_neto_kWh": [5255.0],
+            "reactiva_kVArh": [1800.0],
+        })
+
+        resultado = dividir_energias_curva(original)
+
+        self.assertEqual(resultado.loc[0, "consumo_kWh"], 5.255)
+        self.assertEqual(resultado.loc[0, "consumo_neto_kWh"], 5.255)
+        self.assertEqual(resultado.loc[0, "reactiva_kVArh"], 1.8)
+        self.assertEqual(resultado.loc[0, "periodo"], "P6")
+        self.assertEqual(resultado.loc[0, "hora"], 0)
+        self.assertEqual(
+            resultado.loc[0, "fecha_hora"], original.loc[0, "fecha_hora"]
+        )
+        self.assertEqual(original.loc[0, "consumo_kWh"], 5255.0)
+
+    def test_r1_se_detecta_como_reactiva_sin_confundir_otros_cuadrantes(self):
+        lineas = [
+            "dia_semana;fecha;hora;D.H.;periodo;prelacion;"
+            "M.Lin;AI;AE;R1;R2;R3;R4"
+        ]
+        lineas.extend(
+            f"MAR;01/07/2025;{hora}:00;Tarifa-2021 ;6;1;"
+            f"N;247;0;{40 + hora};999;888;777"
+            for hora in range(24)
+        )
+        archivo = io.BytesIO(("\n".join(lineas) + "\n").encode("cp1252"))
+        archivo.name = "medidas_profiltek.csv"
+
+        _, normalizada, _, _, _, frecuencia = normalize_curve_simple(archivo)
+
+        self.assertEqual(frecuencia, "H")
+        self.assertEqual(normalizada["reactiva_kVArh"].iloc[0], 40)
+        self.assertEqual(normalizada["reactiva_kVArh"].iloc[-1], 63)
+        self.assertNotEqual(normalizada["reactiva_kVArh"].iloc[0], 999)
+
+    def test_fecha_prevalece_sobre_dia_semana_en_csv_platek(self):
+        lineas = ["dia_semana;fecha;hora;D.H.;periodo;prelacion;;;AI"]
+        lineas.extend(
+            f"MAR;01/07/2025;{hora}:00;Tarifa-2021 ;6;1;;;5255"
+            for hora in range(24)
+        )
+        archivo = io.BytesIO(("\n".join(lineas) + "\n").encode("cp1252"))
+        archivo.name = "medidas_platek.csv"
+
+        _, normalizada, _, periodos_origen, _, frecuencia = (
+            normalize_curve_simple(archivo)
+        )
+
+        self.assertEqual(frecuencia, "H")
+        self.assertTrue(periodos_origen)
+        self.assertEqual(len(normalizada), 24)
+        self.assertEqual(
+            normalizada["fecha_hora"].iloc[0],
+            pd.Timestamp("2025-07-01 00:00:00"),
+        )
+
+    def test_csv_cp1252_con_fecha_ddmmyyyy_y_hora_sin_cero_inicial(self):
+        lineas = ["fecha;hora;ENERGÍA ACTIVA (kWh);periodo"]
+        lineas.extend(
+            f"01/07/2025;{hora}:00;1,25;P1"
+            for hora in range(24)
+        )
+        archivo = io.BytesIO(("\n".join(lineas) + "\n").encode("cp1252"))
+        archivo.name = "curva_cp1252.csv"
+
+        _, normalizada, _, periodos_origen, _, frecuencia = (
+            normalize_curve_simple(archivo)
+        )
+
+        self.assertEqual(frecuencia, "H")
+        self.assertTrue(periodos_origen)
+        self.assertEqual(len(normalizada), 24)
+        self.assertTrue(normalizada["fecha_hora"].notna().all())
+        self.assertEqual(
+            normalizada["fecha_hora"].iloc[0],
+            pd.Timestamp("2025-07-01 00:00:00"),
+        )
+        self.assertAlmostEqual(normalizada["consumo_kWh"].sum(), 30.0)
+
+    def test_maximetros_datadis_usan_periodo_y_no_hora_limite(self):
+        datos = {"maxPower": [
+            {
+                "cups": "ES123", "date": "2026/06/30", "time": "23:45",
+                "maxPower": 0.0, "period": "3",
+            },
+            {
+                "cups": "ES123", "date": "2026/07/10", "time": "10:00",
+                "maxPower": 8.828, "period": "1",
+            },
+        ]}
+
+        resultado, exacto = _normalizar_maximetros_datadis(
+            datos, "30/06/2026", "31/07/2026"
+        )
+
+        self.assertTrue(exacto)
+        self.assertEqual(resultado["period"].tolist(), ["P1", "P3"])
+        self.assertNotIn("fecha_hora_local", resultado.columns)
+
+    def test_reactiva_datadis_solo_es_exacta_para_mes_natural(self):
+        datos = {"reactiveEnergy": {"energy": [
+            {"date": "2026/07", "energyP1": 10.0, "energyP2": 5.0}
+        ]}}
+
+        mensual, exacto_mensual = _normalizar_reactiva_datadis(
+            datos, "30/06/2026", "31/07/2026"
+        )
+        parcial, exacto_parcial = _normalizar_reactiva_datadis(
+            datos, "10/07/2026", "31/07/2026"
+        )
+
+        self.assertTrue(exacto_mensual)
+        self.assertEqual(mensual.loc[0, "P1"], 10.0)
+        self.assertFalse(exacto_parcial)
+        self.assertEqual(len(parcial), 1)
+
     def test_rango_datadis_amplia_el_ciclo_a_meses_completos(self):
         inicio, fin = rango_meses_datadis("17/05/2026", "16/06/2026")
         self.assertEqual(inicio, pd.Timestamp("2026-05-01"))

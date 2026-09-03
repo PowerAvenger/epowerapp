@@ -11,6 +11,7 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 from utilidades import generar_menu
 from backend_opt2 import (leer_curva_normalizada, calcular_costes, calcular_optimizacion, pyc_tp, tepp45, tepp123, meses, normalizar_tabla_maximetros, prorratear_excesos_ciclo_tipo_123)
+from backend_sips import leer_sips_completo
 from backend_curvadecarga import colores_periodo
 from backend_comun import aplicar_estilo
 from report_generator import preparar_informe, generar_formato_informe
@@ -125,6 +126,23 @@ habilitar_opt = False
 habilitar_ver = False
 tarifa = st.session_state.atr_dfnorm
 
+archivo_max_sesion = st.session_state.get("upload_maximetros")
+sips_potencia_detectado = None
+atr_sips_potencia = None
+if (
+    modo1
+    and archivo_max_sesion is not None
+    and archivo_max_sesion.name.lower().endswith(".csv")
+):
+    try:
+        sips_potencia_detectado = leer_sips_completo(archivo_max_sesion)
+        atr_sips_potencia = sips_potencia_detectado.get("atr")
+    except Exception:
+        # La carga inferior presenta el error completo del fichero.
+        pass
+if atr_sips_potencia in {"2.0", "3.0", "6.1", "6.2", "6.3", "6.4"}:
+    st.session_state.tarifa_maximetros = atr_sips_potencia
+
 
 
 #if modo1 and tarifa == "Ninguno":
@@ -133,8 +151,19 @@ if modo1 and tarifa:
         "Peaje de acceso",
         ["2.0", "3.0", "6.1", "6.2", "6.3", "6.4"],
         index=1,
-        key="tarifa_maximetros"
+        key="tarifa_maximetros",
+        disabled=atr_sips_potencia is not None,
     )
+    if sips_potencia_detectado is not None:
+        if atr_sips_potencia is None:
+            st.sidebar.warning(
+                "El SIPS no informa el ATR. Selecciónalo manualmente."
+            )
+        else:
+            st.sidebar.info(
+                f"ATR {atr_sips_potencia}TD leído del SIPS. "
+                "El selector queda bloqueado."
+            )
 
 if p6>50:
         
@@ -154,19 +183,32 @@ if modo1:
         st.sidebar.warning('¡¡Estás optimizando mediante maxímetros con P6 >50kW!!')
 
     archivo_max = st.sidebar.file_uploader(
-        "Sube tabla de maxímetros",
-        type=["xlsx"],
+        "Sube tabla manual de maxímetros o CSV SIPS",
+        type=["xlsx", "csv"],
         key="upload_maximetros"
     )
 
     if archivo_max is not None:
         try:
-            df_maximetros_raw = pd.read_excel(archivo_max)
-
-            df_maximetros = normalizar_tabla_maximetros(
-                df_maximetros_raw,
-                meses
-            )
+            if archivo_max.name.lower().endswith(".csv"):
+                sips_potencia = (
+                    sips_potencia_detectado or leer_sips_completo(archivo_max)
+                )
+                df_maximetros = sips_potencia["maximetros"][
+                    ["periodo_mes", "mes_nom", "dias_facturacion",
+                     "P1", "P2", "P3", "P4", "P5", "P6"]
+                ].copy()
+                st.session_state.sips_termino_potencia = sips_potencia
+                st.sidebar.info(
+                    "SIPS leído: consumos, reactiva y maxímetros disponibles."
+                )
+            else:
+                st.session_state.pop("sips_termino_potencia", None)
+                df_maximetros_raw = pd.read_excel(archivo_max)
+                df_maximetros = normalizar_tabla_maximetros(
+                    df_maximetros_raw,
+                    meses
+                )
 
             st.session_state.df_maximetros = df_maximetros
             st.sidebar.success("Tabla de maxímetros cargada correctamente")

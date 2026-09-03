@@ -5,6 +5,9 @@ facturas_prueba/
 
 # Base de datos beta y ficheros reales de importacion. Nunca versionar.
 .local_data/
+pages/bbdd_beta.py
+scripts/importar_bbdd_beta.py
+scripts/validar_bbdd_beta.py
 *.sqlite
 *.sqlite3
 *.db

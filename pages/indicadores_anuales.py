@@ -28,6 +28,7 @@ from backend_previsiones import (
     guardar_prevision_omie_en_sesion,
     obtener_prevision_omie_anual,
 )
+from backend_spot import resumir_spot
 from backend_redata_potgen import (
     COLORES_MIX_GENERACION,
     graficar_mix_comparativo,
@@ -236,21 +237,13 @@ with col1:
     if datos_spot_año.empty:
         st.warning("No hay datos SPOT para el año seleccionado.")
     else:
-        valores_spot = (
-            datos_spot_año.assign(
-                fecha=pd.to_datetime(
-                    datos_spot_año["fecha"], errors="coerce"
-                ).dt.floor("D"),
-                value=pd.to_numeric(datos_spot_año["value"], errors="coerce"),
-            )
-            .dropna(subset=["fecha", "value"])
-            .groupby("fecha")["value"]
-            .mean()
-        )
+        resumen_spot = resumir_spot(datos_spot_año)
+        valores_spot = resumen_spot["diario"].set_index("fecha")["value"]
+        media_anual_spot = resumen_spot["anual"].iloc[0]["value"]
         metricas_spot = st.columns(3)
         metricas_spot[0].metric(
             "Media anual",
-            formato_eur_mwh(valores_spot.mean(), 2, False) or "Sin datos",
+            formato_eur_mwh(media_anual_spot, 2, False) or "Sin datos",
         )
         metricas_spot[1].metric(
             "Mínimo",

@@ -11,6 +11,7 @@ import gc
 from backend_comun import aplicar_estilo
 from calculo_excesos import prorratear_costes_excesos_mensuales
 import re
+import unicodedata
 from datetime import datetime, date 
 
 pyc_tp = {
@@ -690,6 +691,166 @@ def normalizar_tabla_maximetros(df, meses):
     return df
 
 
+def normalizar_tabla_consumos_sips(df):
+    """Normaliza consumos mensuales P1-P6 de un Excel propio o de origen SIPS."""
+    datos = df.copy()
+
+    def limpiar_nombre(valor):
+        texto = unicodedata.normalize('NFKD', str(valor))
+        texto = ''.join(c for c in texto if not unicodedata.combining(c))
+        return re.sub(r'[^a-z0-9]+', '_', texto.lower()).strip('_')
+
+    datos.columns = [limpiar_nombre(col) for col in datos.columns]
+    posibles_fechas = [
+        'fecha_lectura_final', 'fecha_fin', 'fecha_final', 'periodo_mes',
+        'periodo_facturacion', 'fecha', 'mes', 'meses', 'periodo', 'rango',
+    ]
+    col_fecha = next((col for col in posibles_fechas if col in datos.columns), None)
+    if col_fecha is None:
+        raise ValueError('No encuentro columna de mes o fecha en el Excel de consumos.')
+
+    columnas_periodo = {}
+    for periodo in range(1, 7):
+        p = f'p{periodo}'
+        columna_activa_sips = f'{p}_activa'
+        if columna_activa_sips in datos.columns:
+            columnas_periodo[p.upper()] = columna_activa_sips
+            continue
+        candidatos_prioritarios = [
+            col for col in datos.columns
+            if re.search(rf'(^|_){p}($|_)', col)
+            and any(txt in col for txt in ('consumo', 'energia_activa', 'activa', 'kwh'))
+            and not any(txt in col for txt in ('reactiva', 'maximetro', 'potencia'))
+        ]
+        if candidatos_prioritarios:
+            columnas_periodo[p.upper()] = candidatos_prioritarios[0]
+        elif p in datos.columns:
+            columnas_periodo[p.upper()] = p
+
+    if len(columnas_periodo) < 3:
+        raise ValueError(
+            'No encuentro al menos los consumos P1, P2 y P3. '
+            'Admito columnas P1…P6 o nombres tipo consumo_P1/energia_activa_P1.'
+        )
+
+    def extraer_fecha(valor):
+        if pd.isna(valor):
+            return pd.NaT
+        if isinstance(valor, (pd.Timestamp, datetime, date)):
+            return pd.Timestamp(valor)
+        texto = str(valor).strip()
+        if re.match(r'^\d{4}-\d{1,2}-\d{1,2}(?:[T\s]|$)', texto):
+            return pd.to_datetime(texto, errors='coerce')
+        fechas = re.findall(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', texto)
+        candidato = fechas[-1] if fechas else valor
+        return pd.to_datetime(candidato, dayfirst=True, errors='coerce')
+
+    datos['_fecha_consumo'] = datos[col_fecha].apply(extraer_fecha)
+    datos = datos[datos['_fecha_consumo'].notna()].copy()
+    if datos.empty:
+        raise ValueError('No encuentro filas mensuales con fechas válidas.')
+
+    salida = pd.DataFrame({'fecha': datos['_fecha_consumo']})
+
+    def numero_consumo(valor):
+        if pd.isna(valor):
+            return 0.0
+        if isinstance(valor, (int, float, np.number)):
+            return float(valor)
+        texto = str(valor).strip().replace(' ', '')
+        if ',' in texto and '.' in texto:
+            texto = texto.replace('.', '').replace(',', '.')
+        elif ',' in texto:
+            texto = texto.replace(',', '.')
+        return pd.to_numeric(texto, errors='coerce')
+
+    for periodo in [f'P{i}' for i in range(1, 7)]:
+        columna = columnas_periodo.get(periodo)
+        salida[periodo] = (
+            datos[columna].apply(numero_consumo).fillna(0)
+            if columna else 0.0
+        )
+    salida['periodo_mes'] = salida['fecha'].dt.to_period('M')
+    salida = (
+        salida.groupby('periodo_mes', as_index=False)[[f'P{i}' for i in range(1, 7)]]
+        .sum()
+        .sort_values('periodo_mes')
+        .tail(12)
+        .reset_index(drop=True)
+    )
+    if len(salida) < 12:
+        raise ValueError(f'El fichero solo contiene {len(salida)} meses utilizables; necesito 12.')
+    salida['año'] = salida['periodo_mes'].dt.year
+    salida['mes'] = salida['periodo_mes'].dt.month
+    meses_naturales = sorted(salida['mes'].unique().tolist())
+    if meses_naturales != list(range(1, 13)):
+        raise ValueError(
+            'Los últimos 12 registros no cubren una vez cada mes natural. '
+            f'Meses detectados: {meses_naturales}.'
+        )
+    salida['periodo_mes'] = salida['periodo_mes'].astype(str)
+    return salida[['periodo_mes', 'año', 'mes', *[f'P{i}' for i in range(1, 7)]]]
+
+
+def consumos_mensuales_desde_curva_normalizada(df_curva):
+    """Adapta una curva normalizada al formato mensual P1-P6 de Pricing."""
+    columnas_necesarias = {'fecha_hora', 'periodo', 'consumo_neto_kWh'}
+    columnas_faltantes = columnas_necesarias.difference(df_curva.columns)
+    if columnas_faltantes:
+        raise ValueError(
+            'La curva normalizada no contiene: '
+            + ', '.join(sorted(columnas_faltantes))
+            + '.'
+        )
+
+    datos = df_curva[list(columnas_necesarias)].copy()
+    datos['fecha_hora'] = pd.to_datetime(datos['fecha_hora'], errors='coerce')
+    datos['consumo_neto_kWh'] = pd.to_numeric(
+        datos['consumo_neto_kWh'], errors='coerce'
+    )
+    datos['periodo'] = (
+        datos['periodo']
+        .astype('string')
+        .str.upper()
+        .str.extract(r'([1-6])', expand=False)
+        .map(lambda valor: f'P{valor}' if pd.notna(valor) else pd.NA)
+    )
+    datos = datos.dropna(
+        subset=['fecha_hora', 'periodo', 'consumo_neto_kWh']
+    )
+    if datos.empty:
+        raise ValueError(
+            'La curva no contiene fechas, periodos P1-P6 y consumos válidos.'
+        )
+
+    datos['periodo_mes'] = datos['fecha_hora'].dt.to_period('M')
+    salida = (
+        datos.groupby(['periodo_mes', 'periodo'], observed=True)[
+            'consumo_neto_kWh'
+        ]
+        .sum()
+        .unstack(fill_value=0)
+        .reindex(columns=[f'P{i}' for i in range(1, 7)], fill_value=0)
+        .sort_index()
+        .tail(12)
+        .reset_index()
+    )
+    if len(salida) < 12:
+        raise ValueError(
+            f'La curva solo contiene {len(salida)} meses utilizables; necesito 12.'
+        )
+    meses_naturales = sorted(salida['periodo_mes'].dt.month.unique().tolist())
+    if meses_naturales != list(range(1, 13)):
+        raise ValueError(
+            'Los últimos 12 meses de la curva no cubren una vez cada mes natural. '
+            f'Meses detectados: {meses_naturales}.'
+        )
+    salida['año'] = salida['periodo_mes'].dt.year
+    salida['mes'] = salida['periodo_mes'].dt.month
+    salida['periodo_mes'] = salida['periodo_mes'].astype(str)
+    return salida[['periodo_mes', 'año', 'mes', *[f'P{i}' for i in range(1, 7)]]]
+
+
 # Función para calcular los costes a partir de las potencias
 def calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, potencias):
     df_temp = df_in.copy()
@@ -866,6 +1027,114 @@ def prorratear_excesos_ciclo_tipo_123(
     return prorratear_costes_excesos_mensuales(df_excesos, curva)
 
 
+def _preparar_calculo_rapido(df_in, potencias):
+    """Precalcula la parte invariable usada por el optimizador.
+
+    Evita repetir conversiones de fecha, copias, groupby y pivot_table en cada
+    evaluacion de SLSQP. No sustituye el calculo detallado que genera tablas.
+    """
+    modo = detectar_entrada_potencia(df_in)
+    periodos = list(potencias.keys())
+
+    if modo == 'curva':
+        base = df_in[['fecha_hora', 'periodo', 'potencia']].copy()
+        base['fecha_hora'] = pd.to_datetime(
+            base['fecha_hora'], errors='coerce'
+        )
+        base['potencia'] = pd.to_numeric(base['potencia'], errors='coerce')
+        base = base.dropna(subset=['fecha_hora', 'periodo', 'potencia'])
+        base['periodo_mes'] = base['fecha_hora'].dt.to_period('M').astype(str)
+        dias_observados = (
+            base.assign(fecha_dia=base['fecha_hora'].dt.date)
+            .groupby('periodo_mes')['fecha_dia']
+            .nunique()
+        )
+        dias_del_mes = (
+            base.groupby('periodo_mes')['fecha_hora'].min().dt.days_in_month
+        )
+        factores = (dias_observados / dias_del_mes).clip(upper=1)
+        valores = {
+            periodo: [
+                grupo['potencia'].to_numpy(dtype=float, copy=False)
+                for _, grupo in base.loc[base['periodo'] == periodo].groupby(
+                    'periodo_mes', sort=False
+                )
+            ]
+            for periodo in periodos
+        }
+        return {
+            'modo': modo,
+            'factor_potencia': float(factores.sum()),
+            'valores': valores,
+        }
+
+    columna_indice = (
+        'periodo_mes' if 'periodo_mes' in df_in.columns else 'mes_nom'
+    )
+    base = df_in.set_index(columna_indice)
+    dias = pd.Series(30.0, index=base.index, dtype=float)
+    informados = set()
+    if 'dias_facturacion' in base.columns:
+        dias_informados = pd.to_numeric(
+            base['dias_facturacion'], errors='coerce'
+        ).dropna()
+        dias.update(dias_informados)
+        informados = set(dias_informados.index)
+    for indice in base.index:
+        if indice in informados:
+            continue
+        try:
+            dias.loc[indice] = pd.Period(str(indice), freq='M').days_in_month
+        except (TypeError, ValueError):
+            pass
+    valores = {
+        periodo: pd.to_numeric(
+            base[periodo], errors='coerce'
+        ).fillna(0).to_numpy(dtype=float)
+        for periodo in periodos
+    }
+    return {
+        'modo': modo,
+        'factor_potencia': float(len(base)),
+        'dias': dias.to_numpy(dtype=float),
+        'valores': valores,
+    }
+
+
+def _costes_rapidos_por_periodo(contexto, potencias, pyc_tp, tepp):
+    """Calcula los mismos totales por periodo sobre el contexto precalculado."""
+    costes = {}
+    for periodo, potencia in potencias.items():
+        potencia = float(potencia)
+        coste_potencia = (
+            potencia * pyc_tp[periodo] / 12 * contexto['factor_potencia']
+        )
+        if contexto['modo'] == 'curva':
+            coste_excesos = tepp[periodo] * sum(
+                np.sqrt(np.square(np.maximum(valores - potencia, 0)).sum())
+                for valores in contexto['valores'][periodo]
+            )
+        else:
+            excesos = np.maximum(
+                contexto['valores'][periodo] - potencia, 0
+            )
+            coste_excesos = float(
+                (excesos * tepp[periodo] * contexto['dias']).sum()
+            )
+        costes[periodo] = (float(coste_potencia), float(coste_excesos))
+    return costes
+
+
+def _funcion_objetivo_rapida(
+    pot_opt, contexto, pot_con, pyc_tp, tepp
+):
+    potencias = dict(zip(pot_con.keys(), pot_opt))
+    costes = _costes_rapidos_por_periodo(
+        contexto, potencias, pyc_tp, tepp
+    )
+    return sum(coste_pot + coste_exc for coste_pot, coste_exc in costes.values())
+
+
 def funcion_objetivo(pot_opt, df_in, tarifa, pyc_tp, tepp, meses, pot_con):
     potencias = dict(zip(pot_con.keys(), pot_opt))
     coste_potfra_potopt, coste_excesos_potopt, coste_tp_potopt, df_coste_potfra_potopt, df_coste_excesos_potopt = calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, potencias)
@@ -896,6 +1165,7 @@ def ajustar_potencias(pot_opt_ini, fijar_P6=False, pot_con=None):
 #FUNCIÓN GLOBAL PARA OPTIMIZAR++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
     coste_potfra_potcon, coste_excesos_potcon, coste_tp_potcon, df_coste_potfra_potcon, df_coste_excesos_potcon = calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, pot_con)
+    contexto_rapido = _preparar_calculo_rapido(df_in, pot_con)
     df_coste_potfra_potcon['coste_pot_mes'] = df_coste_potfra_potcon.sum(axis=1)
     totales_potfra_potcon = df_coste_potfra_potcon.sum()
     totales_potfra_potcon.name = 'total año'
@@ -917,9 +1187,9 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
  
     # Optimización
     resultado = minimize(
-        funcion_objetivo,
+        _funcion_objetivo_rapida,
         pot_inicial,  # Valores iniciales
-        args=(df_in, tarifa, pyc_tp, tepp, meses, pot_con),  # Argumentos adicionales
+        args=(contexto_rapido, pot_con, pyc_tp, tepp),
         method='SLSQP',
         constraints=constraints,
         bounds=[(0, None)] * len(pot_inicial)  # Las potencias deben ser >= 0
@@ -1007,22 +1277,19 @@ def calcular_optimizacion(df_in, fijar_P6, tarifa, pot_con, pyc_tp, tepp):
             potencias_actuales = pot_con.copy()
             potencias_actuales[periodo] = potencia  # Cambiamos solo la potencia de este periodo
             
-            # Calculamos costes por mes, referenciados al periodo
-            
-            _, _, _, df_coste_pot_temp, df_aei_temp = calcular_costes(df_in, tarifa, pyc_tp, tepp, meses, potencias_actuales)
-            
-            # Sumamos los costes de todos los meses para este periodo específico
-            coste_potencia_periodo = df_coste_pot_temp[periodo].sum()
-            if periodo in df_aei_temp.columns:
-                coste_excesos_periodo = df_aei_temp[periodo].sum()
-            
-                # Añadimos los datos al DataFrame para graficar
-                data.append({
-                    "Periodo": periodo,
-                    "Potencia": potencia,
-                    "Coste Potencia": coste_potencia_periodo,
-                    "Coste Excesos": coste_excesos_periodo,
-                })
+            costes_periodo = _costes_rapidos_por_periodo(
+                contexto_rapido, potencias_actuales, pyc_tp, tepp
+            )
+            coste_potencia_periodo, coste_excesos_periodo = (
+                costes_periodo[periodo]
+            )
+
+            data.append({
+                "Periodo": periodo,
+                "Potencia": potencia,
+                "Coste Potencia": coste_potencia_periodo,
+                "Coste Excesos": coste_excesos_periodo,
+            })
     
     # Creamos un DataFrame con los datos referenciados al periodo
     df_plot = pd.DataFrame(data)

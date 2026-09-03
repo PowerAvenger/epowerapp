@@ -2,7 +2,7 @@ import streamlit as st
 import datetime
 from pathlib import Path
 import pandas as pd
-from backend_comun import autenticar_google_sheets, carga_total_sheets, cargar_componentes_csv, calcular_precios_atr
+from backend_comun import autenticar_google_sheets, carga_total_sheets, cargar_componentes_csv, cargar_precios_snp_csv, calcular_precios_atr
 from backend_escalacv import leer_json
 from backend_telemindex import COMPONENTES_SSAA_FORMULA, construir_df_rad3_manual, añadir_fnee
 
@@ -24,11 +24,11 @@ def generar_menu():
         st.page_link('pages/opt2_rdl.py', label = 'Optimización RDL 7/2026', icon = "🎯")
         st.page_link('pages/telemindex.py', label = 'Telemindex', icon = "📈")
         st.page_link('pages/simulindex.py', label = 'Simulindex', icon = "🔮")
+        st.page_link('pages/indicadores_mensuales.py', label = 'Indicadores mensuales', icon = "📋")
+        st.page_link('pages/indicadores_anuales.py', label = 'Indicadores anuales', icon = "📅")
         st.page_link('pages/fijovspvpc.py', label = 'FijovsPVPC', icon = "⚖️")
         st.page_link('pages/balkoning_solar.py', label = 'Balkoning Solar', icon = "🏊‍♂️")
         st.page_link('pages/escalacv.py', label = 'Escala CV', icon = "📊")
-        st.page_link('pages/indicadores_mensuales.py', label = 'Indicadores mensuales', icon = "📋")
-        st.page_link('pages/indicadores_anuales.py', label = 'Indicadores anuales', icon = "📅")
         st.page_link('pages/excedentes.py', label = 'Excedentes', icon = "💰")
         st.page_link('pages/demanda.py', label = 'Demanda', icon = "🏭")
         st.page_link('pages/redata_potgen.py', label = 'Tecnologías de generación', icon = "⚡️")
@@ -46,7 +46,38 @@ def init_app():
 
 
 
-from backend_comun import aplicar_dh6p_zona, recalcular_componentes_regulados
+from backend_comun import aplicar_periodos_zona, recalcular_componentes_regulados
+
+
+def aplicar_precio_snp(df, df_snp, zona):
+    """Usa SphdemDD como bloque spot+SSAA y limita el resultado al C2 SNP."""
+    if zona == "peninsula":
+        return df.copy()
+    if df_snp is None or df_snp.empty:
+        raise ValueError("No está configurado el histórico df_precios_snp.csv.")
+
+    columna = f"snp_{zona}"
+    if columna not in df_snp.columns:
+        raise ValueError(f"No encuentro la columna {columna} en df_precios_snp.csv.")
+
+    precios = df_snp[["datetime", columna]].copy()
+    precios["datetime"] = pd.to_datetime(precios["datetime"], errors="coerce")
+    precios["año"] = precios["datetime"].dt.year
+    precios["mes"] = precios["datetime"].dt.month
+    precios["dia"] = precios["datetime"].dt.day
+    precios["hora"] = precios["datetime"].dt.hour
+    precios = precios.drop(columns="datetime")
+
+    claves = ["año", "mes", "dia", "hora"]
+    precios["ocurrencia_snp"] = precios.groupby(claves).cumcount()
+    base = df.copy()
+    base["ocurrencia_snp"] = base.groupby(claves).cumcount()
+    resultado = base.merge(
+        precios, on=[*claves, "ocurrencia_snp"], how="inner", validate="one_to_one"
+    ).drop(columns="ocurrencia_snp")
+    resultado["spot"] = resultado[columna]
+    resultado["ssaa"] = 0.0
+    return resultado.drop(columns=columna)
 
 def actualizar_df_index_por_zona(forzar=False):
     """
@@ -79,13 +110,20 @@ def actualizar_df_index_por_zona(forzar=False):
     # 1. Partimos siempre de la base limpia
     df_index = st.session_state.df_sheets_base_index.copy()
 
-    # 2. Aplicamos dh_6p de la zona
-    df_index = aplicar_dh6p_zona(df_index, zona)
+    # 2. En SNP sustituimos spot+SSAA por SphdemDD y excluimos el provisional ESIOS.
+    if zona != "peninsula" and "csv_precios_snp" not in st.session_state:
+        st.session_state.csv_precios_snp = cargar_precios_snp_csv()
+    df_index = aplicar_precio_snp(
+        df_index, st.session_state.get("csv_precios_snp"), zona
+    )
 
-    # 3. Recalculamos componentes regulados que dependen de dh_6p
+    # 3. Aplicamos los periodos 3P y 6P de la zona.
+    df_index = aplicar_periodos_zona(df_index, zona)
+
+    # 4. Recalculamos componentes regulados que dependen de los periodos
     df_index = recalcular_componentes_regulados(df_index)
 
-    # 4. Eliminamos precios/costes antiguos por seguridad
+    # 5. Eliminamos precios/costes antiguos por seguridad
     cols_drop = [
         c for c in df_index.columns
         if c.startswith("coste_") or c.startswith("precio_")
@@ -93,10 +131,10 @@ def actualizar_df_index_por_zona(forzar=False):
 
     df_index = df_index.drop(columns=cols_drop, errors="ignore")
 
-    # 5. Recalculamos precios finales
+    # 6. Recalculamos precios finales
     df_index = calcular_precios_atr(df_index)
 
-    # 6. Guardamos resultado activo
+    # 7. Guardamos resultado activo
     st.session_state.df_sheets = df_index
     st.session_state.zona_periodos_index_aplicada = zona
     st.session_state.precios_calculados = True
@@ -322,13 +360,13 @@ def init_app_index_old():
 
         # Inicialización de estados st.session componentes fórmula
         for key, default in {
-            "desvios_apant": 1.0,
+            "desvios_apant": 0.0,
             #"cfg_srad": True,
-            "margen_telemindex": 1.0,
+            "margen_telemindex": 0.0,
             "cfg_margen_pos": "tm",
             "cfg_fnee": True,
             "cfg_fnee_pos": "perdidas",
-            "cf_pct": 0.8
+            "cf_pct": 0.0
         }.items():
             if key not in st.session_state:
                 st.session_state[key] = default
@@ -369,6 +407,16 @@ def init_app_json_escalacv():
     y los guarda en st.session_state para uso compartido entre páginas.
     """
     
+    componente_actual = st.session_state.get('componente', 'SPOT')
+    if (
+        st.session_state.get('_escalacv_componente_cargado')
+        == componente_actual
+        and st.session_state.get('datos_total_escalacv') is not None
+        and st.session_state.get('fecha_ini_escalacv') is not None
+        and st.session_state.get('fecha_fin_escalacv') is not None
+    ):
+        return
+
     #CODIGO ORIGINAL DE escalacv.py-----------------------------------------------------------------------------
     CREDENTIALS = st.secrets['GOOGLE_SHEETS_CREDENTIALS']
     #componente = st.session_state.get('componente', 'SPOT')
@@ -376,10 +424,12 @@ def init_app_json_escalacv():
     if st.session_state.get('componente', 'SPOT') == 'SPOT':
         FILE_ID = st.secrets['FILE_ID_SPOT']
         datos_total, fecha_ini, fecha_fin = leer_json(FILE_ID, CREDENTIALS)
+        st.session_state._escalacv_datos_spot_general = datos_total
 
     elif st.session_state.get('componente', 'SPOT') == 'SSAA':
         FILE_ID = st.secrets['FILE_ID_SSAA']
         datos_total, fecha_ini, fecha_fin = leer_json(FILE_ID, CREDENTIALS)
+        st.session_state._escalacv_datos_ssaa_general = datos_total
 
     else:
         # 🔹 Caso combinado (SPOT + SSAA)
@@ -387,6 +437,11 @@ def init_app_json_escalacv():
         FILE_ID_SSAA = st.secrets['FILE_ID_SSAA']
         datos_spot, fecha_ini_spot, fecha_fin_spot = leer_json(FILE_ID_SPOT, CREDENTIALS)
         datos_ssaa, fecha_ini_ssaa, fecha_fin_ssaa = leer_json(FILE_ID_SSAA, CREDENTIALS)
+
+        # Conservamos las dos series ya obtenidas para el panel General. Así
+        # no se vuelven a materializar desde cache justo después de combinarlas.
+        st.session_state._escalacv_datos_spot_general = datos_spot
+        st.session_state._escalacv_datos_ssaa_general = datos_ssaa
 
         datos_spot = datos_spot.reset_index()
         datos_ssaa = datos_ssaa.reset_index()
@@ -416,6 +471,7 @@ def init_app_json_escalacv():
     st.session_state.datos_total_escalacv = datos_total
     st.session_state.fecha_ini_escalacv = fecha_ini
     st.session_state.fecha_fin_escalacv = fecha_fin
+    st.session_state._escalacv_componente_cargado = componente_actual
 
  
 
@@ -452,14 +508,25 @@ def persist_widget(
     )
 
 
-def mostrar_parametros_formula_indexado(widget_suffix=None, diferido=False):
+def mostrar_parametros_formula_indexado(
+    widget_suffix=None,
+    diferido=False,
+    dos_filas_tres_columnas=False,
+):
     """Dibuja la configuración de fórmula compartida por los indexados."""
+
+    valores = {}
 
     def widget(widget_func, label, *args, key, default, **kwargs):
         if diferido:
             if key not in st.session_state:
                 st.session_state[key] = default
-            return widget_func(label, *args, key=key, **kwargs)
+            temp_key = f"_{key}_{widget_suffix or 'diferido'}"
+            if temp_key not in st.session_state:
+                st.session_state[temp_key] = st.session_state[key]
+            valor = widget_func(label, *args, key=temp_key, **kwargs)
+            valores[key] = valor
+            return valor
         return persist_widget(
             widget_func,
             label,
@@ -470,6 +537,54 @@ def mostrar_parametros_formula_indexado(widget_suffix=None, diferido=False):
             **kwargs,
         )
 
+    if dos_filas_tres_columnas:
+        fila1_col1, fila1_col2, fila1_col3 = st.columns(3)
+        with fila1_col1:
+            widget(
+                st.number_input,
+                "Desvíos apantallados (€/MWh)",
+                min_value=0.0, max_value=20.0, step=0.1,
+                key="desvios_apant", default=0.0,
+            )
+        with fila1_col2:
+            widget(
+                st.number_input,
+                "Margen (€/MWh)",
+                min_value=0.0, max_value=50.0, step=0.1,
+                key="margen_telemindex", default=0.0,
+            )
+        with fila1_col3:
+            widget(
+                st.selectbox,
+                "Ubicación margen",
+                ["perdidas", "tm", "neto"],
+                key="cfg_margen_pos", default="tm",
+            )
+
+        fila2_col1, fila2_col2, fila2_col3 = st.columns(3)
+        with fila2_col1:
+            widget(
+                st.checkbox,
+                "Incluye FNEE",
+                key="cfg_fnee", default=True,
+            )
+        with fila2_col2:
+            if valores.get("cfg_fnee", st.session_state.get("cfg_fnee", False)):
+                widget(
+                    st.selectbox,
+                    "Ubicación FNEE",
+                    ["perdidas", "tm", "neto"],
+                    key="cfg_fnee_pos", default="perdidas",
+                )
+        with fila2_col3:
+            widget(
+                st.number_input,
+                "Coste financiero (%)",
+                min_value=0.0, max_value=10.0, step=0.01,
+                key="cf_pct", default=0.0,
+            )
+        return valores
+
     widget(
         st.number_input,
         "Desvíos apantallados (€/MWh)",
@@ -477,7 +592,7 @@ def mostrar_parametros_formula_indexado(widget_suffix=None, diferido=False):
         max_value=20.0,
         step=0.1,
         key="desvios_apant",
-        default=1.0,
+        default=0.0,
     )
     widget(
         st.number_input,
@@ -486,7 +601,7 @@ def mostrar_parametros_formula_indexado(widget_suffix=None, diferido=False):
         max_value=50.0,
         step=0.1,
         key="margen_telemindex",
-        default=5.0,
+        default=0.0,
     )
     widget(
         st.selectbox,
@@ -501,7 +616,7 @@ def mostrar_parametros_formula_indexado(widget_suffix=None, diferido=False):
         key="cfg_fnee",
         default=True,
     )
-    if st.session_state.get("cfg_fnee", False):
+    if valores.get("cfg_fnee", st.session_state.get("cfg_fnee", False)):
         widget(
             st.selectbox,
             "Ubicación FNEE",
@@ -518,3 +633,4 @@ def mostrar_parametros_formula_indexado(widget_suffix=None, diferido=False):
         key="cf_pct",
         default=0.0,
     )
+    return valores

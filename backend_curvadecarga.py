@@ -773,6 +773,182 @@ def rango_meses_datadis(fecha_inicio, fecha_fin):
     return inicio_mes, fin_mes
 
 
+def _descargar_componente_v2_datadis(
+    cliente,
+    token,
+    endpoint,
+    suministro,
+    fecha_inicio,
+    fecha_fin,
+    authorized_nif=None,
+    timeout=120,
+):
+    """Descarga un componente V2 conservando los errores de distribuidora."""
+    params = {
+        "cups": str(suministro["cups"]).strip().upper(),
+        "distributorCode": str(suministro["distributorCode"]).strip(),
+        "startDate": pd.Timestamp(fecha_inicio).strftime("%Y/%m"),
+        "endDate": pd.Timestamp(fecha_fin).strftime("%Y/%m"),
+    }
+    authorized_nif = str(authorized_nif or "").strip().upper()
+    if authorized_nif:
+        params["authorizedNif"] = authorized_nif
+    respuesta = cliente.get(
+        f"{DATADIS_API_BASE}/api-private/api/{endpoint}",
+        params=params,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=timeout,
+    )
+    datos = _datadis_json(respuesta, f"la descarga de {endpoint}")
+    if not isinstance(datos, dict):
+        raise RuntimeError(f"Datadis ha devuelto una respuesta {endpoint} no válida.")
+    return datos
+
+
+def _normalizar_maximetros_datadis(datos, fecha_inicio, fecha_fin):
+    """Normaliza los máximos mensuales V2 por periodo tarifario."""
+    registros = datos.get("maxPower") or []
+    if not isinstance(registros, list):
+        raise RuntimeError("La respuesta Datadis no contiene maxPower válido.")
+    columnas = ["period", "maxPower", "date", "time"]
+    if not registros:
+        return pd.DataFrame(columns=columnas), False
+    df = pd.DataFrame(registros)
+    obligatorias = {"maxPower", "period"}
+    if not obligatorias.issubset(df.columns):
+        raise RuntimeError("La respuesta de maxímetros no contiene sus campos básicos.")
+    for columna in ("date", "time"):
+        if columna not in df:
+            df[columna] = None
+    df["maxPower"] = pd.to_numeric(df["maxPower"], errors="coerce")
+    df["period"] = (
+        df["period"].astype(str).str.extract(r"(\d+)", expand=False).map(
+            lambda valor: f"P{valor}" if pd.notna(valor) else None
+        )
+    )
+    inicio = pd.to_datetime(fecha_inicio, dayfirst=True).normalize()
+    fin = pd.to_datetime(fecha_fin, dayfirst=True).normalize()
+    primer_dia = inicio + pd.Timedelta(days=1) if inicio < fin else inicio
+    ciclo_mes_completo = (
+        primer_dia.is_month_start
+        and fin.is_month_end
+        and primer_dia.to_period("M") == fin.to_period("M")
+    )
+    return (
+        df[columnas].sort_values("period").reset_index(drop=True),
+        bool(ciclo_mes_completo),
+    )
+
+
+def _normalizar_reactiva_datadis(datos, fecha_inicio, fecha_fin):
+    """Normaliza la reactiva mensual V2 e indica si cubre exactamente el ciclo."""
+    bloque = datos.get("reactiveEnergy") or {}
+    registros = bloque.get("energy") or [] if isinstance(bloque, dict) else []
+    if not isinstance(registros, list):
+        raise RuntimeError("La respuesta Datadis no contiene energía reactiva válida.")
+    df = pd.DataFrame(registros)
+    if df.empty:
+        return df, False
+    renombrar = {}
+    for columna in df.columns:
+        coincidencia = re.fullmatch(r"energy[_-]?[pP](\d)", str(columna))
+        if coincidencia:
+            renombrar[columna] = f"P{coincidencia.group(1)}"
+    df = df.rename(columns=renombrar)
+    columna_fecha = next(
+        (col for col in ("date", "month", "period") if col in df.columns), None
+    )
+    if columna_fecha is None:
+        raise RuntimeError("La reactiva Datadis no contiene el mes de medida.")
+    meses = pd.to_datetime(
+        df[columna_fecha].astype(str).str.replace("-", "/", regex=False),
+        format="%Y/%m",
+        errors="coerce",
+    ).dt.to_period("M")
+    inicio = pd.to_datetime(fecha_inicio, dayfirst=True).normalize()
+    fin = pd.to_datetime(fecha_fin, dayfirst=True).normalize()
+    primer_dia = inicio + pd.Timedelta(days=1) if inicio < fin else inicio
+    meses_completos = pd.period_range(
+        primer_dia.to_period("M"), fin.to_period("M"), freq="M"
+    )
+    ciclo_meses_completos = (
+        primer_dia.is_month_start
+        and fin.is_month_end
+        and all(
+            periodo.start_time.normalize() >= primer_dia
+            and periodo.end_time.normalize() <= fin
+            for periodo in meses_completos
+        )
+    )
+    df = df.loc[meses.isin(meses_completos)].copy()
+    for periodo in [f"P{i}" for i in range(1, 7)]:
+        if periodo in df:
+            df[periodo] = pd.to_numeric(df[periodo], errors="coerce")
+    return df.reset_index(drop=True), bool(ciclo_meses_completos)
+
+
+def obtener_complementos_verificacion_datadis(
+    usuario,
+    password,
+    suministro,
+    fecha_inicio,
+    fecha_fin,
+    authorized_nif=None,
+    timeout=120,
+    session=None,
+):
+    """Obtiene reactiva y maxímetros V2 sin bloquear un componente por el otro."""
+    cliente = session or requests.Session()
+    cerrar = session is None
+    resultado = {
+        "reactiva": pd.DataFrame(),
+        "reactiva_ciclo_exacto": False,
+        "maximetros": pd.DataFrame(),
+        "maximetros_ciclo_exacto": False,
+        "errores": {},
+        "avisos_distribuidora": {},
+    }
+    try:
+        token = autenticar_datadis(usuario, password, timeout=timeout, session=cliente)
+        inicio_mes, fin_mes = rango_meses_datadis(fecha_inicio, fecha_fin)
+        for nombre, endpoint in (
+            ("reactiva", "get-reactive-data-v2"),
+            ("maximetros", "get-max-power-v2"),
+        ):
+            try:
+                datos = _descargar_componente_v2_datadis(
+                    cliente,
+                    token,
+                    endpoint,
+                    suministro,
+                    inicio_mes,
+                    fin_mes,
+                    authorized_nif=authorized_nif,
+                    timeout=timeout,
+                )
+                avisos = datos.get("distributorError") or []
+                if avisos:
+                    resultado["avisos_distribuidora"][nombre] = avisos
+                if nombre == "reactiva":
+                    reactiva, exacto = _normalizar_reactiva_datadis(
+                        datos, fecha_inicio, fecha_fin
+                    )
+                    resultado["reactiva"] = reactiva
+                    resultado["reactiva_ciclo_exacto"] = exacto
+                else:
+                    maximetros, exacto = _normalizar_maximetros_datadis(
+                        datos, fecha_inicio, fecha_fin
+                    )
+                    resultado["maximetros"] = maximetros
+                    resultado["maximetros_ciclo_exacto"] = exacto
+            except Exception as exc:
+                resultado["errores"][nombre] = str(exc)
+    finally:
+        if cerrar:
+            cliente.close()
+    return resultado
+
+
 def clave_cache_consumo_datadis(
     usuario,
     authorized_nif,
@@ -897,32 +1073,43 @@ def agrupar_curva_horaria(df_norm, frecuencia):
     )
 
 
-def recortar_curva_periodo(df_norm, fecha_inicio, fecha_fin):
+def recortar_curva_periodo(
+    df_norm, fecha_inicio, fecha_fin, inicio_exclusivo=False
+):
     """Recorta una curva normalizada incluyendo todos los intervalos del último día."""
     inicio = pd.to_datetime(fecha_inicio, errors="coerce", dayfirst=True)
     fin = pd.to_datetime(fecha_fin, errors="coerce", dayfirst=True)
     if pd.isna(inicio) or pd.isna(fin) or inicio.normalize() > fin.normalize():
         raise ValueError("El periodo de facturación no es válido.")
     fechas = pd.to_datetime(df_norm.get("fecha_hora"), errors="coerce")
+    limite_inicio = inicio.normalize()
+    if inicio_exclusivo and inicio.normalize() < fin.normalize():
+        limite_inicio += pd.Timedelta(days=1)
     limite_fin = fin.normalize() + pd.Timedelta(days=1)
     salida = df_norm.loc[
-        (fechas >= inicio.normalize()) & (fechas < limite_fin)
+        (fechas >= limite_inicio) & (fechas < limite_fin)
     ].copy()
     if salida.empty:
         raise ValueError("La curva no contiene datos del periodo de facturación.")
     return salida.reset_index(drop=True)
 
 
-def analizar_cobertura_periodo(df_norm, fecha_inicio, fecha_fin, frecuencia):
+def analizar_cobertura_periodo(
+    df_norm, fecha_inicio, fecha_fin, frecuencia, inicio_exclusivo=False
+):
     """Comprueba cobertura, huecos y duplicados dentro de un ciclo facturado."""
-    recortada = recortar_curva_periodo(df_norm, fecha_inicio, fecha_fin)
+    recortada = recortar_curva_periodo(
+        df_norm, fecha_inicio, fecha_fin, inicio_exclusivo=inicio_exclusivo
+    )
     paso = {"H": "1h", "QH": "15min", "10MIN": "10min"}.get(frecuencia)
     if paso is None:
         raise ValueError("No se puede validar una frecuencia desconocida.")
     inicio = pd.to_datetime(fecha_inicio, dayfirst=True).normalize()
+    fin = pd.to_datetime(fecha_fin, dayfirst=True).normalize()
+    if inicio_exclusivo and inicio < fin:
+        inicio += pd.Timedelta(days=1)
     limite_fin = (
-        pd.to_datetime(fecha_fin, dayfirst=True).normalize()
-        + pd.Timedelta(days=1)
+        fin + pd.Timedelta(days=1)
     )
     esperadas = pd.date_range(inicio, limite_fin, freq=paso, inclusive="left")
     fechas = pd.to_datetime(recortada["fecha_hora"], errors="coerce").dropna()
@@ -940,6 +1127,28 @@ def analizar_cobertura_periodo(df_norm, fecha_inicio, fecha_fin, frecuencia):
         "primer_intervalo": unicas.min() if len(unicas) else None,
         "ultimo_intervalo": unicas.max() if len(unicas) else None,
     }
+
+
+def dividir_energias_curva(df_curva, divisor=1000.0):
+    """Reescala solo las magnitudes energéticas de una curva normalizada."""
+    if divisor is None or float(divisor) <= 0:
+        raise ValueError("El divisor de la curva debe ser mayor que cero.")
+    salida = df_curva.copy()
+    columnas_energia = (
+        "consumo_kWh",
+        "excedentes_kWh",
+        "generacion_kWh",
+        "reactiva_kVArh",
+        "capacitiva_kVArh",
+        "consumo_neto_kWh",
+        "vertido_neto_kWh",
+    )
+    for columna in columnas_energia:
+        if columna in salida.columns:
+            salida[columna] = pd.to_numeric(
+                salida[columna], errors="coerce"
+            ) / float(divisor)
+    return salida
 
 
 def resumir_consumo_por_periodo(df_norm):
@@ -1035,20 +1244,37 @@ def _read_any(uploaded_or_path, preferred_sheet=None):
 
         return None
 
+    def read_csv_bytes(content):
+        """Lee CSV habituales sin asumir que todos están codificados en UTF-8."""
+        texto = None
+        errores = []
+        for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+            try:
+                texto = content.decode(encoding)
+                break
+            except UnicodeDecodeError as exc:
+                errores.append(f"{encoding}: {exc}")
+        if texto is None:
+            raise UnicodeError(
+                "No se pudo identificar la codificación del CSV. "
+                + " | ".join(errores)
+            )
+        muestra = texto[:4096]
+        separador = ";" if muestra.count(";") > muestra.count(",") else ","
+        return pd.read_csv(
+            io.StringIO(texto),
+            sep=separador,
+            dtype=str,
+            header=None,
+            skip_blank_lines=True,
+        )
+
     # --- Leer según tipo ---
     if isinstance(uploaded_or_path, str):
         path = uploaded_or_path.lower()
         if path.endswith(".csv"):
             content = Path(uploaded_or_path).read_bytes()
-            sample = content[:4096].decode("utf-8", errors="ignore")
-            sep = ";" if sample.count(";") > sample.count(",") else ","
-            df = pd.read_csv(
-                io.BytesIO(content),
-                sep=sep,
-                dtype=str,
-                header=None,
-                skip_blank_lines=True,
-            )
+            df = read_csv_bytes(content)
         else:
             df = pd.read_excel(
                 uploaded_or_path,
@@ -1060,9 +1286,7 @@ def _read_any(uploaded_or_path, preferred_sheet=None):
         name = uploaded_or_path.name.lower()
         if name.endswith(".csv"):
             content = uploaded_or_path.read()
-            sample = content[:4096].decode("utf-8", errors="ignore")
-            sep = ";" if sample.count(";") > sample.count(",") else ","
-            df = pd.read_csv(io.BytesIO(content), sep=sep, dtype=str, header=None)
+            df = read_csv_bytes(content)
         else:
             
             xls = pd.ExcelFile(uploaded_or_path)
@@ -1218,7 +1442,20 @@ def _guess_cols(df: pd.DataFrame):
         return matches[0]
     
     c_dt = find([r"^fecha.?y.?hora$", r"fecha.?hora", r"^dia.?y.?hora$", r"datetime", r"timestamp", r"instante", r"^fecha.*", r"date"])
-    c_date = find([r"fecha", r"^fecha$", r"dia", r"date", r"data"])
+    # Priorizar nombres inequívocos. El buscador genérico recorre columnas y
+    # podría escoger "dia_semana" antes que una columna posterior "fecha".
+    c_date = next(
+        (
+            columna for columna, nombre_limpio in cleaned.items()
+            if nombre_limpio in {"fecha", "date", "data", "dia", "día"}
+        ),
+        None,
+    )
+    if c_date is None:
+        c_date = find([
+            r"^fecha\b", r"\bfecha$", r"^date\b", r"^data\b",
+            r"^dia$", r"^día$",
+        ])
     c_time = find([r"hora", r"hour",r"hr", r"time", r"^h$"])
     #c_quarter = find([r"cuarto", r"q$", r"qh", r"15"])
     c_quarter = find([r"^cuarto$", r"q$", r"qh"])
@@ -1230,6 +1467,7 @@ def _guess_cols(df: pd.DataFrame):
     )
     c_per = find([r"periodo", r"^p$", r"^p[1-6]$"])
     c_ind = find([
+        r"^r1$",
         r"reactiva",
         r"reactive",
         r"\breact\b",
@@ -1453,6 +1691,23 @@ def normalize_curve_simple(
     
     except Exception as e:
         raise
+
+    if not dt0.notna().any():
+        columna_fecha = c_dt or c_date
+        muestras_fecha = (
+            df[columna_fecha].dropna().astype(str).head(5).tolist()
+            if columna_fecha is not None else []
+        )
+        muestras_hora = (
+            df[c_time].dropna().astype(str).head(5).tolist()
+            if c_time is not None else []
+        )
+        raise ValueError(
+            "Se detectaron las columnas de fecha/hora, pero ninguna fila pudo "
+            "convertirse a una fecha válida. "
+            f"Columna fecha: {columna_fecha!r}; muestras: {muestras_fecha}. "
+            f"Columna hora: {c_time!r}; muestras: {muestras_hora}."
+        )
 
     #print(df[c_date].head())
     
@@ -4276,6 +4531,27 @@ def graficar_compensacion_dimensionamiento(df_curva_q, q_min, fp_min_rec, q_min_
 
 
 from dateutil.relativedelta import relativedelta
+
+
+def _añadir_diferencial_hover_unico(
+    fig, x, y, diferencial, diferencial_pct, etiqueta, unidad, decimales=2
+):
+    """Añade una sola entrada de diferencial a un hover unificado."""
+    valores = [formato_numero_es(valor, decimales) for valor in diferencial]
+    porcentajes = [formato_numero_es(valor, 2) for valor in diferencial_pct]
+    fig.add_trace(go.Scatter(
+        x=list(x),
+        y=list(y),
+        mode="markers",
+        name="Diferencial",
+        showlegend=False,
+        marker=dict(size=12, opacity=0),
+        customdata=np.column_stack([valores, porcentajes]),
+        hovertemplate=(
+            f"Diferencial {etiqueta}: %{{customdata[0]}} {unidad} "
+            "(%{customdata[1]} %)<extra></extra>"
+        ),
+    ))
 from datetime import timedelta
 def calcular_comparacion():
     """
@@ -4591,10 +4867,24 @@ def calcular_comparacion():
         if t.name == etiqueta_base
         else t.update(marker_color=color_comp)
     )
-    fig_mensual.for_each_trace(lambda traza: traza.update(
-        customdata=[formato_numero_es(valor, 0) for valor in traza.y],
-        hovertemplate=f"{traza.name}: %{{customdata}} kWh<extra></extra>"
-    ))
+    def actualizar_hover_consumo_mensual(traza):
+        valores = [formato_numero_es(valor, 0) for valor in traza.y]
+        traza.update(
+            customdata=valores,
+            hovertemplate=f"{traza.name}: %{{customdata}} kWh<extra></extra>",
+        )
+
+    fig_mensual.for_each_trace(actualizar_hover_consumo_mensual)
+    _añadir_diferencial_hover_unico(
+        fig_mensual,
+        x=df_plot["Mes"],
+        y=df_plot[[etiqueta_base, etiqueta_comp]].max(axis=1),
+        diferencial=df_plot["Δ"],
+        diferencial_pct=df_plot["Δ %"],
+        etiqueta=f"{etiqueta_comp}−{etiqueta_base}",
+        unidad="kWh",
+        decimales=0,
+    )
 
     fig_mensual.update_layout(
         title=dict(
@@ -4632,14 +4922,27 @@ def calcular_comparacion():
         customdata=[formato_numero_es(valor, 0) for valor in traza.y],
         hovertemplate=f"{traza.name}: %{{customdata}} kWh<extra></extra>"
     ))
+    _añadir_diferencial_hover_unico(
+        fig_total,
+        x=["TOTAL"],
+        y=[max(fila_total["Base"], fila_total["+1 año"])],
+        diferencial=[fila_total["Δ"]],
+        diferencial_pct=[fila_total["Δ %"]],
+        etiqueta=f"{etiqueta_comp}−{etiqueta_base}",
+        unidad="kWh",
+        decimales=0,
+    )
 
-    fig_total.for_each_trace(lambda traza: traza.update(
-        text=[formato_numero_es(valor, 0) for valor in traza.y],
-        texttemplate="<b>%{text}</b>",
-        textposition="outside",
-        textfont_size=20,
-        cliponaxis=False,
-    ))
+    fig_total.for_each_trace(
+        lambda traza: traza.update(
+            text=[formato_numero_es(valor, 0) for valor in traza.y],
+            texttemplate="<b>%{text}</b>",
+            textposition="outside",
+            textfont_size=20,
+            cliponaxis=False,
+        ),
+        selector=dict(type="bar"),
+    )
 
     fig_total.update_layout(
         title=dict(
@@ -5137,12 +5440,20 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
     signo_precio = "+" if efecto_precio_total > 0 else ""
     signo_consumo = "+" if efecto_consumo_total > 0 else ""
     impacto_html_costes = f"""
-    <div style="padding:.85rem 1rem;border:1px solid #e0b400;
+    <div style="padding:1.15rem 1.25rem;border:1px solid #e0b400;
         border-left:6px solid #e0b400;border-radius:.75rem;
         background:#fff3bf;color:#5f4b00;margin:.2rem 0 .8rem 0;
-        box-shadow:0 2px 8px rgba(224,180,0,.16);font-size:1rem;">
-        <div><b>Efecto precio:</b> {signo_precio}{formato_numero_es(efecto_precio_total, 2)} €</div>
-        <div><b>Efecto consumo:</b> {signo_consumo}{formato_numero_es(efecto_consumo_total, 2)} €</div>
+        box-shadow:0 2px 8px rgba(224,180,0,.16);font-size:1.35rem;line-height:1.8;">
+        <div><b>Efecto precio:</b>
+            <span style="font-size:1.85rem;font-weight:800;margin-left:.45rem;">
+                {signo_precio}{formato_numero_es(efecto_precio_total, 2)} €
+            </span>
+        </div>
+        <div><b>Efecto consumo:</b>
+            <span style="font-size:1.85rem;font-weight:800;margin-left:.45rem;">
+                {signo_consumo}{formato_numero_es(efecto_consumo_total, 2)} €
+            </span>
+        </div>
     </div>
     """
 
@@ -5165,6 +5476,16 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
                 f"{nombre}: {formato_numero_es(valor, 2)} €<extra></extra>"
             ),
         ))
+    _añadir_diferencial_hover_unico(
+        fig_resumen_costes,
+        x=["TOTAL"],
+        y=[max(coste_base_total, coste_comp_total)],
+        diferencial=[variacion_total],
+        diferencial_pct=[variacion_coste_pct_total],
+        etiqueta=f"{etiqueta_comp}−{etiqueta_base}",
+        unidad="€",
+        decimales=2,
+    )
     fig_resumen_costes.update_layout(
         title="Comparativa TOTAL de costes (€)",
         barmode="group",
@@ -5287,6 +5608,7 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
     fig_efectos.update_layout(
         title="Efecto PRECIO/CONSUMO",
         barmode="relative",
+        barcornerradius=8,
         hovermode="x unified",
         legend_title_text=""
         ,hoverlabel=dict(font_size=16, font_family="Arial")
@@ -5310,6 +5632,11 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
     diferencial_precio = (
         df_cmp["precio_comp_cent_kwh"] - df_cmp["precio_base_cent_kwh"]
     )
+    diferencial_precio_pct = np.where(
+        df_cmp["precio_base_cent_kwh"] != 0,
+        diferencial_precio / df_cmp["precio_base_cent_kwh"] * 100,
+        np.nan,
+    )
     fig_precio_medio = go.Figure()
 
     fig_precio_medio.add_trace(
@@ -5321,12 +5648,8 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
             marker_color = color_base,
             line=dict(width=3),
             marker=dict(size=7),
-            customdata=diferencial_precio,
             hovertemplate=(
-                f"Precio {etiqueta_base}: %{{y:.2f}} c€/kWh<br>"
-                f"Diferencial {etiqueta_comp}−{etiqueta_base}: "
-                "%{customdata:.2f} c€/kWh"
-                "<extra></extra>"
+                f"Precio {etiqueta_base}: %{{y:.2f}} c€/kWh<extra></extra>"
             )
         )
     )
@@ -5340,14 +5663,45 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
             marker_color = color_comp,
             line=dict(width=3),
             marker=dict(size=7),
-            customdata=diferencial_precio,
             hovertemplate=(
-                f"Precio {etiqueta_comp}: %{{y:.2f}} c€/kWh<br>"
-                f"Diferencial {etiqueta_comp}−{etiqueta_base}: "
-                "%{customdata:.2f} c€/kWh"
-                "<extra></extra>"
+                f"Precio {etiqueta_comp}: %{{y:.2f}} c€/kWh<extra></extra>"
             )
         )
+    )
+
+    _añadir_diferencial_hover_unico(
+        fig_coste_total,
+        x=df_cmp["mes_label"],
+        y=df_cmp[["coste_base", "coste_comp"]].max(axis=1),
+        diferencial=df_cmp["variacion_coste"],
+        diferencial_pct=df_cmp["variacion_coste_pct"],
+        etiqueta=f"{etiqueta_comp}−{etiqueta_base}",
+        unidad="€",
+        decimales=2,
+    )
+
+    _añadir_diferencial_hover_unico(
+        fig_precio_medio,
+        x=df_cmp["mes_label"],
+        y=df_cmp[["precio_base_cent_kwh", "precio_comp_cent_kwh"]].max(axis=1),
+        diferencial=diferencial_precio,
+        diferencial_pct=diferencial_precio_pct,
+        etiqueta=f"{etiqueta_comp}−{etiqueta_base}",
+        unidad="c€/kWh",
+        decimales=2,
+    )
+
+    fig_precio_medio.add_hline(
+        y=precio_base_total,
+        line_color=color_base,
+        line_width=2,
+        line_dash="dot",
+    )
+    fig_precio_medio.add_hline(
+        y=precio_comp_total,
+        line_color=color_comp,
+        line_width=2,
+        line_dash="dot",
     )
 
     fig_precio_medio.update_layout(
@@ -5383,6 +5737,180 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
         "fig_efectos": fig_efectos,
         "fig_precio_medio": fig_precio_medio,
         "etiquetas_periodos": (etiqueta_base, etiqueta_comp),
+    }
+
+
+def calcular_comparativa_ahorro(df_actual, df_referencia):
+    """Compara dos precios sobre el mismo consumo y el mismo rango temporal."""
+    requeridas = {"fecha_hora", "consumo_neto_kWh", "coste_total"}
+    for nombre, datos in (("actual", df_actual), ("referencia", df_referencia)):
+        if datos is None or datos.empty or not requeridas.issubset(datos.columns):
+            return {
+                "ok": False,
+                "mensaje": f"Faltan datos horarios del escenario {nombre}.",
+                "df_ahorro": pd.DataFrame(), "fig_mensual": None,
+                "fig_diferencia": None,
+            }
+
+    def mensual(datos, prefijo):
+        df = datos.copy()
+        df["Mes"] = pd.to_datetime(df["fecha_hora"]).dt.to_period("M").astype(str)
+        df["consumo_neto_kWh"] = pd.to_numeric(
+            df["consumo_neto_kWh"], errors="coerce"
+        )
+        df["coste_total"] = pd.to_numeric(df["coste_total"], errors="coerce")
+        return df.groupby("Mes", as_index=False).agg(**{
+            f"Consumo {prefijo}": ("consumo_neto_kWh", "sum"),
+            f"Coste {prefijo}": ("coste_total", "sum"),
+        })
+
+    actual = mensual(df_actual, "real")
+    referencia = mensual(df_referencia, "referencia")
+    salida = referencia.merge(actual, on="Mes", how="outer", validate="one_to_one")
+    salida = salida.sort_values("Mes").reset_index(drop=True)
+    if not np.allclose(
+        salida["Consumo referencia"], salida["Consumo real"],
+        rtol=0, atol=1e-6, equal_nan=False,
+    ):
+        return {
+            "ok": False,
+            "mensaje": "Los escenarios no contienen exactamente el mismo consumo mensual.",
+            "df_ahorro": pd.DataFrame(), "fig_mensual": None,
+            "fig_diferencia": None,
+        }
+    consumo = salida["Consumo real"]
+    salida["Precio referencia"] = np.where(
+        consumo != 0, salida["Coste referencia"] / consumo * 100, np.nan
+    )
+    salida["Precio real"] = np.where(
+        consumo != 0, salida["Coste real"] / consumo * 100, np.nan
+    )
+    salida["Ahorro / sobrecoste"] = salida["Coste real"] - salida["Coste referencia"]
+    salida["Ahorro / sobrecoste %"] = np.where(
+        salida["Coste referencia"] != 0,
+        salida["Ahorro / sobrecoste"]
+        / salida["Coste referencia"] * 100,
+        np.nan,
+    )
+
+    coste_referencia = salida["Coste referencia"].sum()
+    coste_actual = salida["Coste real"].sum()
+    diferencia = coste_actual - coste_referencia
+    diferencia_pct = diferencia / coste_referencia * 100 if coste_referencia else np.nan
+    consumo_total = consumo.sum()
+    tipo_impacto = (
+        "sobrecoste" if diferencia > 0
+        else "ahorro" if diferencia < 0
+        else "resultado neutro"
+    )
+    impacto_html = f"""
+    <div style="padding:1rem .8rem;border:1px solid #e0b400;
+        border-left:6px solid #e0b400;border-radius:.75rem;
+        background:#fff3bf;color:#5f4b00;text-align:center;
+        box-shadow:0 2px 8px rgba(224,180,0,.16);">
+        <div style="font-size:28px;line-height:1.15;">
+            El <b>{tipo_impacto}</b> frente al coste de referencia ha sido de:
+        </div>
+        <div style="font-size:36px;font-weight:bold;line-height:1.15;margin-top:.35rem;">
+            {formato_numero_es(abs(diferencia), 2)} €&nbsp;
+            (&nbsp;{formato_numero_es(abs(diferencia_pct), 2)} %&nbsp;)
+        </div>
+    </div>
+    """
+
+    datos_graf = salida.melt(
+        id_vars="Mes",
+        value_vars=[
+            "Coste referencia", "Coste real",
+        ],
+        var_name="Escenario",
+        value_name="Coste",
+    )
+    fig_mensual = px.bar(
+        datos_graf, x="Mes", y="Coste", color="Escenario", barmode="group",
+        title="Coste mensual real frente a referencia",
+        labels={"Coste": "Coste (€)"},
+    )
+    fig_mensual.update_traces(marker_cornerradius=10)
+    fig_mensual = aplicar_estilo(fig_mensual)
+    fig_mensual.update_layout(
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02,
+            xanchor="center", x=0.5,
+        )
+    )
+
+    fig_diferencia = go.Figure(go.Bar(
+        x=salida["Mes"], y=salida["Ahorro / sobrecoste"],
+        marker_color=np.where(
+            salida["Ahorro / sobrecoste"] > 0, "#d62728", "#2ca02c"
+        ),
+        marker_cornerradius=10,
+        hovertemplate="<b>%{x}</b><br>Ahorro / sobrecoste: %{y:.2f} €<extra></extra>",
+    ))
+    fig_diferencia.update_layout(
+        title="Ahorro (-) / sobrecoste (+) mensual", yaxis_title="€",
+        xaxis_title="",
+    )
+    fig_diferencia.add_hline(y=0, line_color="white", line_width=1)
+    fig_diferencia = aplicar_estilo(fig_diferencia)
+    fig_diferencia.update_layout(
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02,
+            xanchor="center", x=0.5,
+        )
+    )
+
+    fig_impacto = go.Figure()
+    for nombre, valor, color in (
+        ("Referencia", coste_referencia, "#1f77b4"),
+        ("Real contractual", coste_actual, "#ff7f0e"),
+    ):
+        fig_impacto.add_trace(go.Bar(
+            x=["TOTAL"], y=[valor], name=nombre, marker_color=color,
+            text=[formato_numero_es(valor, 2) + " €"],
+            texttemplate="<b>%{text}</b>", textposition="outside",
+            textfont=dict(size=20), cliponaxis=False,
+            hovertemplate=(
+                f"{nombre}: {formato_numero_es(valor, 2)} €<extra></extra>"
+            ),
+        ))
+    _añadir_diferencial_hover_unico(
+        fig_impacto,
+        x=["TOTAL"], y=[max(coste_referencia, coste_actual)],
+        diferencial=[diferencia], diferencial_pct=[diferencia_pct],
+        etiqueta="Real−referencia", unidad="€", decimales=2,
+    )
+    fig_impacto.update_layout(
+        title="Impacto económico total (€)", barmode="group",
+        hovermode="x unified", barcornerradius="10%", bargap=.42,
+        bargroupgap=.38, xaxis_title="", yaxis_title="€",
+        uniformtext_minsize=18, uniformtext_mode="show",
+        hoverlabel=dict(font_size=16, font_family="Arial"),
+    )
+    fig_impacto = aplicar_estilo(fig_impacto)
+    fig_impacto.update_layout(
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02,
+            xanchor="center", x=0.5,
+        )
+    )
+
+    return {
+        "ok": True,
+        "mensaje": "",
+        "df_ahorro": salida,
+        "etiquetas_periodos": ("referencia", "real"),
+        "coste_referencia": coste_referencia,
+        "coste_real": coste_actual,
+        "diferencia": diferencia,
+        "diferencia_pct": diferencia_pct,
+        "precio_referencia": coste_referencia / consumo_total * 100 if consumo_total else np.nan,
+        "precio_real": coste_actual / consumo_total * 100 if consumo_total else np.nan,
+        "fig_mensual": fig_mensual,
+        "fig_diferencia": fig_diferencia,
+        "fig_impacto": fig_impacto,
+        "impacto_html": impacto_html,
     }
 
 

@@ -4,6 +4,28 @@ from backend_factura import FacturaLeida, PotenciaFacturadaPeriodo
 
 
 class SobrecostePotenciaTest(unittest.TestCase):
+    def test_no_muestra_residuo_de_redondeo_si_el_periodo_es_boe(self):
+        factura = FacturaLeida(
+            formato="naturgy_grandes_clientes",
+            comercializadora="Naturgy Grandes Clientes",
+            potencia_periodos=[
+                PotenciaFacturadaPeriodo(
+                    periodo="P1",
+                    potencia_kw=1800.0,
+                    dias=28,
+                    precio_facturado_eur_kw_dia=0.08108333333333333,
+                    coste_facturado_eur=4086.60,
+                    precio_boe_eur_kw_dia=0.0810832,
+                    coste_boe_eur=4086.59,
+                    sobrecoste_eur=0.01,
+                    resultado="BOE",
+                ),
+            ],
+        )
+
+        self.assertEqual(factura.sobrecoste_potencia, 0.0)
+        self.assertEqual(factura.sobrecoste_anual_potencia, 0.0)
+
     def test_compensa_periodos_inferiores_y_superiores_a_boe(self):
         factura = FacturaLeida(
             formato="prueba",

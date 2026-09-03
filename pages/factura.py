@@ -18,6 +18,7 @@ from backend_curvadecarga import (
     colores_periodo,
     dataframe_como_archivo_curva,
     obtener_datos_contador,
+    obtener_complementos_verificacion_datadis,
     obtener_consumo_datadis_cacheado,
     obtener_suministros_datadis,
     rango_meses_datadis,
@@ -39,17 +40,22 @@ from formato_es import (
     formato_eur_kwh,
     formato_eur_mwh,
     formato_euros,
+    formato_euros_con_signo,
     formato_kwh,
+    formato_numero_es,
     formato_pct,
+    formato_pct_con_signo,
     formatear_columnas_tabla,
 )
 from backend_verificacion_consumos import (
     calcular_energia_indexada,
     calcular_energia_fija,
+    calcular_reactiva_desde_curva,
     calcular_excesos_desde_curva,
     calcular_potencia_confirmada,
     debe_prorratear_excesos_tramo,
     estado_verificacion_energia_real,
+    resolver_ciclo_energia,
     preparar_archivos_factura,
     preparar_curva_factura,
     reconstruir_total_beta,
@@ -66,6 +72,9 @@ from utilidades import (
 from regulacion_reactiva import (
     FUENTE_REACTIVA,
     LIMITE_REACTIVA_SOBRE_ACTIVA,
+    exceso_reactiva_inductiva,
+    factor_potencia,
+    precio_reactiva_inductiva,
     tramos_reactiva,
 )
 from regulacion_iee import obtener_referencia_iee
@@ -85,7 +94,7 @@ with st.sidebar:
     )
 
 
-VERSION_LECTOR = 136
+VERSION_LECTOR = 138
 MOSTRAR_TABLA_MAXIMETROS = False
 
 with st.sidebar:
@@ -212,6 +221,102 @@ def _buscar_dato_informe(texto, patrones):
     return ""
 
 
+def _cliente_nif_desde_factura(texto):
+    """Extrae titular y documento fiscal de cabeceras simples o tabulares."""
+    patron_nif = (
+        r"(?:[ABCDEFGHJNPQRSUVW]\d{7}[0-9A-J]|"
+        r"\d{8}[A-Z]|[XYZ]\d{7}[A-Z])"
+    )
+    cliente_endesa = re.search(
+        rf"^Titular\s+del\s+contrato\s*:\s*(.+?)\s+"
+        rf"N[uú]mero\s+de\s+contador\s*:[^\n]*\n"
+        rf"NIF\s*:\s*({patron_nif})\b",
+        texto,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    if cliente_endesa:
+        return (
+            re.sub(r"\s+", " ", cliente_endesa.group(1)).strip(" ,-:"),
+            cliente_endesa.group(2).upper(),
+        )
+    # Naturgy Grandes Clientes imprime primero el NIF y después la razón
+    # social, inmediatamente antes de la cabecera de factura/contrato.
+    cliente_naturgy = re.search(
+        rf"^({patron_nif})\s+([^\n]+)\n"
+        r"FACTURA[^\n]{0,20}?CUENTA\s+CONTRATO\b",
+        texto,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    if cliente_naturgy:
+        return (
+            re.sub(r"\s+", " ", cliente_naturgy.group(2)).strip(" ,-:"),
+            cliente_naturgy.group(1).upper(),
+        )
+    patrones_conjuntos = [
+        rf"(?:NOMBRE(?:\s+Y\s+APELLIDOS)?\s*/?\s*RAZ[ÓO]N\s+SOCIAL|"
+        rf"RAZ[ÓO]N\s+SOCIAL|DENOMINACI[ÓO]N\s+SOCIAL|TITULAR)"
+        rf"\s+(?:NIF|CIF|DNI/NIF/NIE)[^\n]*\n\s*([^\n]+?)\s+({patron_nif})\b",
+        rf"(?:DATOS\s+(?:DEL\s+)?(?:CLIENTE|TITULAR))[\s\S]{{0,260}}?"
+        rf"(?:NOMBRE(?:\s+Y\s+APELLIDOS)?|RAZ[ÓO]N\s+SOCIAL|"
+        rf"DENOMINACI[ÓO]N\s+SOCIAL|TITULAR)\s*:?\s*([^\n]+?)\s+"
+        rf"(?:NIF|CIF|DNI/NIF/NIE)\s*:?\s*({patron_nif})\b",
+        rf"(?:CLIENTE|TITULAR)\s*:?\s*([^\n]+?)\s+"
+        rf"(?:NIF|CIF|DNI/NIF/NIE)\s*:?\s*({patron_nif})\b",
+    ]
+    for patron in patrones_conjuntos:
+        coincidencia = re.search(patron, texto, re.IGNORECASE | re.MULTILINE)
+        if coincidencia:
+            cliente = re.sub(r"\s+", " ", coincidencia.group(1)).strip(" ,-:")
+            nif = coincidencia.group(2).strip().upper()
+            if cliente:
+                return cliente, nif
+
+    # Cabecera seguida de una fila de datos, sin repetir las etiquetas.
+    bloque_cliente = re.search(
+        r"(?:DATOS\s+(?:DEL\s+)?(?:CLIENTE|TITULAR)|"
+        r"TITULAR\s+DEL\s+CONTRATO)([\s\S]{0,600})",
+        texto,
+        re.IGNORECASE,
+    )
+    if bloque_cliente:
+        bloque = bloque_cliente.group(1)
+        coincidencia_nif = re.search(rf"\b({patron_nif})\b", bloque, re.IGNORECASE)
+        if coincidencia_nif:
+            nif_contexto = coincidencia_nif.group(1).upper()
+            for linea in bloque.splitlines():
+                posicion_nif = re.search(
+                    rf"\b{re.escape(nif_contexto)}\b", linea, re.IGNORECASE
+                )
+                if not posicion_nif:
+                    continue
+                cliente_contexto = re.sub(
+                    r"^(?:NOMBRE(?:\s+Y\s+APELLIDOS)?|CLIENTE|TITULAR|"
+                    r"RAZ[ÓO]N\s+SOCIAL|DENOMINACI[ÓO]N\s+SOCIAL)\s*:?\s*",
+                    "",
+                    linea[:posicion_nif.start()].strip(),
+                    flags=re.IGNORECASE,
+                ).strip(" ,-:|")
+                if cliente_contexto and not re.fullmatch(
+                    r"(?:NIF|CIF|DNI|DNI/NIF/NIE)",
+                    cliente_contexto,
+                    re.IGNORECASE,
+                ):
+                    return cliente_contexto, nif_contexto
+
+    cliente = _buscar_dato_informe(texto, [
+        r"^Titular\s*:?\s*([^\n]+)$",
+        r"^(?:Nombre(?:\s+y\s+apellidos)?|Raz[oó]n\s+social|"
+        r"Denominaci[oó]n\s+social)\s*:?\s*([^\n]+)$",
+        r"^Cliente\s*:?\s*([^\n]+)$",
+        r"^Nombre\s+del\s+cliente\s*:?\s*([^\n]+)$",
+    ])
+    nif = _buscar_dato_informe(texto, [
+        rf"^(?:DNI/NIF/NIE|NIF|CIF)\s*:?\s*({patron_nif})\b",
+        rf"\b(?:DNI/NIF/NIE|NIF|CIF)\s*:?\s*({patron_nif})\b",
+    ])
+    return cliente, nif
+
+
 def _renderizar_plantilla_informe(contexto, ruta_plantilla):
     ruta = Path(ruta_plantilla)
     if not ruta.is_absolute():
@@ -220,16 +325,79 @@ def _renderizar_plantilla_informe(contexto, ruta_plantilla):
     return entorno.get_template(ruta.name).render(**contexto)
 
 
+def _revision_manual_veredicto(huella, ambito, resultado_automatico):
+    """Recoge una revisión trazable sin alterar el resultado del motor."""
+    prefijo = f"factura_revision_{ambito}_{huella[:12]}"
+    opciones = (
+        "Mantener resultado automático",
+        "Marcar como correcta",
+        "Marcar como incorrecta",
+    )
+    with st.container(border=True):
+        st.markdown("#### Revisión manual del veredicto")
+        st.caption(f"Resultado automático: {resultado_automatico}.")
+        seleccion = st.selectbox(
+            "Veredicto final",
+            opciones,
+            key=f"{prefijo}_seleccion",
+        )
+        if seleccion == opciones[0]:
+            if st.session_state.get(f"{prefijo}_decision") is not None:
+                st.session_state.pop("factura_informe_verificacion", None)
+            st.session_state.pop(f"{prefijo}_decision", None)
+            return None
+
+        resultado_manual = (
+            "CORRECTO" if seleccion == opciones[1] else "INCORRECTO"
+        )
+        motivo = st.text_area(
+            "Motivo del cambio (obligatorio)",
+            key=f"{prefijo}_motivo",
+            placeholder=(
+                "Explica el criterio aplicado y, si procede, el concepto que "
+                "justifica cambiar el veredicto automático."
+            ),
+        ).strip()
+        revision_previa = st.session_state.get(f"{prefijo}_decision") or {}
+        firma_revision = (resultado_automatico, resultado_manual, motivo)
+        firma_previa = (
+            revision_previa.get("automatico"),
+            revision_previa.get("manual"),
+            revision_previa.get("motivo"),
+        )
+        revision = {
+            "ambito": ambito,
+            "automatico": resultado_automatico,
+            "manual": resultado_manual,
+            "motivo": motivo,
+            "fecha": (
+                revision_previa.get("fecha")
+                if firma_revision == firma_previa
+                else pd.Timestamp.now().strftime("%d/%m/%Y %H:%M")
+            ),
+            "valida": bool(motivo),
+        }
+        st.session_state[f"{prefijo}_decision"] = revision
+        if firma_revision != firma_previa:
+            st.session_state.pop("factura_informe_verificacion", None)
+        if motivo:
+            mensaje = (
+                "Veredicto final manual: factura correcta."
+                if resultado_manual == "CORRECTO"
+                else "Veredicto final manual: factura incorrecta."
+            )
+            (st.success if resultado_manual == "CORRECTO" else st.error)(mensaje)
+        else:
+            st.warning(
+                "Debes indicar el motivo antes de generar el informe de "
+                "verificación."
+            )
+        return revision
+
+
 def _datos_informe_desde_factura(factura, texto):
     """Prepara datos editables sin convertirlos en campos fiscales verificados."""
-    cliente = _buscar_dato_informe(texto, [
-        r"^Titular\s*:?\s*([^\n]+)$",
-        r"^(?:Nombre|Raz[oó]n\s+social)\s*:?\s*([^\n]+)$",
-        r"^Cliente\s*:?\s*([^\n]+)$",
-    ])
-    nif = _buscar_dato_informe(texto, [
-        r"^(?:DNI/NIF/NIE|NIF|CIF)\s*:?\s*([A-Z0-9-]+)",
-    ])
+    cliente, nif = _cliente_nif_desde_factura(texto)
     direccion = _buscar_dato_informe(texto, [
         r"^Direcci.n\s*:?\s*([^\n]+)\n(\d{5}[^\n]*)$",
         r"^Direcci.n\s*:?\s*([^\n]+)$",
@@ -242,7 +410,7 @@ def _datos_informe_desde_factura(factura, texto):
         "factura_informe_cliente": cliente,
         "factura_informe_nif": nif,
         "factura_informe_direccion": direccion,
-        "factura_informe_cups": factura.cups or "",
+        "factura_informe_cups": (factura.cups or "")[:20],
         "factura_informe_numero": factura.numero_factura or "",
         "factura_informe_fecha": factura.fecha_factura or "",
         "factura_informe_ciclo": ciclo,
@@ -262,8 +430,8 @@ def _datos_informe_desde_factura(factura, texto):
 def _firma_formula_indexado():
     return (
         "ponderacion_periodos_v2",
-        st.session_state.get("desvios_apant", 1.0),
-        st.session_state.get("margen_telemindex", 5.0),
+        st.session_state.get("desvios_apant", 0.0),
+        st.session_state.get("margen_telemindex", 0.0),
         st.session_state.get("cfg_margen_pos", "tm"),
         st.session_state.get("cfg_fnee", True),
         st.session_state.get("cfg_fnee_pos", "perdidas"),
@@ -776,7 +944,7 @@ def _estilar_diferencias_comparativa(tabla_numerica):
 
 
 tab_analisis, tab_verificacion, tab_comparativa, tab_informe = st.tabs(
-    ["Análisis", "Verificación", "Propuesta", "Informe"]
+    ["Análisis", "Verificación", "Propuesta", "Informes"]
 )
 
 with tab_analisis:
@@ -784,6 +952,8 @@ with tab_analisis:
 
 factura = None
 huella = None
+revision_manual_factura = None
+revision_manual_real = None
 resultado = None
 figura_componentes = None
 
@@ -841,9 +1011,9 @@ if contenido is not None:
             "total_factura",
         )
         cups_mostrado = (
-            f"{factura.cups[:6]}…{factura.cups[-4:]}"
-            if factura.cups and len(factura.cups) > 12
-            else factura.cups or "No detectado"
+            factura.cups[:20]
+            if factura.cups
+            else "No detectado"
         )
 
         with col_entrada:
@@ -984,6 +1154,9 @@ if contenido is not None:
             vencimiento = escape(
                 str(factura.fecha_vencimiento_contrato or "No detectado")
             )
+            numero_contrato = escape(
+                str(factura.numero_contrato or "No detectado")
+            )
             permanencia = (
                 "No" if factura.permanencia is False
                 else "Sí" if factura.permanencia is True
@@ -996,18 +1169,19 @@ if contenido is not None:
             suministro_html = escape(
                 str(factura.tipo_suministro or "No detectado")
             )
+            cliente_factura, nif_factura = _cliente_nif_desde_factura(texto)
+            cliente_html = escape(cliente_factura or "No detectado")
+            nif_html = escape(nif_factura or "No detectado")
             col_total_factura.markdown(
                 f"""
                 <div style="background:rgba(236,72,153,.10); border-left:4px solid #ec4899;
                             border-radius:8px; padding:12px 14px; margin:8px 0;
-                            height:215px; box-sizing:border-box;">
+                            min-height:155px; box-sizing:border-box;">
                     <div style="color:#db2777; font-size:1.45rem; font-weight:700;
-                                margin-bottom:7px;">Datos del contrato</div>
+                                margin-bottom:7px;">Datos de la factura</div>
                     <div style="font-size:1.02rem; line-height:1.65;">
                         <b>Factura:</b> {factura_numero}<br>
-                        <b>Fecha de factura:</b> {fecha_factura}<br>
-                        <b>Vencimiento:</b> {vencimiento}<br>
-                        <b>Permanencia:</b> {permanencia}<br>
+                        <b>Fecha:</b> {fecha_factura}<br>
                         <b>Periodo:</b> {periodo_inicio} - {periodo_fin}
                     </div>
                 </div>
@@ -1018,13 +1192,45 @@ if contenido is not None:
                 f"""
                 <div style="background:rgba(249,115,22,.11); border-left:4px solid #f97316;
                             border-radius:8px; padding:12px 14px; margin:8px 0;
-                            height:215px; box-sizing:border-box;">
+                            min-height:155px; box-sizing:border-box;">
                     <div style="color:#ea580c; font-size:1.45rem; font-weight:700;
                                 margin-bottom:7px;">Datos del suministro</div>
                     <div style="font-size:1.02rem; line-height:1.65;">
                         <b>CUPS:</b> {cups_html}<br>
                         <b>ATR/Peaje:</b> {atr_html}<br>
                         <b>Tipo de suministro:</b> {suministro_html}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            col_datos_factura, col_datos_contrato = st.columns(2)
+            col_datos_factura.markdown(
+                f"""
+                <div style="background:rgba(139,92,246,.10); border-left:4px solid #8b5cf6;
+                            border-radius:8px; padding:12px 14px; margin:8px 0;
+                            min-height:180px; box-sizing:border-box;">
+                    <div style="color:#7c3aed; font-size:1.45rem; font-weight:700;
+                                margin-bottom:7px;">Datos del cliente</div>
+                    <div style="font-size:1.02rem; line-height:1.65;">
+                        <b>Razón social / Cliente:</b> {cliente_html}<br>
+                        <b>NIF / CIF / DNI:</b> {nif_html}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            col_datos_contrato.markdown(
+                f"""
+                <div style="background:rgba(14,165,233,.10); border-left:4px solid #0ea5e9;
+                            border-radius:8px; padding:12px 14px; margin:8px 0;
+                            min-height:180px; box-sizing:border-box;">
+                    <div style="color:#0284c7; font-size:1.45rem; font-weight:700;
+                                margin-bottom:7px;">Datos del contrato</div>
+                    <div style="font-size:1.02rem; line-height:1.65;">
+                        <b>Número de contrato:</b> {numero_contrato}<br>
+                        <b>Vigencia hasta:</b> {vencimiento}<br>
+                        <b>Permanencia:</b> {permanencia}
                     </div>
                 </div>
                 """,
@@ -1196,10 +1402,21 @@ if contenido is not None:
                     formato_euros(factura.total_calculado_segun_factura)
                     if reconstruccion_total_completa else "No verificable",
                 )
+                diferencia_total_pct = (
+                    factura.diferencia_total_calculado / factura.total * 100
+                    if reconstruccion_total_completa and factura.total
+                    else None
+                )
                 col_diferencia.metric(
                     "Diferencia",
-                    formato_euros(factura.diferencia_total_calculado)
+                    formato_euros_con_signo(factura.diferencia_total_calculado)
                     if reconstruccion_total_completa else "No disponible",
+                    delta=(
+                        f"{formato_pct_con_signo(diferencia_total_pct, 2)} "
+                        "del total facturado"
+                        if diferencia_total_pct is not None else None
+                    ),
+                    delta_color="inverse",
                 )
                 if (
                     reconstruccion_total_completa
@@ -1220,6 +1437,17 @@ if contenido is not None:
                             origenes_diferencia.append(
                                 "los componentes extraídos superan el total en "
                                 f"{formato_euros(abs(factura.diferencia))}"
+                            )
+                    if factura.excesos_potencia and factura.excesos_verificados:
+                        delta_excesos = factura.diferencia_excesos
+                        if abs(delta_excesos) > 0.02:
+                            origenes_diferencia.append(
+                                "Excesos de potencia: "
+                                f"{formato_euros(factura.excesos_potencia)} "
+                                "facturados frente a "
+                                f"{formato_euros(factura.coste_excesos_calculado)} "
+                                "calculados con el detalle de la factura "
+                                f"(diferencia {formato_euros(delta_excesos)})"
                             )
                     if factura.verificacion_fnee and (
                         factura.verificacion_fnee.importe_referencia_eur is not None
@@ -1300,6 +1528,11 @@ if contenido is not None:
                         "Aunque el total queda reconstruido, presentan discrepancias: "
                         + ", ".join(otros_incorrectos) + "."
                     )
+                revision_manual_factura = _revision_manual_veredicto(
+                    huella,
+                    "segun_factura",
+                    resultado_texto,
+                )
                 st.subheader("Componentes", divider="rainbow")
                 st.dataframe(
                     formatear_columnas_tabla(
@@ -1636,16 +1869,42 @@ if contenido is not None:
                             st.plotly_chart(figura_consumo, use_container_width=True)
 
                     with col_consumo_metricas:
+                        regularizacion_ssaa_endesa = (
+                            sum(
+                                item.importe for item in factura.otros
+                                if "ssaa" in item.concepto.lower()
+                                or "servicios de ajuste" in item.concepto.lower()
+                            )
+                            if factura.formato == "endesa_empresas"
+                            else 0.0
+                        )
                         st.metric(
                             "Consumo",
                             formato_kwh(factura.consumo_total_kwh, 2, True),
                         )
                         st.metric(
-                            "Precio medio",
+                            (
+                                "Precio medio sin regularización SSAA"
+                                if regularizacion_ssaa_endesa
+                                else "Precio medio"
+                            ),
                             formato_eur_kwh(factura.precio_medio_energia)
                             if factura.consumo_total_kwh
                             else "No disponible",
                         )
+                        if regularizacion_ssaa_endesa:
+                            precio_medio_con_ssaa = (
+                                (factura.energia + regularizacion_ssaa_endesa)
+                                / factura.consumo_total_kwh
+                            )
+                            st.metric(
+                                "Precio medio con regularización SSAA",
+                                formato_eur_kwh(precio_medio_con_ssaa),
+                            )
+                            st.caption(
+                                "La regularización SSAA corresponde al mismo "
+                                "periodo de facturación."
+                            )
                         st.metric(
                             "Coste de la energía",
                             formato_euros(factura.energia),
@@ -1712,7 +1971,7 @@ if contenido is not None:
                             hide_index=True,
                             use_container_width=True,
                         )
-                        col_exc_calc, col_exc_fra = st.columns(2)
+                        col_exc_calc, col_exc_fra, col_exc_diferencia = st.columns(3)
                         col_exc_calc.metric(
                             "Excesos calculados",
                             formato_euros(factura.coste_excesos_calculado),
@@ -1720,7 +1979,20 @@ if contenido is not None:
                         col_exc_fra.metric(
                             "Excesos facturados",
                             formato_euros(factura.excesos_potencia),
-                            delta=formato_euros(factura.diferencia_excesos),
+                        )
+                        diferencia_excesos_pct = (
+                            factura.diferencia_excesos
+                            / factura.excesos_potencia * 100
+                            if factura.excesos_potencia else None
+                        )
+                        col_exc_diferencia.metric(
+                            "Diferencia",
+                            formato_euros_con_signo(factura.diferencia_excesos),
+                            delta=(
+                                f"{formato_pct_con_signo(diferencia_excesos_pct, 2)} "
+                                "de los excesos facturados"
+                                if diferencia_excesos_pct is not None else None
+                            ),
                             delta_color="inverse",
                         )
 
@@ -2015,7 +2287,7 @@ if contenido is not None:
                             if precio_regulado_fbs is not None
                             else "No disponible",
                             delta=(
-                                formato_euros(
+                                formato_euros_con_signo(
                                     fbs.precio_facturado_eur_dia
                                     - precio_regulado_fbs
                                 )
@@ -2076,17 +2348,27 @@ with tab_verificacion:
         tab_medida, tab_condiciones, tab_resultado_medida = st.columns(
             [0.30, 0.30, 0.40], gap="large"
         )
-        fecha_inicio_medida = _fecha_factura(factura.periodo_inicio)
-        fecha_fin_medida = _fecha_factura(factura.periodo_fin)
+        fecha_inicio_factura = _fecha_factura(factura.periodo_inicio)
+        fecha_fin_factura = _fecha_factura(factura.periodo_fin)
+        fecha_inicio_medida, fecha_fin_medida = resolver_ciclo_energia(
+            fecha_inicio_factura,
+            fecha_fin_factura,
+            formato=factura.formato,
+            comercializadora=factura.comercializadora,
+        )
         resultado_medida_sesion = st.session_state.get(
             "factura_verificacion_consumos"
         )
         resultado_medida = None
+        complementos_datadis_resultado = None
         if (
             resultado_medida_sesion
             and resultado_medida_sesion.get("huella") == huella
         ):
             resultado_medida = resultado_medida_sesion.get("resultado")
+            complementos_datadis_resultado = resultado_medida_sesion.get(
+                "complementos_datadis"
+            )
 
         with tab_medida:
             st.subheader("1 · Datos de medida", divider="rainbow")
@@ -2151,6 +2433,7 @@ with tab_verificacion:
                                     atr=atr_medida,
                                     zona_periodos="peninsula",
                                     nombre_origen=f"axon_{frecuencia_axon.lower()}.csv",
+                                    inicio_exclusivo=False,
                                 )
                             st.session_state.axon_usuario_sesion = usuario_axon_factura
                             st.session_state.axon_password_sesion = password_axon_factura
@@ -2191,6 +2474,7 @@ with tab_verificacion:
                                     fecha_fin_medida,
                                     atr=atr_medida,
                                     zona_periodos="peninsula",
+                                    inicio_exclusivo=False,
                                 )
                             st.session_state.factura_verificacion_consumos = {
                                 "huella": huella,
@@ -2206,10 +2490,17 @@ with tab_verificacion:
                 with col_acceso:
                     st.markdown("#### Acceso Datadis")
                     usuario_datadis_factura = st.text_input(
-                        "Usuario Datadis", key="factura_datadis_usuario"
+                        "Usuario Datadis",
+                        value=st.session_state.get(
+                            "datadis_usuario_sesion", ""
+                        ),
+                        key="factura_datadis_usuario",
                     )
                     password_datadis_factura = st.text_input(
                         "Contraseña Datadis",
+                        value=st.session_state.get(
+                            "datadis_password_sesion", ""
+                        ),
                         type="password",
                         key="factura_datadis_password",
                     )
@@ -2239,6 +2530,17 @@ with tab_verificacion:
                                         authorized_nif=authorized_nif_factura,
                                     )
                                 )
+                            st.session_state.datadis_usuario_sesion = (
+                                usuario_datadis_factura
+                            )
+                            st.session_state.datadis_password_sesion = (
+                                password_datadis_factura
+                            )
+                            st.success(
+                                "Datadis ha devuelto "
+                                f"{len(st.session_state.factura_suministros_datadis)} "
+                                "suministro(s)."
+                            )
                         except Exception as exc:
                             st.session_state.pop("factura_suministros_datadis", None)
                             st.error(f"No se pudieron consultar los suministros: {exc}")
@@ -2250,47 +2552,57 @@ with tab_verificacion:
                         "factura_suministros_datadis"
                     )
                     if suministros_factura is not None and not suministros_factura.empty:
-                        indices = list(suministros_factura.index)
+                        st.success(
+                            f"{len(suministros_factura)} suministro(s) disponible(s)."
+                        )
+                        with st.expander("Ver suministros devueltos"):
+                            columnas_suministros = [
+                                columna for columna in (
+                                    "cups", "address", "distributorCode", "pointType"
+                                ) if columna in suministros_factura.columns
+                            ]
+                            st.dataframe(
+                                suministros_factura[columnas_suministros],
+                                hide_index=True,
+                                use_container_width=True,
+                            )
                         cups_factura = (factura.cups or "").strip().upper()
-                        indice_defecto = next(
-                            (
-                                posicion for posicion, indice in enumerate(indices)
-                                if str(suministros_factura.loc[indice].get("cups", ""))
-                                .strip().upper() == cups_factura
-                            ),
-                            0,
-                        )
-
-                        def etiqueta_suministro_factura(indice):
-                            fila = suministros_factura.loc[indice]
-                            cups = str(fila.get("cups", ""))
-                            direccion = str(fila.get("address", "") or "").strip()
-                            return f"{cups} · {direccion}" if direccion else cups
-
-                        indice_suministro = st.selectbox(
-                            "Suministro",
-                            indices,
-                            index=indice_defecto,
-                            format_func=etiqueta_suministro_factura,
-                            key="factura_suministro_datadis",
-                        )
-                        suministro_factura = suministros_factura.loc[
-                            indice_suministro
-                        ].to_dict()
-                        if (
-                            cups_factura
-                            and str(suministro_factura.get("cups", "")).strip().upper()
-                            != cups_factura
-                        ):
-                            st.warning("El CUPS seleccionado no coincide con el de la factura.")
+                        cups_base = cups_factura[:20]
+                        coincidencias_cups = suministros_factura.loc[
+                            suministros_factura["cups"].astype(str).str.upper()
+                            .str.startswith(cups_base, na=False)
+                        ]
+                        if not cups_base:
+                            st.warning("La factura no contiene un CUPS utilizable.")
+                        elif coincidencias_cups.empty:
+                            st.warning(
+                                "El CUPS de la factura no aparece entre los "
+                                "suministros devueltos por Datadis."
+                            )
+                        else:
+                            suministro_factura = coincidencias_cups.iloc[0].to_dict()
+                            st.code(
+                                str(suministro_factura.get("cups", "")),
+                                language=None,
+                            )
+                            direccion = str(
+                                suministro_factura.get("address", "") or ""
+                            ).strip()
+                            if direccion:
+                                st.caption(direccion)
                     else:
-                        st.info("Consulta los suministros para seleccionar el CUPS.")
+                        st.info("Consulta los suministros para localizar el CUPS de la factura.")
 
                     inicio_mes, fin_mes = rango_meses_datadis(
                         factura.periodo_inicio, factura.periodo_fin
                     )
                     st.write(
                         f"Factura: **{factura.periodo_inicio} – {factura.periodo_fin}**"
+                    )
+                    st.write(
+                        "Ciclo real de consumo/reactiva: "
+                        f"**{fecha_inicio_medida:%d/%m/%Y} – "
+                        f"{fecha_fin_medida:%d/%m/%Y}**"
                     )
                     st.write(
                         f"Consulta Datadis: **{inicio_mes:%m/%Y} – {fin_mes:%m/%Y}**"
@@ -2307,7 +2619,7 @@ with tab_verificacion:
                         ),
                     )
                     obtener_medida = st.button(
-                        "Obtener y verificar consumos",
+                        "Obtener y verificar datos",
                         type="primary",
                         use_container_width=True,
                         disabled=suministro_factura is None,
@@ -2344,11 +2656,45 @@ with tab_verificacion:
                                     nombre_origen=(
                                         f"datadis_{frecuencia_datadis.lower()}.csv"
                                     ),
+                                    inicio_exclusivo=False,
                                 )
+                                clave_complementos = (
+                                    str(usuario_datadis_factura).strip().upper(),
+                                    str(authorized_nif_factura).strip().upper(),
+                                    str(suministro_factura.get("cups", "")).strip().upper(),
+                                    str(fecha_inicio_medida),
+                                    str(fecha_fin_medida),
+                                )
+                                cache_complementos = st.session_state.setdefault(
+                                    "datadis_complementos_cache", {}
+                                )
+                                complementos_datadis = cache_complementos.get(
+                                    clave_complementos
+                                )
+                                complementos_reutilizados = (
+                                    complementos_datadis is not None
+                                )
+                                if complementos_datadis is None:
+                                    complementos_datadis = (
+                                        obtener_complementos_verificacion_datadis(
+                                            usuario_datadis_factura,
+                                            password_datadis_factura,
+                                            suministro_factura,
+                                            fecha_inicio_medida,
+                                            fecha_fin_medida,
+                                            authorized_nif=authorized_nif_factura,
+                                        )
+                                    )
+                                    cache_complementos[clave_complementos] = (
+                                        complementos_datadis
+                                    )
                             st.session_state.factura_verificacion_consumos = {
                                 "huella": huella,
+                                "origen": "datadis",
                                 "clave_datadis": clave_datadis,
                                 "reutilizado": reutilizado,
+                                "complementos_reutilizados": complementos_reutilizados,
+                                "complementos_datadis": complementos_datadis,
                                 "aviso_fallback": aviso_fallback,
                                 "resultado": preparado,
                             }
@@ -2386,6 +2732,45 @@ with tab_verificacion:
                                 - cobertura["intervalos_esperados"]
                             ),
                         )
+                        if complementos_datadis_resultado is not None:
+                            df_max_datadis = complementos_datadis_resultado.get(
+                                "maximetros", pd.DataFrame()
+                            )
+                            df_reactiva_datadis = complementos_datadis_resultado.get(
+                                "reactiva", pd.DataFrame()
+                            )
+                            st.metric(
+                                "Maxímetros V2",
+                                len(df_max_datadis),
+                                help="Un registro mensual por periodo disponible.",
+                            )
+                            st.metric(
+                                "Meses de reactiva V2",
+                                len(df_reactiva_datadis),
+                            )
+                            if not complementos_datadis_resultado.get(
+                                "maximetros_ciclo_exacto", False
+                            ) and not df_max_datadis.empty:
+                                st.warning(
+                                    "Los maxímetros son mensuales y el ciclo no "
+                                    "coincide con un mes natural completo."
+                                )
+                            if not complementos_datadis_resultado.get(
+                                "reactiva_ciclo_exacto", False
+                            ) and not df_reactiva_datadis.empty:
+                                st.warning(
+                                    "La reactiva es mensual y no permite aislar "
+                                    "exactamente este ciclo."
+                                )
+                            incidencias_datadis = {
+                                **complementos_datadis_resultado.get("errores", {}),
+                                **complementos_datadis_resultado.get(
+                                    "avisos_distribuidora", {}
+                                ),
+                            }
+                            if incidencias_datadis:
+                                with st.expander("Detalle de llamadas V2"):
+                                    st.json(incidencias_datadis)
                         original_csv = dataframe_como_archivo_curva(
                             resultado_medida.curva_original, "datadis_original.csv"
                         ).getvalue()
@@ -2638,12 +3023,19 @@ with tab_verificacion:
         coste_excesos_beta = None
         componentes_confirmados = {}
         componentes_facturados_beta = {}
+        componentes_no_verificados_beta = set()
+        reactiva_verificada_medida = False
+        fuente_reactiva_verificada = ""
         fnee_incluido_indexado = 0.0
         clave_tipo_energia_verificacion = (
             f"factura_verificacion_tipo_energia_{huella[:8]}"
         )
         with tab_condiciones:
-            st.subheader("2 · Datos de contrato", divider="rainbow")
+            st.subheader("2 · Datos de factura", divider="rainbow")
+            st.caption(
+                f"Fechas según factura: {factura.periodo_inicio} – "
+                f"{factura.periodo_fin}"
+            )
             if resultado_medida is None:
                 st.info("Obtén primero la curva de medida en la pestaña anterior.")
             else:
@@ -2659,6 +3051,10 @@ with tab_verificacion:
                     key=clave_tipo_energia_verificacion,
                     horizontal=True,
                 )
+                formulario_energia = st.form(
+                    f"form_energia_factura_{huella[:8]}_{tipo_energia_verificacion}"
+                )
+                formulario_energia.__enter__()
                 if tipo_energia_verificacion == "Fijo":
                     st.markdown("#### Confirma los precios fijos de energía")
                     st.caption(
@@ -2690,8 +3086,9 @@ with tab_verificacion:
                         "Configuración común con Telemindex. Se aplicará a los "
                         "consumos reales de la curva para el periodo de la factura."
                     )
-                    mostrar_parametros_formula_indexado(
-                        widget_suffix="factura_verificacion"
+                    parametros_indexados_verificacion = mostrar_parametros_formula_indexado(
+                        widget_suffix="factura_verificacion",
+                        diferido=True,
                     )
                     if st.session_state.get("cfg_fnee", True):
                         fnee_incluido_indexado = sum(
@@ -2699,6 +3096,17 @@ with tab_verificacion:
                             for item in factura.otros
                             if "fnee" in item.concepto.lower()
                         )
+                aplicar_parametros_energia = st.form_submit_button(
+                    "Aplicar parámetros de energía",
+                    type="primary",
+                    use_container_width=True,
+                )
+                formulario_energia.__exit__(None, None, None)
+                if (
+                    aplicar_parametros_energia
+                    and tipo_energia_verificacion == "Indexado"
+                ):
+                    st.session_state.update(parametros_indexados_verificacion)
 
                 st.markdown("#### Confirma potencia y precio de potencia")
                 items_potencia = [
@@ -2816,6 +3224,7 @@ with tab_verificacion:
                                     fin_inclusivo_dt,
                                     len(grupos_confirmados),
                                     factura.tipo_suministro,
+                                    tarifa=atr_medida,
                                 ),
                             )
                             detalle_tramo.insert(
@@ -2844,6 +3253,95 @@ with tab_verificacion:
                             "No se han podido verificar los excesos de potencia: "
                             f"{exc}"
                         )
+
+                if factura.reactiva:
+                    componentes_facturados_beta["reactiva"] = float(
+                        factura.reactiva
+                    )
+                    coste_reactiva_datadis = None
+                    if (
+                        "reactiva_kVArh" in resultado_medida.curva_periodo.columns
+                        and pd.to_numeric(
+                            resultado_medida.curva_periodo["reactiva_kVArh"],
+                            errors="coerce",
+                        ).notna().any()
+                    ):
+                        try:
+                            (
+                                detalle_reactiva_curva,
+                                coste_reactiva_datadis,
+                            ) = calcular_reactiva_desde_curva(
+                                resultado_medida.curva_periodo
+                            )
+                            reactiva_verificada_medida = True
+                            fuente_reactiva_verificada = (
+                                st.session_state.get(
+                                    "factura_verificacion_consumos", {}
+                                ).get("origen", "curva").capitalize()
+                            )
+                        except ValueError:
+                            coste_reactiva_datadis = None
+                    if (
+                        coste_reactiva_datadis is None
+                        and
+                        complementos_datadis_resultado is not None
+                        and complementos_datadis_resultado.get(
+                            "reactiva_ciclo_exacto", False
+                        )
+                    ):
+                        reactiva_medida = complementos_datadis_resultado.get(
+                            "reactiva", pd.DataFrame()
+                        )
+                        if not reactiva_medida.empty:
+                            coste_reactiva_datadis = 0.0
+                            periodos_reactiva_utiles = 0
+                            for periodo in periodos_medida:
+                                if periodo not in reactiva_medida:
+                                    continue
+                                reactiva_periodo = pd.to_numeric(
+                                    reactiva_medida[periodo], errors="coerce"
+                                ).sum(min_count=1)
+                                if pd.isna(reactiva_periodo):
+                                    continue
+                                periodos_reactiva_utiles += 1
+                                activa_periodo = float(
+                                    resultado_medida.consumos_periodos.get(
+                                        periodo, 0.0
+                                    )
+                                )
+                                cos_phi = factor_potencia(
+                                    activa_periodo, float(reactiva_periodo)
+                                )
+                                exceso = exceso_reactiva_inductiva(
+                                    activa_periodo,
+                                    float(reactiva_periodo),
+                                    periodo,
+                                )
+                                precio = precio_reactiva_inductiva(
+                                    cos_phi, periodo
+                                )
+                                coste_reactiva_datadis += exceso * precio
+                            if periodos_reactiva_utiles:
+                                coste_reactiva_datadis = round(
+                                    coste_reactiva_datadis, 2
+                                )
+                                reactiva_verificada_medida = True
+                                fuente_reactiva_verificada = "Datadis"
+                            else:
+                                coste_reactiva_datadis = None
+                    componentes_confirmados["reactiva"] = (
+                        coste_reactiva_datadis
+                        if coste_reactiva_datadis is not None
+                        else float(factura.reactiva)
+                    )
+                    if reactiva_verificada_medida:
+                        st.caption(
+                            f"Reactiva verificada con la medida {fuente_reactiva_verificada} "
+                            "del ciclo completo: "
+                            f"{formato_euros(coste_reactiva_datadis)}."
+                        )
+                    else:
+                        componentes_no_verificados_beta.add("Reactiva")
 
                 st.markdown("#### Confirma el resto de componentes")
                 filas_componentes_beta = []
@@ -2941,7 +3439,6 @@ with tab_verificacion:
                     "IEE e IVA se recalculan automáticamente con sus tipos "
                     "regulatorios sobre las bases ajustadas."
                 )
-
             reparto_energia_potencia = pd.DataFrame({
                 "Componente": ["Energía", "Potencia"],
                 "Importe (€)": [
@@ -2957,13 +3454,14 @@ with tab_verificacion:
             if resultado_medida is not None:
                 st.subheader("3 · Resultado", divider="rainbow")
                 subcol_resultado, subcol_metricas = st.columns(
-                    [0.70, 0.30], gap="medium"
+                    [0.75, 0.25], gap="medium"
                 )
                 estado_resumen_real = subcol_resultado.empty()
                 gauge_resumen_real = subcol_resultado.empty()
                 metric_factura_resumen = subcol_metricas.empty()
                 metric_verificado_resumen = subcol_metricas.empty()
                 metric_diferencia_resumen = subcol_metricas.empty()
+                revision_manual_real_placeholder = st.empty()
             st.subheader("4 · Detalles de la verificación", divider="rainbow")
             cups_periodo = (factura.cups or "").strip().upper()
             cups_enmascarado = (
@@ -2972,8 +3470,8 @@ with tab_verificacion:
                 else cups_periodo
             )
             st.caption(
-                f"Periodo analizado: {factura.periodo_inicio} – "
-                f"{factura.periodo_fin} · CUPS: {cups_enmascarado} · "
+                f"Ciclo real analizado: {fecha_inicio_medida:%d/%m/%Y} – "
+                f"{fecha_fin_medida:%d/%m/%Y} · CUPS: {cups_enmascarado} · "
                 f"Factura: {factura.numero_factura or 'No disponible'}"
             )
             if resultado_medida is None:
@@ -2983,6 +3481,7 @@ with tab_verificacion:
                     [0.70, 0.30], gap="medium"
                 )
                 titulo_resumen_componentes = col_tabla_reconstruccion.empty()
+                aviso_resumen_componentes = col_tabla_reconstruccion.empty()
                 tabla_resumen_componentes = col_tabla_reconstruccion.empty()
                 detalle_costes = col_tabla_reconstruccion.container()
                 grafico_componentes = col_metricas_resultado.container()
@@ -3012,6 +3511,106 @@ with tab_verificacion:
                     hide_index=True,
                     use_container_width=True,
                 )
+                if complementos_datadis_resultado is not None:
+                    max_datadis = complementos_datadis_resultado.get(
+                        "maximetros", pd.DataFrame()
+                    )
+                    if (
+                        complementos_datadis_resultado.get(
+                            "maximetros_ciclo_exacto", False
+                        )
+                        and not max_datadis.empty
+                    ):
+                        max_api = (
+                            max_datadis.dropna(subset=["period", "maxPower"])
+                            .groupby("period")["maxPower"].max().to_dict()
+                        )
+                        max_factura = {
+                            item.periodo: item.potencia_kw
+                            for item in factura.maximetros
+                        }
+                        periodos_max = sorted(
+                            set(max_api) | set(max_factura),
+                            key=lambda valor: int(valor.removeprefix("P")),
+                        )
+                        tabla_max_datadis = pd.DataFrame([
+                            {
+                                "Periodo": periodo,
+                                "Factura (kW)": max_factura.get(periodo),
+                                "Datadis (kW)": max_api.get(periodo),
+                                "Diferencia (kW)": (
+                                    max_api[periodo] - max_factura[periodo]
+                                    if periodo in max_api and periodo in max_factura
+                                    else None
+                                ),
+                            }
+                            for periodo in periodos_max
+                        ])
+                        col_medida_resultado.markdown("#### Comparativa de maxímetros")
+                        col_medida_resultado.dataframe(
+                            formatear_columnas_tabla(
+                                tabla_max_datadis,
+                                columnas_kw=[
+                                    "Factura (kW)", "Datadis (kW)",
+                                    "Diferencia (kW)",
+                                ],
+                                incluir_unidades=False,
+                            ),
+                            hide_index=True,
+                            use_container_width=True,
+                        )
+
+                    reactiva_datadis = complementos_datadis_resultado.get(
+                        "reactiva", pd.DataFrame()
+                    )
+                    if (
+                        complementos_datadis_resultado.get(
+                            "reactiva_ciclo_exacto", False
+                        )
+                        and not reactiva_datadis.empty
+                    ):
+                        reactiva_api = {
+                            periodo: pd.to_numeric(
+                                reactiva_datadis.get(periodo), errors="coerce"
+                            ).sum(min_count=1)
+                            for periodo in periodos_medida
+                            if periodo in reactiva_datadis
+                        }
+                        reactiva_factura = {
+                            item.periodo: item.energia_reactiva_kvarh
+                            for item in factura.reactiva_periodos
+                        }
+                        periodos_reactiva = sorted(
+                            set(reactiva_api) | set(reactiva_factura),
+                            key=lambda valor: int(valor.removeprefix("P")),
+                        )
+                        tabla_reactiva_datadis = pd.DataFrame([
+                            {
+                                "Periodo": periodo,
+                                "Factura (kVArh)": reactiva_factura.get(periodo),
+                                "Datadis (kVArh)": reactiva_api.get(periodo),
+                                "Diferencia (kVArh)": (
+                                    reactiva_api[periodo] - reactiva_factura[periodo]
+                                    if periodo in reactiva_api
+                                    and periodo in reactiva_factura
+                                    else None
+                                ),
+                            }
+                            for periodo in periodos_reactiva
+                        ])
+                        col_medida_resultado.markdown("#### Comparativa de reactiva")
+                        col_medida_resultado.dataframe(
+                            formatear_columnas_tabla(
+                                tabla_reactiva_datadis,
+                                columnas_kwh=[
+                                    "Factura (kVArh)", "Datadis (kVArh)",
+                                    "Diferencia (kVArh)",
+                                ],
+                                incluir_unidades=False,
+                            ),
+                            hide_index=True,
+                            use_container_width=True,
+                        )
                 tipo_energia_verificacion = st.session_state.get(
                     clave_tipo_energia_verificacion, "Fijo"
                 )
@@ -3166,8 +3765,22 @@ with tab_verificacion:
                     col_excesos_metricas.metric(
                         "Excesos según Axon",
                         formato_euros(coste_excesos_beta),
-                        delta=formato_euros(
-                            coste_excesos_beta - factura.excesos_potencia
+                    )
+                    diferencia_excesos_reales = (
+                        factura.excesos_potencia - coste_excesos_beta
+                    )
+                    diferencia_excesos_reales_pct = (
+                        diferencia_excesos_reales
+                        / factura.excesos_potencia * 100
+                        if factura.excesos_potencia else None
+                    )
+                    col_excesos_metricas.metric(
+                        "Diferencia real",
+                        formato_euros_con_signo(diferencia_excesos_reales),
+                        delta=(
+                            f"{formato_pct_con_signo(diferencia_excesos_reales_pct, 2)} "
+                            "de los excesos facturados"
+                            if diferencia_excesos_reales_pct is not None else None
                         ),
                         delta_color="inverse",
                     )
@@ -3217,6 +3830,7 @@ with tab_verificacion:
                 ]
                 nombres_componentes_beta = {
                     "excesos_potencia": "Excesos de potencia",
+                    "reactiva": "Reactiva",
                     **{
                         f"otro_{indice}": item.concepto
                         for indice, item in enumerate(factura.otros)
@@ -3278,6 +3892,8 @@ with tab_verificacion:
                     axis=1,
                 )
                 def impacto_fila(fila):
+                    if fila["Componente"] in componentes_no_verificados_beta:
+                        return "warning"
                     tipo_tolerancia = (
                         "total_factura"
                         if fila["Componente"] == "TOTAL" else "componentes"
@@ -3296,7 +3912,10 @@ with tab_verificacion:
                     impacto_fila, axis=1
                 )
                 tabla_total_beta["Estado"] = impactos_tabla_beta.map(
-                    {"correcto": "✔", "favorable": "✖", "contra": "✖"}
+                    {
+                        "correcto": "✔", "warning": "⚠",
+                        "favorable": "✖", "contra": "✖",
+                    }
                 )
                 verificacion_beta_ok = importes_coinciden(
                     factura.total,
@@ -3307,7 +3926,14 @@ with tab_verificacion:
                     not verificacion_beta_ok
                     and reconstruccion_beta["diferencia_total"] < 0
                 )
-                if verificacion_beta_ok:
+                verificacion_beta_incompleta = bool(
+                    componentes_no_verificados_beta
+                )
+                if verificacion_beta_incompleta:
+                    beta_texto, beta_icono, beta_color = (
+                        "INCOMPLETA", "⚠", "#e0a800"
+                    )
+                elif verificacion_beta_ok:
                     beta_texto, beta_icono, beta_color = (
                         "CORRECTO", "✓", "#00c853"
                     )
@@ -3320,14 +3946,22 @@ with tab_verificacion:
                         "INCORRECTO", "✕", "#ef4444"
                     )
                 beta_fondo = (
-                    "rgba(0,200,83,.12)"
-                    if verificacion_beta_ok or verificacion_beta_favorable
-                    else "rgba(239,68,68,.12)"
+                    "rgba(224,168,0,.14)"
+                    if verificacion_beta_incompleta
+                    else (
+                        "rgba(0,200,83,.12)"
+                        if verificacion_beta_ok or verificacion_beta_favorable
+                        else "rgba(239,68,68,.12)"
+                    )
                 )
                 beta_borde = (
-                    "rgba(0,200,83,.55)"
-                    if verificacion_beta_ok or verificacion_beta_favorable
-                    else "rgba(239,68,68,.55)"
+                    "rgba(224,168,0,.65)"
+                    if verificacion_beta_incompleta
+                    else (
+                        "rgba(0,200,83,.55)"
+                        if verificacion_beta_ok or verificacion_beta_favorable
+                        else "rgba(239,68,68,.55)"
+                    )
                 )
                 estado_resumen_real.markdown(
                         "<div style='display:flex;align-items:center;"
@@ -3352,23 +3986,39 @@ with tab_verificacion:
                     "Total verificado",
                     formato_euros(reconstruccion_beta["total_verificado"]),
                 )
-                metric_diferencia_resumen.metric(
-                    "Factura − verificado",
-                    formato_euros(reconstruccion_beta["diferencia_total"]),
-                    delta=(
-                        formato_pct(
+                with metric_diferencia_resumen.container(border=True):
+                    st.metric(
+                        "Factura − verificado",
+                        formato_euros_con_signo(
                             reconstruccion_beta["diferencia_total"]
-                            / reconstruccion_beta["total_verificado"]
-                            * 100
-                        )
-                        if abs(reconstruccion_beta["total_verificado"]) > 0.000001
-                        else None
-                    ),
-                    delta_color="inverse",
-                )
+                        ),
+                        delta=(
+                            formato_pct_con_signo(
+                                reconstruccion_beta["diferencia_total"]
+                                / reconstruccion_beta["total_verificado"]
+                                * 100
+                            )
+                            if abs(reconstruccion_beta["total_verificado"]) > 0.000001
+                            else None
+                        ),
+                        delta_color="inverse",
+                    )
+                with revision_manual_real_placeholder.container():
+                    revision_manual_real = _revision_manual_veredicto(
+                        huella,
+                        "real",
+                        beta_texto,
+                    )
                 titulo_resumen_componentes.markdown(
                     "#### Resumen verificación componentes"
                 )
+                if componentes_no_verificados_beta:
+                    aviso_resumen_componentes.warning(
+                        "⚠️ No se han podido verificar de forma independiente: "
+                        + ", ".join(sorted(componentes_no_verificados_beta))
+                        + ". Sus importes facturados se conservan para reconstruir "
+                        "el total."
+                    )
                 tabla_total_beta_mostrar = formatear_columnas_tabla(
                     tabla_total_beta,
                     columnas_euros=[
@@ -3386,7 +4036,14 @@ with tab_verificacion:
                     )
                     for indice in dataframe.index:
                         impacto = impactos_tabla_beta.loc[indice]
-                        color = "#00c853" if impacto != "contra" else "#ef4444"
+                        if impacto == "warning":
+                            estilos.loc[indice, :] = (
+                                "background-color:rgba(224,168,0,.14);"
+                            )
+                        color = (
+                            "#e0a800" if impacto == "warning"
+                            else ("#00c853" if impacto != "contra" else "#ef4444")
+                        )
                         estilos.loc[indice, "Estado"] = (
                             f"color:{color};font-size:1.5rem;font-weight:900;"
                             f"-webkit-text-stroke:0.65px {color};"
@@ -3420,7 +4077,6 @@ with tab_verificacion:
                         use_container_width=True,
                 )
                 if not reparto_energia_potencia.empty:
-                    grafico_componentes.markdown("#### Potencia y Energía")
                     figura_reparto_contrato = px.pie(
                         reparto_energia_potencia,
                         names="Componente",
@@ -3428,7 +4084,7 @@ with tab_verificacion:
                         hole=0.48,
                         color="Componente",
                         color_discrete_map={
-                            "Energía": "#e74c3c",
+                            "Energía": "#f97316",
                             "Potencia": "#3498db",
                         },
                     )
@@ -3450,17 +4106,14 @@ with tab_verificacion:
                         figura_reparto_contrato
                     )
                     figura_reparto_contrato.update_layout(
-                        title=None,
-                        title_text=None,
+                        title=dict(
+                            text="Potencia y energía",
+                            x=0.5,
+                            xanchor="center",
+                        ),
                         height=400,
-                        margin=dict(l=0, r=0, t=0, b=0),
+                        margin=dict(l=0, r=0, t=55, b=0),
                         showlegend=False,
-                    )
-                    grafico_componentes.plotly_chart(
-                        figura_reparto_contrato,
-                        use_container_width=True,
-                        key=f"factura_reparto_contrato_{huella[:8]}",
-                        config={"displayModeBar": False},
                     )
 
                 def categoria_componente(nombre):
@@ -3499,17 +4152,29 @@ with tab_verificacion:
                     reparto_todos_componentes["Verificado (€)"] > 0
                 ]
                 if not reparto_todos_componentes.empty:
+                    colores_todos_componentes = {
+                        "Potencia": "#3498db",
+                        "Energía": "#f97316",
+                        "Excesos": "#dc2626",
+                        "Reactiva": "#9333ea",
+                        "IEE": "#14b8a6",
+                        "IVA": "#ec4899",
+                        "AM": "#22c55e",
+                        "Otros": "#eab308",
+                    }
                     figura_todos_componentes = px.pie(
                         reparto_todos_componentes,
                         names="Categoría",
                         values="Verificado (€)",
                         hole=0.48,
                         title="Todos los componentes",
+                        color="Categoría",
+                        color_discrete_map=colores_todos_componentes,
                     )
                     figura_todos_componentes.update_traces(
                         textinfo="label+percent",
                         textposition="inside",
-                        textfont=dict(size=16, family="Arial"),
+                        textfont=dict(size=16, family="Arial", color="white"),
                         hovertemplate=(
                             "%{label}<br>%{value:.2f} €<br>"
                             "%{percent}<extra></extra>"
@@ -3532,6 +4197,14 @@ with tab_verificacion:
                         key=f"factura_todos_componentes_{huella[:8]}",
                         config={"displayModeBar": False},
                     )
+                if not reparto_energia_potencia.empty:
+                    grafico_componentes.markdown("#### Potencia y Energía")
+                    grafico_componentes.plotly_chart(
+                        figura_reparto_contrato,
+                        use_container_width=True,
+                        key=f"factura_reparto_contrato_{huella[:8]}",
+                        config={"displayModeBar": False},
+                    )
                 grafico_componentes.metric(
                     "Energía facturada",
                     formato_euros(energia_facturada_comparable),
@@ -3542,7 +4215,7 @@ with tab_verificacion:
                 )
                 grafico_componentes.metric(
                     "Diferencia energía",
-                    formato_euros(
+                    formato_euros_con_signo(
                         energia_facturada_comparable - coste_energia_medida
                     ),
                     delta_color="inverse",
@@ -3752,7 +4425,7 @@ with tab_comparativa:
                             "Configuración compartida con Telemindex durante "
                             "esta sesión."
                         )
-                        mostrar_parametros_formula_indexado(
+                        parametros_indexados_propuesta = mostrar_parametros_formula_indexado(
                             widget_suffix="factura_propuesta",
                             diferido=True,
                         )
@@ -3762,6 +4435,8 @@ with tab_comparativa:
                             use_container_width=True,
                             disabled=atr_indexado is None,
                         )
+                        if calcular:
+                            st.session_state.update(parametros_indexados_propuesta)
 
             if st.session_state.get("factura_tipo_energia") == "Indexado":
                 if inicio_indexado and fin_indexado:
@@ -3913,9 +4588,9 @@ with tab_comparativa:
                 with metrica_diferencia.container(border=True):
                     st.metric(
                         "Diferencia",
-                        formato_euros(diferencia_total),
+                        formato_euros_con_signo(diferencia_total),
                         delta=(
-                            formato_pct(diferencia_total_pct, 2)
+                            formato_pct_con_signo(diferencia_total_pct, 2)
                             if diferencia_total_pct is not None
                             else None
                         ),
@@ -3999,7 +4674,7 @@ with tab_comparativa:
                     f"Precio medio {tipo_propuesta_minusculas}",
                     formato_eur_kwh(resultado["precio_indexado"], 5),
                     delta=(
-                        formato_pct(diferencia_energia_pct, 2)
+                        formato_pct_con_signo(diferencia_energia_pct, 2)
                         if diferencia_energia_pct is not None
                         else None
                     ),
@@ -4155,7 +4830,7 @@ with tab_comparativa:
 
 
 with tab_informe:
-    st.subheader("Informe", divider="rainbow")
+    st.subheader("Informes", divider="rainbow")
     col_informe, col_salida_informe = st.columns([0.40, 0.60])
     contenedor_salida_informe = col_salida_informe.container()
     with col_informe:
@@ -4167,15 +4842,52 @@ with tab_informe:
                 "La vista previa aparecerá aquí cuando exista una propuesta."
             )
         else:
+            informes_disponibles = []
+            if resultado_medida is not None and "tabla_total_beta" in locals():
+                informes_disponibles.append("Informe de verificación")
+            if resultado is not None:
+                informes_disponibles.append("Informe comercial de propuesta")
+            if not informes_disponibles:
+                informes_disponibles.append("Informe comercial de propuesta")
+            tipo_informe_seleccionado = st.selectbox(
+                "Informe disponible",
+                informes_disponibles,
+                key=f"factura_tipo_informe_{huella[:8]}",
+            )
             datos_informe = _datos_informe_desde_factura(factura, texto)
-            if st.session_state.get("_factura_informe_huella") != huella:
+            if tipo_informe_seleccionado == "Informe de verificación":
+                datos_informe["factura_informe_objeto"] = (
+                    "Informe de verificación de factura"
+                )
+            huella_datos_informe = f"{huella}:cabecera_v3"
+            if (
+                st.session_state.get("_factura_informe_huella")
+                != huella_datos_informe
+            ):
                 for clave, valor in datos_informe.items():
                     st.session_state[clave] = valor
-                st.session_state["_factura_informe_huella"] = huella
+                st.session_state["_factura_informe_huella"] = (
+                    huella_datos_informe
+                )
                 st.session_state.pop("factura_informe_logo", None)
             else:
                 for clave, valor in datos_informe.items():
                     st.session_state.setdefault(clave, valor)
+
+            contexto_objeto_informe = (
+                huella,
+                tipo_informe_seleccionado,
+            )
+            if (
+                st.session_state.get("_factura_informe_objeto_contexto")
+                != contexto_objeto_informe
+            ):
+                objeto_informe = datos_informe["factura_informe_objeto"]
+                st.session_state["factura_informe_objeto"] = objeto_informe
+                st.session_state["_factura_informe_objeto"] = objeto_informe
+                st.session_state["_factura_informe_objeto_contexto"] = (
+                    contexto_objeto_informe
+                )
 
             st.caption(
                 "Los datos detectados en la factura son editables. Revisa la "
@@ -4266,7 +4978,7 @@ with tab_informe:
                 )
                 persist_widget(
                     st.text_input,
-                    "Objeto de la propuesta",
+                    "Objeto del informe",
                     key="factura_informe_objeto",
                     default=datos_informe["factura_informe_objeto"],
                 )
@@ -4281,6 +4993,491 @@ with tab_informe:
                 )
                 if logo_informe is not None:
                     st.image(logo_informe, width=180)
+
+            if tipo_informe_seleccionado == "Informe de verificación":
+                contenedor_salida_informe.markdown(
+                    "#### Informe de verificación · V1"
+                )
+                contenedor_salida_informe.caption(
+                    "Estructura en tres niveles: conclusión, resumen y detalle técnico."
+                )
+
+                def tabla_html_informe(dataframe):
+                    if dataframe is None or dataframe.empty:
+                        return "<p><em>No hay una tabla disponible para este concepto.</em></p>"
+                    tabla = dataframe.copy()
+
+                    def formatear_celda_informe(valor, columna):
+                        if valor is None or pd.isna(valor):
+                            return "—"
+                        if isinstance(valor, bool):
+                            return "Sí" if valor else "No"
+                        try:
+                            numero = float(valor)
+                        except (TypeError, ValueError):
+                            return str(valor)
+                        nombre = str(columna).lower()
+                        if "€/kwh" in nombre or "€/kw" in nombre or "precio" in nombre:
+                            decimales = 6
+                        elif "tep" in nombre:
+                            decimales = 6
+                        elif "factor" in nombre or "prorrateo" in nombre:
+                            decimales = 6
+                        elif "€" in nombre or "eur" in nombre or any(
+                            termino in nombre
+                            for termino in ("coste", "importe")
+                        ):
+                            decimales = 2
+                        elif "%" in nombre or "porcentaje" in nombre or "desvío" in nombre:
+                            decimales = 2
+                        elif "kvarh" in nombre:
+                            decimales = 3
+                        elif "kwh" in nombre or "mwh" in nombre:
+                            decimales = 0
+                        elif "kw" in nombre:
+                            decimales = 3
+                        elif "día" in nombre or "dias" in nombre or "días" in nombre:
+                            decimales = 0
+                        else:
+                            decimales = 2
+                        return formato_numero_es(numero, decimales)
+
+                    for columna in tabla.columns:
+                        tabla[columna] = tabla[columna].map(
+                            lambda valor, nombre_columna=columna: (
+                                formatear_celda_informe(valor, nombre_columna)
+                            )
+                        )
+                    return tabla.to_html(index=False, border=0, escape=True)
+
+                revisiones_manuales_activas = [
+                    revision for revision in (
+                        revision_manual_factura, revision_manual_real
+                    )
+                    if revision is not None
+                ]
+                revisiones_manuales_invalidas = [
+                    revision for revision in revisiones_manuales_activas
+                    if not revision.get("valida")
+                ]
+                if revisiones_manuales_invalidas:
+                    contenedor_salida_informe.warning(
+                        "Completa el motivo de todas las revisiones manuales "
+                        "antes de preparar el informe."
+                    )
+                if contenedor_salida_informe.button(
+                    "Preparar informe de verificación",
+                    type="primary",
+                    use_container_width=True,
+                    key=f"preparar_informe_verificacion_{huella[:8]}",
+                    disabled=bool(revisiones_manuales_invalidas),
+                ):
+                    def figura_data_uri(figura, ancho=1000, alto=500):
+                        if figura is None:
+                            return ""
+                        try:
+                            png = figura.to_image(
+                                format="png", width=ancho, height=alto, scale=1.4
+                            )
+                            return "data:image/png;base64," + base64.b64encode(
+                                png
+                            ).decode("ascii")
+                        except Exception:
+                            return ""
+
+                    logo_data = ""
+                    if logo_informe is not None:
+                        subtipo_logo = (
+                            "jpeg" if logo_informe.type == "image/jpeg" else "png"
+                        )
+                        logo_data = (
+                            f"data:image/{subtipo_logo};base64,"
+                            + base64.b64encode(logo_informe.getvalue()).decode("ascii")
+                        )
+
+                    tabla_resumen_informe = tabla_total_beta_mostrar.copy()
+                    tabla_resumen_html_informe = (
+                        tabla_resumen_informe.style
+                        .apply(colorear_estados, axis=None)
+                        .set_properties(
+                            subset=["Estado"],
+                            **{"text-align": "center"},
+                        )
+                        .hide(axis="index")
+                        .to_html()
+                    )
+                    tabla_niveles_informe = df_componentes.copy()
+                    columnas_niveles = [
+                        columna for columna in (
+                            "Componente", "Verif s/factura", "Verif s/cálculo",
+                            "Verificación real",
+                        ) if columna in tabla_niveles_informe.columns
+                    ]
+                    tabla_niveles_informe = tabla_niveles_informe[columnas_niveles]
+                    def semaforo_contraste_real(facturado, verificado):
+                        if importes_coinciden(
+                            float(facturado), float(verificado), "componentes"
+                        ):
+                            return "🟢"
+                        # Cobrar menos que el valor reconstruido es una
+                        # discrepancia verificada, pero favorable al cliente.
+                        return "🟢 ⚠️" if facturado < verificado else "🔴"
+
+                    if (
+                        coste_excesos_beta is not None
+                        and not detalle_excesos_beta.empty
+                    ):
+                        tabla_niveles_informe.loc[
+                            tabla_niveles_informe["Componente"] == "Excesos",
+                            "Verificación real",
+                        ] = semaforo_contraste_real(
+                            factura.excesos_potencia, coste_excesos_beta
+                        )
+                    if reactiva_verificada_medida:
+                        tabla_niveles_informe.loc[
+                            tabla_niveles_informe["Componente"] == "Reactiva",
+                            "Verificación real",
+                        ] = semaforo_contraste_real(
+                            factura.reactiva,
+                            componentes_confirmados.get("reactiva", factura.reactiva),
+                        )
+
+                    def tabla_niveles_html_informe(dataframe):
+                        def clase_estado(valor):
+                            texto_estado = str(valor)
+                            if "🔴" in texto_estado:
+                                return "rojo"
+                            if "🔵" in texto_estado:
+                                return "azul"
+                            if "🟢" in texto_estado:
+                                return "verde"
+                            return "ambar"
+                        cabecera = "".join(
+                            f"<th>{escape(str(columna))}</th>"
+                            for columna in dataframe.columns
+                        )
+                        filas = []
+                        for _, fila in dataframe.iterrows():
+                            celdas = []
+                            for indice, valor in enumerate(fila):
+                                if indice == 0:
+                                    contenido = escape(str(valor))
+                                else:
+                                    clase = clase_estado(valor)
+                                    contenido = (
+                                        f'<span class="estado-circulo {clase}" '
+                                        f'aria-label="{escape(str(valor))}"></span>'
+                                    )
+                                celdas.append(f"<td>{contenido}</td>")
+                            filas.append("<tr>" + "".join(celdas) + "</tr>")
+                        return (
+                            "<table><thead><tr>" + cabecera
+                            + "</tr></thead><tbody>" + "".join(filas)
+                            + "</tbody></table>"
+                        )
+                    tabla_niveles_html = tabla_niveles_html_informe(
+                        tabla_niveles_informe
+                    )
+
+                    secciones_verificacion = [
+                        {
+                            "titulo": "Potencia facturada",
+                            "texto": (
+                                "Reproducción del término de potencia por periodo y "
+                                "tramo con las potencias y precios confirmados."
+                            ),
+                            "tabla": tabla_html_informe(detalle_potencia_mostrar),
+                        },
+                        {
+                            "titulo": "Excesos de potencia",
+                            "texto": (
+                                "Cálculo desde la curva de medida. Cuando existen "
+                                "cambios de potencia, cada tramo conserva sus fechas "
+                                "y su factor de prorrateo."
+                            ),
+                            "tabla": tabla_html_informe(detalle_excesos_beta),
+                        },
+                        {
+                            "titulo": "Energía activa",
+                            "texto": (
+                                "Comparación por periodo del consumo medido y su "
+                                "valoración con los precios confirmados. El ciclo "
+                                "utilizado es el ciclo real indicado en la cabecera."
+                            ),
+                            "tabla": tabla_html_informe(detalle_coste_mostrar),
+                        },
+                    ]
+                    detalle_reactiva_informe = locals().get(
+                        "detalle_reactiva_curva", pd.DataFrame()
+                    )
+                    if detalle_reactiva_informe.empty and factura.reactiva_periodos:
+                        detalle_reactiva_informe = pd.DataFrame([{
+                            "Periodo": item.periodo,
+                            "Activa factura (kWh)": item.energia_activa_kwh,
+                            "Reactiva factura (kVArh)": item.energia_reactiva_kvarh,
+                            "Exceso facturado (kVArh)": item.exceso_facturado_kvarh,
+                            "Coste facturado (€)": item.coste_facturado_eur,
+                            "Coste calculado (€)": item.coste_calculado_eur,
+                        } for item in factura.reactiva_periodos])
+                    secciones_verificacion.append({
+                        "titulo": "Energía reactiva",
+                        "texto": (
+                            "La activa y la reactiva se agregan por periodo sobre el "
+                            "ciclo completo; se aplica el umbral y precio regulado "
+                            "correspondiente."
+                        ),
+                        "tabla": tabla_html_informe(detalle_reactiva_informe),
+                    })
+                    conceptos_finales = tabla_total_beta.loc[
+                        tabla_total_beta["Componente"].isin(["IEE", "IVA"])
+                        | ~tabla_total_beta["Componente"].isin([
+                            "Potencia", "Energía", "Excesos de potencia",
+                            "Reactiva", "TOTAL",
+                        ])
+                    ].copy()
+                    def orden_concepto_final(nombre):
+                        concepto = str(nombre).lower()
+                        if "fnee" in concepto or "eficiencia energética" in concepto:
+                            return 0
+                        if str(nombre).upper() == "IEE":
+                            return 1
+                        if str(nombre).upper() == "AM" or "alquiler" in concepto:
+                            return 2
+                        if str(nombre).upper() == "IVA":
+                            return 4
+                        return 3
+                    conceptos_finales["_orden_informe"] = conceptos_finales[
+                        "Componente"
+                    ].map(orden_concepto_final)
+                    conceptos_finales = conceptos_finales.sort_values(
+                        "_orden_informe", kind="stable"
+                    ).drop(columns="_orden_informe")
+                    secciones_verificacion.append({
+                        "titulo": "Otros conceptos e impuestos",
+                        "texto": (
+                            "Los conceptos regulados se contrastan con su referencia "
+                            "cuando está disponible; los restantes conservan el "
+                            "importe confirmado por el usuario."
+                        ),
+                        "tabla": tabla_html_informe(conceptos_finales),
+                    })
+
+                    alcance_origen = st.session_state.get(
+                        "factura_verificacion_consumos", {}
+                    ).get("origen", "medida").capitalize()
+                    if verificacion_beta_incompleta:
+                        conclusion = (
+                            "La verificación no alcanza contraste independiente para "
+                            "todos los conceptos. Revise los avisos del nivel 2."
+                        )
+                    elif verificacion_beta_ok:
+                        conclusion = (
+                            "El total verificado coincide con la factura dentro de "
+                            "los márgenes admitidos."
+                        )
+                    elif verificacion_beta_favorable:
+                        conclusion = (
+                            "La factura presenta diferencias respecto al cálculo, "
+                            "pero el efecto económico es favorable para el cliente."
+                        )
+                    else:
+                        conclusion = (
+                            "La factura presenta una desviación económica desfavorable "
+                            "respecto al importe verificado."
+                        )
+                    estado_informe = beta_texto
+                    estado_icono_informe = beta_icono
+                    hero_color_informe = beta_color
+                    hero_borde_informe = beta_borde
+                    hero_fondo_informe = beta_fondo
+                    revision_real_valida = (
+                        revision_manual_real
+                        if revision_manual_real
+                        and revision_manual_real.get("valida")
+                        else None
+                    )
+                    if revision_real_valida:
+                        estado_informe = revision_real_valida["manual"]
+                        es_correcto_manual = estado_informe == "CORRECTO"
+                        estado_icono_informe = "✓" if es_correcto_manual else "✕"
+                        hero_color_informe = (
+                            "#00c853" if es_correcto_manual else "#ef4444"
+                        )
+                        hero_borde_informe = (
+                            "rgba(0,200,83,.55)"
+                            if es_correcto_manual else "rgba(239,68,68,.55)"
+                        )
+                        hero_fondo_informe = (
+                            "rgba(0,200,83,.12)"
+                            if es_correcto_manual else "rgba(239,68,68,.12)"
+                        )
+                        conclusion = (
+                            "El veredicto final ha sido establecido mediante revisión "
+                            "manual. Los cálculos y evidencias técnicas del informe "
+                            "no han sido modificados."
+                        )
+                    ciclo_real_informe = (
+                        f"{fecha_inicio_medida:%d/%m/%Y} – "
+                        f"{fecha_fin_medida:%d/%m/%Y}"
+                    )
+                    figura_desvio_informe = go.Figure(figura_desvio)
+                    for anotacion in figura_desvio_informe.layout.annotations:
+                        texto_anotacion = str(anotacion.text or "")
+                        if "Desvío total" in texto_anotacion:
+                            anotacion.font.size = 25
+                        elif "<b>" in texto_anotacion:
+                            anotacion.font.size = 58
+                        else:
+                            anotacion.font.size = 22
+                    figura_desvio_informe.update_layout(
+                        height=285,
+                        margin=dict(l=10, r=10, t=58, b=2),
+                    )
+                    figura_todos_informe = go.Figure(figura_todos_componentes)
+                    figura_todos_informe.update_traces(
+                        textinfo="label+percent",
+                        textposition="outside",
+                        textfont=dict(size=20, family="Arial", color="#263547"),
+                        automargin=True,
+                    )
+                    figura_todos_informe.update_layout(
+                        uniformtext_minsize=16,
+                        uniformtext_mode="show",
+                        margin=dict(l=85, r=85, t=55, b=45),
+                    )
+                    figura_reparto_informe = go.Figure(figura_reparto_contrato)
+                    figura_reparto_informe.update_traces(
+                        textinfo="label+percent",
+                        textposition="outside",
+                        textfont=dict(size=20, family="Arial", color="#263547"),
+                        automargin=True,
+                    )
+                    figura_reparto_informe.update_layout(
+                        uniformtext_minsize=16,
+                        uniformtext_mode="show",
+                        margin=dict(l=85, r=85, t=55, b=45),
+                    )
+                    accion_resultado = (
+                        "REVISIÓN MANUAL"
+                        if revision_real_valida
+                        else (
+                            ""
+                            if verificacion_beta_incompleta or verificacion_beta_ok
+                            else (
+                                "A FAVOR DEL CLIENTE"
+                                if verificacion_beta_favorable
+                                else "RECLAMAR"
+                            )
+                        )
+                    )
+                    revisiones_informe = [
+                        {
+                            "ambito": (
+                                "Verificación según factura"
+                                if revision["ambito"] == "segun_factura"
+                                else "Verificación real"
+                            ),
+                            "automatico": escape(revision["automatico"]),
+                            "manual": escape(revision["manual"]),
+                            "motivo": escape(revision["motivo"]),
+                            "fecha": escape(revision["fecha"]),
+                        }
+                        for revision in revisiones_manuales_activas
+                        if revision.get("valida")
+                    ]
+                    contexto_verificacion = {
+                        "logo": logo_data,
+                        "objeto": escape(st.session_state.get(
+                            "factura_informe_objeto", "Verificación de factura"
+                        )),
+                        "cliente": escape(st.session_state.get("factura_informe_cliente", "")),
+                        "nif": escape(st.session_state.get("factura_informe_nif", "")),
+                        "cups": escape(st.session_state.get("factura_informe_cups", "")),
+                        "numero_factura": escape(st.session_state.get("factura_informe_numero", "")),
+                        "comercializadora": escape(st.session_state.get("factura_informe_comercializadora", "")),
+                        "fecha_factura": escape(st.session_state.get("factura_informe_fecha", "")),
+                        "ciclo_factura": escape(st.session_state.get("factura_informe_ciclo", "")),
+                        "ciclo_real": ciclo_real_informe,
+                        "atr": escape(st.session_state.get("factura_informe_atr", "")),
+                        "estado": estado_informe,
+                        "estado_icono": estado_icono_informe,
+                        "accion_resultado": accion_resultado,
+                        "conclusion": conclusion,
+                        "total_factura": formato_euros(factura.total),
+                        "total_verificado": formato_euros(reconstruccion_beta["total_verificado"]),
+                        "diferencia": formato_euros(reconstruccion_beta["diferencia_total"]),
+                        "alcance": f"Verificación real con datos {alcance_origen}",
+                        "texto_alcance": (
+                            "Se ha alcanzado el nivel de contraste real para energía "
+                            "y los componentes sustentados por la medida. Los demás "
+                            "conceptos se clasifican individualmente según factura, "
+                            "cálculo reproducido o referencia externa."
+                        ),
+                        "hero_color": hero_color_informe,
+                        "hero_border": hero_borde_informe,
+                        "hero_background": hero_fondo_informe,
+                        "revisiones_manuales": revisiones_informe,
+                        "gauge": figura_data_uri(figura_desvio_informe, 900, 420),
+                        "tabla_resumen": tabla_resumen_html_informe,
+                        "tabla_niveles": tabla_niveles_html,
+                        "grafico_todos": figura_data_uri(figura_todos_informe),
+                        "grafico_energia_potencia": figura_data_uri(figura_reparto_informe),
+                        "secciones": secciones_verificacion,
+                        "realizado_por": escape(st.session_state.get("factura_informe_realizado_por", "")),
+                        "fecha_realizacion": escape(st.session_state.get("factura_informe_fecha_realizacion", "")),
+                    }
+                    html_verificacion = _renderizar_plantilla_informe(
+                        contexto_verificacion,
+                        "templates/informe_verificacion.html",
+                    )
+                    st.session_state["factura_informe_verificacion"] = {
+                        "huella": huella,
+                        "html": html_verificacion,
+                    }
+
+                informe_verificacion_sesion = st.session_state.get(
+                    "factura_informe_verificacion"
+                )
+                if (
+                    informe_verificacion_sesion
+                    and informe_verificacion_sesion.get("huella") == huella
+                ):
+                    with contenedor_salida_informe.expander(
+                        "Vista previa del informe de verificación", expanded=True
+                    ):
+                        st.components.v1.html(
+                            informe_verificacion_sesion["html"],
+                            height=1050,
+                            scrolling=True,
+                        )
+                    numero_informe = re.sub(
+                        r"[^A-Za-z0-9._-]+", "_",
+                        str(factura.numero_factura or "factura"),
+                    ).strip("._") or "factura"
+                    cups_informe = re.sub(
+                        r"[^A-Za-z0-9._-]+", "_",
+                        str(factura.cups or "sin_cups"),
+                    ).strip("._") or "sin_cups"
+                    fecha_inicio_informe = re.sub(
+                        r"[^A-Za-z0-9._-]+", "_",
+                        str(factura.periodo_inicio or "sin_fecha_inicio"),
+                    ).strip("._") or "sin_fecha_inicio"
+                    fecha_fin_informe = re.sub(
+                        r"[^A-Za-z0-9._-]+", "_",
+                        str(factura.periodo_fin or "sin_fecha_fin"),
+                    ).strip("._") or "sin_fecha_fin"
+                    contenedor_salida_informe.download_button(
+                        "Descargar informe de verificación HTML",
+                        data=informe_verificacion_sesion["html"].encode("utf-8"),
+                        file_name=(
+                            "informe_verificacion_luz_"
+                            f"{cups_informe}_{numero_informe}_"
+                            f"{fecha_inicio_informe}_{fecha_fin_informe}.html"
+                        ),
+                        mime="text/html; charset=utf-8",
+                        use_container_width=True,
+                    )
+                st.stop()
 
             contenedor_salida_informe.markdown("#### Resumen comercial")
             if resultado is None:

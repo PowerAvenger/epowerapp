@@ -6,10 +6,12 @@ import pandas as pd
 from backend_verificacion_consumos import (
     calcular_energia_indexada,
     calcular_energia_fija,
+    calcular_reactiva_desde_curva,
     calcular_excesos_desde_curva,
     calcular_potencia_confirmada,
     debe_prorratear_excesos_tramo,
     estado_verificacion_energia_real,
+    resolver_ciclo_energia,
     preparar_archivos_factura,
     preparar_curva_factura,
     reconstruir_total_beta,
@@ -135,6 +137,93 @@ class VerificacionConsumosTest(unittest.TestCase):
         self.assertTrue(resultado.cobertura["completa"])
         self.assertEqual(resultado.consumos_periodos, {"P3": 24.0})
 
+    def test_ciclo_lecturas_excluye_dia_inicial(self):
+        fechas = pd.date_range("2026-06-30", "2026-07-31 23:00", freq="1h")
+        curva = pd.DataFrame({
+            "Fecha": fechas.strftime("%d/%m/%Y"),
+            "Hora": fechas.strftime("%H:%M"),
+            "Consumo (kWh)": [10.0] * 24 + [1.0] * (31 * 24),
+            "Periodo": ["P3"] * 24 + ["P1"] * (31 * 24),
+        })
+
+        resultado = preparar_curva_factura(
+            curva, "30/06/2026", "31/07/2026", atr="2.0"
+        )
+        self.assertTrue(resultado.cobertura["completa"])
+        self.assertEqual(resultado.cobertura["intervalos_esperados"], 31 * 24)
+        self.assertEqual(resultado.consumos_periodos, {"P1": 31 * 24})
+
+    def test_61_sin_tipo_prorratea_doble_tramo_15_y_16_dias(self):
+        casos = (
+            ("01/07/2026", "15/07/2026", 15 / 31),
+            ("16/07/2026", "31/07/2026", 16 / 31),
+        )
+        for inicio, fin, factor in casos:
+            with self.subTest(inicio=inicio, fin=fin):
+                self.assertTrue(debe_prorratear_excesos_tramo(
+                    inicio, fin, numero_tramos=2,
+                    tipo_suministro=None, tarifa="6.1TD",
+                ))
+                dias = (
+                    pd.to_datetime(fin, dayfirst=True)
+                    - pd.to_datetime(inicio, dayfirst=True)
+                ).days + 1
+                self.assertAlmostEqual(dias / 31, factor)
+
+    def test_mes_natural_julio_incluye_del_1_al_31_en_qh(self):
+        fechas = pd.date_range(
+            "2026-07-01 00:00", "2026-07-31 23:45", freq="15min"
+        )
+        curva = pd.DataFrame({
+            "Fecha": fechas.strftime("%d/%m/%Y"),
+            "Hora": fechas.strftime("%H:%M"),
+            "Consumo (kWh)": [1.0] * len(fechas),
+            "Reactiva (kVArh)": [0.5] * len(fechas),
+            "Periodo": ["P1"] * len(fechas),
+        })
+        resultado = preparar_curva_factura(
+            curva, "01/07/2026", "31/07/2026", atr="6.1",
+            inicio_exclusivo=False,
+        )
+        self.assertTrue(resultado.cobertura["completa"])
+        self.assertEqual(resultado.cobertura["intervalos_esperados"], 31 * 96)
+        self.assertEqual(resultado.cobertura["intervalos_unicos"], 31 * 96)
+        self.assertEqual(resultado.consumos_periodos, {"P1": 31 * 96})
+        self.assertEqual(
+            resultado.curva_periodo["fecha_hora"].min(),
+            pd.Timestamp("2026-07-01 00:00"),
+        )
+        self.assertEqual(
+            resultado.curva_periodo["fecha_hora"].max(),
+            pd.Timestamp("2026-07-31 23:45"),
+        )
+
+    def test_ciclo_generico_excluye_inicio_sin_importar_atr(self):
+        self.assertEqual(
+            resolver_ciclo_energia(
+                "30/06/2026", "31/07/2026",
+                formato="generico", comercializadora="Otra",
+            ),
+            (pd.Timestamp("2026-07-01").date(), pd.Timestamp("2026-07-31").date()),
+        )
+
+    def test_excepciones_nexus_vm_y_naturgy_gc_incluyen_inicio(self):
+        casos = (
+            ("nexus_nuevo", "Nexus Energía"),
+            ("vm_fijo", "VM Energía"),
+            ("naturgy_grandes_clientes", "Naturgy Grandes Clientes"),
+            ("generico", "Nexus Energía"),
+        )
+        for formato, comercializadora in casos:
+            with self.subTest(formato=formato):
+                self.assertEqual(
+                    resolver_ciclo_energia(
+                        "01/07/2026", "31/07/2026",
+                        formato=formato, comercializadora=comercializadora,
+                    )[0],
+                    pd.Timestamp("2026-07-01").date(),
+                )
+
     def test_compara_factura_y_medida_con_diferencia_con_signo(self):
         tabla = tabla_conciliacion_consumos(
             {"P1": 100.0, "P2": 50.0, "P3": 200.0},
@@ -152,6 +241,21 @@ class VerificacionConsumosTest(unittest.TestCase):
         )
         self.assertEqual(len(detalle), 3)
         self.assertEqual(total, 47.50)
+
+    def test_calcula_reactiva_qh_sobre_ciclo_completo_sin_tramos(self):
+        curva = pd.DataFrame({
+            "fecha_hora": pd.date_range(
+                "2026-07-01 00:00", periods=8, freq="15min"
+            ),
+            "periodo": ["P1"] * 4 + ["P2"] * 4,
+            "consumo_neto_kWh": [25.0] * 8,
+            "reactiva_kVArh": [12.5] * 8,
+        })
+        detalle, total = calcular_reactiva_desde_curva(curva)
+        self.assertEqual(len(detalle), 2)
+        self.assertEqual(detalle["Activa medida (kWh)"].sum(), 200.0)
+        self.assertEqual(detalle["Reactiva medida (kVArh)"].sum(), 100.0)
+        self.assertGreater(total, 0.0)
 
     def test_semaforo_energia_real_compara_costes(self):
         self.assertEqual(estado_verificacion_energia_real(50.0, 50.01), "🟢")

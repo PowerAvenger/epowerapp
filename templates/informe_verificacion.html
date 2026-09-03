@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>Informe de verificación de factura</title>
+{% include "_estilos_informe_epower.html" %}
+<style>
+:root{--azul:#17365d;--claro:#eef4f8;--texto:#263547;--verde:#15803d;--rojo:#dc2626;--ambar:#b7791f}
+*{box-sizing:border-box} body{margin:0;background:#eef1f4;color:var(--texto);font:14px Arial,sans-serif;line-height:1.45}
+main{max-width:1120px;margin:24px auto;background:white;padding:42px;box-shadow:0 3px 18px #0002}
+header{display:flex;justify-content:space-between;gap:24px;border-bottom:4px solid var(--azul);padding-bottom:18px}.logo{max-width:190px;max-height:80px}
+h1{color:var(--azul);margin:0;font-size:30px} h2{color:var(--azul);border-bottom:2px solid #dbe5ee;padding-bottom:7px;margin-top:34px} h3{color:var(--azul);margin:24px 0 8px}
+.nivel>h2{background:#ffedd5;color:#9a3412;border:0;border-left:6px solid #f97316;border-radius:6px;padding:11px 14px;margin:34px 0 18px;font-size:24px;font-weight:700}
+.firma-cabecera{margin:9px 0 0;color:#536579;font-size:14px;font-weight:600}
+.meta{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:20px 0}.meta div{background:var(--claro);padding:10px;border-radius:6px}.meta span{display:block;color:#607286;font-size:11px;text-transform:uppercase}.meta strong{overflow-wrap:anywhere}
+.nivel1-superior{display:grid;grid-template-columns:minmax(0,1.18fr) minmax(320px,.82fr);gap:18px;align-items:stretch;margin:22px 0}.hero{position:relative;border:2px solid {{ hero_border }};background:{{ hero_background }};padding:22px 82px 22px 22px;border-radius:12px;margin:0}.hero h2{border:0;margin:0;color:{{ hero_color }}}.estado-icono{position:absolute;right:22px;top:13px;color:{{ hero_color }};font:900 60px/1 Arial,sans-serif}.accion-resultado{display:inline-block;margin-left:10px;padding:5px 9px;border:1px solid {{ hero_border }};border-radius:999px;background:white;color:{{ hero_color }};font-size:13px;vertical-align:3px}.hero-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:15px}.kpi{background:white;padding:14px;border-radius:8px}.kpi span{display:block;color:#65758b}.kpi strong{font-size:22px;color:var(--azul)}
+.gauge-nivel1{display:flex;align-items:center;justify-content:center;border:1px solid #d9e2ea;border-radius:12px;padding:8px;background:white}.gauge-nivel1 img{display:block;width:100%;height:auto}
+.alcance{border-left:5px solid #f59e0b;background:#fff7e6;padding:14px 18px}.nota{color:#536579}.graficos{display:grid;grid-template-columns:1fr 1fr;gap:18px}.grafico{border:1px solid #d9e2ea;border-radius:8px;padding:10px;text-align:center}.grafico img{max-width:100%;height:auto}.grafico.ancho{grid-column:1/-1}.sin-grafico{padding:30px;color:#738396;font-style:italic}
+.revision-manual{margin:16px 0;border:2px solid #ef4444;border-left-width:7px;border-radius:9px;background:#fff1f2;padding:14px 18px}.revision-manual h3{margin:0 0 9px;color:#991b1b}.revision-manual p{margin:5px 0}.revision-manual .motivo{background:white;border-radius:6px;padding:9px 11px;margin-top:9px}
+.leyenda-estados{display:flex;flex-wrap:wrap;gap:8px 18px;background:#f4f7fa;border:1px solid #d9e2ea;border-radius:7px;padding:10px 12px;margin:0 0 18px}.leyenda-estados span{white-space:nowrap}.punto{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:5px;vertical-align:-1px}.punto.verde{background:#00c853}.punto.rojo{background:#ef4444}.punto.ambar{background:#e0a800}.punto.azul{background:#3498db}
+table{width:100%;border-collapse:collapse;margin:10px 0 18px;font-size:12px}th{background:var(--azul);color:white;text-align:left}th,td{border:1px solid #d9e1e8;padding:7px}tbody tr:nth-child(even){background:#f7f9fb}
+.tabla-resumen-economico table{font-size:14px}.tabla-resumen-economico th,.tabla-resumen-economico td{padding:9px}
+.tabla-niveles th:not(:first-child),.tabla-niveles td:not(:first-child){text-align:center}.tabla-niveles th:last-child{background:#15803d;border-color:#166534}.tabla-niveles td:not(:first-child){padding:8px 7px}.estado-circulo{display:inline-block;width:18px;height:18px;border-radius:50%;vertical-align:middle;box-shadow:inset 0 -2px 4px #0002,0 1px 2px #0002}.estado-circulo.verde{background:#00c853}.estado-circulo.rojo{background:#ef4444}.estado-circulo.ambar{background:#e0a800}.estado-circulo.azul{background:#3498db}
+.detalle{break-inside:avoid}.pie{margin-top:36px;border-top:1px solid #ccd7e0;padding-top:12px;color:#65758b;font-size:11px}
+@media(max-width:800px){main{padding:20px}.meta,.hero-grid,.graficos,.nivel1-superior{grid-template-columns:1fr}.grafico.ancho{grid-column:auto}}
+@media print{body{background:white}main{margin:0;box-shadow:none;max-width:none}.nivel{break-before:page}.nivel:first-of-type{break-before:auto}}
+</style></head><body><main class="documento">
+<header><div><h1>Informe de verificación de factura</h1><p class="firma-cabecera">Realizado por {{ realizado_por }} &middot; Fecha de realización: {{ fecha_realizacion }}</p></div>{% if logo %}<img class="logo" src="{{ logo }}">{% endif %}</header>
+<div class="meta">
+<div><span>Cliente</span><strong>{{ cliente }}</strong></div><div><span>NIF / CIF</span><strong>{{ nif }}</strong></div>
+<div><span>CUPS</span><strong>{{ cups }}</strong></div><div><span>ATR</span><strong>{{ atr }}</strong></div>
+<div><span>Comercializadora</span><strong>{{ comercializadora }}</strong></div><div><span>Factura</span><strong>{{ numero_factura }}</strong></div>
+<div><span>Fecha factura</span><strong>{{ fecha_factura }}</strong></div><div><span>Fechas según factura</span><strong>{{ ciclo_factura }}</strong></div>
+</div>
+<section class="nivel"><h2>Resultado de la verificación</h2>
+<div class="nivel1-superior"><div class="hero"><span class="estado-icono">{{ estado_icono }}</span><h2>{{ estado }}{% if accion_resultado %}<span class="accion-resultado">{{ accion_resultado }}</span>{% endif %}</h2><p>{{ conclusion }}</p><div class="hero-grid">
+<div class="kpi"><span>Total factura</span><strong>{{ total_factura }}</strong></div><div class="kpi"><span>Total verificado</span><strong>{{ total_verificado }}</strong></div><div class="kpi"><span>Factura − verificado</span><strong>{{ diferencia }}</strong></div>
+</div></div>
+{% if gauge %}<div class="gauge-nivel1"><img src="{{ gauge }}"></div>{% endif %}</div>
+<div class="alcance"><strong>Alcance: {{ alcance }}</strong><p>{{ texto_alcance }}</p></div>
+{% for revision in revisiones_manuales %}<div class="revision-manual"><h3>Revisión manual del veredicto · {{ revision.ambito }}</h3><p><strong>Resultado automático:</strong> {{ revision.automatico }} &nbsp;→&nbsp; <strong>Veredicto final:</strong> {{ revision.manual }}</p><p class="motivo"><strong>Motivo:</strong> {{ revision.motivo }}</p><p class="nota">Decisión registrada: {{ revision.fecha }}. Los cálculos y evidencias técnicas no han sido alterados.</p></div>{% endfor %}
+<h3>Niveles de comprobación alcanzados</h3><p class="nota">Según factura comprueba el cuadre contable; según cálculo reproduce fórmulas y referencias; verificación real contrasta medida, contrato o una fuente externa.</p>
+<div class="tabla-niveles">{{ tabla_niveles|safe }}</div>
+<div class="leyenda-estados" aria-label="Código de estados">
+<span><i class="punto verde"></i><strong>Verde:</strong> verificado o coincidente</span>
+<span><i class="punto rojo"></i><strong>Rojo:</strong> no coincide</span>
+<span><i class="punto ambar"></i><strong>Amarillo:</strong> sin datos suficientes o pendiente de contraste</span>
+<span><i class="punto azul"></i><strong>Azul:</strong> concepto no facturado</span>
+</div>
+</section>
+<section class="nivel"><h2>Resumen y alcance por componentes</h2>
+<p>La tabla resume el importe facturado, el importe obtenido con la mejor verificación disponible y su desviación. Un resultado sin contraste externo no equivale a una verificación real.</p>
+<div class="tabla-resumen-economico">{{ tabla_resumen|safe }}</div>
+<div class="graficos">
+{% if grafico_todos %}<div class="grafico"><img src="{{ grafico_todos }}"></div>{% endif %}
+{% if grafico_energia_potencia %}<div class="grafico"><img src="{{ grafico_energia_potencia }}"></div>{% endif %}
+</div></section>
+<section class="nivel"><h2>Detalles justificativos</h2>
+<p>Cada apartado documenta el origen del valor verificado. Las partidas sin información suficiente se identifican como no verificadas y conservan provisionalmente su importe facturado.</p>
+{% for seccion in secciones %}<div class="detalle"><h3>{{ seccion.titulo }}</h3><p>{{ seccion.texto }}</p>{{ seccion.tabla|safe }}</div>{% endfor %}
+</section>
+<div class="pie">Realizado por {{ realizado_por }} · {{ fecha_realizacion }}. Este informe refleja la información y parámetros disponibles en la fecha de elaboración.</div>
+</main></body></html>

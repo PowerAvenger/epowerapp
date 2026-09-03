@@ -12,6 +12,7 @@ import numpy as np
 
 from backend_comun import aplicar_estilo
 from backend_telemindex import construir_df_spot_ssaa
+from backend_spot import media_spot, resumir_spot
 
 
 
@@ -21,7 +22,61 @@ meses_español = {1: "ene", 2: "feb", 3: "mar", 4: "abr", 5: "may", 6: "jun",
 meses_completos = pd.DataFrame({
         'mes': range(1, 13),
         'mes_nombre': [meses_español[m] for m in range(1, 13)]
-    })
+})
+
+
+def _redondear_barras(fig, radio=12):
+    """Aplica el acabado visual común solo a las trazas de barras."""
+    fig.update_traces(
+        marker_cornerradius=radio,
+        selector=dict(type="bar"),
+    )
+    return fig
+
+
+def _rango_fechas_con_margen_barras(inicio, fin):
+    """Añade media unidad diaria para no recortar las barras extremas."""
+    margen = pd.Timedelta(hours=12)
+    return [pd.Timestamp(inicio) - margen, pd.Timestamp(fin) + margen]
+
+
+def calcular_spreads_diarios(datos):
+    """Devuelve un spread por dia a partir del maximo y minimo horario reales.
+
+    El spread medio de cualquier periodo debe calcularse posteriormente como
+    la media de ``spread_diario``; no como la diferencia entre el maximo y el
+    minimo de un perfil horario previamente promediado.
+    """
+    columnas = [
+        'fecha', 'año', 'mes', 'minimo_horario', 'maximo_horario',
+        'spread_diario', 'registros',
+    ]
+    if not isinstance(datos, pd.DataFrame) or datos.empty:
+        return pd.DataFrame(columns=columnas)
+    if not {'fecha', 'value'}.issubset(datos.columns):
+        return pd.DataFrame(columns=columnas)
+
+    base = datos[['fecha', 'value']].copy()
+    base['value'] = pd.to_numeric(base['value'], errors='coerce')
+    base = base.dropna(subset=['fecha', 'value'])
+    if base.empty:
+        return pd.DataFrame(columns=columnas)
+
+    spreads = (
+        base.groupby('fecha', as_index=False)['value']
+        .agg(
+            minimo_horario='min',
+            maximo_horario='max',
+            registros='count',
+        )
+    )
+    spreads['spread_diario'] = (
+        spreads['maximo_horario'] - spreads['minimo_horario']
+    )
+    fechas = pd.to_datetime(spreads['fecha'], errors='coerce')
+    spreads['año'] = fechas.dt.year
+    spreads['mes'] = fechas.dt.month
+    return spreads[columnas]
 
 from backend_comun import rango_componentes
 
@@ -172,19 +227,11 @@ def graficar_comparativa_spot_mensual(
         (datos["fecha"].dt.month == mes)
         & datos["fecha"].dt.year.isin([año_actual, año_comparacion])
     ].copy()
-    diario = (
-        datos.dropna(subset=["fecha", "value"])
-        .assign(año=lambda df: df["fecha"].dt.year)
-        .groupby(["año", "fecha"], as_index=False)["value"]
-        .mean()
-        .sort_values(["año", "fecha"])
-    )
+    diario = resumir_spot(datos)["diario"]
     diario["día"] = diario["fecha"].dt.day
     diario["media_acumulada"] = (
-        diario.groupby("año")["value"]
-        .expanding()
-        .mean()
-        .reset_index(level=0, drop=True)
+        diario.groupby("año")["suma_periodos"].cumsum()
+        / diario.groupby("año")["numero_periodos"].cumsum()
     )
 
     fig = go.Figure()
@@ -253,7 +300,14 @@ def graficar_comparativa_spot_mensual(
         diario,
         año_actual,
     )
-    medias = diario_periodo_comun.groupby("año")["value"].mean().to_dict()
+    fechas_comunes = diario_periodo_comun[["año", "fecha"]]
+    datos_periodo_comun = datos.assign(año=datos["fecha"].dt.year).merge(
+        fechas_comunes, on=["año", "fecha"], how="inner"
+    )
+    medias = {
+        año: media_spot(grupo)
+        for año, grupo in datos_periodo_comun.groupby("año")
+    }
     return diario, aplicar_estilo(fig), medias
 
 
@@ -389,7 +443,6 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
 
     
     
-    datos_dia['value'] = datos_dia['value'].round(2)
     datos_dia[['dia','mes','año']] = datos_dia[['dia','mes','año']].astype(int)
     
     df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes()
@@ -492,7 +545,7 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
         #    xanchor="center"
         #),
         xaxis=dict(
-            range = [fecha_ini, fecha_fin],
+            range=_rango_fechas_con_margen_barras(fecha_ini, fecha_fin),
             rangeslider=dict(
                 visible=True,
                 bgcolor='rgba(173, 216, 230, 0.5)'
@@ -583,20 +636,13 @@ def diarios(datos, fecha_ini, fecha_fin, datos_comparar):
         
     
     else:
-        datos_dia=datos_dia.groupby('fecha').agg({
-            'value':'mean',
-            'dia':'first',
-            'mes':'first',
-            'año':'first',
-            'mes_nombre':'first'
-        }).reset_index()   
-
-        datos_dia['media'] = datos_dia['value'].expanding().mean()
+        datos_dia = resumir_spot(datos)["diario"]
+        datos_dia['mes_nombre'] = datos_dia['mes'].map(meses_español)
+        datos_dia['media'] = datos_dia['media_acumulada']
         datos_dia['media_movil'] = datos_dia['value'].rolling(window=14, min_periods=1).mean()
         
     
 
-    datos_dia['value'] = datos_dia['value'].round(2)
     datos_dia[['dia','mes','año']] = datos_dia[['dia','mes','año']].astype(int)
     
 
@@ -752,7 +798,7 @@ def diarios(datos, fecha_ini, fecha_fin, datos_comparar):
     graf_ecv_diario.update_layout(
         
         xaxis=dict(
-            range = [fecha_ini, fecha_fin],
+            range=_rango_fechas_con_margen_barras(fecha_ini, fecha_fin),
             rangeslider=dict(
                 visible=True,
                 bgcolor='rgba(173, 216, 230, 0.5)'
@@ -815,15 +861,13 @@ def graficar_media_acumulada_periodo(
         df = df_componentes[["fecha"]].copy()
         df["value"] = df_componentes["value_spot"] + df_componentes["value_ssaa"]
     else:
-        df = (
-            df.groupby("fecha", as_index=False)["value"]
-            .mean()
-            .sort_values("fecha")
-        )
+        df = resumir_spot(df)["diario"]
     if df.empty:
         return df, go.Figure()
 
-    df["value"] = pd.to_numeric(df["value"], errors="coerce").round(2)
+    df["value"] = pd.to_numeric(df["value"], errors="coerce")
+    # Contrato común para la capa de métricas: también en Predator Mode
+    # devolvemos la media acumulada del total SPOT + SSAA.
     df["media_acumulada"] = df["value"].expanding().mean()
 
     df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes(
@@ -941,19 +985,17 @@ def graficar_media_acumulada_periodo(
         inicio_eje = pd.Timestamp(
             año, mes_num, 1
         )
-        fin_eje = inicio_eje + pd.offsets.MonthEnd(0) + pd.Timedelta(
-            hours=23, minutes=59
-        )
+        fin_eje = inicio_eje + pd.offsets.MonthEnd(0)
     else:
         inicio_eje = pd.Timestamp(año, 1, 1)
-        fin_eje = pd.Timestamp(
-            año, 12, 31, 23, 59
-        )
+        fin_eje = pd.Timestamp(año, 12, 31)
     fig.update_xaxes(
         showgrid=True,
         tickformat="%d %b" if mes_num else "%b",
-        range=[inicio_eje, fin_eje],
+        range=_rango_fechas_con_margen_barras(inicio_eje, fin_eje),
     )
+    if mes_num is not None:
+        fig = _redondear_barras(fig)
     fig = aplicar_estilo(fig)
     return df, fig
 
@@ -984,18 +1026,39 @@ def mensuales(datos_dia):
         media_spot = datos_dia[datos_dia['componente'] == 'value_spot'].sort_values('fecha')['media'].iloc[-1]
         media_ssaa = datos_dia[datos_dia['componente'] == 'value_ssaa'].sort_values('fecha')['media'].iloc[-1]
     else:
-        datos_mes = datos_mes.groupby('mes').agg({
-            'value':'mean',
-            'año':'first',
-            'mes_nombre':'first'
-        }).reset_index()   
-
-        datos_mes['media'] = datos_mes['value'].expanding().mean()
+        if {'suma_periodos', 'numero_periodos'}.issubset(datos_mes.columns):
+            datos_mes = datos_mes.groupby('mes').agg({
+                'suma_periodos':'sum',
+                'numero_periodos':'sum',
+                'año':'first',
+                'mes_nombre':'first'
+            }).reset_index()
+            datos_mes['value'] = (
+                datos_mes['suma_periodos'] / datos_mes['numero_periodos']
+            )
+            datos_mes['media'] = (
+                datos_mes['suma_periodos'].cumsum()
+                / datos_mes['numero_periodos'].cumsum()
+            )
+        else:
+            datos_mes = datos_mes.groupby('mes').agg({
+                'value':'mean',
+                'año':'first',
+                'mes_nombre':'first'
+            }).reset_index()
+            datos_mes['media'] = datos_mes['value'].expanding().mean()
     
     datos_mes['value'] = datos_mes['value'].round(2)
     datos_mes[['mes','año']] = datos_mes[['mes','año']].astype(int)
     
-    media_mensual=round(datos_dia['value'].mean(),2)
+    if {'suma_periodos', 'numero_periodos'}.issubset(datos_dia.columns):
+        media_mensual = round(
+            datos_dia['suma_periodos'].sum()
+            / datos_dia['numero_periodos'].sum(),
+            2,
+        )
+    else:
+        media_mensual=round(datos_dia['value'].mean(),2)
     
     # Unir con tus datos por mes (asumiendo que sólo falta alguno)
     datos_mes = pd.merge(meses_completos, datos_mes, on=['mes', 'mes_nombre'], how='left')
@@ -1137,6 +1200,7 @@ def mensuales(datos_dia):
            
     )
     
+    graf_ecv_mensual = _redondear_barras(graf_ecv_mensual)
     graf_ecv_mensual = aplicar_estilo(graf_ecv_mensual)
     
 
@@ -1302,6 +1366,7 @@ def evolucion_mensual(df):
     graf_ecv_mensual.update_yaxes(
         rangemode="tozero"
     )
+    graf_ecv_mensual = _redondear_barras(graf_ecv_mensual)
     graf_ecv_mensual = aplicar_estilo(graf_ecv_mensual)
     return graf_ecv_mensual
 
@@ -1346,15 +1411,21 @@ def horarios(datos):
     # -----------------------------------------------------
     # FILTRAMOS DÍA
     # -----------------------------------------------------
-    fecha_max = datos_horarios['fecha'].max()
+    fechas_horarias = pd.to_datetime(
+        datos_horarios['fecha'], errors='coerce'
+    ).dt.normalize()
+    fecha_max = fechas_horarias.max()
+    dia_seleccionado = pd.Timestamp(
+        st.session_state.dia_seleccionado_esc
+    ).normalize()
 
-    if st.session_state.dia_seleccionado_esc > fecha_max:
+    if dia_seleccionado > fecha_max:
         datos_horarios_filtrado = datos_horarios[
-            datos_horarios['fecha'] == fecha_max
+            fechas_horarias == fecha_max
         ].copy()
     else:
         datos_horarios_filtrado = datos_horarios[
-            datos_horarios['fecha'] == st.session_state.dia_seleccionado_esc
+            fechas_horarias == dia_seleccionado
         ].copy()
 
     # -----------------------------------------------------
@@ -1529,6 +1600,7 @@ def horarios(datos):
         bargap=.5
     )
 
+    graf_horaria_dia = _redondear_barras(graf_horaria_dia)
     graf_horaria_dia = aplicar_estilo(graf_horaria_dia)
 
     return datos_horarios, graf_horaria_dia, datos_horarios_filtrado
@@ -1636,9 +1708,11 @@ def horarios_old(datos):
     
 # DATOS HORARIOS PARA UN MES SELECCIONADO+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-def medias_horarias(datos):
+def medias_horarias(datos, mes_etiqueta=None):
     # datos_horarios = datos[datos['año'] == st.session_state.get('año_seleccionado_esc', 2025)]
     datos_horarios = datos.copy()
+    if mes_etiqueta is None:
+        mes_etiqueta = st.session_state.get('mes_seleccionado_esc', '')
 
     componente = st.session_state.get('componente', 'SPOT')
     dos_colores = st.session_state.get('dos_colores', False)
@@ -1739,10 +1813,7 @@ def medias_horarias(datos):
         ''
     )
 
-    datos_horarios_filtrado['mes_hover'] = st.session_state.get(
-        'mes_seleccionado_esc',
-        ''
-    )
+    datos_horarios_filtrado['mes_hover'] = mes_etiqueta
 
     # --- 4. Título y escala Y ---
     componente = st.session_state.get('componente', 'SPOT')
@@ -1751,7 +1822,7 @@ def medias_horarias(datos):
         title = (
             f"Perfil horario medio del SPOT. "
             f"Año {st.session_state.año_seleccionado_esc} - "
-            f"Mes: {st.session_state.mes_seleccionado_esc}"
+            f"Mes: {mes_etiqueta}"
         )
         tick_y = 20
 
@@ -1759,7 +1830,7 @@ def medias_horarias(datos):
         title = (
             f"Perfil horario medio del SPOT+SSAA. "
             f"Año {st.session_state.año_seleccionado_esc} - "
-            f"Mes: {st.session_state.mes_seleccionado_esc}"
+            f"Mes: {mes_etiqueta}"
         )
         tick_y = 20
 
@@ -1767,7 +1838,7 @@ def medias_horarias(datos):
         title = (
             f"Perfil horario medio de los SSAA. "
             f"Año {st.session_state.año_seleccionado_esc} - "
-            f"Mes: {st.session_state.mes_seleccionado_esc}"
+            f"Mes: {mes_etiqueta}"
         )
         tick_y = 4
 
@@ -1862,6 +1933,7 @@ def medias_horarias(datos):
         bargap=.5
     )
 
+    graf_horaria_dia = _redondear_barras(graf_horaria_dia)
     graf_horaria_dia = aplicar_estilo(graf_horaria_dia)
 
     return datos_horarios_filtrado, graf_horaria_dia
@@ -2573,6 +2645,7 @@ def mapa_calor_mes(datos):
 
     graf_heat.update_layout(
         height=800,
+        hoverlabel=dict(font_size=15),
         title=dict(
             font=dict(size=20),
             x=0.5,
@@ -2750,6 +2823,7 @@ def mapa_calor_mes_gradual(datos):
     )
 
     graf_heat.update_layout(
+        hoverlabel=dict(font_size=15),
         title=dict(
             font=dict(size=20),
             x=0.5,
@@ -2771,5 +2845,24 @@ def mapa_calor_mes_gradual(datos):
         ),
         height=800
     )
+
+    # Destacar la primera celda que contiene cada extremo sin ocultar su color.
+    valores_validos = matriz_value.stack().dropna()
+    if not valores_validos.empty:
+        posiciones_extremos = [
+            (valores_validos.idxmin(), '#00BFFF'),
+            (valores_validos.idxmax(), 'yellow'),
+        ]
+        for (valor_y, hora_x), color_borde in posiciones_extremos:
+            graf_heat.add_shape(
+                type='rect',
+                x0=hora_x - 0.5,
+                x1=hora_x + 0.5,
+                y0=valor_y - 0.5,
+                y1=valor_y + 0.5,
+                line=dict(color=color_borde, width=4),
+                fillcolor='rgba(0,0,0,0)',
+                layer='above',
+            )
 
     return tabla_heat, graf_heat

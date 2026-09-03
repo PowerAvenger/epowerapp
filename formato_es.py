@@ -31,6 +31,17 @@ def formato_numero_es(valor, decimales: int = 0) -> str:
     return texto.translate(str.maketrans({",": ".", ".": ","}))
 
 
+def formato_numero_es_con_signo(valor, decimales: int = 0) -> str:
+    """Añade ``+`` a valores positivos; conserva negativos y cero."""
+    texto = formato_numero_es(valor, decimales)
+    if not texto:
+        return texto
+    try:
+        return f"+{texto}" if float(valor) > 0 else texto
+    except (TypeError, ValueError):
+        return texto
+
+
 def _con_unidad(valor, decimales: int, unidad: str, incluir: bool) -> str:
     texto = formato_numero_es(valor, decimales)
     if not texto:
@@ -52,6 +63,15 @@ def formato_kw(valor, decimales: int = 2, unidad: bool = False) -> str:
 
 def formato_euros(valor, decimales: int = 2, unidad: bool = True) -> str:
     return _con_unidad(valor, decimales, "€", unidad)
+
+
+def formato_euros_con_signo(
+    valor, decimales: int = 2, unidad: bool = True
+) -> str:
+    texto = formato_numero_es_con_signo(valor, decimales)
+    if not texto:
+        return ""
+    return f"{texto} €" if unidad else texto
 
 
 def formato_eur_mwh(valor, decimales: int = 2, unidad: bool = True) -> str:
@@ -76,6 +96,15 @@ def formato_eur_kw_mes(valor, decimales: int = 6, unidad: bool = True) -> str:
 
 def formato_pct(valor, decimales: int = 2, unidad: bool = True) -> str:
     return _con_unidad(valor, decimales, "%", unidad)
+
+
+def formato_pct_con_signo(
+    valor, decimales: int = 2, unidad: bool = True
+) -> str:
+    texto = formato_numero_es_con_signo(valor, decimales)
+    if not texto:
+        return ""
+    return f"{texto} %" if unidad else texto
 
 
 def formato_fecha_es(valor, separador: str = ".") -> str:

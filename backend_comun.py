@@ -582,6 +582,38 @@ def cargar_componentes_csv():
 
     return df
 
+
+@st.cache_data
+def cargar_precios_snp_csv():
+    """Carga desde Drive el histórico C2 SphdemDD no peninsular."""
+    file_id = st.secrets.get("CSV_SNP")
+    if not file_id:
+        return pd.DataFrame()
+
+    url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    df = pd.read_csv(
+        url,
+        sep=",",
+        engine="python",
+        quoting=3,
+        on_bad_lines="skip",
+        encoding="utf-8",
+    )
+    df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
+
+    columnas = ["datetime", "snp_baleares", "snp_canarias", "snp_ceuta", "snp_melilla"]
+    faltantes = [col for col in columnas if col not in df.columns]
+    if faltantes:
+        raise ValueError(f"Faltan columnas en df_precios_snp.csv: {', '.join(faltantes)}")
+
+    df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce")
+    for col in columnas[1:]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df.dropna(subset=columnas).sort_values("datetime", kind="stable")
+    if df.groupby("datetime").size().max() > 2:
+        raise ValueError("df_precios_snp.csv contiene una hora repetida más de dos veces.")
+    return df[columnas].reset_index(drop=True)
+
 #CARGAMOS MIBGAS DESDE SHEET DE DRIVE
 @st.cache_data
 def carga_mibgas(): #sheet_name=None
@@ -786,7 +818,7 @@ def cargar_periodos_zona(zona):
     """
 
     mapa_periodos_path = {
-        "peninsula": "utils/periodos_horarios.xlsx",
+        "peninsula": "utils/periodos_horarios_peninsula.xlsx",
         "baleares": "utils/periodos_horarios_baleares.xlsx",
         "canarias": "utils/periodos_horarios_canarias.xlsx",
         "ceuta": "utils/periodos_horarios_ceuta.xlsx",
@@ -805,11 +837,33 @@ def cargar_periodos_zona(zona):
             "mes": int,
             "dia": int,
             "hora": int,
+            "dh_3p": str,
             "dh_6p": str,
         }
     )
 
-    return df_periodos[["año", "mes", "dia", "hora", "dh_6p"]]
+    return df_periodos[["año", "mes", "dia", "hora", "dh_3p", "dh_6p"]]
+
+
+def aplicar_periodos_zona(df, zona):
+    """Sustituye dh_3p y dh_6p por los calendarios horarios de la zona."""
+    df = df.copy()
+    if zona == "peninsula":
+        return df
+
+    claves = ["año", "mes", "dia", "hora"]
+    df_periodos = cargar_periodos_zona(zona).rename(
+        columns={"dh_3p": "dh_3p_zona", "dh_6p": "dh_6p_zona"}
+    )
+    for col in claves:
+        df[col] = df[col].astype(int)
+        df_periodos[col] = df_periodos[col].astype(int)
+
+    df = df.merge(df_periodos, on=claves, how="left", validate="many_to_one")
+    for col in ["dh_3p", "dh_6p"]:
+        zona_col = f"{col}_zona"
+        df[col] = df[zona_col].fillna(df[col])
+    return df.drop(columns=["dh_3p_zona", "dh_6p_zona"])
 
 def aplicar_dh6p_zona(df, zona):
     """
@@ -819,31 +873,4 @@ def aplicar_dh6p_zona(df, zona):
     Para península no modifica nada.
     """
 
-    df = df.copy()
-
-    if zona == "peninsula":
-        return df
-
-    df_periodos = cargar_periodos_zona(zona).rename(
-        columns={"dh_6p": "dh_6p_zona"}
-    )
-
-    claves = ["año", "mes", "dia", "hora"]
-
-    # Aseguramos tipos para que el merge no falle por int/str/float
-    for col in claves:
-        df[col] = df[col].astype(int)
-        df_periodos[col] = df_periodos[col].astype(int)
-
-    df = df.merge(
-        df_periodos,
-        on=claves,
-        how="left"
-    )
-
-    # Sustituimos solo cuando haya valor encontrado
-    df["dh_6p"] = df["dh_6p_zona"].fillna(df["dh_6p"])
-
-    df = df.drop(columns=["dh_6p_zona"])
-
-    return df
+    return aplicar_periodos_zona(df, zona)
