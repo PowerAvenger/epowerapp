@@ -1262,7 +1262,7 @@ import pandas as pd
 import numpy as np
 
 
-def evol_diario(df):
+def evol_diario(df, df_prevision_2026=None):
 
     dffd = df.copy()
 
@@ -1343,12 +1343,52 @@ def evol_diario(df):
             .round(2)
         )
 
+    previsiones_acumuladas = {}
+    if df_prevision_2026 is not None and not df_prevision_2026.empty:
+        real_2026 = df_diario[df_diario["año"].eq(2026)].copy()
+        if not real_2026.empty:
+            ultima_real = real_2026["fecha"].max()
+            futuro_mensual = df_prevision_2026.copy()
+            futuro_mensual["fecha"] = pd.to_datetime(
+                futuro_mensual["fecha"], errors="coerce"
+            )
+            for col in columnas_precio:
+                dias_futuros = []
+                for _, fila in futuro_mensual.iterrows():
+                    inicio_mes = pd.Timestamp(fila["fecha"]).normalize()
+                    fin_mes = inicio_mes + pd.offsets.MonthEnd(0)
+                    inicio = max(inicio_mes, ultima_real + pd.Timedelta(days=1))
+                    if inicio > fin_mes or pd.isna(fila.get(col)):
+                        continue
+                    dias_futuros.append(pd.DataFrame({
+                        "fecha": pd.date_range(inicio, fin_mes, freq="D"),
+                        col: float(fila[col]),
+                    }))
+                if not dias_futuros:
+                    continue
+                futuro_diario = pd.concat(dias_futuros, ignore_index=True)
+                serie_real = real_2026[["fecha", col]].dropna()
+                combinada = pd.concat([serie_real, futuro_diario], ignore_index=True)
+                combinada = combinada.sort_values("fecha").drop_duplicates(
+                    "fecha", keep="first"
+                )
+                combinada[f"{col}_media_acum"] = combinada[col].expanding().mean()
+                tramo = combinada[combinada["fecha"].gt(ultima_real)].copy()
+                ultimo_real = combinada[combinada["fecha"].eq(ultima_real)].tail(1)
+                tramo = pd.concat([ultimo_real, tramo], ignore_index=True)
+                tramo["fecha_tipo"] = pd.to_datetime(
+                    "2024-" + tramo["fecha"].dt.strftime("%m-%d"), errors="coerce"
+                )
+                previsiones_acumuladas[col] = tramo
+
     # =====================================================
     # 6. ESCALA Y COMÚN PARA LOS TRES GRÁFICOS
     # =====================================================
     columnas_acum = [f"{col}_media_acum" for col in columnas_precio]
 
     y_max = df_diario[columnas_acum].max().max()
+    for col, previsto in previsiones_acumuladas.items():
+        y_max = max(y_max, previsto[f"{col}_media_acum"].max())
 
     if pd.isna(y_max):
         y_lim = 20
@@ -1443,7 +1483,7 @@ def evol_diario(df):
                     line=dict(
                         color=color_linea,
                         width=4 if año == 2026 else 2.3,
-                        dash="dot" if año == 2026 else "solid"
+                        dash="solid"
                     ),
                     hovertemplate=(
                         "Año: " + str(año) + "<br>"
@@ -1455,34 +1495,67 @@ def evol_diario(df):
                 col=i
             )
 
-            # =================================================
-            # ETIQUETA FINAL SOLO PARA 2024 Y 2025
-            # =================================================
             if año in [2024, 2025]:
-
                 df_last = df_plot.dropna(subset=[col_acum]).tail(1)
-
                 if not df_last.empty:
-
-                    x_last = df_last["fecha_tipo"].iloc[0]
-                    y_last = df_last[col_acum].iloc[0]
-
                     fig.add_annotation(
-                        x=x_last,
-                        y=y_last,
+                        x=df_last["fecha_tipo"].iloc[0],
+                        y=df_last[col_acum].iloc[0],
                         text=str(año),
                         showarrow=False,
                         xshift=-8,
-                        yshift=10,
+                        yshift=-24 if año == 2024 else 20,
                         xanchor="right",
                         yanchor="middle",
-                        font=dict(
-                            size=18,
-                            color=color_linea
-                        ),
+                        font=dict(size=16, color="white"),
+                        bgcolor=color_linea,
+                        bordercolor=color_linea,
+                        borderwidth=1,
+                        borderpad=1,
+                        opacity=0.95,
                         row=1,
-                        col=i
+                        col=i,
                     )
+
+        previsto = previsiones_acumuladas.get(col)
+        if previsto is not None and not previsto.empty:
+            color_2026 = colores_años[col].get(2026, "white")
+            fig.add_trace(
+                go.Scatter(
+                    x=previsto["fecha_tipo"],
+                    y=previsto[col_acum],
+                    mode="lines",
+                    name="2026 simulado",
+                    showlegend=False,
+                    line=dict(color=color_2026, width=4, dash="dot"),
+                    hovertemplate=(
+                        "2026 simulado<br>Media acumulada: "
+                        "%{y:.2f} c€/kWh<extra></extra>"
+                    ),
+                ),
+                row=1,
+                col=i,
+            )
+            ultimo_previsto = previsto.dropna(subset=[col_acum]).tail(1)
+            if not ultimo_previsto.empty:
+                fig.add_annotation(
+                    x=ultimo_previsto["fecha_tipo"].iloc[0],
+                    y=ultimo_previsto[col_acum].iloc[0],
+                    text="2026",
+                    showarrow=False,
+                    xshift=-8,
+                    yshift=20,
+                    xanchor="right",
+                    yanchor="middle",
+                    font=dict(size=16, color="#0E1117"),
+                    bgcolor=color_2026,
+                    bordercolor=color_2026,
+                    borderwidth=1,
+                    borderpad=1,
+                    opacity=0.95,
+                    row=1,
+                    col=i,
+                )
 
     # =====================================================
     # 10. FORMATOS EJES

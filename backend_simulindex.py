@@ -414,6 +414,33 @@ def obtener_hist_mensual(df_in):
 
 
 # GRÁFICO PRINCIPAL DE PRECIOS DE INDEXADO A PARTIR DE OMIE
+def construir_prevision_indexados_2026(df_hist, curva_omie_2026, ajuste_hist=0.0):
+    """Proyecta los tres ATR con la misma regresion empleada por Simulindex."""
+    columnas = ["precio_2.0", "precio_3.0", "precio_6.1"]
+    faltantes = [col for col in ["spot", *columnas] if col not in df_hist]
+    if faltantes:
+        raise ValueError(
+            "Faltan columnas para simular indexados: " + ", ".join(faltantes)
+        )
+    futuro = curva_omie_2026.copy()
+    futuro["fecha"] = pd.to_datetime(futuro["fecha"], errors="coerce")
+    futuro["spot_previsto"] = pd.to_numeric(futuro["precio"], errors="coerce")
+    futuro = futuro[futuro["tipo"].ne("OMIE")].dropna(
+        subset=["fecha", "spot_previsto"]
+    )
+    X = sm.add_constant(pd.to_numeric(df_hist["spot"], errors="coerce"))
+    for columna in columnas:
+        y = pd.to_numeric(df_hist[columna], errors="coerce")
+        validos = X.notna().all(axis=1) & y.notna()
+        modelo = sm.OLS(y.loc[validos], X.loc[validos]).fit()
+        futuro[columna] = (
+            modelo.params["const"]
+            + modelo.params["spot"] * futuro["spot_previsto"]
+            + float(ajuste_hist)
+        )
+    return futuro[["fecha", "tipo", "spot_previsto", *columnas]]
+
+
 def obtener_graf_hist(df_hist, omip, colores_precios, añadir_hist):
 
     series_y = ['precio_2.0','precio_3.0','precio_6.1']
@@ -1477,7 +1504,9 @@ def construir_curva_omip_mensual_12m(df_ftb_m, df_ftb_q, fecha_ref):
 
         filas.append({
             "fecha": fecha,
-            "precio": round(float(precio), 2),
+            # Sin redondeo intermedio: la media debe coincidir exactamente
+            # con el ultimo punto de la serie forward historica.
+            "precio": float(precio),
             "tipo": tipo,
             "fecha_dato": fecha_dato
         })
@@ -1604,6 +1633,11 @@ def construir_evolucion_media_omip(df_ftb_m, df_ftb_q, fecha_ref, fecha_inicio="
     )
 
     fechas = [pd.Timestamp(f).normalize() for f in fechas]
+    # Aunque hoy no haya una nueva cotizacion, el ultimo punto debe representar
+    # el horizonte forward vigente usando los precios mas recientes disponibles.
+    if fecha_ref not in fechas:
+        fechas.append(fecha_ref)
+        fechas.sort()
 
     # Preparar diccionarios por mes de entrega
     mensual_por_mes = {

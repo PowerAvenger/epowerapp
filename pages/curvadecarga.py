@@ -4,6 +4,7 @@ import pandas as pd
 import io
 import base64
 import re
+import json
 from html import escape
 from pathlib import Path
 from dateutil.relativedelta import relativedelta
@@ -15,7 +16,7 @@ from backend_curvadecarga import (
     obtener_suministros_datadis,
     obtener_detalle_contrato_datadis, extraer_potencias_contratadas_datadis,
     obtener_consumo_datadis_cacheado, dataframe_como_archivo_curva,
-    completar_periodos_curva, agrupar_curva_horaria,
+    completar_periodos_curva, agrupar_curva_horaria, dividir_energias_curva,
     analizar_calidad_curva,
     graficar_curva_horaria, graficar_diario_apilado, graficar_mensual_apilado, tabla_mensual_periodos, formatear_tabla_mensual_es, graficar_queso_periodos,
     graficar_media_horaria, graficar_media_horaria_combinada, graficar_boxplot_horario,
@@ -26,6 +27,7 @@ from backend_curvadecarga import (
     calcular_tabla_excesos_reactiva, calcular_tabla_factor_potencia, estilo_factor_potencia, calcular_tabla_precio_penalizacion_reactiva, calcular_tabla_coste_excesos_reactiva, estilo_coste_penalizacion,
     calcular_tabla_potencia_media_qh,calcular_tabla_coef_k, calcular_tabla_q_condensadores,
     calcular_comparacion, calcular_comparacion_costes,
+    calcular_comparativa_ahorro,
     preparar_costes_mensuales_rango,
     )
 from backend_comun import (
@@ -34,6 +36,7 @@ from backend_comun import (
     formatear_columnas_tabla,
 )
 from formato_es import formato_euros, formato_kwh, formato_numero_es
+from informe_comparativa import mostrar_informe_comparativa
 
 
 
@@ -42,11 +45,25 @@ from utilidades import (
     generar_menu,
     init_app,
     init_app_index,
+    mostrar_parametros_formula_indexado,
 )
+from backend_indexado import FormulaIndexada
 from backend_telemindex import (
     añadir_costes_curva,
     construir_df_curva_sheets,
     evol_mensual,
+)
+from backend_contractual import (
+    aplicar_condiciones_contractuales,
+    aplicar_costes_extra_mensuales,
+    cargar_condiciones_cups,
+    cargar_costes_extra_cups,
+    cargar_datos_suministro,
+    condicion_como_referencia,
+    condicion_manual_como_referencia,
+    guardar_costes_extra_cups,
+    preparar_indexado_contractual,
+    resumir_calculo_contractual,
 )
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
@@ -105,15 +122,28 @@ def limpiar_curva_cargada():
         "rango_fechas_comparativa_guardado",
         "_rango_fechas_comparativa",
         "precios_mensuales",
+        "df_curva_sheets",
+        "resumen_costes_contractuales",
+        "origen_costes_comparativa",
+        "cups_costes_comparativa",
+        "version_curva_costes_comparativa",
         "df_axon_raw",
         "frec_axon_raw",
         "df_datadis_raw",
         "frec_datadis_raw",
         "suministros_datadis",
+        "datadis_curvas_cache",
+        "datadis_detalles_cache",
+        "detalle_datadis_actual",
+        "detalle_datadis_clave",
+        "cups_curva",
         "reactiva_base_cache",
         "reactiva_compensacion",
+        "curva_escala_manual_1000_aplicada",
         "curva_reactiva_version",
         "informe_reactiva_html",
+        "comparativa_informe_datos",
+        "informe_comparativa_html",
         "diagnosticos_curva",
     )
     for clave in claves_curva:
@@ -123,15 +153,16 @@ def limpiar_curva_cargada():
     )
 
 
-tab_curva, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+tab_curva, tab1, tab2, tab3, tab4, tab_ahorro, tab5, tab6 = st.tabs(
     [
         "Curva",
         "Resumen",
         "Perfiles Horarios",
         "Autoconsumo",
-        "Comparaciones",
+        "Efecto consumo/precio",
+        "Comparativa de ahorro",
         "Reactiva",
-        "Informe",
+        "Informes",
     ]
 )
 
@@ -507,8 +538,9 @@ with tab_curva:
             use_container_width=True,
             on_click=limpiar_curva_cargada,
             help=(
-                "Elimina la curva cargada y sus cálculos de esta sesión. "
-                "No borra preferencias, usuario ni cachés compartidas."
+                "Elimina la curva cargada, sus cálculos y las cachés de curva "
+                "y Datadis de esta sesión. No borra archivos originales, "
+                "preferencias, usuario ni cachés globales de otros módulos."
             ),
         )
 
@@ -821,6 +853,7 @@ if normalizar and uploaded:
         st.session_state.pop("informe_reactiva_html", None)
         st.session_state.atr_dfnorm = atr_dfnorm
         st.session_state.df_norm_h = df_norm_h
+        st.session_state.curva_escala_manual_1000_aplicada = False
         st.session_state.csv_bytes_norm = csv_bytes_norm
         st.session_state.csv_bytes_h = csv_bytes_h
         st.session_state.frec = frec
@@ -963,15 +996,101 @@ if st.session_state.get("df_norm") is not None:
                     st.write(f"• {fichero}")
 
         st.markdown("**Tabla normalizada**")
+        if st.button(
+            "÷ 1.000 energías (Wh → kWh)",
+            key="dividir_energias_curva_1000",
+            disabled=st.session_state.get(
+                "curva_escala_manual_1000_aplicada", False
+            ),
+            help=(
+                "Divide entre 1.000 consumo, excedentes, generación y energía "
+                "reactiva/capacitiva. No modifica fechas, horas ni periodos."
+            ),
+            use_container_width=True,
+        ):
+            st.session_state.df_norm = dividir_energias_curva(
+                st.session_state.df_norm
+            )
+            st.session_state.df_norm_h = dividir_energias_curva(
+                st.session_state.df_norm_h
+            )
+            df_norm_reescalada = st.session_state.df_norm
+            st.session_state.consumo_total = df_norm_reescalada[
+                "consumo_kWh"
+            ].sum()
+            st.session_state.vertido_total = df_norm_reescalada[
+                "excedentes_kWh"
+            ].sum()
+            st.session_state.consumo_neto = df_norm_reescalada[
+                "consumo_neto_kWh"
+            ].sum()
+            st.session_state.vertido_neto = df_norm_reescalada[
+                "vertido_neto_kWh"
+            ].sum()
+            st.session_state.reactiva_total = df_norm_reescalada[
+                "reactiva_kVArh"
+            ].sum()
+            st.session_state.csv_bytes_norm = (
+                df_norm_reescalada.reset_index(drop=True)
+                .to_csv(index=False, sep=";", decimal=",", float_format="%.3f")
+                .encode("utf-8")
+            )
+            st.session_state.csv_bytes_h = (
+                st.session_state.df_norm_h.reset_index(drop=True)
+                .to_csv(index=False, sep=";", decimal=",", float_format="%.3f")
+                .encode("utf-8")
+            )
+            st.session_state.curva_escala_manual_1000_aplicada = True
+            st.session_state.curva_reactiva_version = (
+                st.session_state.get("curva_reactiva_version", 0) + 1
+            )
+            for clave_derivada in (
+                "df_curva_sheets",
+                "precios_mensuales",
+                "resumen_costes_contractuales",
+                "origen_costes_comparativa",
+                "cups_costes_comparativa",
+                "version_curva_costes_comparativa",
+                "reactiva_base_cache",
+                "reactiva_compensacion",
+                "informe_reactiva_html",
+                "df_consumos_pricing",
+                "df_consumos_pricing_origen",
+            ):
+                st.session_state.pop(clave_derivada, None)
+            st.rerun()
         total_filas_norm = len(st.session_state.df_norm)
         st.caption(
             f"Vista previa: primeras 1.000 filas de "
             f"{formato_numero_es(total_filas_norm)}"
         )
+        df_norm_vista = st.session_state.df_norm.head(1000).copy()
+        if "fecha_hora" in df_norm_vista.columns:
+            df_norm_vista["fecha_hora"] = pd.to_datetime(
+                df_norm_vista["fecha_hora"], errors="coerce"
+            ).dt.strftime("%d/%m/%Y %H:%M")
+        if "fecha" in df_norm_vista.columns:
+            df_norm_vista["fecha"] = pd.to_datetime(
+                df_norm_vista["fecha"], errors="coerce"
+            ).dt.strftime("%d/%m/%Y")
+        columnas_energia_vista = [
+            columna
+            for columna in (
+                "consumo_kWh", "excedentes_kWh", "generacion_kWh",
+                "reactiva_kVArh", "capacitiva_kVArh",
+                "consumo_neto_kWh", "vertido_neto_kWh",
+            )
+            if columna in df_norm_vista.columns
+        ]
+        for columna in columnas_energia_vista:
+            df_norm_vista[columna] = df_norm_vista[columna].map(
+                lambda valor: formato_numero_es(valor, 3)
+            )
         st.dataframe(
-            st.session_state.df_norm.head(1000),
+            df_norm_vista,
             height=altura_df,
             use_container_width=True,
+            hide_index=True,
         )
 
     with col_curva_info:
@@ -986,13 +1105,17 @@ if st.session_state.get("df_norm") is not None:
             )
             st.metric("Consumo neto", formato_kwh(st.session_state.consumo_neto))
         with resumen_2:
+            fecha_inicio_resumen = st.session_state.df_norm["fecha_hora"].min()
+            fecha_fin_resumen = st.session_state.df_norm["fecha_hora"].max()
             st.metric(
                 "Fecha inicio",
-                st.session_state.df_norm["fecha_hora"].min().strftime("%d.%m.%Y"),
+                fecha_inicio_resumen.strftime("%d.%m.%Y")
+                if pd.notna(fecha_inicio_resumen) else "Sin fecha válida",
             )
             st.metric(
                 "Fecha final",
-                st.session_state.df_norm["fecha_hora"].max().strftime("%d.%m.%Y"),
+                fecha_fin_resumen.strftime("%d.%m.%Y")
+                if pd.notna(fecha_fin_resumen) else "Sin fecha válida",
             )
             st.metric("Vertido total", formato_kwh(st.session_state.vertido_total))
             st.metric("Vertido neto", formato_kwh(st.session_state.vertido_neto))
@@ -1363,22 +1486,150 @@ if st.session_state.get("df_norm") is not None:
         coste_c1, coste_c2, coste_c3, coste_c4 = st.columns(4)
         with coste_c1:
                 st.subheader("Comparación de costes de energía")
+                cups_costes_actual = re.sub(
+                    r"[^A-Z0-9]", "",
+                    str(st.session_state.get("cups_curva", "") or "").upper(),
+                )[:20]
+                cups_costes_calculado = st.session_state.get(
+                    "cups_costes_comparativa"
+                )
+                version_curva_actual = st.session_state.get(
+                    "curva_reactiva_version", 0
+                )
+                version_curva_calculada = st.session_state.get(
+                    "version_curva_costes_comparativa"
+                )
+                if (
+                    st.session_state.get("precios_mensuales") is not None
+                    and (
+                        cups_costes_calculado != cups_costes_actual
+                        or version_curva_calculada != version_curva_actual
+                    )
+                ):
+                    for clave_costes in (
+                        "precios_mensuales", "df_curva_sheets",
+                        "resumen_costes_contractuales",
+                        "origen_costes_comparativa",
+                        "cups_costes_comparativa",
+                        "version_curva_costes_comparativa",
+                    ):
+                        st.session_state.pop(clave_costes, None)
+                modo_coste_energia = st.radio(
+                    "Origen de precios",
+                    ("Indexado estándar", "Condiciones del contrato"),
+                    horizontal=False,
+                    key="modo_coste_energia_comparativa",
+                )
                 precios_mensuales = st.session_state.get("precios_mensuales", None)
                 if precios_mensuales is None:
                     st.warning(
-                        'Todavía no se han cargado precios indexados para la curva.'
+                        'Todavía no se han calculado precios para la curva.'
                     )
                 else:
-                    st.success('Disponibles datos de indexado para la curva introducida')
+                    origen_calculado = st.session_state.get(
+                        "origen_costes_comparativa", "precios cargados"
+                    )
+                    st.success(f'Disponibles costes: {origen_calculado}')
                 cargar_indexados = st.button(
-                    "Cargar precios indexados",
+                    (
+                        "Aplicar condiciones del contrato"
+                        if modo_coste_energia == "Condiciones del contrato"
+                        else "Cargar precios indexados"
+                    ),
                     use_container_width=True,
                     key="cargar_indexados_comparaciones",
                 )
-                st.caption(
-                    "Usa la fórmula vigente de Telemindex y la curva horaria "
-                    "cargada, sin salir de este módulo."
-                )
+                if modo_coste_energia == "Condiciones del contrato":
+                    st.caption(
+                        "Cruza cada intervalo con la condición vigente del CUPS. "
+                        "Los tramos fijos usan TE puro, todavía sin regularización "
+                        "mensual de SSAA."
+                    )
+                else:
+                    st.caption(
+                        "Usa la fórmula vigente de Telemindex y la curva horaria "
+                        "cargada, sin salir de este módulo."
+                    )
+
+                if modo_coste_energia == "Condiciones del contrato":
+                    cups_extras = st.session_state.get("cups_curva", "")
+                    try:
+                        extras_guardados = cargar_costes_extra_cups(cups_extras)
+                    except Exception as exc:
+                        st.warning(f"No se han podido leer los costes extra: {exc}")
+                        extras_guardados = pd.DataFrame()
+                    columnas_extras = [
+                        "Mes", "Concepto", "Cantidad_kWh",
+                        "Precio_unitario_EUR_kWh", "Importe_EUR",
+                        "Referencia", "Observaciones",
+                    ]
+                    if extras_guardados.empty:
+                        extras_guardados = pd.DataFrame([{
+                            "Mes": "", "Concepto": "REGULARIZACION SSAA",
+                            "Cantidad_kWh": None,
+                            "Precio_unitario_EUR_kWh": None,
+                            "Importe_EUR": None, "Referencia": "",
+                            "Observaciones": "",
+                        }], columns=columnas_extras)
+                    with st.expander("Añadir costes extra mensuales"):
+                        st.caption(
+                            "Introduzca varias mensualidades y guárdelas juntas. "
+                            "Los meses sin datos deben dejarse sin fila: se mostrarán "
+                            "como provisionales, no como coste cero."
+                        )
+                        with st.form(
+                            f"form_costes_extra_contractuales_{cups_extras[:20]}"
+                        ):
+                            editor_extras = st.data_editor(
+                                extras_guardados[columnas_extras],
+                                num_rows="dynamic",
+                                use_container_width=True,
+                                hide_index=True,
+                                column_config={
+                                    "Mes": st.column_config.TextColumn(
+                                        "Mes (AAAA-MM)", required=True
+                                    ),
+                                    "Concepto": st.column_config.TextColumn(
+                                        "Concepto", default="REGULARIZACION SSAA"
+                                    ),
+                                    "Cantidad_kWh": st.column_config.NumberColumn(
+                                        "Cantidad factura (kWh)", format="%.3f"
+                                    ),
+                                    "Precio_unitario_EUR_kWh": st.column_config.NumberColumn(
+                                        "Precio unitario (€/kWh)", format="%.8f"
+                                    ),
+                                    "Importe_EUR": st.column_config.NumberColumn(
+                                        "Importe (€)", required=True, format="%.2f"
+                                    ),
+                                },
+                                key=(
+                                    "editor_costes_extra_contractuales_"
+                                    f"{cups_extras[:20]}"
+                                ),
+                            )
+                            guardar_extras = st.form_submit_button(
+                                "Guardar todas las mensualidades",
+                                use_container_width=True,
+                                type="primary",
+                            )
+                        if guardar_extras:
+                            try:
+                                filas_guardadas, avisos_extras = guardar_costes_extra_cups(
+                                    cups_extras, editor_extras
+                                )
+                            except Exception as exc:
+                                st.error(f"No se han guardado los costes extra: {exc}")
+                            else:
+                                st.session_state.pop("precios_mensuales", None)
+                                st.session_state.pop(
+                                    "resumen_costes_contractuales", None
+                                )
+                                st.success(
+                                    f"Guardadas {filas_guardadas} mensualidades en "
+                                    "un único guardado. Vuelva a aplicar el contrato."
+                                )
+                                for aviso_extra in avisos_extras:
+                                    st.warning(aviso_extra)
 
                 if cargar_indexados:
                     try:
@@ -1387,23 +1638,65 @@ if st.session_state.get("df_norm") is not None:
                             st.session_state.zona_periodos_index = "peninsula"
                             init_app_index()
                             actualizar_df_index_por_zona(forzar=True)
+                            condiciones = None
+                            cups_contrato = ""
+                            if modo_coste_energia == "Condiciones del contrato":
+                                cups_contrato = st.session_state.get("cups_curva", "")
+                                condiciones = cargar_condiciones_cups(cups_contrato)
+                                st.session_state.df_sheets = (
+                                    preparar_indexado_contractual(
+                                        st.session_state.df_sheets,
+                                        condiciones,
+                                        st.session_state.atr_dfnorm,
+                                    )
+                                )
                             df_curva_indexada = construir_df_curva_sheets(
                                 st.session_state.df_sheets.copy()
                             )
-                            df_curva_indexada = añadir_costes_curva(
-                                df_curva_indexada
-                            ).drop_duplicates(
+                            if modo_coste_energia == "Condiciones del contrato":
+                                df_curva_indexada = aplicar_condiciones_contractuales(
+                                    df_curva_indexada,
+                                    condiciones,
+                                    st.session_state.atr_dfnorm,
+                                )
+                                costes_extra = cargar_costes_extra_cups(cups_contrato)
+                                df_curva_indexada = aplicar_costes_extra_mensuales(
+                                    df_curva_indexada, costes_extra
+                                )
+                                st.session_state.resumen_costes_contractuales = (
+                                    resumir_calculo_contractual(df_curva_indexada)
+                                )
+                                st.session_state.origen_costes_comparativa = (
+                                    f"contrato del CUPS {cups_contrato[:20]}"
+                                )
+                            else:
+                                df_curva_indexada = añadir_costes_curva(
+                                    df_curva_indexada
+                                )
+                                st.session_state.pop(
+                                    "resumen_costes_contractuales", None
+                                )
+                                st.session_state.origen_costes_comparativa = (
+                                    "indexado estándar"
+                                )
+                            df_curva_indexada = df_curva_indexada.drop_duplicates(
                                 subset=["fecha", "hora"], keep="first"
                             )
                             st.session_state.df_curva_sheets = df_curva_indexada
+                            st.session_state.cups_costes_comparativa = (
+                                cups_costes_actual
+                            )
+                            st.session_state.version_curva_costes_comparativa = (
+                                version_curva_actual
+                            )
                             precios_mensuales, _ = evol_mensual(
                                 df_curva_indexada, {}
                             )
                             st.session_state.precios_mensuales = precios_mensuales
                     except Exception as exc:
-                        st.error(f"No se han podido cargar los indexados: {exc}")
+                        st.error(f"No se han podido calcular los costes: {exc}")
                     else:
-                        st.success("Precios indexados cargados correctamente.")
+                        st.success("Costes calculados correctamente.")
                         st.rerun()
 
         if precios_mensuales is not None and rango_valido is not None:
@@ -1428,6 +1721,15 @@ if st.session_state.get("df_norm") is not None:
             else:
                 df_costes = res_costes["df_costes"]
                 df_efectos = res_costes["df_efectos"]
+                st.session_state.comparativa_informe_datos = {
+                    "consumo": res,
+                    "costes": res_costes,
+                    "resumen_contractual": st.session_state.get(
+                        "resumen_costes_contractuales"
+                    ),
+                    "cups": str(st.session_state.get("cups_curva", "") or ""),
+                    "atr": str(st.session_state.get("atr_dfnorm", "") or ""),
+                }
                 etiqueta_base_coste, etiqueta_comp_coste = res_costes.get(
                     "etiquetas_periodos", ("Base", "+1 año")
                 )
@@ -1478,6 +1780,44 @@ if st.session_state.get("df_norm") is not None:
                             use_container_width=True,
                             hide_index=True,
                         )
+                    resumen_contractual = st.session_state.get(
+                        "resumen_costes_contractuales"
+                    )
+                    if resumen_contractual is not None:
+                        with st.expander("Justificación contractual mensual"):
+                            st.caption(
+                                "En los tramos fijos, el precio mostrado es el TE "
+                                "inicial sin regularización de SSAA."
+                            )
+                            st.dataframe(
+                                resumen_contractual,
+                                use_container_width=True,
+                                hide_index=True,
+                            )
+                        with st.expander("Detalle horario del cálculo"):
+                            columnas_detalle = [
+                                "fecha_hora", "periodo", "consumo_neto_kWh",
+                                "tipo_precio_contrato", "condicion_id",
+                                "condicion_desde", "condicion_hasta",
+                                "precio_fijo_te_eur_mwh",
+                                "precio_contrato_eur_mwh",
+                                "coste_total_inicial",
+                                "coste_extra_mensual_asignado", "coste_total",
+                                "estado_coste_contractual", "formula_contrato",
+                            ]
+                            detalle_contractual = st.session_state.get(
+                                "df_curva_sheets", pd.DataFrame()
+                            )
+                            columnas_detalle = [
+                                columna for columna in columnas_detalle
+                                if columna in detalle_contractual.columns
+                            ]
+                            st.dataframe(
+                                detalle_contractual[columnas_detalle],
+                                use_container_width=True,
+                                hide_index=True,
+                                height=360,
+                            )
                     st.subheader("Efecto PRECIO / CONSUMO")
                     st.markdown(
                         res_costes.get("impacto_html_costes", ""),
@@ -1485,9 +1825,9 @@ if st.session_state.get("df_norm") is not None:
                     )
 
                 with coste_c2:
-                    if res_costes.get("fig_resumen_costes") is not None:
+                    if res_costes["fig_precio_medio"] is not None:
                         st.plotly_chart(
-                            res_costes["fig_resumen_costes"],
+                            res_costes["fig_precio_medio"],
                             use_container_width=True,
                         )
                     if res_costes["fig_efectos"] is not None:
@@ -1497,9 +1837,9 @@ if st.session_state.get("df_norm") is not None:
                         )
 
                 with coste_c3:
-                    if res_costes["fig_precio_medio"] is not None:
+                    if res_costes.get("fig_resumen_costes") is not None:
                         st.plotly_chart(
-                            res_costes["fig_precio_medio"],
+                            res_costes["fig_resumen_costes"],
                             use_container_width=True,
                         )
 
@@ -1510,7 +1850,320 @@ if st.session_state.get("df_norm") is not None:
                             use_container_width=True,
                         )
 
+    # ======================================================================================================================================================
+    # COMPARATIVA DE AHORRO / SOBRECOSTE
+    # ======================================================================================================================================================
+    with tab_ahorro:
+        col_resumen, col_impacto, col_costes, col_diferencia = st.columns(4)
+        col_resumen.info(
+            "Compara el coste contractual real con otro precio sobre exactamente "
+            "el mismo consumo y el mismo intervalo. El coste real incorpora los "
+            "cambios de contrato y los extras mensuales guardados, incluidos SSAA."
+        )
+        df_rango_ahorro = st.session_state.df_norm_h.copy()
+        fechas_rango_ahorro = pd.to_datetime(
+            df_rango_ahorro["fecha_hora"], errors="coerce"
+        ).dropna()
+        fecha_min_ahorro = fechas_rango_ahorro.min().date()
+        fecha_max_ahorro = fechas_rango_ahorro.max().date()
+        rango_defecto_ahorro = (fecha_min_ahorro, fecha_max_ahorro)
+        rango_guardado_ahorro = st.session_state.get(
+            "rango_ahorro_seleccionado", rango_defecto_ahorro
+        )
+        if (
+            not isinstance(rango_guardado_ahorro, (tuple, list))
+            or len(rango_guardado_ahorro) != 2
+            or pd.Timestamp(rango_guardado_ahorro[0]).date() < fecha_min_ahorro
+            or pd.Timestamp(rango_guardado_ahorro[1]).date() > fecha_max_ahorro
+        ):
+            rango_guardado_ahorro = rango_defecto_ahorro
+        rango_ahorro = col_resumen.date_input(
+            "Periodo de análisis",
+            value=rango_guardado_ahorro,
+            min_value=fecha_min_ahorro,
+            max_value=fecha_max_ahorro,
+            format="DD.MM.YYYY",
+            key="rango_ahorro_widget",
+        )
+        origen_referencia = col_resumen.radio(
+            "Precio de referencia",
+            ("Condición anterior del contrato", "Oferta fija manual", "Oferta indexada manual"),
+            horizontal=False,
+            key="origen_referencia_ahorro",
+        )
 
+        cups_ahorro = str(st.session_state.get("cups_curva", "") or "")
+        condiciones_ahorro = None
+        error_condiciones_ahorro = None
+        try:
+            condiciones_ahorro = cargar_condiciones_cups(cups_ahorro)
+        except Exception as exc:
+            error_condiciones_ahorro = str(exc)
+
+        condicion_referencia_id = None
+        precios_fijos_referencia = None
+        formula_referencia = None
+        if origen_referencia == "Condición anterior del contrato":
+            if error_condiciones_ahorro:
+                col_resumen.warning(error_condiciones_ahorro)
+            else:
+                opciones_condicion = condiciones_ahorro["condicion_id"].astype(int).tolist()
+                etiquetas_condicion = {}
+                for _, fila_condicion in condiciones_ahorro.iterrows():
+                    fin_txt = (
+                        pd.Timestamp(fila_condicion["fin_condicion"]).strftime("%d/%m/%Y")
+                        if pd.notna(fila_condicion["fin_condicion"]) else "actualidad"
+                    )
+                    payload_condicion = json.loads(
+                        fila_condicion.get("payload_json") or "{}"
+                    )
+                    detalle_condicion = ""
+                    if not str(fila_condicion["tipo_precio"]).upper().startswith("FIJO"):
+                        margen_condicion = str(
+                            payload_condicion.get("INDEX CG", "0")
+                        ).replace(",", ".")
+                        posicion_condicion = {
+                            "1": "pérdidas", "2": "TM", "3": "neto"
+                        }.get(str(payload_condicion.get("CG F", "2")), "TM")
+                        detalle_condicion = (
+                            f" · margen {margen_condicion} €/MWh en {posicion_condicion}"
+                        )
+                    etiquetas_condicion[int(fila_condicion["condicion_id"])] = (
+                        f"{str(fila_condicion['tipo_precio']).strip()} · "
+                        f"{pd.Timestamp(fila_condicion['inicio_condicion']):%d/%m/%Y}–{fin_txt}"
+                        f"{detalle_condicion}"
+                    )
+                inicio_ref_ahorro = pd.Timestamp(rango_ahorro[0])
+                anteriores_ahorro = condiciones_ahorro.loc[
+                    condiciones_ahorro["fin_condicion"].notna()
+                    & (condiciones_ahorro["fin_condicion"] < inicio_ref_ahorro)
+                ]
+                condicion_default_ahorro = (
+                    int(anteriores_ahorro.sort_values("fin_condicion").iloc[-1]["condicion_id"])
+                    if not anteriores_ahorro.empty else opciones_condicion[-1]
+                )
+                condicion_referencia_id = col_resumen.selectbox(
+                    "Condición que se aplicará como referencia a todo el periodo",
+                    opciones_condicion,
+                    index=opciones_condicion.index(condicion_default_ahorro),
+                    format_func=lambda valor: etiquetas_condicion[valor],
+                    key="condicion_referencia_ahorro",
+                )
+                col_resumen.caption(
+                    "Se conserva su fórmula o sus precios, pero no su vigencia original. "
+                    "No se trasladan extras históricos al escenario de referencia."
+                )
+        elif origen_referencia == "Oferta fija manual":
+            numero_periodos_ahorro = 3 if str(st.session_state.atr_dfnorm) == "2.0" else 6
+            columnas_fijo_ahorro = col_resumen.columns(2)
+            precios_fijos_referencia = {}
+            for indice_ahorro in range(1, numero_periodos_ahorro + 1):
+                with columnas_fijo_ahorro[(indice_ahorro - 1) % 2]:
+                    precios_fijos_referencia[f"P{indice_ahorro}"] = st.number_input(
+                        f"P{indice_ahorro} (€/kWh)", min_value=0.0, max_value=2.0,
+                        step=0.001, format="%.6f",
+                        key=f"ahorro_fijo_p{indice_ahorro}",
+                    )
+        else:
+            with col_resumen:
+                parametros_ref = mostrar_parametros_formula_indexado(
+                    widget_suffix="ahorro_referencia", diferido=True
+                )
+            formula_referencia = FormulaIndexada(
+                desvios_apant=float(parametros_ref.get("desvios_apant", 0.0)),
+                margen=float(parametros_ref.get("margen_telemindex", 0.0)),
+                margen_pos=parametros_ref.get("cfg_margen_pos", "tm"),
+                incluir_fnee=bool(parametros_ref.get("cfg_fnee", False)),
+                fnee_pos=parametros_ref.get("cfg_fnee_pos", "perdidas"),
+                cf_pct=float(parametros_ref.get("cf_pct", 0.0)),
+            )
+
+        calcular_ahorro = col_resumen.button(
+            "Calcular ahorro / sobrecoste", type="primary",
+            use_container_width=True, key="calcular_ahorro_contractual",
+        )
+        if calcular_ahorro:
+            try:
+                if error_condiciones_ahorro:
+                    raise ValueError(error_condiciones_ahorro)
+                if not isinstance(rango_ahorro, (tuple, list)) or len(rango_ahorro) != 2:
+                    raise ValueError("Seleccione una fecha inicial y una fecha final.")
+                inicio_ahorro, fin_ahorro = map(pd.Timestamp, rango_ahorro)
+                if inicio_ahorro > fin_ahorro:
+                    raise ValueError("La fecha inicial no puede ser posterior a la final.")
+                if origen_referencia == "Condición anterior del contrato":
+                    fila_ref = condiciones_ahorro.loc[
+                        condiciones_ahorro["condicion_id"].eq(condicion_referencia_id)
+                    ].iloc[0]
+                    condicion_ref = condicion_como_referencia(
+                        fila_ref, inicio_ahorro, fin_ahorro
+                    )
+                elif origen_referencia == "Oferta fija manual":
+                    condicion_ref = condicion_manual_como_referencia(
+                        "FIJO", inicio_ahorro, fin_ahorro,
+                        precios_fijos=precios_fijos_referencia,
+                    )
+                else:
+                    condicion_ref = condicion_manual_como_referencia(
+                        "INDEXADO", inicio_ahorro, fin_ahorro,
+                        formula=formula_referencia,
+                    )
+
+                with st.spinner("Calculando ambos escenarios sobre la misma curva…"):
+                    init_app()
+                    st.session_state.zona_periodos_index = "peninsula"
+                    init_app_index()
+                    actualizar_df_index_por_zona(forzar=True)
+                    precios_base = st.session_state.df_sheets.copy()
+
+                    precios_actual = preparar_indexado_contractual(
+                        precios_base, condiciones_ahorro, st.session_state.atr_dfnorm
+                    )
+                    curva_actual = construir_df_curva_sheets(precios_actual)
+                    mascara_rango = (
+                        pd.to_datetime(curva_actual["fecha_hora"]).dt.normalize()
+                        .between(inicio_ahorro.normalize(), fin_ahorro.normalize())
+                    )
+                    curva_actual = curva_actual.loc[mascara_rango].copy()
+                    curva_actual = aplicar_condiciones_contractuales(
+                        curva_actual, condiciones_ahorro, st.session_state.atr_dfnorm
+                    )
+                    curva_completa_consumos = st.session_state.df_norm_h.copy()
+                    curva_completa_consumos["_mes_extra"] = pd.to_datetime(
+                        curva_completa_consumos["fecha_hora"]
+                    ).dt.to_period("M").astype(str)
+                    consumos_mes_completo = (
+                        curva_completa_consumos.groupby("_mes_extra")[
+                            "consumo_neto_kWh"
+                        ].sum().to_dict()
+                    )
+                    curva_actual = aplicar_costes_extra_mensuales(
+                        curva_actual, cargar_costes_extra_cups(cups_ahorro),
+                        consumos_mensuales_base=consumos_mes_completo,
+                    )
+
+                    precios_ref = preparar_indexado_contractual(
+                        precios_base, condicion_ref, st.session_state.atr_dfnorm
+                    )
+                    curva_ref = construir_df_curva_sheets(precios_ref)
+                    mascara_ref = (
+                        pd.to_datetime(curva_ref["fecha_hora"]).dt.normalize()
+                        .between(inicio_ahorro.normalize(), fin_ahorro.normalize())
+                    )
+                    curva_ref = aplicar_condiciones_contractuales(
+                        curva_ref.loc[mascara_ref].copy(), condicion_ref,
+                        st.session_state.atr_dfnorm,
+                    )
+                    resultado_nuevo_ahorro = calcular_comparativa_ahorro(
+                        curva_actual, curva_ref
+                    )
+                    if not resultado_nuevo_ahorro["ok"]:
+                        raise ValueError(resultado_nuevo_ahorro["mensaje"])
+                    st.session_state.resultado_comparativa_ahorro = resultado_nuevo_ahorro
+                    st.session_state.rango_ahorro_seleccionado = tuple(rango_ahorro)
+                    st.session_state.detalle_actual_ahorro = curva_actual
+                    st.session_state.detalle_referencia_ahorro = curva_ref
+            except Exception as exc:
+                st.session_state.pop("resultado_comparativa_ahorro", None)
+                col_resumen.error(f"No se ha podido calcular la comparativa: {exc}")
+
+        resultado_ahorro = st.session_state.get("resultado_comparativa_ahorro")
+        if resultado_ahorro is not None:
+            if not resultado_ahorro["ok"]:
+                st.warning(resultado_ahorro["mensaje"])
+            else:
+                st.session_state.comparativa_ahorro_informe_datos = {
+                    "resultado": resultado_ahorro,
+                    "cups": str(st.session_state.get("cups_curva", "") or ""),
+                    "atr": str(st.session_state.get("atr_dfnorm", "") or ""),
+                    "origen": origen_referencia,
+                    "rango": st.session_state.get("rango_ahorro_seleccionado"),
+                }
+                etiqueta_ref, etiqueta_actual = resultado_ahorro[
+                    "etiquetas_periodos"
+                ]
+                diferencia_ahorro = resultado_ahorro["diferencia"]
+                veredicto_ahorro = (
+                    "Sobrecoste" if diferencia_ahorro > 0
+                    else "Ahorro" if diferencia_ahorro < 0
+                    else "Sin diferencia"
+                )
+                with col_resumen:
+                    st.subheader("Resultado", divider="rainbow")
+                    st.metric(
+                        "Coste de referencia",
+                        formato_euros(resultado_ahorro["coste_referencia"]),
+                    )
+                    st.metric(
+                        "Coste real contractual",
+                        formato_euros(resultado_ahorro["coste_real"]),
+                    )
+                    st.metric(
+                        veredicto_ahorro,
+                        formato_euros(abs(diferencia_ahorro)),
+                        delta=(
+                            f"{formato_numero_es(resultado_ahorro['diferencia_pct'], 2)} %"
+                        ),
+                        delta_color="inverse",
+                    )
+                    st.caption(
+                        "Ambos importes usan exactamente la misma curva de consumo. "
+                        "Positivo significa sobrecoste real; negativo, ahorro real."
+                    )
+                with col_impacto:
+                    fig_impacto_ahorro = resultado_ahorro.get("fig_impacto")
+                    if fig_impacto_ahorro is not None:
+                        st.plotly_chart(
+                            fig_impacto_ahorro,
+                            use_container_width=True,
+                        )
+                        st.markdown(
+                            resultado_ahorro.get("impacto_html", ""),
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        st.info(
+                            "Recalcula la comparativa para generar el nuevo "
+                            "gráfico de impacto total."
+                        )
+                with col_costes:
+                    st.plotly_chart(
+                        resultado_ahorro["fig_mensual"],
+                        use_container_width=True,
+                    )
+                with col_diferencia:
+                    st.plotly_chart(
+                        resultado_ahorro["fig_diferencia"],
+                        use_container_width=True,
+                    )
+
+                tabla_ahorro = resultado_ahorro["df_ahorro"]
+                columnas_euros_ahorro = [
+                    columna for columna in tabla_ahorro.columns
+                    if "Coste" in columna or columna == "Ahorro / sobrecoste"
+                ]
+                columnas_precios_ahorro = [
+                    columna for columna in tabla_ahorro.columns
+                    if columna.startswith("Precio")
+                ]
+                columnas_consumo_ahorro = [
+                    columna for columna in tabla_ahorro.columns
+                    if columna.startswith("Consumo")
+                ]
+                tabla_ahorro_vista = formatear_columnas_tabla(
+                    tabla_ahorro,
+                    columnas_kwh=columnas_consumo_ahorro,
+                    columnas_euros=columnas_euros_ahorro,
+                    columnas_cent_eur_kwh=columnas_precios_ahorro,
+                    columnas_pct=["Ahorro / sobrecoste %"],
+                    incluir_unidades=False,
+                )
+                st.subheader("Detalle mensual", divider="rainbow")
+                st.dataframe(
+                    tabla_ahorro_vista,
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
     # ======================================================================================================================================================
     # REACTIVA
@@ -1679,7 +2332,7 @@ if st.session_state.get("df_norm") is not None:
                     with c_form2:
                         margen_comp_form = st.number_input(
                             "Margen de seguridad (%)",
-                            min_value=30,
+                            min_value=5,
                             max_value=50,
                             value=int(st.session_state.margen_comp_min),
                         )
@@ -2068,11 +2721,34 @@ if st.session_state.get("df_norm") is not None:
                         )
 
     with tab6:
-        st.subheader("Informe de compensación", divider="rainbow")
+        st.subheader("Informes", divider="rainbow")
         informe_base = st.session_state.get("reactiva_base_cache")
         informe_compensacion = st.session_state.get("reactiva_compensacion")
+        informe_comparativa = st.session_state.get("comparativa_informe_datos")
 
-        if not informe_base:
+        informes_disponibles = []
+        if informe_comparativa:
+            informes_disponibles.append("Comparativa")
+        if informe_base and informe_compensacion:
+            informes_disponibles.append("Reactiva")
+
+        tipo_informe = None
+        if informes_disponibles:
+            tipo_informe = st.radio(
+                "Informe disponible",
+                informes_disponibles,
+                horizontal=True,
+                key="tipo_informe_curva",
+            )
+
+        if tipo_informe == "Comparativa":
+            mostrar_informe_comparativa(informe_comparativa)
+        elif not informes_disponibles:
+            st.info(
+                "Todavía no hay informes disponibles. Calcula una comparativa "
+                "de costes o una compensación de reactiva."
+            )
+        elif not informe_base:
             st.info(
                 "Carga una curva con datos de reactiva para preparar el informe."
             )
@@ -2085,19 +2761,32 @@ if st.session_state.get("df_norm") is not None:
             cups_disponible = str(
                 st.session_state.get("cups_curva", "") or ""
             ).strip().upper()
-            cups_autocompletado_anterior = st.session_state.get(
-                "_reactiva_informe_cups_autocompletado", ""
+            datos_bbdd_informe = cargar_datos_suministro(cups_disponible)
+            datos_bbdd_informe["cups"] = (
+                datos_bbdd_informe.get("cups") or cups_disponible
             )
-            cups_informe_actual = st.session_state.get(
-                "reactiva_informe_cups", ""
+            anteriores_informe = st.session_state.get(
+                "_reactiva_informe_autocompletado", {}
             )
-            if cups_disponible and (
-                not cups_informe_actual
-                or cups_informe_actual == cups_autocompletado_anterior
+            for campo_informe in (
+                "cliente", "nif", "direccion", "cups", "atr"
             ):
-                st.session_state.reactiva_informe_cups = cups_disponible
-            st.session_state._reactiva_informe_cups_autocompletado = (
-                cups_disponible
+                clave_informe = f"reactiva_informe_{campo_informe}"
+                valor_actual = str(
+                    st.session_state.get(clave_informe, "") or ""
+                ).strip()
+                valor_anterior = str(
+                    anteriores_informe.get(campo_informe, "") or ""
+                ).strip()
+                valor_bbdd = str(
+                    datos_bbdd_informe.get(campo_informe, "") or ""
+                ).strip()
+                if valor_bbdd and (
+                    not valor_actual or valor_actual == valor_anterior
+                ):
+                    st.session_state[clave_informe] = valor_bbdd
+            st.session_state._reactiva_informe_autocompletado = (
+                datos_bbdd_informe
             )
 
             col_datos_informe, col_previa_informe = st.columns([0.38, 0.62])
@@ -2128,7 +2817,6 @@ if st.session_state.get("df_norm") is not None:
                     )
                     col_atr.text_input(
                         "ATR",
-                        value=str(st.session_state.get("atr_dfnorm", "")),
                         key="reactiva_informe_atr",
                     )
 

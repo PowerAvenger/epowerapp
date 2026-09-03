@@ -19,6 +19,40 @@ from backend_curvadecarga import (
 )
 
 
+FORMATOS_INICIO_INCLUIDO = {
+    "naturgy_grandes_clientes",
+    "nexus_nuevo",
+    "vm_fijo",
+    "vm_indexado",
+}
+COMERCIALIZADORAS_INICIO_INCLUIDO = ("nexus", "vm energía", "vm energia")
+
+
+def resolver_ciclo_energia(
+    fecha_inicio, fecha_fin, *, formato=None, comercializadora=None
+):
+    """Devuelve el ciclo real de consumo/reactiva según formato o comercializadora."""
+    inicio = pd.to_datetime(fecha_inicio, dayfirst=True, errors="coerce")
+    fin = pd.to_datetime(fecha_fin, dayfirst=True, errors="coerce")
+    if pd.isna(inicio) or pd.isna(fin) or inicio.normalize() > fin.normalize():
+        raise ValueError("El periodo de facturación no es válido.")
+    formato_normalizado = str(formato or "").strip().casefold()
+    comercializadora_normalizada = str(
+        comercializadora or ""
+    ).strip().casefold()
+    inicio_incluido = (
+        formato_normalizado in FORMATOS_INICIO_INCLUIDO
+        or any(
+            nombre in comercializadora_normalizada
+            for nombre in COMERCIALIZADORAS_INICIO_INCLUIDO
+        )
+    )
+    inicio_real = inicio.normalize()
+    if not inicio_incluido and inicio.normalize() < fin.normalize():
+        inicio_real += pd.Timedelta(days=1)
+    return inicio_real.date(), fin.normalize().date()
+
+
 @dataclass
 class ResultadoCurvaFactura:
     curva_original: pd.DataFrame
@@ -36,6 +70,7 @@ def preparar_curva_factura(
     atr="2.0",
     zona_periodos="peninsula",
     nombre_origen="curva.csv",
+    inicio_exclusivo=True,
 ) -> ResultadoCurvaFactura:
     """Normaliza una curva, asigna periodos y extrae el ciclo de factura."""
     archivo = dataframe_como_archivo_curva(curva_original, nombre_origen)
@@ -47,6 +82,7 @@ def preparar_curva_factura(
         zona_periodos=zona_periodos,
         nombre_origen=nombre_origen,
         curva_original=curva_original,
+        inicio_exclusivo=inicio_exclusivo,
     )
 
 
@@ -58,6 +94,7 @@ def preparar_archivo_factura(
     zona_periodos="peninsula",
     nombre_origen=None,
     curva_original=None,
+    inicio_exclusivo=True,
 ) -> ResultadoCurvaFactura:
     """Prepara un único CSV/Excel con el normalizador compartido."""
     return preparar_archivos_factura(
@@ -68,6 +105,7 @@ def preparar_archivo_factura(
         zona_periodos=zona_periodos,
         nombres_origen=[nombre_origen] if nombre_origen else None,
         curva_original=curva_original,
+        inicio_exclusivo=inicio_exclusivo,
     )
 
 
@@ -79,6 +117,7 @@ def preparar_archivos_factura(
     zona_periodos="peninsula",
     nombres_origen=None,
     curva_original=None,
+    inicio_exclusivo=True,
 ) -> ResultadoCurvaFactura:
     """Normaliza y reúne varios CSV/Excel antes de recortar el ciclo."""
     archivos = list(archivos or [])
@@ -118,9 +157,18 @@ def preparar_archivos_factura(
         .reset_index(drop=True)
     )
     cobertura = analizar_cobertura_periodo(
-        normalizada, fecha_inicio, fecha_fin, frecuencia
+        normalizada,
+        fecha_inicio,
+        fecha_fin,
+        frecuencia,
+        inicio_exclusivo=inicio_exclusivo,
     )
-    periodo = recortar_curva_periodo(normalizada, fecha_inicio, fecha_fin)
+    periodo = recortar_curva_periodo(
+        normalizada,
+        fecha_inicio,
+        fecha_fin,
+        inicio_exclusivo=inicio_exclusivo,
+    )
     consumos = resumir_consumo_por_periodo(periodo)
     return ResultadoCurvaFactura(
         curva_original=(
@@ -193,6 +241,49 @@ def calcular_energia_fija(
         })
     detalle = pd.DataFrame(filas)
     return detalle, round(detalle["Coste verificado (€)"].sum(), 2)
+
+
+def calcular_reactiva_desde_curva(curva_periodo):
+    """Calcula la reactiva por periodo usando el ciclo completo ya recortado."""
+    from regulacion_reactiva import (
+        exceso_reactiva_inductiva,
+        factor_potencia,
+        precio_reactiva_inductiva,
+    )
+
+    requeridas = {"periodo", "consumo_neto_kWh", "reactiva_kVArh"}
+    if curva_periodo is None or not requeridas.issubset(curva_periodo.columns):
+        raise ValueError("La curva no contiene activa y reactiva por periodo.")
+    curva = curva_periodo[list(requeridas)].copy()
+    curva["periodo"] = curva["periodo"].astype(str).str.strip().str.upper()
+    for columna in ("consumo_neto_kWh", "reactiva_kVArh"):
+        curva[columna] = pd.to_numeric(curva[columna], errors="coerce")
+    curva = curva.dropna(subset=["periodo", "consumo_neto_kWh", "reactiva_kVArh"])
+    if curva.empty:
+        raise ValueError("La curva no contiene datos de reactiva utilizables.")
+
+    agrupada = curva.groupby("periodo", as_index=False)[
+        ["consumo_neto_kWh", "reactiva_kVArh"]
+    ].sum()
+    filas = []
+    for _, item in agrupada.iterrows():
+        periodo = str(item["periodo"])
+        activa = float(item["consumo_neto_kWh"])
+        reactiva = float(item["reactiva_kVArh"])
+        cos_phi = factor_potencia(activa, reactiva)
+        exceso = exceso_reactiva_inductiva(activa, reactiva, periodo)
+        precio = precio_reactiva_inductiva(cos_phi, periodo)
+        filas.append({
+            "Periodo": periodo,
+            "Activa medida (kWh)": activa,
+            "Reactiva medida (kVArh)": reactiva,
+            "cos φ": cos_phi,
+            "Exceso reactiva (kVArh)": exceso,
+            "Precio (€/kVArh)": precio,
+            "Coste verificado (€)": exceso * precio,
+        })
+    detalle = pd.DataFrame(filas).sort_values("Periodo").reset_index(drop=True)
+    return detalle, round(float(detalle["Coste verificado (€)"].sum()), 2)
 
 
 def calcular_energia_indexada(curva_periodo, precios_index, atr, frecuencia):
@@ -325,11 +416,13 @@ def calcular_potencia_confirmada(periodos):
 
 
 def debe_prorratear_excesos_tramo(
-    inicio, fin, numero_tramos=1, tipo_suministro=None
+    inicio, fin, numero_tramos=1, tipo_suministro=None, tarifa=None
 ):
     """Detecta cambios o una ruptura mensual en puntos de medida 1, 2 y 3."""
     tipo = str(tipo_suministro or "").upper().replace(" ", "")
-    if tipo not in {"1", "2", "3", "TIPO1", "TIPO2", "TIPO3"}:
+    tarifa_normalizada = str(tarifa or "").upper().replace(" ", "")
+    tipo_prorrateable = tipo in {"1", "2", "3", "TIPO1", "TIPO2", "TIPO3"}
+    if not tipo_prorrateable and not tarifa_normalizada.startswith("6.1"):
         return False
     if int(numero_tramos) > 1:
         return True

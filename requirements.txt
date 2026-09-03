@@ -1,7 +1,13 @@
 pandas
+numpy
+scipy
 requests
+urllib3
 openpyxl
-plotly.express
+openai>=1.68.0
+zstandard>=0.23.0
+brotlicffi>=1.2.0.0
+plotly
 pdfplumber
 PyMuPDF
 pytesseract
@@ -17,8 +23,11 @@ unidecode
 pvlib
 numpy_financial
 streamlit_folium
+folium
+python-dateutil
 altair<5
 streamlit==1.36.0
+streamlit-paste-button==0.1.2
 statsmodels
 jinja2
 #xhtml2pdf==0.2.11

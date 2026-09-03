@@ -38,9 +38,14 @@ def exceso_reactiva_inductiva(
 def precio_reactiva_inductiva(cos_phi: float | None, periodo: str) -> float:
     if cos_phi is None or periodo.upper() == PERIODO_INDUCTIVA_EXENTO:
         return 0.0
-    if cos_phi >= COS_PHI_SIN_PENALIZACION:
+    # La regla de facturación se aplica sobre el factor de potencia publicado
+    # con dos decimales, igual que en el módulo Curva de carga. Puede existir
+    # exceso físico de reactiva y, aun así, no tener coste si el cos φ
+    # redondeado resulta 0,95.
+    cos_phi_facturable = round(float(cos_phi), 2)
+    if cos_phi_facturable >= COS_PHI_SIN_PENALIZACION:
         return 0.0
-    if cos_phi >= COS_PHI_PENALIZACION_ALTA:
+    if cos_phi_facturable >= COS_PHI_PENALIZACION_ALTA:
         return PRECIO_REACTIVA_MEDIA_EUR_KVARH
     return PRECIO_REACTIVA_ALTA_EUR_KVARH
 

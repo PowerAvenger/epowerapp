@@ -197,6 +197,7 @@ class FacturaLeida:
     atr: str | None = None
     tipo_suministro: str | None = None
     fecha_factura: str | None = None
+    numero_contrato: str | None = None
     fecha_vencimiento_contrato: str | None = None
     permanencia: bool | None = None
     periodo_inicio: str | None = None
@@ -253,7 +254,7 @@ class FacturaLeida:
         return round(sum(
             item.sobrecoste_eur
             for item in self.potencia_periodos
-            if item.resultado != "No verificado"
+            if item.resultado not in {"No verificado", "BOE"}
         ), 2)
 
     @property
@@ -283,7 +284,7 @@ class FacturaLeida:
             * item.potencia_kw
             * dias_ejercicio
             for item in self.potencia_periodos
-            if item.resultado != "No verificado"
+            if item.resultado not in {"No verificado", "BOE"}
         ), 2)
 
     @property
@@ -2978,6 +2979,8 @@ def _extraer_fecha_vencimiento_contrato(texto: str) -> str | None:
         r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
         r"Fecha\s+fin\s+(?:de\s+)?contrato[^\n]*\n(?:[^\n]*\n)?"
         r"\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
+        r"Fin\s+de\s+contrato\s+de\s+suministro\s*[:.]?\s*"
+        r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
     ])
     if not fecha:
         vencimiento_visalia = buscar_texto(texto, [
@@ -3018,6 +3021,28 @@ def _extraer_fecha_vencimiento_contrato(texto: str) -> str | None:
     if len(partes) == 3 and len(partes[2]) == 2:
         partes[2] = f"20{partes[2]}"
     return "/".join(parte.zfill(2) for parte in partes)
+
+
+def _extraer_numero_contrato(texto: str) -> str | None:
+    """Extrae el contrato comercial sin confundirlo con el contrato ATR."""
+    valor = buscar_texto(texto, [
+        r"N[uú]mero\s+(?:de\s+)?contrato\s+FORMA\s+(?:DE\s+)?PAGO[^\n]*\n\s*([A-Z0-9][A-Z0-9./_-]{2,})",
+        r"(?:N[.\s]*[º°o]\.?|N[uú]mero)\s+(?:de\s+)?contrato\s*[:.]\s*([A-Z0-9][A-Z0-9./_-]{2,})",
+        r"C[oó]digo\s+(?:de\s+)?contrato\s*[:.]\s*([A-Z0-9][A-Z0-9./_-]{2,})",
+        r"Cuenta\s+contrato\s*[:.]\s*([A-Z0-9][A-Z0-9./_-]{2,})",
+        r"^Contrato\s*[:.]\s*([A-Z0-9][A-Z0-9./_-]{2,})\s*$",
+        r"Referencia\s+del\s+contrato\s*[:.]\s*([A-Z0-9][A-Z0-9./_-]{2,})",
+        # Cabecera tabular habitual de Naturgy: factura y cuenta contrato.
+        r"FACTURA\s+N[º°]?\s+CUENTA\s+CONTRATO[^\n]*\n\s*\S+\s+([A-Z0-9][A-Z0-9./_-]{2,})",
+    ])
+    if not valor:
+        return None
+    valor = valor.strip(" .,:;-")
+    if valor.upper() in {
+        "ATR", "ACCESO", "SUMINISTRO", "FORMA", "PAGO", "FECHA"
+    }:
+        return None
+    return valor
 
 
 def _extraer_permanencia(texto: str) -> bool | None:
@@ -7149,8 +7174,122 @@ def _repsol(texto: str) -> FacturaLeida:
     return _completar_advertencias(factura)
 
 
+def _extraer_energia_endesa_empresas(texto: str) -> list[EnergiaPeriodo]:
+    """Combina los componentes de energía por periodo de Endesa Empresas."""
+    por_periodo = {}
+    patron = (
+        r"^(Consumo|Energ[ií]a\s+precio\s+indexado)\s+(P[1-6])\s+"
+        r"([\d.,]+)\s*kWh\s*x\s*([\d.,]+)\s*Eur/kWh\s+([\d.,]+)\s*€\s*$"
+    )
+    for _, periodo, consumo, precio, coste in re.findall(
+        patron, texto, re.IGNORECASE | re.MULTILINE
+    ):
+        datos = por_periodo.setdefault(
+            periodo.upper(), {"consumo": consumo_es(consumo), "precio": 0.0, "coste": 0.0}
+        )
+        consumo_fila = consumo_es(consumo)
+        if not math.isclose(datos["consumo"], consumo_fila, rel_tol=0, abs_tol=0.001):
+            raise ValueError(
+                f"Endesa publica consumos distintos para los componentes de {periodo}."
+            )
+        datos["precio"] += numero_es(precio)
+        datos["coste"] += numero_es(coste)
+    return [
+        EnergiaPeriodo(
+            periodo=periodo,
+            consumo_kwh=datos["consumo"],
+            precio_eur_kwh=round(datos["precio"], 9),
+            coste_eur=round(datos["coste"], 2),
+            coste_calculado_eur=round(datos["coste"], 2),
+        )
+        for periodo, datos in sorted(por_periodo.items())
+    ]
+
+
+def _extraer_maximetros_endesa_empresas(texto: str) -> list[MaximetroPeriodo]:
+    """Lee la tabla 'Excesos de potencia' aunque todos los máximos sean cero."""
+    inicio = re.search(r"EXCESOS\s+DE\s*POTENCIA", texto, re.IGNORECASE)
+    if not inicio:
+        return []
+    bloque = texto[inicio.end():inicio.end() + 1800]
+    encontrados = {}
+    for periodo, _, maxima in re.findall(
+        r"\b(P[1-6])\s+([\d.,]+)\s+([\d.,]+)\s*$",
+        bloque, re.IGNORECASE | re.MULTILINE,
+    ):
+        encontrados[periodo.upper()] = numero_es(maxima)
+    return [
+        MaximetroPeriodo(periodo, potencia)
+        for periodo, potencia in sorted(encontrados.items())
+    ]
+
+
+def _extraer_reactiva_endesa_empresas(
+    texto: str, energia_periodos: list[EnergiaPeriodo], importe_total: float,
+) -> list[ReactivaPeriodo]:
+    """Cruza la tabla inductiva de Endesa con la activa facturada por periodo."""
+    from regulacion_reactiva import (
+        exceso_reactiva_inductiva,
+        factor_potencia,
+        precio_reactiva_inductiva,
+    )
+
+    cabecera = re.search(r"ENERG[IÍ]A\s+REACTIVA\s+INDUCTIVA", texto, re.IGNORECASE)
+    fin = re.search(r"EXCESOS\s+DE\s*POTENCIA", texto, re.IGNORECASE)
+    if not cabecera or not fin or fin.start() <= cabecera.end():
+        return []
+    bloque = texto[cabecera.end():fin.start()]
+    activas = {item.periodo: item.consumo_kwh for item in energia_periodos}
+    filas = []
+    for periodo, reactiva, cos_phi_txt, exceso in re.findall(
+        r"\b(P[1-6])\s+([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)\s*$",
+        bloque, re.IGNORECASE | re.MULTILINE,
+    ):
+        periodo = periodo.upper()
+        # P6 está exento de penalización por reactiva inductiva. En algunos PDF
+        # el último acumulado de P4 queda visualmente alineado bajo su fila.
+        if periodo not in activas or periodo == "P6":
+            continue
+        filas.append((
+            periodo, activas[periodo], consumo_es(reactiva),
+            numero_es(cos_phi_txt), consumo_es(exceso),
+        ))
+    total_exceso = sum(fila[4] for fila in filas)
+    if not filas or total_exceso <= 0:
+        return []
+
+    resultado = []
+    for periodo, activa, reactiva, cos_phi_impreso, exceso_facturado in filas:
+        cos_phi = factor_potencia(activa, reactiva)
+        exceso_calculado = exceso_reactiva_inductiva(activa, reactiva, periodo)
+        precio = precio_reactiva_inductiva(cos_phi, periodo)
+        coste_facturado = round(importe_total * exceso_facturado / total_exceso, 2)
+        coste_calculado = round(exceso_calculado * precio, 2)
+        resultado.append(ReactivaPeriodo(
+            periodo=periodo,
+            energia_activa_kwh=activa,
+            energia_reactiva_kvarh=reactiva,
+            exceso_facturado_kvarh=exceso_facturado,
+            exceso_calculado_kvarh=round(exceso_calculado, 3),
+            cos_phi=round(cos_phi if cos_phi is not None else cos_phi_impreso, 4),
+            precio_eur_kvarh=precio,
+            coste_facturado_eur=coste_facturado,
+            coste_calculado_eur=coste_calculado,
+            estado=semaforo_desviacion_coste(
+                coste_facturado, coste_calculado, "componentes"
+            ),
+        ))
+    # Conserva exactamente el total impreso pese al reparto y sus redondeos.
+    diferencia_redondeo = round(importe_total - sum(x.coste_facturado_eur for x in resultado), 2)
+    if resultado and diferencia_redondeo:
+        resultado[-1].coste_facturado_eur = round(
+            resultado[-1].coste_facturado_eur + diferencia_redondeo, 2
+        )
+    return resultado
+
+
 def _endesa(texto: str) -> FacturaLeida:
-    """Extrae las variantes de Endesa, incluidas Tempo Open 20 y Open 30."""
+    """Extrae las variantes de Endesa, incluidas Open y Grandes Clientes."""
     factura = _generico(texto)
     if re.search(
         r"Potencias?\s+contratadas?\s*:\s*punta-llano",
@@ -7167,6 +7306,43 @@ def _endesa(texto: str) -> FacturaLeida:
     else:
         factura.formato = "endesa"
     factura.comercializadora = "Endesa"
+    energia_empresas = _extraer_energia_endesa_empresas(texto)
+    if energia_empresas:
+        factura.energia_periodos = energia_empresas
+        factura.energia = round(sum(item.coste_eur for item in energia_empresas), 2)
+        factura.formato = "endesa_empresas"
+    regularizacion_ssaa = buscar_numero(texto, [
+        r"^Regularizaci[oó]n\s+Servicios\s+Ajuste\s*\(SSAA\)[^\n]*?"
+        r"([\d.,]+)\s*€\s*$",
+    ])
+    if regularizacion_ssaa and not any(
+        "ssaa" in item.concepto.lower() for item in factura.otros
+    ):
+        factura.otros.append(OtroConcepto(
+            "Regularización Servicios de Ajuste (SSAA)", regularizacion_ssaa
+        ))
+    maximetros_empresas = _extraer_maximetros_endesa_empresas(texto)
+    if maximetros_empresas:
+        factura.maximetros = maximetros_empresas
+        factura.sobrepasamientos = [
+            SobrepasamientoPeriodo(item.periodo, 0.0)
+            for item in maximetros_empresas
+        ]
+        factura.excesos_verificados = []
+        verificar_excesos_maximetros(factura)
+    reactiva_empresas = _extraer_reactiva_endesa_empresas(
+        texto, factura.energia_periodos, factura.reactiva
+    )
+    if reactiva_empresas:
+        factura.reactiva_periodos = reactiva_empresas
+    factura.numero_contrato = factura.numero_contrato or buscar_texto(texto, [
+        r"Referencia\s+del\s+contrato\s*:\s*([A-Z0-9-]+)",
+    ])
+    factura.fecha_vencimiento_contrato = (
+        factura.fecha_vencimiento_contrato or buscar_texto(texto, [
+            r"Fin\s+de\s+contrato\s+de\s+suministro\s*:\s*(\d{2}/\d{2}/\d{4})",
+        ])
+    )
     return factura
 
 
@@ -7484,6 +7660,7 @@ def analizar_factura(texto: str) -> FacturaLeida:
             for item in factura.otros
         ):
             factura.otros.append(servicio)
+    factura.numero_contrato = _extraer_numero_contrato(texto)
     factura.fecha_vencimiento_contrato = _extraer_fecha_vencimiento_contrato(texto)
     factura.permanencia = _extraer_permanencia(texto)
     _verificar_fbs(factura, texto)
