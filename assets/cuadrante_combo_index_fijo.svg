@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="550" viewBox="0 0 820 550">
+  <defs>
+    <pattern id="grid" width="62" height="20" patternUnits="userSpaceOnUse">
+      <path d="M 62 0 L 0 0 0 20" fill="none" stroke="#111" stroke-width="1"/>
+    </pattern>
+    <style>
+      .head { fill:#006778; stroke:#111; stroke-width:1; }
+      .headtxt { fill:#fff; font:700 11px Arial, sans-serif; text-anchor:middle; }
+      .hour { fill:#fff; font:700 10px Arial, sans-serif; text-anchor:middle; }
+      .range { fill:#111; font:700 10px Arial, sans-serif; text-anchor:middle; }
+      .legend { fill:#222; font:12px Arial, sans-serif; }
+    </style>
+  </defs>
+  <rect width="820" height="550" fill="#fff"/>
+  <rect x="8" y="14" width="50" height="24" class="head"/>
+  <text x="33" y="30" class="headtxt">Hora</text>
+  <rect x="58" y="14" width="744" height="24" fill="#006778"/>
+  <g class="headtxt">
+    <text x="89" y="30">ene</text><text x="151" y="30">feb</text>
+    <text x="213" y="30">mar</text><text x="275" y="30">abr</text>
+    <text x="337" y="30">may</text><text x="399" y="30">jun</text>
+    <text x="461" y="30">jul</text><text x="523" y="30">ago</text>
+    <text x="585" y="30">sep</text><text x="647" y="30">oct</text>
+    <text x="709" y="30">nov</text><text x="771" y="30">dic</text>
+  </g>
+  <rect x="8" y="38" width="50" height="480" fill="#006778" stroke="#111"/>
+  <rect x="58" y="38" width="744" height="480" fill="#dce5f4"/>
+  <!-- Bloques fijos; las horas inicial y final son inclusivas. -->
+  <g fill="#fff" stroke="#111" stroke-width="1">
+    <rect x="58"  y="218" width="62" height="180"/>
+    <rect x="120" y="198" width="62" height="200"/>
+    <rect x="182" y="178" width="62" height="240"/>
+    <rect x="244" y="178" width="62" height="240"/>
+    <rect x="306" y="138" width="62" height="300"/>
+    <rect x="368" y="138" width="62" height="300"/>
+    <rect x="430" y="158" width="62" height="280"/>
+    <rect x="492" y="178" width="62" height="260"/>
+    <rect x="554" y="178" width="62" height="240"/>
+    <rect x="616" y="178" width="62" height="220"/>
+    <rect x="678" y="198" width="62" height="200"/>
+    <rect x="740" y="218" width="62" height="160"/>
+  </g>
+  <rect x="58" y="38" width="744" height="480" fill="url(#grid)" stroke="#111"/>
+  <g class="hour">
+    <text x="33" y="52">1</text><text x="33" y="72">2</text><text x="33" y="92">3</text>
+    <text x="33" y="112">4</text><text x="33" y="132">5</text><text x="33" y="152">6</text>
+    <text x="33" y="172">7</text><text x="33" y="192">8</text><text x="33" y="212">9</text>
+    <text x="33" y="232">10</text><text x="33" y="252">11</text><text x="33" y="272">12</text>
+    <text x="33" y="292">13</text><text x="33" y="312">14</text><text x="33" y="332">15</text>
+    <text x="33" y="352">16</text><text x="33" y="372">17</text><text x="33" y="392">18</text>
+    <text x="33" y="412">19</text><text x="33" y="432">20</text><text x="33" y="452">21</text>
+    <text x="33" y="472">22</text><text x="33" y="492">23</text><text x="33" y="512">24</text>
+  </g>
+  <g class="range">
+    <text x="89" y="314">Fijo</text><text x="151" y="304">Fijo</text>
+    <text x="213" y="304">Fijo</text><text x="275" y="304">Fijo</text>
+    <text x="337" y="294">Fijo</text><text x="399" y="294">Fijo</text>
+    <text x="461" y="304">Fijo</text><text x="523" y="304">Fijo</text>
+    <text x="585" y="304">Fijo</text><text x="647" y="294">Fijo</text>
+    <text x="709" y="304">Fijo</text><text x="771" y="294">Fijo</text>
+  </g>
+  <rect x="58" y="527" width="16" height="12" fill="#fff" stroke="#111"/>
+  <text x="80" y="538" class="legend">Fijo</text>
+  <rect x="125" y="527" width="16" height="12" fill="#dce5f4" stroke="#111"/>
+  <text x="147" y="538" class="legend">Indexado</text>
+</svg>

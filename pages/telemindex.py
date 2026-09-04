@@ -23,6 +23,12 @@ from backend_simulindex import (
     construir_prevision_indexados_2026,
     obtener_hist_mensual,
 )
+from backend_indexado import (
+    FormulaIndexada,
+    construir_desglose_precio_indexado,
+    construir_desglose_ssaa_c2,
+)
+from backend_telemindex import COMPONENTES_SSAA_FORMULA
 from utilidades import (
     generar_menu,
     init_app,
@@ -486,7 +492,141 @@ with st.sidebar.container(border=True):
 
 # ZONA PRINCIPAL DE GRÁFICOS++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-tab1, tab2, tab3, tab4 = st.tabs(['Principal', 'Evol', 'Comparativa', 'Verificación SSAA'])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
+    ['Principal', 'Evol', 'Comparativa', 'Verificación SSAA', 'Desglose']
+)
+
+# Streamlit ejecuta el contenido de todos los tabs en orden. Este tab se
+# renderiza antes de Comparativa porque esa sección puede detener el script si
+# no hay curva de carga, aunque visualmente Desglose siga siendo el último tab.
+with tab5:
+    st.subheader("Desglose justificativo del precio indexado", divider="rainbow")
+    columna_consumo = (
+        "consumo_neto_kWh"
+        if "consumo_neto_kWh" in df_uso.columns
+        and pd.to_numeric(df_uso["consumo_neto_kWh"], errors="coerce").sum() > 0
+        else None
+    )
+    metodo_media = "ponderada por el consumo" if columna_consumo else "aritmética"
+    fecha_limite_c2 = pd.to_datetime(st.session_state.ultima_fecha_csv).date()
+    fechas_desglose = pd.to_datetime(df_uso["fecha"], errors="coerce").dt.date
+    fechas_validas_desglose = fechas_desglose.dropna()
+    if fechas_validas_desglose.empty:
+        texto_rango_desglose = "Sin fechas"
+    else:
+        fecha_inicio_desglose = fechas_validas_desglose.min()
+        fecha_fin_desglose = fechas_validas_desglose.max()
+        texto_rango_desglose = (
+            fecha_inicio_desglose.strftime("%d/%m/%Y")
+            if fecha_inicio_desglose == fecha_fin_desglose
+            else (
+                f"{fecha_inicio_desglose.strftime('%d/%m/%Y')} → "
+                f"{fecha_fin_desglose.strftime('%d/%m/%Y')}"
+            )
+        )
+    opciones_atr_desglose = ["2.0", "3.0", "6.1"]
+    atr_curva = st.session_state.get("atr_dfnorm") if columna_consumo else None
+    if atr_curva in opciones_atr_desglose:
+        st.session_state.atr_desglose = atr_curva
+    elif st.session_state.get("atr_desglose") not in opciones_atr_desglose:
+        st.session_state.atr_desglose = "2.0"
+
+    col_atr, col_media, col_c2 = st.columns([0.8, 1.1, 1.1])
+    with col_atr:
+        st.metric("Rango de fechas seleccionado", texto_rango_desglose)
+        atr_desglose = st.selectbox(
+            "Peaje de acceso",
+            opciones_atr_desglose,
+            key="atr_desglose",
+            disabled=atr_curva in opciones_atr_desglose,
+            help=(
+                "El ATR se toma automáticamente de la curva cargada."
+                if atr_curva in opciones_atr_desglose
+                else "Selecciona el ATR que se aplicará a las dos tablas."
+            ),
+        )
+    with col_media:
+        st.metric("Tipo de media", metodo_media.capitalize())
+    with col_c2:
+        st.metric("Detalle C2 disponible hasta", fecha_limite_c2.strftime("%d/%m/%Y"))
+
+    st.caption(
+        f"Valores en €/kWh. Media {metodo_media}, por periodos y total del peaje "
+        f"{atr_desglose}TD. La fila Precio final concilia con la fórmula activa."
+    )
+
+    formula_desglose = FormulaIndexada(
+        desvios_apant=st.session_state.get("desvios_apant", 0.0),
+        margen=st.session_state.get("margen_telemindex", 0.0),
+        margen_pos=st.session_state.get("cfg_margen_pos", "tm"),
+        incluir_fnee=st.session_state.get("cfg_fnee", False),
+        fnee_pos=st.session_state.get("cfg_fnee_pos", "perdidas"),
+        cf_pct=st.session_state.get("cf_pct", 0.0),
+    )
+    try:
+        tabla_desglose = construir_desglose_precio_indexado(
+            df_uso,
+            atr_desglose,
+            formula_desglose,
+            columna_consumo=columna_consumo,
+        )
+        tabla_desglose_mostrar = tabla_desglose.copy()
+        for columna in tabla_desglose_mostrar.columns[1:]:
+            tabla_desglose_mostrar[columna] = tabla_desglose_mostrar[columna].map(
+                lambda valor: formato_eur_kwh(valor / 1000, 6, False)
+            )
+        st.markdown("#### Formación del precio final")
+        col1_tabla_precio, col2_tabla_precio = st.columns([0.82, 0.18])
+        with col1_tabla_precio:
+            st.dataframe(
+                tabla_desglose_mostrar,
+                use_container_width=True,
+                hide_index=True,
+                height=38 + 35 * len(tabla_desglose),
+            )
+    except ValueError as exc:
+        st.warning(f"No se puede construir el desglose del precio: {exc}")
+
+    rango_dentro_c2 = (
+        not fechas_validas_desglose.empty
+        and fechas_desglose.notna().all()
+        and fechas_validas_desglose.max() <= fecha_limite_c2
+    )
+    zona_peninsular = st.session_state.get("zona_periodos_index", "peninsula") == "peninsula"
+    componentes_disponibles = all(
+        columna in df_uso.columns and df_uso[columna].notna().all()
+        for columna in COMPONENTES_SSAA_FORMULA
+    )
+
+    st.markdown("#### Desglose de los SSAA del C2 Compodem")
+    if not zona_peninsular:
+        st.info("El desglose C2 de SSAA está disponible únicamente para Península.")
+    elif not rango_dentro_c2:
+        st.info(
+            "El rango supera la última fecha con detalle C2 "
+            f"({fecha_limite_c2.strftime('%d/%m/%Y')}). Se mantiene la tabla global, "
+            "pero no se muestra un desglose parcial de SSAA."
+        )
+    elif not componentes_disponibles:
+        st.warning("El rango no contiene todas las columnas de detalle SSAA del C2.")
+    else:
+        tabla_ssaa = construir_desglose_ssaa_c2(
+            df_uso,
+            COMPONENTES_SSAA_FORMULA,
+            atr_desglose,
+            columna_consumo=columna_consumo,
+        )
+        tabla_ssaa_mostrar = tabla_ssaa.copy()
+        for columna in tabla_ssaa_mostrar.columns[1:]:
+            tabla_ssaa_mostrar[columna] = tabla_ssaa_mostrar[columna].map(
+                lambda valor: formato_eur_kwh(valor / 1000, 6, False)
+            )
+        st.dataframe(
+            tabla_ssaa_mostrar,
+            use_container_width=True,
+            hide_index=True,
+            height=38 + 35 * len(tabla_ssaa),
+        )
 
 with tab1:
     

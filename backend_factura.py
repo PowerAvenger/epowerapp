@@ -3123,18 +3123,17 @@ def verificar_precios_potencia(factura: FacturaLeida) -> None:
 
     tarifa = factura.atr.upper().replace("TD", "").strip()
     try:
-        from backend_opt2 import pyc_tp
+        from backend_opt2 import precios_potencia_boe_diarios
 
-        referencias = pyc_tp[ejercicio][tarifa]
-    except (ImportError, KeyError):
+        referencias = precios_potencia_boe_diarios(tarifa, f"{ejercicio}-01-01")
+    except (ImportError, ValueError):
         return
 
     for item in factura.potencia_periodos:
-        precio_anual = referencias.get(item.periodo)
-        if precio_anual is None:
+        precio_diario = referencias.get(item.periodo)
+        if precio_diario is None:
             continue
-        dias_ejercicio = 366 if calendar.isleap(ejercicio) else 365
-        item.precio_boe_eur_kw_dia = precio_anual / dias_ejercicio
+        item.precio_boe_eur_kw_dia = precio_diario
         item.coste_boe_eur = round(
             item.potencia_kw * item.dias * item.precio_boe_eur_kw_dia, 2
         )

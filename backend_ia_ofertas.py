@@ -12,11 +12,12 @@ import json
 import pandas as pd
 
 
-ATRS_OFERTA = {"2.0", "3.0", "6.1"}
+ATRS_OFERTA = {"2.0", "3.0", "6.1", "6.2"}
 PERIODOS_ATR = {
     "2.0": ["P1", "P2", "P3"],
     "3.0": [f"P{i}" for i in range(1, 7)],
     "6.1": [f"P{i}" for i in range(1, 7)],
+    "6.2": [f"P{i}" for i in range(1, 7)],
 }
 
 

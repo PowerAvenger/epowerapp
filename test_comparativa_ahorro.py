@@ -26,6 +26,22 @@ class TestComparativaAhorro(unittest.TestCase):
         self.assertAlmostEqual(resultado["coste_real"], 36.0)
         self.assertAlmostEqual(resultado["diferencia"], 6.0)
         self.assertAlmostEqual(resultado["diferencia_pct"], 20.0)
+        self.assertIsNotNone(resultado["fig_acumulado"])
+        cascada = resultado["fig_acumulado"].data[0]
+        self.assertEqual(list(cascada.measure), ["relative", "relative", "total"])
+        self.assertEqual(list(cascada.y), [-2.0, -4.0, -6.0])
+        perfil = resultado["fig_perfil_costes"]
+        self.assertEqual(
+            [traza.name for traza in perfil.data],
+            ["Consumo medio", "Coste referencia", "Coste real contractual"],
+        )
+        perfil_precios = resultado["fig_perfil_precios"]
+        self.assertEqual(
+            [traza.name for traza in perfil_precios.data],
+            [
+                "Diferencial fijo − indexado",
+            ],
+        )
 
     def test_rechaza_consumos_distintos(self):
         actual = pd.DataFrame({

@@ -103,6 +103,31 @@ def guardar_credenciales_axon_sesion():
     )
 
 
+def cargar_widget_desde_sesion(clave_widget, clave_sesion, valor_defecto=""):
+    """Restaura un widget que Streamlit pudo eliminar al ocultarlo o navegar."""
+    if clave_widget not in st.session_state:
+        st.session_state[clave_widget] = st.session_state.get(
+            clave_sesion, valor_defecto
+        )
+
+
+def guardar_widget_en_sesion(clave_widget, clave_sesion):
+    """Copia inmediatamente el valor temporal del widget a estado permanente."""
+    st.session_state[clave_sesion] = st.session_state.get(clave_widget)
+
+
+def guardar_preferencias_datadis_sesion():
+    """Persiste todos los campos de acceso antes de realizar una llamada remota."""
+    for clave_widget, clave_sesion in (
+        ("_curva_datadis_usuario", "datadis_usuario_sesion"),
+        ("_curva_datadis_password", "datadis_password_sesion"),
+        ("_curva_datadis_acceso", "datadis_acceso_sesion"),
+        ("_curva_datadis_nif", "datadis_nif_sesion"),
+    ):
+        if clave_widget in st.session_state:
+            guardar_widget_en_sesion(clave_widget, clave_sesion)
+
+
 def limpiar_curva_cargada():
     """Elimina la curva y los resultados calculados en esta sesión."""
     claves_curva = (
@@ -188,10 +213,17 @@ with tab_curva:
             uploaded = "curvas/qh anual demo.csv"
             atr_dfnorm = "3.0"
         else:
+            cargar_widget_desde_sesion(
+                "_origen_curva_cdc", "origen_curva_cdc_sesion",
+                "Archivo CSV/Excel",
+            )
             origen_curva = st.selectbox(
                 "Origen de la curva",
                 ("Archivo CSV/Excel", "Axon", "Datadis"),
                 index=0,
+                key="_origen_curva_cdc",
+                on_change=guardar_widget_en_sesion,
+                args=("_origen_curva_cdc", "origen_curva_cdc_sesion"),
             )
             uploaded = None
             if origen_curva == "Archivo CSV/Excel":
@@ -307,30 +339,94 @@ with tab_curva:
                     }[valor],
                 )
             else:
-                usuario_datadis = st.text_input("Usuario Datadis")
-                password_datadis = st.text_input("Contraseña Datadis", type="password")
+                cargar_widget_desde_sesion(
+                    "_curva_datadis_usuario", "datadis_usuario_sesion"
+                )
+                cargar_widget_desde_sesion(
+                    "_curva_datadis_password", "datadis_password_sesion"
+                )
+                cargar_widget_desde_sesion(
+                    "_curva_datadis_acceso", "datadis_acceso_sesion", "Titular"
+                )
+                usuario_datadis = st.text_input(
+                    "Usuario Datadis",
+                    key="_curva_datadis_usuario",
+                    on_change=guardar_widget_en_sesion,
+                    args=("_curva_datadis_usuario", "datadis_usuario_sesion"),
+                )
+                password_datadis = st.text_input(
+                    "Contraseña Datadis",
+                    type="password",
+                    key="_curva_datadis_password",
+                    on_change=guardar_widget_en_sesion,
+                    args=("_curva_datadis_password", "datadis_password_sesion"),
+                )
                 acceso_datadis = st.radio(
-                    "Acceso", ("Titular", "Autorizado"), horizontal=True
+                    "Acceso",
+                    ("Titular", "Autorizado"),
+                    horizontal=True,
+                    key="_curva_datadis_acceso",
+                    on_change=guardar_widget_en_sesion,
+                    args=("_curva_datadis_acceso", "datadis_acceso_sesion"),
                 )
                 authorized_nif_datadis = ""
                 if acceso_datadis == "Autorizado":
-                    authorized_nif_datadis = st.text_input("NIF del titular")
+                    cargar_widget_desde_sesion(
+                        "_curva_datadis_nif", "datadis_nif_sesion"
+                    )
+                    authorized_nif_datadis = st.text_input(
+                        "NIF del titular",
+                        key="_curva_datadis_nif",
+                        on_change=guardar_widget_en_sesion,
+                        args=("_curva_datadis_nif", "datadis_nif_sesion"),
+                    )
 
                 if st.button(
                     "Consultar suministros",
                     use_container_width=True,
                     key="consultar_suministros_datadis",
+                    disabled=not bool(
+                        str(usuario_datadis or "").strip()
+                        and str(password_datadis or "")
+                        and (
+                            acceso_datadis != "Autorizado"
+                            or str(authorized_nif_datadis or "").strip()
+                        )
+                    ),
                 ):
+                    # Se guarda antes de la petición: incluso si Datadis agota el
+                    # timeout o el usuario navega, los campos podrán restaurarse.
+                    guardar_preferencias_datadis_sesion()
                     try:
                         with st.spinner("Consultando suministros en Datadis…"):
-                            st.session_state.suministros_datadis = obtener_suministros_datadis(
+                            suministros_consultados = obtener_suministros_datadis(
                                 usuario_datadis,
                                 password_datadis,
                                 authorized_nif=authorized_nif_datadis,
                             )
+                        # Usar un índice interno limpio evita que un índice devuelto
+                        # por pandas termine siendo una opción ambigua del selectbox.
+                        st.session_state.suministros_datadis = (
+                            suministros_consultados.reset_index(drop=True)
+                        )
+                        st.session_state.datadis_suministros_mensaje = (
+                            "success",
+                            f"Se han encontrado {len(suministros_consultados)} "
+                            "suministro(s).",
+                        )
                     except Exception as e:
                         st.session_state.pop("suministros_datadis", None)
-                        st.error(f"No se pudieron consultar los suministros: {e}")
+                        st.session_state.datadis_suministros_mensaje = (
+                            "error",
+                            f"No se pudieron consultar los suministros: {e}",
+                        )
+
+                mensaje_datadis = st.session_state.get(
+                    "datadis_suministros_mensaje"
+                )
+                if mensaje_datadis:
+                    tipo_mensaje, texto_mensaje = mensaje_datadis
+                    getattr(st, tipo_mensaje)(texto_mensaje)
 
                 suministros_datadis = st.session_state.get("suministros_datadis")
                 suministro_datadis = None
@@ -349,6 +445,7 @@ with tab_curva:
                         "Suministro",
                         indices_suministros,
                         format_func=etiqueta_suministro,
+                        key="suministro_datadis_seleccionado",
                     )
                     suministro_datadis = suministros_datadis.loc[indice_datadis].to_dict()
                     st.caption(
@@ -508,6 +605,7 @@ with tab_curva:
                 "Selecciona peaje de acceso",
                 ("2.0", "3.0", "6.1", "6.2", "6.3", "6.4"),
                 index=0,
+                key="atr_dfnorm_entrada_cdc",
             )
             opciones_zona_periodos = [
                 "peninsula", "baleares", "canarias", "ceuta", "melilla"
@@ -526,13 +624,63 @@ with tab_curva:
                 }[zona],
             )
 
+        entrada_lista = True
+        motivo_entrada_pendiente = ""
+        if st.session_state.get('usuario_autenticado', False):
+            if origen_curva == "Archivo CSV/Excel":
+                entrada_lista = bool(uploaded)
+                motivo_entrada_pendiente = "Sube al menos un archivo CSV o Excel."
+            elif origen_curva == "Axon":
+                rango_axon_valido = (
+                    isinstance(rango_axon, (tuple, list))
+                    and len(rango_axon) == 2
+                    and rango_axon[0] <= rango_axon[1]
+                )
+                entrada_lista = bool(
+                    str(usuario_axon or "").strip()
+                    and str(password_axon or "")
+                    and len(cups_axon_base) == 20
+                    and rango_axon_valido
+                )
+                motivo_entrada_pendiente = (
+                    "Completa usuario, contraseña, un CUPS válido y el periodo de Axon."
+                )
+            else:
+                nif_requerido_valido = (
+                    acceso_datadis != "Autorizado"
+                    or bool(str(authorized_nif_datadis or "").strip())
+                )
+                rango_datadis_valido = mes_inicio_datadis <= mes_fin_datadis
+                entrada_lista = bool(
+                    str(usuario_datadis or "").strip()
+                    and str(password_datadis or "")
+                    and nif_requerido_valido
+                    and suministro_datadis is not None
+                    and rango_datadis_valido
+                )
+                if suministro_datadis is None:
+                    motivo_entrada_pendiente = (
+                        "Consulta los suministros y selecciona uno antes de continuar."
+                    )
+                elif not rango_datadis_valido:
+                    motivo_entrada_pendiente = (
+                        "El mes inicial no puede ser posterior al mes final."
+                    )
+                else:
+                    motivo_entrada_pendiente = (
+                        "Completa las credenciales y los datos de acceso de Datadis."
+                    )
+
         normalizar = st.button(
             "Obtener y normalizar curva"
             if origen_curva in {"Axon", "Datadis"}
             else "Normalizar curva de carga",
             type="primary",
             use_container_width=True,
+            disabled=not entrada_lista,
         )
+        if not entrada_lista:
+            st.caption(motivo_entrada_pendiente)
         st.button(
             "🗑️ Eliminar curva y resultados",
             use_container_width=True,
@@ -1854,7 +2002,7 @@ if st.session_state.get("df_norm") is not None:
     # COMPARATIVA DE AHORRO / SOBRECOSTE
     # ======================================================================================================================================================
     with tab_ahorro:
-        col_resumen, col_impacto, col_costes, col_diferencia = st.columns(4)
+        col_resumen, col_resultado, col_graficos, col_acumulado = st.columns(4)
         col_resumen.info(
             "Compara el coste contractual real con otro precio sobre exactamente "
             "el mismo consumo y el mismo intervalo. El coste real incorpora los "
@@ -2089,53 +2237,78 @@ if st.session_state.get("df_norm") is not None:
                     else "Sin diferencia"
                 )
                 with col_resumen:
-                    st.subheader("Resultado", divider="rainbow")
-                    st.metric(
-                        "Coste de referencia",
-                        formato_euros(resultado_ahorro["coste_referencia"]),
-                    )
-                    st.metric(
-                        "Coste real contractual",
-                        formato_euros(resultado_ahorro["coste_real"]),
-                    )
-                    st.metric(
-                        veredicto_ahorro,
-                        formato_euros(abs(diferencia_ahorro)),
-                        delta=(
-                            f"{formato_numero_es(resultado_ahorro['diferencia_pct'], 2)} %"
-                        ),
-                        delta_color="inverse",
-                    )
-                    st.caption(
-                        "Ambos importes usan exactamente la misma curva de consumo. "
-                        "Positivo significa sobrecoste real; negativo, ahorro real."
-                    )
-                with col_impacto:
+                    fig_perfil_precios = resultado_ahorro.get("fig_perfil_precios")
+                    if fig_perfil_precios is not None:
+                        st.plotly_chart(
+                            fig_perfil_precios,
+                            use_container_width=True,
+                        )
+                with col_resultado:
+                    # Misma altura que la primera gráfica de las columnas 3 y 4:
+                    # el gráfico horario comienza así en la segunda fila visual.
+                    with st.container(height=500, border=False):
+                        st.subheader("Resultado", divider="rainbow")
+                        st.markdown(
+                            resultado_ahorro.get("impacto_html", ""),
+                            unsafe_allow_html=True,
+                        )
+                        subcol_real, subcol_referencia = st.columns(2)
+                        with subcol_real:
+                            st.metric(
+                                "Coste real contractual",
+                                formato_euros(resultado_ahorro["coste_real"]),
+                            )
+                        with subcol_referencia:
+                            st.metric(
+                                "Coste de referencia",
+                                formato_euros(resultado_ahorro["coste_referencia"]),
+                            )
+                        with st.container(border=True):
+                            st.metric(
+                                veredicto_ahorro,
+                                formato_euros(abs(diferencia_ahorro)),
+                                delta=(
+                                    f"{formato_numero_es(resultado_ahorro['diferencia_pct'], 2)} %"
+                                ),
+                                delta_color="inverse",
+                            )
+                        st.caption(
+                            "Ambos importes usan exactamente la misma curva de consumo. "
+                            "Positivo significa sobrecoste real; negativo, ahorro real."
+                        )
+                    fig_perfil_costes = resultado_ahorro.get("fig_perfil_costes")
+                    if fig_perfil_costes is not None:
+                        st.plotly_chart(
+                            fig_perfil_costes,
+                            use_container_width=True,
+                        )
+                with col_graficos:
                     fig_impacto_ahorro = resultado_ahorro.get("fig_impacto")
                     if fig_impacto_ahorro is not None:
                         st.plotly_chart(
                             fig_impacto_ahorro,
                             use_container_width=True,
                         )
-                        st.markdown(
-                            resultado_ahorro.get("impacto_html", ""),
-                            unsafe_allow_html=True,
-                        )
                     else:
                         st.info(
                             "Recalcula la comparativa para generar el nuevo "
                             "gráfico de impacto total."
                         )
-                with col_costes:
-                    st.plotly_chart(
-                        resultado_ahorro["fig_mensual"],
-                        use_container_width=True,
-                    )
-                with col_diferencia:
                     st.plotly_chart(
                         resultado_ahorro["fig_diferencia"],
                         use_container_width=True,
                     )
+                with col_acumulado:
+                    st.plotly_chart(
+                        resultado_ahorro["fig_mensual"],
+                        use_container_width=True,
+                    )
+                    fig_acumulado_ahorro = resultado_ahorro.get("fig_acumulado")
+                    if fig_acumulado_ahorro is not None:
+                        st.plotly_chart(
+                            fig_acumulado_ahorro,
+                            use_container_width=True,
+                        )
 
                 tabla_ahorro = resultado_ahorro["df_ahorro"]
                 columnas_euros_ahorro = [

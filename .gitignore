@@ -17,3 +17,6 @@ scripts/validar_bbdd_beta.py
 *.key
 *credentials*.json
 *service-account*.json
+
+# Catálogos locales/privados del comparador. El módulo funciona sin ellos.
+data/ofertas_fijas*.json

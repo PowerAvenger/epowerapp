@@ -3,7 +3,12 @@ import unittest
 import pandas as pd
 from pandas.testing import assert_frame_equal
 
-from backend_indexado import FormulaIndexada, calcular_precios_atr_formula
+from backend_indexado import (
+    FormulaIndexada,
+    calcular_precios_atr_formula,
+    construir_desglose_precio_indexado,
+    construir_desglose_ssaa_c2,
+)
 
 
 def calculo_historico(df, formula):
@@ -64,6 +69,9 @@ class MotorIndexadoTest(unittest.TestCase):
             "pyc_2.0": [20.0, 10.0],
             "pyc_3.0": [15.0, 8.0],
             "pyc_6.1": [10.0, 6.0],
+            "dh_3p": ["P1", "P2"],
+            "dh_6p": ["P3", "P4"],
+            "consumo_neto_kWh": [100.0, 300.0],
         })
 
     def test_equivalencia_exacta_con_todas_las_posiciones(self):
@@ -100,6 +108,50 @@ class MotorIndexadoTest(unittest.TestCase):
         df.loc[0, "spot"] = "sin dato"
         with self.assertRaisesRegex(ValueError, "spot"):
             calcular_precios_atr_formula(df, FormulaIndexada())
+
+    def test_desglose_concilia_precio_final_en_todas_las_posiciones(self):
+        for margen_pos in ("perdidas", "tm", "neto"):
+            for fnee_pos in ("perdidas", "tm", "neto"):
+                formula = FormulaIndexada(
+                    desvios_apant=1.3,
+                    margen=5.7,
+                    margen_pos=margen_pos,
+                    incluir_fnee=True,
+                    fnee_pos=fnee_pos,
+                    cf_pct=1.25,
+                )
+                tabla = construir_desglose_precio_indexado(
+                    self.df, "2.0", formula, "consumo_neto_kWh"
+                ).set_index("Componente")
+                aportaciones = tabla.drop(index="Precio final").sum(axis=0)
+                pd.testing.assert_series_equal(
+                    aportaciones,
+                    tabla.loc["Precio final"],
+                    check_names=False,
+                    rtol=1e-12,
+                    atol=1e-12,
+                )
+
+    def test_desglose_usa_media_ponderada_total_y_periodos(self):
+        tabla = construir_desglose_precio_indexado(
+            self.df, "2.0", FormulaIndexada(), "consumo_neto_kWh"
+        ).set_index("Componente")
+        self.assertAlmostEqual(tabla.loc["OMIE", "Total"], 70.0)
+        self.assertAlmostEqual(tabla.loc["OMIE", "P1"], 40.0)
+        self.assertAlmostEqual(tabla.loc["OMIE", "P2"], 80.0)
+
+    def test_desglose_ssaa_c2_reconstruye_componentes(self):
+        df = self.df.assign(
+            balx=[1.0, 3.0], dsv=[2.0, 6.0], ssaa=[3.0, 9.0]
+        )
+        tabla = construir_desglose_ssaa_c2(
+            df, ["balx", "dsv"], "2.0", "consumo_neto_kWh"
+        ).set_index("Componente SSAA")
+        self.assertAlmostEqual(tabla.loc["BALX", "Total"], 2.5)
+        self.assertAlmostEqual(tabla.loc["DSV", "Total"], 5.0)
+        self.assertAlmostEqual(tabla.loc["SSAA C2 RECONSTRUIDO", "Total"], 7.5)
+        self.assertAlmostEqual(tabla.loc["SSAA GLOBAL USADO", "Total"], 7.5)
+        self.assertAlmostEqual(tabla.loc["DIFERENCIA VS GLOBAL", "Total"], 0.0)
 
 if __name__ == "__main__":
     unittest.main()

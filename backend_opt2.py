@@ -171,6 +171,24 @@ pyc_tp = {
     }
 }
 
+
+def precios_potencia_boe_diarios(atr, fecha_referencia=None):
+    """Devuelve peajes y cargos de potencia BOE en €/kW día."""
+    fecha = pd.Timestamp(fecha_referencia or date.today())
+    ejercicio = int(fecha.year)
+    tarifa = str(atr).upper().replace("TD", "").strip()
+    try:
+        precios_anuales = pyc_tp[ejercicio][tarifa]
+    except KeyError as exc:
+        raise ValueError(
+            f"No hay precios BOE de potencia para {tarifa}TD en {ejercicio}."
+        ) from exc
+    dias = 366 if fecha.is_leap_year else 365
+    return {
+        periodo: None if precio is None else float(precio) / dias
+        for periodo, precio in precios_anuales.items()
+    }
+
 # tipos 1, 2 y 3
 tepp123 = {
     2025: {

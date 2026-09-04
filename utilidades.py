@@ -24,6 +24,17 @@ def generar_menu():
         st.page_link('pages/opt2_rdl.py', label = 'Optimización RDL 7/2026', icon = "🎯")
         st.page_link('pages/telemindex.py', label = 'Telemindex', icon = "📈")
         st.page_link('pages/simulindex.py', label = 'Simulindex', icon = "🔮")
+        try:
+            st.page_link(
+                'pages/comparador_luz.py',
+                label='Comparador luz',
+                icon='⚖️',
+            )
+        except st.errors.StreamlitAPIException:
+            # Streamlit registra las páginas al arrancar. Si esta página se
+            # acaba de crear durante una sesión, el enlace nativo no estará
+            # disponible hasta reiniciar, pero el resto de módulos debe seguir.
+            st.markdown('⚖️ [Comparador luz](/comparador_luz)')
         st.page_link('pages/indicadores_mensuales.py', label = 'Indicadores mensuales', icon = "📋")
         st.page_link('pages/indicadores_anuales.py', label = 'Indicadores anuales', icon = "📅")
         st.page_link('pages/fijovspvpc.py', label = 'FijovsPVPC', icon = "⚖️")

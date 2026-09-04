@@ -16,6 +16,7 @@ from formato_es import formato_numero_es
 TZ = "Europe/Madrid"
 AXON_API_BASE = "https://api.twinmeter.es"
 DATADIS_API_BASE = "https://datadis.es"
+DATADIS_SUMINISTROS_TIMEOUT = 120
 BASE_DIR = Path(__file__).resolve().parent
 
 
@@ -525,12 +526,25 @@ def obtener_suministros_datadis(
         authorized_nif = str(authorized_nif or "").strip().upper()
         if authorized_nif:
             params["authorizedNif"] = authorized_nif
-        respuesta = cliente.get(
-            f"{DATADIS_API_BASE}/api-private/api/get-supplies",
-            params=params,
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=timeout,
-        )
+        try:
+            respuesta = cliente.get(
+                f"{DATADIS_API_BASE}/api-private/api/get-supplies",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+                # Las cuentas con decenas de CUPS pueden tardar bastante más
+                # que la autenticación. Limitamos la ampliación a este endpoint.
+                timeout=max(timeout, DATADIS_SUMINISTROS_TIMEOUT),
+            )
+        except requests.Timeout as exc:
+            raise RuntimeError(
+                "Datadis no ha respondido en 120 segundos al consultar los "
+                "suministros. "
+                "Las credenciales se conservan; inténtalo de nuevo más tarde."
+            ) from exc
+        except requests.RequestException as exc:
+            raise RuntimeError(
+                "No se ha podido conectar con Datadis para consultar los suministros."
+            ) from exc
         datos = _datadis_json(respuesta, "la consulta de suministros")
     finally:
         if cerrar:
@@ -5740,6 +5754,148 @@ def calcular_comparacion_costes(precios_mensuales, rango_base=None):
     }
 
 
+def crear_grafico_perfil_costes_comparativa(df_actual, df_referencia):
+    """Combina el perfil medio horario con el coste de ambos contratos."""
+    def resumen_horario(datos, sufijo):
+        df = datos[["fecha_hora", "consumo_neto_kWh", "coste_total"]].copy()
+        df["hora"] = pd.to_datetime(df["fecha_hora"], errors="coerce").dt.hour
+        df["consumo_neto_kWh"] = pd.to_numeric(
+            df["consumo_neto_kWh"], errors="coerce"
+        )
+        df["coste_total"] = pd.to_numeric(df["coste_total"], errors="coerce")
+        return (
+            df.dropna(subset=["hora"])
+            .groupby("hora", as_index=False)
+            .agg(**{
+                f"Consumo {sufijo}": ("consumo_neto_kWh", "mean"),
+                f"Coste {sufijo}": ("coste_total", "mean"),
+            })
+        )
+
+    real = resumen_horario(df_actual, "real")
+    referencia = resumen_horario(df_referencia, "referencia")
+    perfil = real.merge(referencia, on="hora", how="inner", validate="one_to_one")
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=perfil["hora"],
+        y=perfil["Consumo real"],
+        name="Consumo medio",
+        marker_color="#1f77b4",
+        opacity=0.65,
+        hovertemplate="Hora %{x}: %{y:.2f} kWh<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=perfil["hora"],
+        y=perfil["Coste referencia"],
+        name="Coste referencia",
+        mode="lines+markers",
+        line=dict(color="#72b7e8", width=4),
+        marker=dict(size=6),
+        yaxis="y2",
+        hovertemplate="Hora %{x}: %{y:.2f} €<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=perfil["hora"],
+        y=perfil["Coste real"],
+        name="Coste real contractual",
+        mode="lines+markers",
+        line=dict(color="#ff7f0e", width=4),
+        marker=dict(size=6),
+        yaxis="y2",
+        hovertemplate="Hora %{x}: %{y:.2f} €<extra></extra>",
+    ))
+    fig.update_layout(
+        title="Perfil medio horario y coste contractual",
+        xaxis=dict(
+            title="Hora",
+            tickmode="array",
+            tickvals=list(range(24)),
+        ),
+        yaxis=dict(title="Consumo medio (kWh)", rangemode="tozero"),
+        yaxis2=dict(
+            title="Coste medio (€)",
+            overlaying="y",
+            side="right",
+            showgrid=False,
+            rangemode="tozero",
+        ),
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02,
+            xanchor="center", x=0.5,
+        ),
+        hovermode="x unified",
+        height=520,
+    )
+    return aplicar_estilo(fig)
+
+
+def crear_grafico_perfil_precios_comparativa(df_actual, df_referencia):
+    """Compara por hora el precio ponderado de ambos contratos y la carga."""
+    def resumen_horario(datos, sufijo):
+        df = datos[["fecha_hora", "consumo_neto_kWh", "coste_total"]].copy()
+        df["hora"] = pd.to_datetime(df["fecha_hora"], errors="coerce").dt.hour
+        df["consumo_neto_kWh"] = pd.to_numeric(
+            df["consumo_neto_kWh"], errors="coerce"
+        )
+        df["coste_total"] = pd.to_numeric(df["coste_total"], errors="coerce")
+        resumen = (
+            df.dropna(subset=["hora"])
+            .groupby("hora", as_index=False)
+            .agg(**{
+                f"Consumo total {sufijo}": ("consumo_neto_kWh", "sum"),
+                f"Coste total {sufijo}": ("coste_total", "sum"),
+            })
+        )
+        resumen[f"Precio {sufijo}"] = np.where(
+            resumen[f"Consumo total {sufijo}"] > 0,
+            resumen[f"Coste total {sufijo}"]
+            / resumen[f"Consumo total {sufijo}"],
+            np.nan,
+        )
+        return resumen
+
+    real = resumen_horario(df_actual, "real")
+    referencia = resumen_horario(df_referencia, "referencia")
+    perfil = real.merge(referencia, on="hora", how="inner", validate="one_to_one")
+    perfil["Diferencial precio"] = (
+        perfil["Precio real"] - perfil["Precio referencia"]
+    )
+    colores_diferencial = np.where(
+        perfil["Diferencial precio"] > 0,
+        "#d62728",
+        np.where(perfil["Diferencial precio"] < 0, "#2ca02c", "#8c8c8c"),
+    )
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=perfil["hora"],
+        y=perfil["Diferencial precio"],
+        name="Diferencial fijo − indexado",
+        marker_color=colores_diferencial,
+        hovertemplate=(
+            "Hora %{x}<br>Fijo − indexado: %{y:.6f} €/kWh<extra></extra>"
+        ),
+    ))
+    fig.update_layout(
+        title="Ventaja del fijo frente al indexado por hora",
+        xaxis=dict(
+            title="Hora",
+            tickmode="array",
+            tickvals=list(range(24)),
+        ),
+        yaxis=dict(title="Fijo − indexado (€/kWh)", zeroline=True),
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02,
+            xanchor="center", x=0.5,
+        ),
+        hovermode="x unified",
+        height=520,
+    )
+    fig.add_hline(y=0, line_color="white", line_width=1)
+    return aplicar_estilo(fig)
+
+
 def calcular_comparativa_ahorro(df_actual, df_referencia):
     """Compara dos precios sobre el mismo consumo y el mismo rango temporal."""
     requeridas = {"fecha_hora", "consumo_neto_kWh", "coste_total"}
@@ -5861,6 +6017,47 @@ def calcular_comparativa_ahorro(df_actual, df_referencia):
         )
     )
 
+    # Cascada con signo intuitivo: el ahorro aumenta el acumulado y el
+    # sobrecoste lo reduce. La última barra muestra el resultado completo.
+    ahorro_mensual = -salida["Ahorro / sobrecoste"]
+    ahorro_total = float(ahorro_mensual.sum())
+    texto_total = (
+        f"Ahorro: {formato_numero_es(ahorro_total, 2)} €"
+        if ahorro_total > 0
+        else f"Sobrecoste: {formato_numero_es(abs(ahorro_total), 2)} €"
+        if ahorro_total < 0
+        else "Sin diferencia"
+    )
+    fig_acumulado = go.Figure(go.Waterfall(
+        x=[*salida["Mes"].tolist(), "TOTAL"],
+        y=[*ahorro_mensual.tolist(), ahorro_total],
+        measure=[*["relative"] * len(salida), "total"],
+        text=[
+            f"{formato_numero_es(valor, 2)} €"
+            for valor in ahorro_mensual
+        ] + [texto_total],
+        textposition="outside",
+        connector={"line": {"color": "rgba(180,180,180,.65)"}},
+        increasing={"marker": {"color": "#2ca02c"}},
+        decreasing={"marker": {"color": "#d62728"}},
+        totals={"marker": {"color": "#1f77b4"}},
+        hovertemplate="<b>%{x}</b><br>Impacto: %{y:.2f} €<extra></extra>",
+    ))
+    fig_acumulado.update_layout(
+        title="Ahorro acumulado / sobrecoste",
+        xaxis_title="",
+        yaxis_title="€",
+        showlegend=False,
+    )
+    fig_acumulado.add_hline(y=0, line_color="white", line_width=1)
+    fig_acumulado = aplicar_estilo(fig_acumulado)
+    fig_perfil_costes = crear_grafico_perfil_costes_comparativa(
+        df_actual, df_referencia
+    )
+    fig_perfil_precios = crear_grafico_perfil_precios_comparativa(
+        df_actual, df_referencia
+    )
+
     fig_impacto = go.Figure()
     for nombre, valor, color in (
         ("Referencia", coste_referencia, "#1f77b4"),
@@ -5909,6 +6106,9 @@ def calcular_comparativa_ahorro(df_actual, df_referencia):
         "precio_real": coste_actual / consumo_total * 100 if consumo_total else np.nan,
         "fig_mensual": fig_mensual,
         "fig_diferencia": fig_diferencia,
+        "fig_acumulado": fig_acumulado,
+        "fig_perfil_costes": fig_perfil_costes,
+        "fig_perfil_precios": fig_perfil_precios,
         "fig_impacto": fig_impacto,
         "impacto_html": impacto_html,
     }

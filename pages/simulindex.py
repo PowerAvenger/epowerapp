@@ -1,5 +1,6 @@
 import streamlit as st
 import io
+from pathlib import Path
 from backend_simulindex import (obtener_historicos_meff, obtener_meff_anual, obtener_meff_trimestral, obtener_meff_mensual,
                                 pyc_2026,
                                 obtener_hist_mensual, obtener_spot_mensual, obtener_spot_diario,
@@ -13,6 +14,7 @@ from backend_simulindex import (obtener_historicos_meff, obtener_meff_anual, obt
 from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, formatear_df_resultados, aplicar_estilo
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 from utilidades import (
     generar_menu,
     init_app,
@@ -26,7 +28,12 @@ from backend_previsiones import (
     guardar_prevision_omie_en_sesion,
     obtener_prevision_omie_anual,
 )
-from backend_indexado import FormulaIndexada, calcular_precios_atr_formula
+from backend_indexado import (
+    FormulaIndexada,
+    calcular_combo_index_fijo,
+    calcular_precios_atr_formula,
+    resumir_precio_ponderado,
+)
 from backend_telemindex import añadir_costes_curva, construir_df_curva_sheets
 from backend_opt2 import (
     consumos_mensuales_desde_curva_normalizada,
@@ -34,6 +41,10 @@ from backend_opt2 import (
 )
 from backend_sips import leer_sips_completo, perfil_anual_meses_naturales
 from backend_ia_ofertas import extraer_oferta_imagen
+from backend_ofertas_fijas import (
+    cargar_catalogo_ofertas,
+    guardar_version_oferta,
+)
 from streamlit_paste_button import paste_image_button
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
@@ -475,7 +486,7 @@ for clave_pricing, clave_principal in {
 
 
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     'Principal',
     'Futuros',
     'Previsión anual',
@@ -483,6 +494,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     'Comparador',
     'Cobertura trimestral',
     'Pricing',
+    'Combo index-fijo',
 ])
 
 # =======================================================================================================================================================================
@@ -1524,6 +1536,267 @@ with tab7:
 # ========================================================================================================================================================================
 #PANTALLA PRINCIPAL CON LAS RECTAS DE SIMULACIÓN Y DATOS PARA UN SOLO ESCENARIO OMIE
 # ========================================================================================================================================================================
+with tab8:
+    st.subheader('Combo index-fijo · precio del volumen fijo', divider='rainbow')
+    ruta_cuadrante_combo = (
+        Path(__file__).resolve().parent.parent
+        / 'assets'
+        / 'cuadrante_combo_index_fijo.svg'
+    )
+    st.info(
+        'Ejemplo del tipo de cuadrante horario que podrá introducirse. '
+        'Por ahora se utiliza este calendario de muestra; todavía no está '
+        'habilitada la carga de imagen ni su lectura con IA.',
+        icon='ℹ️',
+    )
+    st.image(
+        str(ruta_cuadrante_combo),
+        caption='Cuadrante de muestra · horas Fijo e Indexado por mes',
+        width=820,
+    )
+    st.caption(
+        'Se valoran exclusivamente las horas marcadas como Fijo en el '
+        'cuadrante. En ellas se sustituye OMIE por el valor indicado y se '
+        'aplica la fórmula y los componentes horarios de Telemindex.'
+    )
+    omie_fijo_combo = st.number_input(
+        'OMIE para las casillas Fijo (€/MWh)',
+        min_value=0.0,
+        value=40.0,
+        step=0.5,
+        key='combo_omie_fijo',
+    )
+    df_combo_origen = st.session_state.get('df_curva_sheets')
+    atr_combo = str(st.session_state.get('atr_dfnorm', '')).upper().removesuffix('TD')
+    if (
+        not isinstance(df_combo_origen, pd.DataFrame)
+        or df_combo_origen.empty
+        or atr_combo not in {'2.0', '3.0', '6.1'}
+    ):
+        st.info('Carga primero una curva de carga en Telemindex/Simulindex.')
+    else:
+        formula_combo = FormulaIndexada(
+            desvios_apant=st.session_state.get('desvios_apant', 0.0),
+            margen=st.session_state.get('margen_telemindex', 0.0),
+            margen_pos=st.session_state.get('cfg_margen_pos', 'tm'),
+            incluir_fnee=st.session_state.get('cfg_fnee', True),
+            fnee_pos=st.session_state.get('cfg_fnee_pos', 'perdidas'),
+            cf_pct=st.session_state.get('cf_pct', 0.0),
+        )
+        try:
+            detalle_combo, resumen_combo = calcular_combo_index_fijo(
+                df_combo_origen,
+                atr_combo,
+                formula_combo,
+                omie_fijo_combo,
+            )
+            fijo_combo = detalle_combo[detalle_combo['es_fijo']]
+            resumen_solo_fijo = resumen_combo
+            resumen_combo_completo = resumir_precio_ponderado(
+                detalle_combo, atr_combo
+            )
+            resumen_solo_indexado = resumir_precio_ponderado(
+                detalle_combo[~detalle_combo['es_fijo']].copy(), atr_combo
+            )
+            detalle_indexado = calcular_precios_atr_formula(
+                df_combo_origen.copy(), formula_combo
+            )
+            resumen_todo_indexado = resumir_precio_ponderado(
+                detalle_indexado, atr_combo
+            )
+            consumo_fijo_combo = pd.to_numeric(
+                fijo_combo['consumo_neto_kWh'], errors='coerce'
+            )
+            spot_fijo_combo = pd.to_numeric(
+                fijo_combo['spot_original'], errors='coerce'
+            )
+            mascara_omie_fijo_combo = (
+                consumo_fijo_combo.notna()
+                & spot_fijo_combo.notna()
+                & consumo_fijo_combo.ge(0)
+            )
+            consumo_omie_fijo_combo = consumo_fijo_combo[
+                mascara_omie_fijo_combo
+            ].sum()
+            omie_apuntado_horas_fijas = (
+                spot_fijo_combo[mascara_omie_fijo_combo]
+                .mul(consumo_fijo_combo[mascara_omie_fijo_combo])
+                .sum()
+                / consumo_omie_fijo_combo
+                if consumo_omie_fijo_combo > 0 else float('nan')
+            )
+            fecha_min_combo = detalle_combo['fecha_hora'].min()
+            fecha_max_combo = detalle_combo['fecha_hora'].max()
+            st.info(
+                f'Curva utilizada: {fecha_min_combo:%d/%m/%Y} → '
+                f'{fecha_max_combo:%d/%m/%Y} · ATR {atr_combo}TD · '
+                f'{formato_numero_es(fijo_combo["consumo_neto_kWh"].sum(), 0)} '
+                'kWh incluidos en el bloque fijo.'
+            )
+
+            periodos_combo = [f'P{i}' for i in range(1, 7)]
+            columnas_combo = st.columns(3)
+            escenarios_combo = [
+                ('1 · Solo fijo', resumen_solo_fijo),
+                ('2 · Combo index + fijo', resumen_combo_completo),
+                ('3 · Todo indexado', resumen_todo_indexado),
+            ]
+            for columna_combo, (
+                titulo_combo, resumen_escenario_combo
+            ) in zip(columnas_combo, escenarios_combo):
+                with columna_combo:
+                    st.markdown(f'### {titulo_combo}')
+                    precio_total_combo = resumen_escenario_combo.loc[
+                        'Total', 'Precio medio (EUR/MWh)'
+                    ] / 1000
+                    if titulo_combo == '3 · Todo indexado':
+                        metricas_omie_combo = st.columns(3)
+                        with metricas_omie_combo[0]:
+                            st.metric(
+                                'Precio ponderado (€/kWh)',
+                                formato_numero_es(precio_total_combo, 6),
+                            )
+                        with metricas_omie_combo[1]:
+                            st.metric(
+                                'OMIE apuntado horas Fijo (€/MWh)',
+                                formato_numero_es(omie_apuntado_horas_fijas, 2),
+                            )
+                        with metricas_omie_combo[2]:
+                            st.metric(
+                                'Diferencia vs fijo (€/MWh)',
+                                formato_numero_es(
+                                    omie_apuntado_horas_fijas - omie_fijo_combo,
+                                    2,
+                                ),
+                            )
+                    else:
+                        st.metric(
+                            'Precio medio ponderado (€/kWh)',
+                            formato_numero_es(precio_total_combo, 6),
+                        )
+                    tabla_precio_combo = (
+                        resumen_escenario_combo['Precio medio (EUR/MWh)']
+                        .div(1000)
+                        .reindex([*periodos_combo, 'Total'])
+                        .rename(index={'Total': 'Total ponderado'})
+                        .to_frame('Precio (€/kWh)')
+                    )
+                    st.dataframe(
+                        tabla_precio_combo.style.format(
+                            lambda valor: formato_numero_es(valor, 6)
+                            if pd.notna(valor) else '-'
+                        ),
+                        use_container_width=True,
+                    )
+                    tabla_volumen_combo = resumen_escenario_combo[
+                        ['Consumo (kWh)', 'Coste (EUR)']
+                    ]
+                    st.dataframe(
+                        tabla_volumen_combo.style.format({
+                            'Consumo (kWh)': (
+                                lambda valor: formato_numero_es(valor, 0)
+                            ),
+                            'Coste (EUR)': (
+                                lambda valor: formato_numero_es(valor, 2)
+                            ),
+                        }),
+                        use_container_width=True,
+                    )
+                    if titulo_combo == '2 · Combo index + fijo':
+                        for titulo_tramo_combo, resumen_tramo_combo in (
+                            ('Volumen Fijo', resumen_solo_fijo),
+                            ('Volumen Indexado', resumen_solo_indexado),
+                        ):
+                            st.markdown(f'#### {titulo_tramo_combo}')
+                            tabla_tramo_combo = resumen_tramo_combo[
+                                ['Consumo (kWh)', 'Coste (EUR)']
+                            ]
+                            st.dataframe(
+                                tabla_tramo_combo.style.format({
+                                    'Consumo (kWh)': (
+                                        lambda valor: formato_numero_es(valor, 0)
+                                    ),
+                                    'Coste (EUR)': (
+                                        lambda valor: formato_numero_es(valor, 2)
+                                    ),
+                                }),
+                                use_container_width=True,
+                            )
+            st.markdown('### Mapa de calor · diferencia Fijo − OMIE real')
+            st.caption(
+                'Solo se muestran las casillas Fijo. Valores positivos: el '
+                'precio OMIE fijo quedó por encima del OMIE real (sobrecoste); '
+                'valores negativos: quedó por debajo (ahorro).'
+            )
+            mapa_combo = fijo_combo.copy()
+            mapa_combo['Mes'] = mapa_combo['fecha_hora'].dt.month
+            mapa_combo['Hora'] = mapa_combo['hora_entrega']
+            mapa_combo['Diferencia'] = (
+                omie_fijo_combo
+                - pd.to_numeric(mapa_combo['spot_original'], errors='coerce')
+            )
+            matriz_mapa_combo = mapa_combo.pivot_table(
+                index='Hora',
+                columns='Mes',
+                values='Diferencia',
+                aggfunc='mean',
+            ).reindex(
+                index=range(1, 25),
+                columns=range(1, 13),
+            )
+            meses_mapa_combo = [
+                'ene', 'feb', 'mar', 'abr', 'may', 'jun',
+                'jul', 'ago', 'sep', 'oct', 'nov', 'dic',
+            ]
+            limite_mapa_combo = matriz_mapa_combo.abs().max().max()
+            if pd.isna(limite_mapa_combo) or limite_mapa_combo == 0:
+                limite_mapa_combo = 1.0
+            texto_mapa_combo = matriz_mapa_combo.applymap(
+                lambda valor: formato_numero_es(valor, 1)
+                if pd.notna(valor) else ''
+            )
+            grafico_mapa_combo = go.Figure(go.Heatmap(
+                z=matriz_mapa_combo.values,
+                x=meses_mapa_combo,
+                y=list(range(1, 25)),
+                text=texto_mapa_combo.values,
+                texttemplate='%{text}',
+                textfont={'size': 10},
+                colorscale=[
+                    [0.0, '#1a9850'],
+                    [0.5, '#fff7bc'],
+                    [1.0, '#d73027'],
+                ],
+                zmin=-limite_mapa_combo,
+                zmax=limite_mapa_combo,
+                colorbar={'title': 'Fijo − OMIE<br>(€/MWh)'},
+                hovertemplate=(
+                    'Mes: %{x}<br>Hora: %{y}<br>'
+                    'Diferencia: %{z:.2f} €/MWh<extra></extra>'
+                ),
+                hoverongaps=False,
+            ))
+            grafico_mapa_combo.update_layout(
+                height=650,
+                margin={'l': 50, 'r': 80, 't': 25, 'b': 45},
+                xaxis_title='Mes',
+                yaxis_title='Hora de entrega',
+                template='plotly_dark',
+            )
+            grafico_mapa_combo.update_yaxes(
+                autorange='reversed',
+                dtick=1,
+            )
+            st.plotly_chart(grafico_mapa_combo, use_container_width=True)
+            st.caption(
+                'Fórmula aplicada: [(OMIE fijo + SSAA + PPCC + OSOM + '
+                'desvíos + FNEE/margen según configuración) × pérdidas, TM '
+                'y coste financiero] + peajes y cargos.'
+            )
+        except ValueError as error_combo:
+            st.error(f'No se ha podido calcular el bloque fijo: {error_combo}')
+
+
 with tab1:
  
     col1, col2 = st.columns([0.2, 0.8])
@@ -1860,7 +2133,7 @@ with tab5:
         # ----------------------------
         # 6. MOSTRAR TABLA
         # ----------------------------
-        st.subheader('Parametriza escenarios OMIE')
+        st.subheader('Parametriza escenarios OMIE', divider='rainbow')
         c12, c13, c14 = st.columns(3)
         with c12:
             simul_a = st.number_input(
@@ -1880,7 +2153,7 @@ with tab5:
 
         lista_simul = [simul_a, simul_b, simul_c]
 
-        st.subheader('Componentes absolutos', divider='rainbow')
+        st.subheader('Parametriza resto de escenarios', divider='rainbow')
         componentes_comparador = [
             ('SSAA sin SRAD (€/MWh)', 'pricing_ssaa_forward_12m'),
             ('SRAD (€/MWh)', 'pricing_srad_prev'),
@@ -1964,7 +2237,125 @@ with tab5:
             else [f"P{i}" for i in range(1, 7)]
         )
 
-        with st.expander("Importar oferta desde imagen con IA"):
+        def reactivar_oferta_comparador(nombre_oferta):
+            excluidas = set(st.session_state.get(
+                '_ofertas_excluidas_comparador_simulindex', []
+            ))
+            excluidas.discard(str(nombre_oferta).strip().casefold())
+            st.session_state[
+                '_ofertas_excluidas_comparador_simulindex'
+            ] = sorted(excluidas)
+            eliminadas = set(st.session_state.get(
+                '_ofertas_eliminadas_comparador_simulindex', []
+            ))
+            eliminadas.discard(str(nombre_oferta).strip().casefold())
+            st.session_state[
+                '_ofertas_eliminadas_comparador_simulindex'
+            ] = sorted(eliminadas)
+
+        try:
+            catalogo_ofertas_local = cargar_catalogo_ofertas()
+        except ValueError as error_catalogo_ofertas:
+            catalogo_ofertas_local = []
+            st.warning(str(error_catalogo_ofertas))
+
+        with st.expander(
+            f"Ofertas guardadas en local ({len(catalogo_ofertas_local)})"
+        ):
+            if not catalogo_ofertas_local:
+                st.info('Todavía no hay ofertas guardadas.')
+            else:
+                etiquetas_catalogo = {
+                    registro['id']: (
+                        f"{registro['nombre']} · "
+                        f"{registro['vigencia_desde']} → "
+                        f"{registro.get('vigencia_hasta') or 'sin fecha fin'}"
+                    )
+                    for registro in catalogo_ofertas_local
+                }
+                id_oferta_local = st.selectbox(
+                    'Selecciona una versión',
+                    options=list(etiquetas_catalogo),
+                    format_func=etiquetas_catalogo.get,
+                    key='version_oferta_local_simulindex',
+                )
+                oferta_local_seleccionada = next(
+                    registro for registro in catalogo_ofertas_local
+                    if registro['id'] == id_oferta_local
+                )
+                tarifas_oferta_local = pd.DataFrame(
+                    oferta_local_seleccionada.get('tarifas', [])
+                ).rename(columns={'atr': 'ATR'})
+                st.dataframe(
+                    tarifas_oferta_local,
+                    hide_index=True,
+                    use_container_width=True,
+                )
+                atr_local_buscado = atr_comparador.removesuffix('TD')
+                fila_oferta_local = tarifas_oferta_local[
+                    tarifas_oferta_local['ATR'] == atr_local_buscado
+                ]
+                if fila_oferta_local.empty:
+                    st.warning(
+                        f'Esta versión no contiene la tarifa {atr_comparador}.'
+                    )
+                else:
+                    fee_oferta_local = st.number_input(
+                        'Fee para esta oferta (€/MWh)',
+                        min_value=0.0,
+                        max_value=100.0,
+                        value=0.0,
+                        step=0.1,
+                        key=f'fee_oferta_local_{id_oferta_local}',
+                        help='Se suma a todos los periodos al incorporarla.',
+                    )
+                if not fila_oferta_local.empty and st.button(
+                    f'Usar {atr_comparador} en el comparador',
+                    key='usar_oferta_local_simulindex',
+                    type='primary',
+                    use_container_width=True,
+                ):
+                    fila_local = fila_oferta_local.iloc[0]
+                    nombre_local = oferta_local_seleccionada['nombre']
+                    fila_comparador_local = {
+                        'oferta': nombre_local,
+                        'Fee (€/MWh)': fee_oferta_local,
+                        **{
+                            periodo: (
+                                float(fila_local[periodo])
+                                if pd.notna(fila_local.get(periodo)) else 0.0
+                            )
+                            for periodo in [f'P{i}' for i in range(1, 7)]
+                        },
+                    }
+                    ofertas_locales_comparador = st.session_state.get(
+                        'df_ofertas_fijas_ia_simulindex', pd.DataFrame()
+                    ).copy()
+                    if not ofertas_locales_comparador.empty:
+                        mascara_otras_ofertas = (
+                            ofertas_locales_comparador['oferta']
+                            .astype(str).str.strip().str.casefold()
+                            != nombre_local.strip().casefold()
+                        )
+                        ofertas_locales_comparador = (
+                            ofertas_locales_comparador[mascara_otras_ofertas]
+                        )
+                    st.session_state.df_ofertas_fijas_ia_simulindex = pd.concat(
+                        [
+                            ofertas_locales_comparador,
+                            pd.DataFrame([fila_comparador_local]),
+                        ],
+                        ignore_index=True,
+                    )
+                    st.session_state.revision_ofertas_ia_simulindex = (
+                        st.session_state.get(
+                            'revision_ofertas_ia_simulindex', 0
+                        ) + 1
+                    )
+                    reactivar_oferta_comparador(nombre_local)
+                    st.success(f'«{nombre_local}» añadida al comparador.')
+
+        with st.expander("Importar nueva oferta desde imagen con IA"):
             st.caption(
                 "La IA transcribe la tabla. Revisa siempre los precios antes "
                 "de incorporarlos a la comparación."
@@ -2020,6 +2411,79 @@ with tab5:
                 "tabla_oferta_ia_simulindex"
             )
             if isinstance(tabla_oferta_ia, pd.DataFrame) and not tabla_oferta_ia.empty:
+                st.markdown("#### Guardar todas las tarifas en el histórico local")
+                nombre_catalogo_ia = st.text_input(
+                    "Nombre para esta versión",
+                    value=st.session_state.get(
+                        "nombre_oferta_ia_simulindex",
+                        st.session_state.get(
+                            "nombre_oferta_ia_detectado_simulindex",
+                            "Oferta precio fijo",
+                        ),
+                    ),
+                    key="nombre_catalogo_oferta_ia_simulindex",
+                )
+                fechas_catalogo_ia = st.columns(2)
+                hoy_catalogo_ia = pd.Timestamp.today().date()
+                with fechas_catalogo_ia[0]:
+                    vigencia_desde_ia = st.date_input(
+                        "Vigencia desde",
+                        value=hoy_catalogo_ia,
+                        key="vigencia_desde_oferta_ia_simulindex",
+                    )
+                with fechas_catalogo_ia[1]:
+                    oferta_ia_con_fecha_fin = st.checkbox(
+                        'Indicar fecha fin de vigencia',
+                        value=True,
+                        key='oferta_ia_con_fecha_fin_simulindex_v2',
+                    )
+                    vigencia_hasta_ia = None
+                    if oferta_ia_con_fecha_fin:
+                        vigencia_hasta_ia = st.date_input(
+                            "Vigencia hasta",
+                            value=(
+                                pd.Timestamp(vigencia_desde_ia)
+                                + pd.Timedelta(days=7)
+                            ).date(),
+                            key="vigencia_hasta_oferta_ia_simulindex_v2",
+                        )
+                tabla_catalogo_editada_ia = st.data_editor(
+                    tabla_oferta_ia,
+                    hide_index=True,
+                    disabled=['ATR'],
+                    num_rows='fixed',
+                    key='editor_catalogo_oferta_ia_simulindex',
+                    column_config={
+                        periodo: st.column_config.NumberColumn(
+                            periodo,
+                            min_value=0.0,
+                            max_value=2.0,
+                            format='%.6f',
+                        )
+                        for periodo in [f'P{i}' for i in range(1, 7)]
+                    },
+                )
+                if st.button(
+                    "Guardar versión completa en local",
+                    key="guardar_catalogo_oferta_ia_simulindex",
+                    use_container_width=True,
+                ):
+                    try:
+                        registro_oferta_guardado = guardar_version_oferta(
+                            nombre_catalogo_ia,
+                            vigencia_desde_ia,
+                            vigencia_hasta_ia,
+                            tabla_catalogo_editada_ia,
+                        )
+                        st.success(
+                            "Versión guardada con todas las tarifas detectadas: "
+                            f"{registro_oferta_guardado['nombre']} · "
+                            f"{registro_oferta_guardado['vigencia_desde']} → "
+                            f"{registro_oferta_guardado['vigencia_hasta'] or 'sin fecha fin'}."
+                        )
+                    except (OSError, ValueError) as error_guardar_catalogo:
+                        st.error(f"No se pudo guardar la oferta: {error_guardar_catalogo}")
+
                 fila_atr_ia = tabla_oferta_ia[
                     tabla_oferta_ia["ATR"] == atr_comparador.removesuffix("TD")
                 ].copy()
@@ -2109,6 +2573,9 @@ with tab5:
                                 st.session_state.get(
                                     "revision_ofertas_ia_simulindex", 0
                                 ) + 1
+                            )
+                            reactivar_oferta_comparador(
+                                fila_guardada_ia['oferta']
                             )
                             st.success(
                                 "Oferta incorporada a la comparación sin "
@@ -2214,6 +2681,7 @@ with tab5:
                 st.session_state.df_oferta_fija_manual_simulindex = pd.DataFrame(
                     [fila_manual_simul]
                 )
+                reactivar_oferta_comparador(nombre_manual_limpio)
                 st.success(
                     f"Oferta manual «{nombre_manual_limpio}» actualizada."
                 )
@@ -2226,10 +2694,7 @@ with tab5:
         atr_resultado_comparador = (
             atr_calculo_comparador
         )
-        st.subheader(
-            f'Consumos según {origen_comparador} para peaje '
-            f':orange[{atr_resultado_comparador}]'
-        )
+        st.subheader('Consumos mensuales')
         st.dataframe(
             df_consumos_view,
             use_container_width=True,
@@ -2241,7 +2706,9 @@ with tab5:
             "Total consumo: "
             f"<span style='color:#ffc107; font-size:1.45rem; "
             f"font-weight:700;'>{formato_numero_es(total_consumo_comparador, 0)} "
-            "kWh</span>",
+            "kWh</span> - Peaje de acceso: "
+            f"<span style='color:#ffc107; font-size:1.45rem; "
+            f"font-weight:700;'>{atr_resultado_comparador}TD</span>",
             unsafe_allow_html=True,
         )
 
@@ -2373,6 +2840,9 @@ with tab5:
 
 
         ofertas_base_simulindex = []
+        ofertas_eliminadas_comparador = set(st.session_state.get(
+            '_ofertas_eliminadas_comparador_simulindex', []
+        ))
         for clave_ofertas_simulindex in (
             "df_ofertas_fijas_excel_simulindex",
             "df_oferta_fija_manual_simulindex",
@@ -2380,6 +2850,14 @@ with tab5:
         ):
             ofertas_fuente = st.session_state.get(clave_ofertas_simulindex)
             if isinstance(ofertas_fuente, pd.DataFrame) and not ofertas_fuente.empty:
+                if ofertas_eliminadas_comparador:
+                    nombres_fuente = (
+                        ofertas_fuente['oferta'].astype(str)
+                        .str.strip().str.casefold()
+                    )
+                    ofertas_fuente = ofertas_fuente.loc[
+                        ~nombres_fuente.isin(ofertas_eliminadas_comparador)
+                    ].copy()
                 ofertas_base_simulindex.append(ofertas_fuente)
 
         if ofertas_base_simulindex:
@@ -2391,8 +2869,107 @@ with tab5:
                 columns=["oferta", *[f"P{i}" for i in range(1, 7)]]
             )
 
+        ofertas_excluidas_comparador = {
+            str(nombre).strip().casefold()
+            for nombre in st.session_state.get(
+                '_ofertas_excluidas_comparador_simulindex', []
+            )
+        }
         df_ofertas_calc = df_ofertas_base_simul.copy()
         if not df_ofertas_base_simul.empty:
+            st.subheader("Resultado ofertas fijo")
+            selector_ofertas_comparador = (
+                df_ofertas_base_simul[['oferta']]
+                .drop_duplicates(subset=['oferta'])
+                .reset_index(drop=True)
+            )
+            nombres_selector_normalizados = (
+                selector_ofertas_comparador['oferta'].astype(str)
+                .str.strip().str.casefold()
+            )
+            selector_ofertas_comparador.insert(
+                0,
+                'Mostrar',
+                ~nombres_selector_normalizados.isin(
+                    ofertas_excluidas_comparador
+                ),
+            )
+            firma_selector_ofertas = abs(hash(tuple(
+                nombres_selector_normalizados.tolist()
+            )))
+            selector_ofertas_editado = st.data_editor(
+                selector_ofertas_comparador,
+                hide_index=True,
+                num_rows='fixed',
+                disabled=['oferta'],
+                use_container_width=True,
+                key=f'selector_ofertas_comparador_{firma_selector_ofertas}',
+                column_config={
+                    'Mostrar': st.column_config.CheckboxColumn(
+                        'Mostrar',
+                        help='Incluye o excluye la oferta de la comparativa.',
+                    ),
+                    'oferta': st.column_config.TextColumn('Oferta'),
+                },
+            )
+            nombres_ocultos_comparador = set(
+                selector_ofertas_editado.loc[
+                    ~selector_ofertas_editado['Mostrar'], 'oferta'
+                ].astype(str).str.strip().str.casefold()
+            )
+            st.session_state[
+                '_ofertas_excluidas_comparador_simulindex'
+            ] = sorted(nombres_ocultos_comparador)
+            df_ofertas_base_simul = df_ofertas_base_simul[
+                ~df_ofertas_base_simul['oferta'].astype(str)
+                .str.strip().str.casefold().isin(
+                    nombres_ocultos_comparador
+                )
+            ].copy()
+
+            ofertas_a_eliminar = st.multiselect(
+                'Eliminar ofertas cargadas',
+                options=selector_ofertas_comparador['oferta'].astype(str).tolist(),
+                key='eliminar_ofertas_comparador_simulindex_v2',
+                placeholder='Selecciona una o varias ofertas',
+            )
+            if st.button(
+                'Eliminar de la comparativa',
+                key='confirmar_eliminar_ofertas_comparador_simulindex_v2',
+                disabled=not ofertas_a_eliminar,
+                use_container_width=True,
+            ):
+                nombres_eliminados = {
+                    str(nombre).strip().casefold()
+                    for nombre in ofertas_a_eliminar
+                }
+                ofertas_eliminadas_comparador.update(nombres_eliminados)
+                st.session_state[
+                    '_ofertas_eliminadas_comparador_simulindex'
+                ] = sorted(ofertas_eliminadas_comparador)
+                for clave_fuente_ofertas in (
+                    'df_ofertas_fijas_excel_simulindex',
+                    'df_oferta_fija_manual_simulindex',
+                    'df_ofertas_fijas_ia_simulindex',
+                    'df_ofertas_fijas_simul',
+                ):
+                    fuente_ofertas = st.session_state.get(clave_fuente_ofertas)
+                    if (
+                        isinstance(fuente_ofertas, pd.DataFrame)
+                        and not fuente_ofertas.empty
+                        and 'oferta' in fuente_ofertas.columns
+                    ):
+                        nombres_fuente = (
+                            fuente_ofertas['oferta'].astype(str)
+                            .str.strip().str.casefold()
+                        )
+                        st.session_state[clave_fuente_ofertas] = (
+                            fuente_ofertas.loc[
+                                ~nombres_fuente.isin(nombres_eliminados)
+                            ].copy()
+                        )
+                st.rerun()
+
             columna_fee_simul = "Fee (€/MWh)"
             if columna_fee_simul not in df_ofertas_base_simul.columns:
                 df_ofertas_base_simul[columna_fee_simul] = 0.0
@@ -2410,7 +2987,6 @@ with tab5:
             st.session_state.df_ofertas_fijas_simul = df_ofertas_calc
 
             df_ofertas_view = formatear_df_resumen(st.session_state.df_ofertas_fijas_simul)
-            st.subheader("Resultado ofertas fijo")
             st.dataframe(
                 df_ofertas_view,
                 use_container_width=True,
