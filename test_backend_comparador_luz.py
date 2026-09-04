@@ -1,6 +1,7 @@
 import unittest
 import pandas as pd
 from backend_comparador_luz import (
+    calcular_ahorro_seleccion_vs_indexados,
     calcular_escenarios_indexados_mensuales,
     comparar_ofertas_fijas,
     consumos_por_periodo,
@@ -9,6 +10,23 @@ from backend_indexado import FormulaIndexada
 
 
 class ComparadorLuzTest(unittest.TestCase):
+    def test_ahorro_seleccion_frente_a_tres_indexados(self):
+        resultados = pd.DataFrame({
+            'Oferta': ['Fija elegida', 'Indexado C', 'Indexado A', 'Indexado B'],
+            'Coste total (€)': [900.0, 1200.0, 1000.0, 1100.0],
+        })
+
+        ahorro = calcular_ahorro_seleccion_vs_indexados(
+            resultados, 'Fija elegida'
+        )
+
+        self.assertEqual(
+            ahorro['Oferta'].tolist(),
+            ['Indexado A', 'Indexado B', 'Indexado C'],
+        )
+        self.assertEqual(ahorro['Ahorro (€)'].tolist(), [100.0, 200.0, 300.0])
+        self.assertAlmostEqual(ahorro.iloc[0]['Ahorro (%)'], 10.0)
+
     def test_consumos_y_fee(self):
         curva = pd.DataFrame({'consumo_neto_kWh': [100, 200], 'dh_6p': ['P1', 'P2']})
         consumos = consumos_por_periodo(curva, '3.0')

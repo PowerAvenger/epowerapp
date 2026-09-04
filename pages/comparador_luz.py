@@ -4,7 +4,14 @@ import re
 import streamlit as st
 
 from backend_comun import aplicar_estilo
-from backend_comparador_luz import calcular_costes_potencia, calcular_escenarios_indexados_mensuales, comparar_ofertas_fijas, filtrar_ofertas_elegibles, ofertas_catalogo_para_atr
+from backend_comparador_luz import (
+    calcular_ahorro_seleccion_vs_indexados,
+    calcular_costes_potencia,
+    calcular_escenarios_indexados_mensuales,
+    comparar_ofertas_fijas,
+    filtrar_ofertas_elegibles,
+    ofertas_catalogo_para_atr,
+)
 from backend_indexado import FormulaIndexada
 from backend_ofertas_fijas import cargar_catalogo_ofertas, resolver_potencia_tarifa
 from backend_opt2 import consumos_mensuales_desde_curva_normalizada
@@ -843,3 +850,35 @@ with tab_potencia_energia:
             st.dataframe(
                 tabla_win_win, hide_index=True, use_container_width=True
             )
+            ahorro_vs_indexados = calcular_ahorro_seleccion_vs_indexados(
+                resultado_total,
+                oferta_referencia,
+            )
+            st.markdown(
+                f'#### Ahorro de {oferta_referencia} frente a los indexados'
+            )
+            if ahorro_vs_indexados.empty:
+                st.info('No están disponibles los tres escenarios indexados.')
+            else:
+                tabla_ahorro_indexados = ahorro_vs_indexados[[
+                    'Oferta', 'Ahorro (€)', 'Ahorro (%)'
+                ]].rename(columns={'Oferta': 'Referencia'}).copy()
+                tabla_ahorro_indexados['Ahorro (€)'] = (
+                    tabla_ahorro_indexados['Ahorro (€)'].map(
+                        lambda valor: f'{formato_numero_es(valor, 2)} €'
+                    )
+                )
+                tabla_ahorro_indexados['Ahorro (%)'] = (
+                    tabla_ahorro_indexados['Ahorro (%)'].map(
+                        lambda valor: f'{formato_numero_es(valor, 2)} %'
+                    )
+                )
+                st.dataframe(
+                    tabla_ahorro_indexados,
+                    hide_index=True,
+                    use_container_width=True,
+                )
+                st.caption(
+                    'Un valor positivo indica ahorro de la oferta seleccionada; '
+                    'un valor negativo indica sobrecoste.'
+                )

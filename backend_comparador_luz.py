@@ -13,6 +13,47 @@ from backend_ofertas_fijas import resolver_potencia_tarifa
 PERIODOS = [f"P{i}" for i in range(1, 7)]
 
 
+def calcular_ahorro_seleccion_vs_indexados(
+    resultados: pd.DataFrame,
+    oferta_seleccionada: str,
+) -> pd.DataFrame:
+    """Compara el coste total de una oferta con Indexado A, B y C."""
+    requeridas = {"Oferta", "Coste total (€)"}
+    faltantes = requeridas.difference(resultados.columns)
+    if faltantes:
+        raise ValueError("Faltan columnas: " + ", ".join(sorted(faltantes)))
+
+    seleccion = resultados.loc[
+        resultados["Oferta"].astype(str).eq(str(oferta_seleccionada))
+    ]
+    if seleccion.empty:
+        raise ValueError("La oferta seleccionada no está en los resultados.")
+    coste_seleccion = float(seleccion.iloc[0]["Coste total (€)"])
+
+    nombres_indexados = ["Indexado A", "Indexado B", "Indexado C"]
+    indexados = (
+        resultados.loc[
+            resultados["Oferta"].isin(nombres_indexados),
+            ["Oferta", "Coste total (€)"],
+        ]
+        .drop_duplicates(subset="Oferta", keep="first")
+        .set_index("Oferta")
+        .reindex(nombres_indexados)
+        .dropna(subset=["Coste total (€)"])
+        .reset_index()
+    )
+    indexados["Coste selección (€)"] = coste_seleccion
+    indexados["Ahorro (€)"] = (
+        indexados["Coste total (€)"] - coste_seleccion
+    )
+    indexados["Ahorro (%)"] = np.where(
+        indexados["Coste total (€)"].ne(0),
+        indexados["Ahorro (€)"] / indexados["Coste total (€)"] * 100,
+        np.nan,
+    )
+    return indexados.rename(columns={"Coste total (€)": "Coste indexado (€)"})
+
+
 def limite_maximo_consumo_oferta(nombre: str) -> float | None:
     """Extrae límites tipo «hasta 10.000 kWh» o «máx. 100.000 kWh»."""
     coincidencia = re.search(
