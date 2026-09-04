@@ -896,7 +896,7 @@ with tab_potencia_energia:
                         box-shadow:0 2px 8px rgba(224,180,0,.16);">
                         <div style="font-size:28px;line-height:1.15;">
                             La <b>horquilla de ahorro</b> de la selección frente
-                            a Simulindex es de:
+                            a indexado es de:
                         </div>
                         <div style="font-size:36px;font-weight:bold;
                             line-height:1.15;margin-top:.35rem;">
