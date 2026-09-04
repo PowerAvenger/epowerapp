@@ -11,7 +11,12 @@ from backend_opt2 import consumos_mensuales_desde_curva_normalizada
 from backend_simulindex import construir_curva_omip_mensual_12m, obtener_historicos_meff, obtener_meff_mensual, obtener_meff_trimestral
 from backend_sips import leer_sips_completo, perfil_anual_meses_naturales
 from formato_es import formato_numero_es
-from utilidades import generar_menu, init_app, init_app_index
+from utilidades import (
+    generar_menu,
+    init_app,
+    init_app_index,
+    mostrar_parametros_formula_indexado,
+)
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
@@ -212,6 +217,8 @@ with col1:
     ssaa = st.number_input('SSAA sin SRAD (€/MWh)', value=float(st.session_state.get('pricing_ssaa_forward_12m', 20.0)))
     srad = st.number_input('SRAD (€/MWh)', value=float(st.session_state.get('pricing_srad_prev', 1.7)))
     fnee = st.number_input('FNEE (€/MWh)', value=float(st.session_state.get('pricing_fnee_prev', 2.68)))
+    st.subheader('Fórmula indexada', divider='rainbow')
+    mostrar_parametros_formula_indexado(widget_suffix='comparador_luz')
 
 formula = FormulaIndexada(desvios_apant=st.session_state.get('desvios_apant', 0.0), margen=st.session_state.get('margen_telemindex', 0.0), margen_pos=st.session_state.get('cfg_margen_pos', 'tm'), incluir_fnee=st.session_state.get('cfg_fnee', True), fnee_pos=st.session_state.get('cfg_fnee_pos', 'perdidas'), cf_pct=st.session_state.get('cf_pct', 0.0))
 referencia = st.session_state.get('df_sheets'); resultado_index = pd.DataFrame()
