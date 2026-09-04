@@ -882,38 +882,31 @@ with tab_potencia_energia:
                 ahorro_maximo = float(
                     ahorro_vs_indexados['Ahorro (€)'].max()
                 )
-                if ahorro_minimo >= 0:
-                    color_horquilla = '#16a34a'
-                    fondo_horquilla = 'rgba(22,163,74,.12)'
-                    etiqueta_horquilla = 'Ahorro estimado'
-                    valor_inferior = ahorro_minimo
-                    valor_superior = ahorro_maximo
-                elif ahorro_maximo <= 0:
-                    color_horquilla = '#dc2626'
-                    fondo_horquilla = 'rgba(220,38,38,.12)'
-                    etiqueta_horquilla = 'Sobrecoste estimado'
-                    valor_inferior = abs(ahorro_maximo)
-                    valor_superior = abs(ahorro_minimo)
-                else:
-                    color_horquilla = '#f59e0b'
-                    fondo_horquilla = 'rgba(245,158,11,.12)'
-                    etiqueta_horquilla = 'Impacto estimado'
-                    valor_inferior = ahorro_minimo
-                    valor_superior = ahorro_maximo
+                ahorro_pct_minimo = float(
+                    ahorro_vs_indexados['Ahorro (%)'].min()
+                )
+                ahorro_pct_maximo = float(
+                    ahorro_vs_indexados['Ahorro (%)'].max()
+                )
                 st.markdown(
                     f'''
-                    <div style="background:{fondo_horquilla};
-                                border-left:4px solid {color_horquilla};
-                                border-radius:8px; padding:12px 14px;
-                                margin:8px 0;">
-                      <div style="font-size:.82rem; font-weight:600; opacity:.85;">
-                        {etiqueta_horquilla} frente a Simulindex
-                      </div>
-                      <div style="color:{color_horquilla}; font-size:1.45rem;
-                                  font-weight:700; line-height:1.25;">
-                        {formato_numero_es(valor_inferior, 2)} € –
-                        {formato_numero_es(valor_superior, 2)} €
-                      </div>
+                    <div style="padding:1rem .8rem;border:1px solid #e0b400;
+                        border-left:6px solid #e0b400;border-radius:.75rem;
+                        background:#fff3bf;color:#5f4b00;text-align:center;
+                        box-shadow:0 2px 8px rgba(224,180,0,.16);">
+                        <div style="font-size:28px;line-height:1.15;">
+                            La <b>horquilla de ahorro</b> de la selección frente
+                            a Simulindex es de:
+                        </div>
+                        <div style="font-size:36px;font-weight:bold;
+                            line-height:1.15;margin-top:.35rem;">
+                            {formato_numero_es(ahorro_minimo, 2)} € –
+                            {formato_numero_es(ahorro_maximo, 2)} €
+                            <div style="font-size:24px;margin-top:.25rem;">
+                                ({formato_numero_es(ahorro_pct_minimo, 2)} % –
+                                {formato_numero_es(ahorro_pct_maximo, 2)} %)
+                            </div>
+                        </div>
                     </div>
                     ''',
                     unsafe_allow_html=True,
