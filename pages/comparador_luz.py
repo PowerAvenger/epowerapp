@@ -876,6 +876,48 @@ with tab_potencia_energia:
                     hide_index=True,
                     use_container_width=True,
                 )
+                ahorro_minimo = float(
+                    ahorro_vs_indexados['Ahorro (€)'].min()
+                )
+                ahorro_maximo = float(
+                    ahorro_vs_indexados['Ahorro (€)'].max()
+                )
+                if ahorro_minimo >= 0:
+                    color_horquilla = '#16a34a'
+                    fondo_horquilla = 'rgba(22,163,74,.12)'
+                    etiqueta_horquilla = 'Ahorro estimado'
+                    valor_inferior = ahorro_minimo
+                    valor_superior = ahorro_maximo
+                elif ahorro_maximo <= 0:
+                    color_horquilla = '#dc2626'
+                    fondo_horquilla = 'rgba(220,38,38,.12)'
+                    etiqueta_horquilla = 'Sobrecoste estimado'
+                    valor_inferior = abs(ahorro_maximo)
+                    valor_superior = abs(ahorro_minimo)
+                else:
+                    color_horquilla = '#f59e0b'
+                    fondo_horquilla = 'rgba(245,158,11,.12)'
+                    etiqueta_horquilla = 'Impacto estimado'
+                    valor_inferior = ahorro_minimo
+                    valor_superior = ahorro_maximo
+                st.markdown(
+                    f'''
+                    <div style="background:{fondo_horquilla};
+                                border-left:4px solid {color_horquilla};
+                                border-radius:8px; padding:12px 14px;
+                                margin:8px 0;">
+                      <div style="font-size:.82rem; font-weight:600; opacity:.85;">
+                        {etiqueta_horquilla} frente a Simulindex
+                      </div>
+                      <div style="color:{color_horquilla}; font-size:1.45rem;
+                                  font-weight:700; line-height:1.25;">
+                        {formato_numero_es(valor_inferior, 2)} € –
+                        {formato_numero_es(valor_superior, 2)} €
+                      </div>
+                    </div>
+                    ''',
+                    unsafe_allow_html=True,
+                )
                 st.caption(
                     'Un valor positivo indica ahorro de la oferta seleccionada; '
                     'un valor negativo indica sobrecoste.'
