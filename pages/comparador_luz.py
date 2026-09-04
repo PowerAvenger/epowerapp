@@ -854,9 +854,7 @@ with tab_potencia_energia:
                 resultado_total,
                 oferta_referencia,
             )
-            st.markdown(
-                f'#### Ahorro de {oferta_referencia} frente a los indexados'
-            )
+            st.markdown('#### Ahorro frente a los indexados')
             if ahorro_vs_indexados.empty:
                 st.info('No están disponibles los tres escenarios indexados.')
             else:
