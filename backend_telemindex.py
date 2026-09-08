@@ -5,7 +5,11 @@ from plotly.subplots import make_subplots
 import statsmodels.api as sm
 import streamlit as st
 import numpy as np
-from backend_comun import aplicar_estilo, aplicar_texto_pie_porcentaje
+from backend_comun import (
+    aplicar_estilo,
+    aplicar_texto_pie_porcentaje,
+    filtrar_intervalos_inexistentes_madrid,
+)
 
 
 COMPONENTES_SSAA_TOTAL = [
@@ -3264,7 +3268,9 @@ def construir_df_curva_sheets(df_filtrado):
     con los datos filtrados del Sheets.
     """
     
-    df_norm = st.session_state.df_norm_h.copy()
+    df_norm = filtrar_intervalos_inexistentes_madrid(
+        st.session_state.df_norm_h
+    )
     #df_norm = df_norm_h.copy()
 
     # Asegurar que 'fecha' es date en ambos DF
@@ -3277,7 +3283,6 @@ def construir_df_curva_sheets(df_filtrado):
         on=["fecha", "hora"],
         how="left"
     )
-
     print('df curva sheets construida en la función')
     print(df)
 
@@ -3618,6 +3623,49 @@ def graficar_elasticidad_lineal(df_res, atr="2.0", spot_ref=None, n_puntos=101):
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+
+
+def preparar_comparativa_mensual_indexados(
+    datos,
+    anio_base,
+    anio_comp,
+    mes_num=None,
+):
+    """Resume precios mensuales comparando ambos años hasta el mismo día.
+
+    Para cada mes disponible en ``anio_comp``, limita también ``anio_base`` al
+    último día con datos del año comparado. Devuelve precios en c€/kWh y un
+    diccionario ``{mes: fecha_corte}`` para poder explicar el criterio en UI.
+    """
+    columnas = ["spot", "precio_2.0", "precio_3.0", "precio_6.1"]
+    df = datos.copy()
+    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+    df = df[
+        df["fecha"].dt.year.isin([anio_base, anio_comp])
+        & df["fecha"].notna()
+    ].copy()
+    if mes_num is not None:
+        df = df[df["fecha"].dt.month == mes_num].copy()
+
+    fechas_comp = df.loc[df["fecha"].dt.year == anio_comp, "fecha"]
+    fechas_corte = fechas_comp.groupby(fechas_comp.dt.month).max().to_dict()
+    if fechas_corte:
+        dia_corte = df["fecha"].dt.month.map(
+            {mes: fecha.day for mes, fecha in fechas_corte.items()}
+        )
+        es_base = df["fecha"].dt.year == anio_base
+        df = df[~es_base | (df["fecha"].dt.day <= dia_corte)].copy()
+
+    resumen = (
+        df.assign(
+            año=lambda frame: frame["fecha"].dt.year,
+            mes_num=lambda frame: frame["fecha"].dt.month,
+        )
+        .groupby(["año", "mes_num"], as_index=False)[columnas]
+        .mean()
+    )
+    resumen[columnas] /= 10
+    return resumen, fechas_corte
 
 
 def graficar_diferencial_precios_mensuales(

@@ -115,7 +115,7 @@ colores = {
 
 
 
-@st.cache_data
+@st.cache_data(ttl=3600, show_spinner=False)
 def leer_json(file_id, _creds_dict):
     SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
     creds = Credentials.from_service_account_info(_creds_dict, scopes=SCOPES)
@@ -156,35 +156,36 @@ def leer_json(file_id, _creds_dict):
     
     return datos, fecha_ini, fecha_fin
 
-#gráfico con todos los valores diarios desde el 2018
-def cargar_datos_escalacv(componente, file_id_spot, file_id_ssaa, creds_dict):
-    """Carga la serie ESIOS-ID de Escala CV sin depender de session_state."""
-    if componente not in {"SPOT", "SSAA", "SPOT+SSAA"}:
-        raise ValueError(f"Componente de mercado no válido: {componente}")
 
-    if componente == "SPOT":
-        return leer_json(file_id_spot, creds_dict)
-    if componente == "SSAA":
-        return leer_json(file_id_ssaa, creds_dict)
+@st.cache_data(ttl=3600, show_spinner=False)
+def cargar_series_mercado(file_id_spot, file_id_ssaa, _creds_dict):
+    """Carga y cachea conjuntamente las series base de SPOT y SSAA."""
+    datos_spot = leer_json(file_id_spot, _creds_dict)
+    datos_ssaa = leer_json(file_id_ssaa, _creds_dict)
+    return datos_spot, datos_ssaa
 
-    datos_spot, fecha_ini_spot, fecha_fin_spot = leer_json(
-        file_id_spot, creds_dict
-    )
-    datos_ssaa, fecha_ini_ssaa, fecha_fin_ssaa = leer_json(
-        file_id_ssaa, creds_dict
-    )
-    datos_spot = datos_spot.reset_index()
-    datos_ssaa = datos_ssaa.reset_index()
+
+def combinar_series_mercado(datos_spot, datos_ssaa):
+    """Combina SPOT y SSAA por hora sin modificar las series originales."""
+    spot = datos_spot.reset_index()
+    ssaa = datos_ssaa.reset_index()
+    # Al retirar la zona horaria, las dos horas del cambio de octubre tienen
+    # la misma marca local. La ocurrencia evita un producto cartesiano 2x2 y
+    # conserva ambas lecturas emparejadas en su orden cronológico.
+    clave_repeticion = "_repeticion_hora"
+    spot[clave_repeticion] = spot.groupby("datetime", sort=False).cumcount()
+    ssaa[clave_repeticion] = ssaa.groupby("datetime", sort=False).cumcount()
     datos = (
-        datos_spot[["datetime", "value"]]
+        spot[["datetime", clave_repeticion, "value"]]
         .rename(columns={"value": "value_spot"})
         .merge(
-            datos_ssaa[["datetime", "value"]].rename(
+            ssaa[["datetime", clave_repeticion, "value"]].rename(
                 columns={"value": "value_ssaa"}
             ),
-            on="datetime",
+            on=["datetime", clave_repeticion],
             how="inner",
         )
+        .drop(columns=clave_repeticion)
     )
     datos["value"] = datos["value_spot"] + datos["value_ssaa"]
     datos["fecha"] = datos["datetime"].dt.date
@@ -193,6 +194,27 @@ def cargar_datos_escalacv(componente, file_id_spot, file_id_ssaa, creds_dict):
     datos["mes"] = datos["datetime"].dt.month
     datos["año"] = datos["datetime"].dt.year
     datos.set_index("datetime", inplace=True)
+    return datos
+
+
+#gráfico con todos los valores diarios desde el 2018
+def cargar_datos_escalacv(componente, file_id_spot, file_id_ssaa, creds_dict):
+    """Carga la serie ESIOS-ID de Escala CV sin depender de session_state."""
+    if componente not in {"SPOT", "SSAA", "SPOT+SSAA"}:
+        raise ValueError(f"Componente de mercado no válido: {componente}")
+
+    (datos_spot, fecha_ini_spot, fecha_fin_spot), (
+        datos_ssaa,
+        fecha_ini_ssaa,
+        fecha_fin_ssaa,
+    ) = cargar_series_mercado(file_id_spot, file_id_ssaa, creds_dict)
+
+    if componente == "SPOT":
+        return datos_spot, fecha_ini_spot, fecha_fin_spot
+    if componente == "SSAA":
+        return datos_ssaa, fecha_ini_ssaa, fecha_fin_ssaa
+
+    datos = combinar_series_mercado(datos_spot, datos_ssaa)
     return datos, max(fecha_ini_spot, fecha_ini_ssaa), min(
         fecha_fin_spot, fecha_fin_ssaa
     )
@@ -396,7 +418,7 @@ def graficar_comparativa_spot_horaria_mensual(
     return horario, aplicar_estilo(figura)
 
 
-def diarios_totales(datos, fecha_ini, fecha_fin):    
+def diarios_totales(datos, fecha_ini, fecha_fin, componente=None):
     datos_dia = datos.copy()
     datos_dia = datos_dia.drop(columns=['hora'])
     datos_dia['mes_nombre']=datos_dia['mes'].map(meses_español)
@@ -406,7 +428,7 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
 
     
 
-    componente = st.session_state.get('componente', 'SPOT')
+    componente = componente or st.session_state.get('componente', 'SPOT')
     dos_colores = st.session_state.get('dos_colores', False)
     if componente in ['SPOT+SSAA'] and dos_colores:
         datos_dia=datos_dia.groupby('fecha').agg({
@@ -445,7 +467,9 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
     
     datos_dia[['dia','mes','año']] = datos_dia[['dia','mes','año']].astype(int)
     
-    df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes()
+    df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes(
+        componente=componente
+    )
     datos_dia['escala']=pd.cut(datos_dia['value'],bins=df_limites['rango'],labels=etiquetas,right=False)
     datos_dia['color']=datos_dia['escala'].map(colores)
     escala_dia=datos_dia['escala'].unique()
@@ -461,14 +485,17 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
     #GRÁFICO PRINCIPAL CON LOS PRECIOS MEDIOS DIARIOS DE TODOS LOS AÑOS. ecv es escala cavero vidal-----------------------------------------------------------
     #componente = st.session_state.get('componente', 'SPOT')
     
+    año_inicio = int(datos_dia['año'].min())
+    año_fin = int(datos_dia['año'].max())
+    periodo_titulo = f'{año_inicio}-{año_fin}'
     if componente in ['SPOT']:
-        title = f'Precios medios diarios del SPOT. 2018-2025'
+        title = f'Precios medios diarios del SPOT. {periodo_titulo}'
         tick_y = 20
     elif componente in ['SPOT+SSAA']:
-        title = f'Precios medios diarios del SPOT+SSAA. 2018-2025'
+        title = f'Precios medios diarios del SPOT+SSAA. {periodo_titulo}'
         tick_y = 20
     else:
-        title = f'Precios medios diarios de los SSAA. 2018-2025'
+        title = f'Precios medios diarios de los SSAA. {periodo_titulo}'
         tick_y = 4
 
     if componente == 'SPOT+SSAA' and dos_colores:
@@ -597,10 +624,6 @@ def diarios_totales(datos, fecha_ini, fecha_fin):
 
     
     
-    print('datos dia')
-    print(datos_dia)
-    
-
     return datos_dia, graf_ecv_diario
 
 

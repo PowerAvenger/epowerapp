@@ -31,6 +31,7 @@ ESQUEMA_OFERTA_IMAGEN = {
             "items": {
                 "type": "object",
                 "properties": {
+                    "nombre": {"type": ["string", "null"]},
                     "atr": {"type": "string"},
                     "P1": {"type": ["number", "null"]},
                     "P2": {"type": ["number", "null"]},
@@ -39,7 +40,7 @@ ESQUEMA_OFERTA_IMAGEN = {
                     "P5": {"type": ["number", "null"]},
                     "P6": {"type": ["number", "null"]},
                 },
-                "required": ["atr", "P1", "P2", "P3", "P4", "P5", "P6"],
+                "required": ["nombre", "atr", "P1", "P2", "P3", "P4", "P5", "P6"],
                 "additionalProperties": False,
             },
         },
@@ -87,7 +88,7 @@ def _factor_a_eur_kwh(unidad, tarifas=None):
     return 1 / 1000, True         # precios como 236,937: EUR/MWh
 
 
-def validar_oferta_extraida(resultado):
+def validar_oferta_extraida(resultado, atr_contexto=None):
     """Valida y convierte la extracción a una tabla canónica en €/kWh."""
     if not isinstance(resultado, dict) or not resultado.get("tarifas"):
         raise ValueError("No se ha detectado ninguna tarifa en la imagen.")
@@ -95,11 +96,27 @@ def validar_oferta_extraida(resultado):
         resultado.get("unidad_original"), resultado.get("tarifas")
     )
     filas = []
-    for tarifa in resultado["tarifas"]:
+    nombres_usados = {}
+    numero_tarifas = len(resultado["tarifas"])
+    nombre_global = str(resultado.get("nombre") or "Oferta desde imagen").strip()
+    for indice, tarifa in enumerate(resultado["tarifas"], start=1):
         atr = _normalizar_atr(tarifa.get("atr"))
+        if atr not in ATRS_OFERTA and atr_contexto is not None:
+            atr = _normalizar_atr(atr_contexto)
         if atr not in ATRS_OFERTA:
             continue
-        fila = {"ATR": atr}
+        nombre_fila = str(tarifa.get("nombre") or "").strip()
+        if not nombre_fila:
+            nombre_fila = (
+                nombre_global if numero_tarifas == 1
+                else f"{nombre_global} {indice}"
+            )
+        clave_nombre = nombre_fila.casefold()
+        repeticion = nombres_usados.get(clave_nombre, 0) + 1
+        nombres_usados[clave_nombre] = repeticion
+        if repeticion > 1:
+            nombre_fila = f"{nombre_fila} ({repeticion})"
+        fila = {"oferta": nombre_fila, "ATR": atr}
         for periodo in [f"P{i}" for i in range(1, 7)]:
             valor = tarifa.get(periodo)
             fila[periodo] = None if valor is None else float(valor) * factor
@@ -120,6 +137,7 @@ def extraer_oferta_imagen(
     mime_type,
     api_key,
     modelo="gpt-5.6-luna",
+    atr_contexto=None,
 ):
     """Envía una imagen al modelo y devuelve tarifas validadas en €/kWh."""
     try:
@@ -138,7 +156,11 @@ def extraer_oferta_imagen(
         instructions=(
             "Eres un extractor de tablas de ofertas eléctricas. Transcribe "
             "exclusivamente datos visibles. No inventes precios ni periodos. "
-            "Conserva la unidad original y convierte comas decimales a números."
+            "Conserva la unidad original y convierte comas decimales a números. "
+            "Cada fila de precios es una oferta independiente: conserva en el "
+            "campo nombre su etiqueta comercial completa. Si dos filas tienen "
+            "la misma etiqueta, incorpora otro dato visible de la fila, como "
+            "el valor OMIE, para que sus nombres sean inequívocos."
         ),
         input=[{
             "role": "user",
@@ -146,7 +168,9 @@ def extraer_oferta_imagen(
                 {
                     "type": "input_text",
                     "text": (
-                        "Extrae todas las filas ATR y sus precios P1-P6. "
+                        "Extrae todas las filas de ofertas y sus precios P1-P6, "
+                        "incluido el nombre de cada fila. Si la tabla no muestra "
+                        "ATR, deja atr vacío: se aplicará el ATR del contexto. "
                         "Usa null para periodos que no aparezcan."
                     ),
                 },
@@ -166,4 +190,6 @@ def extraer_oferta_imagen(
             }
         },
     )
-    return validar_oferta_extraida(json.loads(respuesta.output_text))
+    return validar_oferta_extraida(
+        json.loads(respuesta.output_text), atr_contexto=atr_contexto
+    )

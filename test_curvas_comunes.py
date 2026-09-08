@@ -4,15 +4,21 @@ from unittest.mock import patch
 
 import pandas as pd
 
+from backend_comun import filtrar_intervalos_inexistentes_madrid
+
 from backend_curvadecarga import (
     DatadisLimiteConsultas,
     _normalizar_maximetros_datadis,
     _normalizar_reactiva_datadis,
     agrupar_curva_horaria,
+    analizar_calidad_curva,
     analizar_cobertura_periodo,
+    cargar_matriz_periodos_zonas,
     clave_cache_consumo_datadis,
     dataframe_como_archivo_curva,
+    detectar_periodos_en_fuente,
     dividir_energias_curva,
+    inferir_zonas_por_periodos,
     normalize_curve_simple,
     obtener_consumo_datadis,
     obtener_consumo_datadis_cacheado,
@@ -20,9 +26,152 @@ from backend_curvadecarga import (
     recortar_curva_periodo,
     resumir_consumo_por_periodo,
 )
+from servicio_curva import (
+    limpiar_curva_sesion,
+    normalizar_fuentes_curva,
+    obtener_curva_sesion,
+    publicar_curva_sesion,
+)
 
 
 class CurvasComunesTest(unittest.TestCase):
+    def test_infiere_una_zona_en_curva_de_seis_periodos(self):
+        matriz = cargar_matriz_periodos_zonas()
+        matriz = matriz[matriz["fecha_hora"].dt.year.eq(2025)]
+        curva = matriz[["fecha_hora", "p6_peninsula"]].rename(
+            columns={"p6_peninsula": "periodo"}
+        )
+
+        zonas, cobertura = inferir_zonas_por_periodos(curva)
+
+        self.assertEqual(zonas, ["peninsula"])
+        self.assertEqual(cobertura, 1.0)
+
+    def test_tres_periodos_puede_ser_compatible_con_varias_zonas(self):
+        matriz = cargar_matriz_periodos_zonas()
+        matriz = matriz[matriz["fecha_hora"].dt.year.eq(2025)]
+        curva = matriz[["fecha_hora", "p3"]].rename(
+            columns={"p3": "periodo"}
+        )
+
+        zonas, _ = inferir_zonas_por_periodos(curva)
+
+        self.assertEqual(
+            zonas, ["peninsula", "baleares", "canarias", "ceuta", "melilla"]
+        )
+
+    def test_duplicado_de_octubre_se_conserva_y_se_identifica(self):
+        curva = pd.DataFrame({
+            "fecha_hora": pd.to_datetime([
+                "2025-10-26 02:00", "2025-10-26 02:00"
+            ]),
+            "consumo_kWh": [1.0, 2.0],
+        })
+
+        diagnostico = analizar_calidad_curva(curva, frecuencia="H")
+
+        self.assertEqual(diagnostico["duplicados_fecha_hora"], 1)
+        self.assertEqual(diagnostico["duplicados_cambio_hora_octubre"], 1)
+        self.assertEqual(curva["consumo_kWh"].tolist(), [1.0, 2.0])
+
+    def test_prelectura_detecta_periodos_y_restaura_el_archivo(self):
+        archivo = io.BytesIO((
+            "Fecha;Hora;Consumo (kWh);Periodo\n"
+            "01/07/2025;00:00;1;P3\n"
+        ).encode("utf-8"))
+        archivo.name = "con_periodos.csv"
+        archivo.seek(7)
+
+        self.assertTrue(detectar_periodos_en_fuente(archivo))
+        self.assertEqual(archivo.tell(), 7)
+
+    def test_prelectura_no_confunde_curva_sin_periodos(self):
+        archivo = io.BytesIO((
+            "Fecha;Hora;Consumo (kWh)\n"
+            "01/07/2025;00:00;1\n"
+        ).encode("utf-8"))
+        archivo.name = "sin_periodos.csv"
+
+        self.assertFalse(detectar_periodos_en_fuente(archivo))
+
+    def test_servicio_publica_la_curva_activa_con_contrato_compatible(self):
+        lineas = ["Fecha;Hora;Consumo (kWh);Periodo"]
+        lineas.extend(
+            f"01/07/2025;{hora:02d}:00;1,25;P3" for hora in range(24)
+        )
+        archivo = io.BytesIO(("\n".join(lineas) + "\n").encode("utf-8"))
+        archivo.name = "curva_servicio.csv"
+
+        resultado = normalizar_fuentes_curva(archivo, atr="3.0")
+        estado = {}
+        publicar_curva_sesion(estado, resultado)
+
+        self.assertEqual(resultado.frecuencia, "H")
+        self.assertEqual(resultado.atr, "2.0")
+        self.assertEqual(len(resultado.df_norm_h), 24)
+        self.assertIs(estado["df_norm"], resultado.df_norm)
+        self.assertIs(estado["df_norm_h"], resultado.df_norm_h)
+        self.assertIsNotNone(obtener_curva_sesion(estado))
+        self.assertEqual(estado["curva_actual"]["atr"], "2.0")
+        self.assertAlmostEqual(estado["consumo_total"], 30.0)
+
+    def test_servicio_rechaza_archivos_con_frecuencias_distintas(self):
+        horario = io.BytesIO((
+            "Fecha;Hora;Consumo (kWh);Periodo\n"
+            "01/07/2025;00:00;1;P3\n"
+            "01/07/2025;01:00;1;P3\n"
+        ).encode("utf-8"))
+        horario.name = "horaria.csv"
+        cuarto_horario = io.BytesIO((
+            "Fecha;Hora;Consumo (kWh);Periodo\n"
+            "01/07/2025;00:15;0,25;P3\n"
+            "01/07/2025;00:30;0,25;P3\n"
+            "01/07/2025;00:45;0,25;P3\n"
+            "01/07/2025;01:00;0,25;P3\n"
+        ).encode("utf-8"))
+        cuarto_horario.name = "cuartohoraria.csv"
+
+        with self.assertRaisesRegex(ValueError, "resoluciones temporales distintas"):
+            normalizar_fuentes_curva([horario, cuarto_horario], atr="2.0")
+
+    def test_servicio_limpia_la_curva_activa(self):
+        estado = {
+            "curva_actual": {"version": 1},
+            "df_norm": pd.DataFrame({"a": [1]}),
+            "df_norm_h": pd.DataFrame({"a": [1]}),
+            "curva_uploader_version": 4,
+        }
+
+        limpiar_curva_sesion(estado)
+
+        self.assertNotIn("curva_actual", estado)
+        self.assertNotIn("df_norm", estado)
+        self.assertNotIn("df_norm_h", estado)
+        self.assertEqual(estado["curva_uploader_version"], 5)
+
+    def test_elimina_hora_inexistente_del_cambio_de_marzo(self):
+        curva = pd.DataFrame({
+            "fecha_hora": pd.to_datetime([
+                "2026-03-29 01:00",
+                "2026-03-29 02:00",
+                "2026-03-29 03:00",
+                "2026-03-30 02:00",
+            ]),
+            "consumo_kWh": [1.0, 2.0, 3.0, 4.0],
+        })
+
+        resultado = filtrar_intervalos_inexistentes_madrid(curva)
+
+        self.assertEqual(len(resultado), 3)
+        self.assertNotIn(
+            pd.Timestamp("2026-03-29 02:00"),
+            resultado["fecha_hora"].tolist(),
+        )
+        self.assertIn(
+            pd.Timestamp("2026-03-30 02:00"),
+            resultado["fecha_hora"].tolist(),
+        )
+
     def test_dividir_energias_no_modifica_fechas_horas_ni_periodos(self):
         original = pd.DataFrame({
             "fecha_hora": pd.to_datetime(["2025-07-01 00:00"]),

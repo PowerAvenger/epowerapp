@@ -17,13 +17,29 @@ from backend_ofertas_fijas import cargar_catalogo_ofertas, resolver_potencia_tar
 from backend_opt2 import consumos_mensuales_desde_curva_normalizada
 from backend_simulindex import construir_curva_omip_mensual_12m, obtener_historicos_meff, obtener_meff_mensual, obtener_meff_trimestral
 from backend_sips import leer_sips_completo, perfil_anual_meses_naturales
+from componentes_curva import render_origen_curva
+from componentes_indexados import (
+    render_escenarios_omie,
+    render_formula_indexada,
+    render_otros_escenarios,
+)
+from servicio_curva import obtener_curva_sesion
+from componentes_ofertas_fijas import (
+    combinar_ofertas,
+    normalizar_excel_ofertas,
+    periodos_con_consumo,
+    render_oferta_ia,
+    render_oferta_manual,
+    selector_origen_oferta,
+)
 from formato_es import formato_numero_es
 from utilidades import (
     generar_menu,
     init_app,
     init_app_index,
-    mostrar_parametros_formula_indexado,
 )
+
+COLOR_INDEXADO_ETIQUETA = '#7E57C2'
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
@@ -33,10 +49,18 @@ st.session_state.zona_periodos_index = 'peninsula'; init_app_index()
 st.session_state.zona_periodos_index = zona_previa
 st.sidebar.header('⚖️ Comparador luz ⚖️'); st.title('Comparador luz')
 tab_energia, tab_potencia_energia, tab_resultados = st.tabs([
-    'Solo energía', 'Potencia + energía', 'Resultados'
+    'Ofertas', 'Resultados', 'Comparativa'
 ])
 with tab_energia:
     col1, col2, col3 = st.columns(3)
+with tab_potencia_energia:
+    col_resultados_principal, col_resultados_energia, col_resultados_potencia = st.columns(3)
+    with col_resultados_principal:
+        contenedor_resultado_comparativa = st.container()
+        contenedor_grafico_resultado = st.container()
+    with col_resultados_potencia:
+        contenedor_precios_potencia = st.container()
+        contenedor_controles_resultado = st.container()
 with tab_resultados:
     col_resultados_1, col_resultados_2, col_resultados_3 = st.columns(3)
 
@@ -47,13 +71,27 @@ atr_sips_guardado = st.session_state.get('comparador_luz_atr_sips')
 potencias_sips_guardadas = st.session_state.get('comparador_luz_potencias_sips')
 metadatos_sips = st.session_state.get('comparador_luz_metadatos_sips', {})
 hay_curva = isinstance(curva_sesion, pd.DataFrame) and not curva_sesion.empty
-opciones = ['CSV SIPS'] if not hay_curva else ['Curva horaria enriquecida', 'CSV SIPS']
+opciones = ['Curva + datos potencia', 'CSV SIPS']
 with col1:
-    st.subheader('Origen de los consumos', divider='rainbow')
+    st.subheader('Origen de datos', divider='rainbow')
     origen = st.radio(
         'Selecciona el origen', opciones, horizontal=True,
         label_visibility='collapsed',
     )
+if origen == 'Curva + datos potencia':
+    with col1:
+        contenedor_curva_comparador = st.container()
+        acciones_curva_comparador = st.container()
+    render_origen_curva(
+        contenedor_curva_comparador,
+        acciones_curva_comparador,
+        clave='comparador_luz_curva',
+        titulo_compacto=True,
+    )
+    curva_actual_comparador = obtener_curva_sesion(st.session_state)
+    if curva_actual_comparador is not None:
+        curva_sesion = curva_actual_comparador.get('df_norm_h')
+        hay_curva = isinstance(curva_sesion, pd.DataFrame) and not curva_sesion.empty
 if origen == 'CSV SIPS':
     with col1:
         archivo = st.file_uploader('Sube el CSV SIPS', type=['csv'])
@@ -138,11 +176,27 @@ if origen == 'CSV SIPS':
         st.error(f'No se pudo leer el SIPS: {error}'); st.stop()
 else:
     atr = str(st.session_state.get('atr_dfnorm', '')).upper().removesuffix('TD')
+    if not hay_curva:
+        with col1:
+            st.info('Carga y normaliza una curva; quedará disponible aquí.')
+        st.stop()
+    periodos_potencia_curva = ['P1', 'P2'] if atr == '2.0' else [f'P{i}' for i in range(1, 7)]
+    with col1:
+        st.markdown('#### Potencias contratadas (kW)')
+        columnas_potencia_curva = st.columns(len(periodos_potencia_curva))
+        for columna_potencia, periodo_potencia in zip(columnas_potencia_curva, periodos_potencia_curva):
+            with columna_potencia:
+                potencias_contratadas[periodo_potencia] = st.number_input(
+                    periodo_potencia, min_value=0.0, step=0.1, format='%.3f',
+                    key=f'comparador_luz_potencia_curva_{periodo_potencia}',
+                )
     try:
-        perfil_mensual = consumos_mensuales_desde_curva_normalizada(st.session_state.get('df_norm_h', curva_sesion))
+        perfil_mensual = consumos_mensuales_desde_curva_normalizada(curva_sesion)
     except ValueError as error:
         st.error(str(error)); st.stop()
-if atr not in {'2.0', '3.0', '6.1'}:
+atrs_indexados = {'2.0', '3.0', '6.1', '6.2'}
+atrs_comparador = {*atrs_indexados, '6.2'}
+if atr not in atrs_comparador:
     st.error('El origen no contiene un ATR compatible.'); st.stop()
 periodos = [f'P{i}' for i in range(1, 7)]
 consumos = perfil_mensual[periodos].apply(pd.to_numeric, errors='coerce').sum()
@@ -190,13 +244,35 @@ with col1:
         hide_index=True,
         use_container_width=True,
     )
+    consumo_total_anual = pd.to_numeric(
+        consumos, errors='coerce'
+    ).fillna(0.0).sum()
+    st.markdown(
+        "Total consumo anual: "
+        f"<span style='color:#ffc107; font-size:1.45rem; "
+        f"font-weight:700;'>{formato_numero_es(consumo_total_anual, 0)} "
+        "kWh</span>",
+        unsafe_allow_html=True,
+    )
     columnas_consumos_vista = [
         columna for columna in ['periodo_mes', 'año', 'mes', *periodos]
         if columna in perfil_mensual.columns
     ]
+    consumos_mensuales_vista = perfil_mensual[
+        columnas_consumos_vista
+    ].copy()
+    consumos_mensuales_vista['_orden_periodo'] = pd.to_datetime(
+        consumos_mensuales_vista['periodo_mes'], errors='coerce'
+    )
+    consumos_mensuales_vista = (
+        consumos_mensuales_vista
+        .sort_values('_orden_periodo', ascending=False, na_position='last')
+        .drop(columns='_orden_periodo')
+        .reset_index(drop=True)
+    )
     with st.expander('Ver consumos mensuales P1–P6'):
         st.dataframe(
-            perfil_mensual[columnas_consumos_vista].style.format({
+            consumos_mensuales_vista.style.format({
                 periodo: lambda valor: formato_numero_es(valor, 0)
                 for periodo in periodos
             }),
@@ -204,41 +280,140 @@ with col1:
             use_container_width=True,
         )
 
-try:
-    hist, _ = obtener_historicos_meff()
-    trim = obtener_meff_trimestral(hist)[0]; mensual = obtener_meff_mensual(hist)[0]
-    forward = construir_curva_omip_mensual_12m(mensual, trim, pd.Timestamp.today().normalize())
-    forward_actual = round(float(forward['precio'].mean()), 2)
-except Exception:
-    forward_actual = float(st.session_state.get('pricing_spot_forward_12m', 50.0))
-if 'comparador_luz_omie_central' not in st.session_state:
-    st.session_state.comparador_luz_omie_central = forward_actual
-
-with col1:
-    st.subheader('Parametriza escenarios OMIE', divider='rainbow')
-    central = st.number_input('OMIE central · forward actual (€/MWh)', key='comparador_luz_omie_central', step=0.1)
-    separacion = st.number_input('Separación escenarios (€/MWh)', value=5.0, min_value=0.0, step=0.5)
-    omies = {'Indexado A': central-separacion, 'Indexado B': central, 'Indexado C': central+separacion}
-    st.dataframe(pd.DataFrame([omies], index=['OMIE (€/MWh)']).style.format(lambda x: formato_numero_es(x, 2)), use_container_width=True)
-    st.subheader('Parametriza otros escenarios', divider='rainbow')
-    ssaa = st.number_input('SSAA sin SRAD (€/MWh)', value=float(st.session_state.get('pricing_ssaa_forward_12m', 20.0)))
-    srad = st.number_input('SRAD (€/MWh)', value=float(st.session_state.get('pricing_srad_prev', 1.7)))
-    fnee = st.number_input('FNEE (€/MWh)', value=float(st.session_state.get('pricing_fnee_prev', 2.68)))
-    st.subheader('Fórmula indexada', divider='rainbow')
-    mostrar_parametros_formula_indexado(widget_suffix='comparador_luz')
+forward_actual = float(st.session_state.get('precio_omip_previsto', 50.0))
+with col2:
+    omies = render_escenarios_omie(
+        forward_actual, 'comparador_luz_escenarios'
+    )
+    otros_escenarios = render_otros_escenarios(
+        'comparador_luz_escenarios'
+    )
+    ssaa = otros_escenarios['ssaa']
+    srad = otros_escenarios['srad']
+    fnee = otros_escenarios['fnee']
+    render_formula_indexada('comparador_luz')
 
 formula = FormulaIndexada(desvios_apant=st.session_state.get('desvios_apant', 0.0), margen=st.session_state.get('margen_telemindex', 0.0), margen_pos=st.session_state.get('cfg_margen_pos', 'tm'), incluir_fnee=st.session_state.get('cfg_fnee', True), fnee_pos=st.session_state.get('cfg_fnee_pos', 'perdidas'), cf_pct=st.session_state.get('cf_pct', 0.0))
 referencia = st.session_state.get('df_sheets'); resultado_index = pd.DataFrame()
-if isinstance(referencia, pd.DataFrame) and not referencia.empty:
+if (
+    atr in atrs_indexados
+    and isinstance(referencia, pd.DataFrame)
+    and not referencia.empty
+):
     resultado_index = calcular_escenarios_indexados_mensuales(referencia, perfil_mensual, atr, formula, omies, ssaa, fnee, srad)
 
 with col2:
     st.subheader('Simulación indexados', divider='rainbow')
-    if resultado_index.empty: st.warning('No hay componentes de referencia para simular indexados.')
-    else: st.dataframe(resultado_index.style.format({'Coste energía (€)': lambda x: formato_numero_es(x, 2), 'Precio medio energía (€/kWh)': lambda x: formato_numero_es(x, 6)}), hide_index=True, use_container_width=True)
-    st.subheader('Ofertas guardadas', divider='rainbow')
-    ofertas = ofertas_catalogo_para_atr(cargar_catalogo_ofertas(), atr)
-    if ofertas.empty: st.info(f'No hay ofertas locales para {atr}TD.')
+    if atr not in atrs_indexados:
+        st.info(
+            f'La comparación de ofertas fijas y potencia está disponible para '
+            f'{atr}TD. La simulación indexada todavía no dispone de componentes '
+            'regulados horarios para este ATR.'
+        )
+    elif resultado_index.empty:
+        st.warning('No hay componentes de referencia para simular indexados.')
+    else:
+        st.dataframe(resultado_index.style.format({'Coste energía (€)': lambda x: formato_numero_es(x, 2), 'Precio medio energía (€/kWh)': lambda x: formato_numero_es(x, 6)}), hide_index=True, use_container_width=True)
+        detalle_indexados = resultado_index.attrs.get('detalle', pd.DataFrame())
+        with st.expander('Resultado indexados según escenario'):
+            for nombre_indexado in resultado_index['Oferta']:
+                detalle_oferta = detalle_indexados.loc[
+                    detalle_indexados['Oferta'].eq(nombre_indexado)
+                ].copy()
+                resumen_periodos = detalle_oferta.groupby('Periodo').agg(
+                    **{
+                        'Coste (€)': ('Coste (€)', 'sum'),
+                        'Consumo (kWh)': ('Consumo (kWh)', 'sum'),
+                    }
+                ).reindex(periodos, fill_value=0.0)
+                resumen_periodos['Precio medio (€/kWh)'] = (
+                    resumen_periodos['Coste (€)']
+                    / resumen_periodos['Consumo (kWh)'].where(
+                        resumen_periodos['Consumo (kWh)'].ne(0)
+                    )
+                ).fillna(0.0)
+                tabla_escenario = resumen_periodos[
+                    ['Coste (€)', 'Precio medio (€/kWh)']
+                ].T
+                omie_escenario = omies.get(nombre_indexado, 0.0)
+                letra_escenario = nombre_indexado.removeprefix('Indexado ').strip()
+                st.markdown(
+                    f'**Indexado simulado {letra_escenario} '
+                    f'({formato_numero_es(omie_escenario, 1)} €/MWh)**'
+                )
+                tabla_escenario_vista = tabla_escenario.copy().astype(object)
+                for periodo in periodos:
+                    tabla_escenario_vista.loc['Coste (€)', periodo] = (
+                        f"{formato_numero_es(tabla_escenario.loc['Coste (€)', periodo], 2)} €"
+                    )
+                    tabla_escenario_vista.loc['Precio medio (€/kWh)', periodo] = (
+                        formato_numero_es(
+                            tabla_escenario.loc['Precio medio (€/kWh)', periodo], 6
+                        )
+                    )
+                st.dataframe(
+                    tabla_escenario_vista,
+                    use_container_width=True,
+                )
+    # Renderiza carga y listado de ofertas en la tercera columna.
+    col3.__enter__()
+    st.subheader('Cargar oferta fija', divider='rainbow')
+    periodos_oferta, periodos_sin_consumo = periodos_con_consumo(consumos, atr)
+    if periodos_sin_consumo:
+        st.caption(
+            'Solo se solicitan precios para periodos con consumo. Sin consumo: '
+            + ', '.join(periodos_sin_consumo) + '.'
+        )
+    origen_oferta = selector_origen_oferta('comparador_luz_oferta')
+    oferta_nueva = pd.DataFrame()
+    if origen_oferta == 'Oferta manual':
+        oferta_nueva = render_oferta_manual(
+            periodos_oferta, 'comparador_luz_oferta_manual'
+        )
+    elif origen_oferta == 'Excel':
+        archivo_ofertas = st.file_uploader(
+            'Sube el Excel con ofertas de precio fijo',
+            type=['xlsx', 'xls'], key='comparador_luz_ofertas_excel',
+        )
+        if archivo_ofertas is not None:
+            try:
+                oferta_nueva = normalizar_excel_ofertas(
+                    pd.read_excel(archivo_ofertas)
+                )
+            except ValueError as error_ofertas_excel:
+                st.error(str(error_ofertas_excel))
+    else:
+        oferta_nueva = render_oferta_ia(
+            atr, periodos_oferta, 'comparador_luz_oferta_ia'
+        )
+    if not oferta_nueva.empty:
+        oferta_nueva = oferta_nueva.copy()
+        oferta_nueva['Potencia modalidad'] = oferta_nueva.get(
+            'Potencia modalidad', 'BOE'
+        )
+        for periodo_potencia in periodos:
+            columna_potencia = f'Potencia {periodo_potencia}'
+            if columna_potencia not in oferta_nueva:
+                oferta_nueva[columna_potencia] = pd.NA
+        for columna_usuario in (
+            'Vigencia desde', 'Vigencia hasta', 'Plataforma', 'Comisión tipo',
+            'Comisión estimada (€)', 'Comisión (€/MWh)',
+            'Comisión participación (%)',
+        ):
+            if columna_usuario not in oferta_nueva:
+                oferta_nueva[columna_usuario] = pd.NA
+        if 'Fee (€/MWh)' not in oferta_nueva:
+            oferta_nueva['Fee (€/MWh)'] = 0.0
+        st.session_state.comparador_luz_ofertas_usuario = combinar_ofertas(
+            st.session_state.get('comparador_luz_ofertas_usuario'), oferta_nueva
+        )
+
+    st.subheader('Ofertas disponibles', divider='rainbow')
+    ofertas = combinar_ofertas(
+        ofertas_catalogo_para_atr(cargar_catalogo_ofertas(), atr),
+        st.session_state.get('comparador_luz_ofertas_usuario'),
+    )
+    if ofertas.empty: st.info(f'No hay ofertas disponibles para {atr}TD.')
     else:
         clave_editor_ofertas = 'comparador_luz_editor_ofertas_guardadas'
         st.session_state.comparador_luz_nombres_editor = (
@@ -330,16 +505,33 @@ with col2:
                     hide_index=True, use_container_width=True,
                 )
 
+    col3.__exit__(None, None, None)
+
 partes = ([resultado_index] if not resultado_index.empty else [])
 if not ofertas.empty: partes.append(comparar_ofertas_fijas(consumos, ofertas))
-with col3:
-    st.subheader('Resultado comparativa', divider='rainbow')
+with col_resultados_energia:
+    st.subheader('Resultado comparativa SÓLO ENERGÍA', divider='rainbow')
     resultado = pd.concat(partes, ignore_index=True).sort_values('Coste energía (€)') if partes else pd.DataFrame()
     if resultado.empty: st.info('No hay escenarios u ofertas compatibles que comparar.')
     else:
         st.dataframe(resultado.style.format({'Coste energía (€)': lambda x: formato_numero_es(x, 2), 'Precio medio energía (€/kWh)': lambda x: formato_numero_es(x, 6)}), hide_index=True, use_container_width=True)
-        grafico = px.bar(resultado.sort_values('Coste energía (€)', ascending=False), x='Coste energía (€)', y='Oferta', color='Tipo', orientation='h', text='Coste energía (€)', title='Coste anual de energía por oferta')
-        grafico.update_traces(texttemplate='%{text:,.0f} €', textposition='outside')
+        resultado_grafico = resultado.sort_values(
+            'Coste energía (€)', ascending=False
+        )
+        grafico = px.bar(
+            resultado_grafico,
+            x='Coste energía (€)', y='Oferta', color='Tipo',
+            orientation='h', text='Coste energía (€)',
+            title='Coste anual de energía por oferta',
+            color_discrete_map={
+                'Indexado': COLOR_INDEXADO_ETIQUETA,
+                'Fijo': '#0B74C9',
+            },
+        )
+        grafico.update_traces(
+            texttemplate='%{text:,.0f} €', textposition='outside',
+            cliponaxis=False,
+        )
         grafico = aplicar_estilo(grafico)
         grafico.update_layout(
             height=max(420, 34*len(resultado)+150),
@@ -357,15 +549,22 @@ with col3:
             ),
             margin=dict(l=10, r=80, t=105, b=45),
         )
+        coste_maximo_grafico = pd.to_numeric(
+            resultado['Coste energía (€)'], errors='coerce'
+        ).max()
+        if pd.notna(coste_maximo_grafico) and coste_maximo_grafico > 0:
+            grafico.update_xaxes(range=[0, float(coste_maximo_grafico) * 1.18])
+        grafico.update_yaxes(
+            categoryorder='array',
+            categoryarray=resultado_grafico['Oferta'].tolist(),
+        )
         st.plotly_chart(grafico, use_container_width=True)
-with tab_potencia_energia:
-    st.subheader('Resultado potencia + energía', divider='rainbow')
+with col_resultados_principal:
     if resultado.empty:
         st.info('No hay escenarios u ofertas compatibles que comparar.')
     elif not potencias_contratadas.notna().any():
         st.info('Carga las potencias contratadas para comparar potencia y energía.')
     else:
-        col_total_1, col_total_2, col_total_3 = st.columns(3)
         meses_comparados = perfil_mensual[['año', 'mes']].drop_duplicates().copy()
         meses_comparados['días'] = pd.to_datetime(dict(
             year=meses_comparados['año'].astype(int),
@@ -408,7 +607,7 @@ with tab_potencia_energia:
         resultado_total = resultado_total.sort_values(
             'Coste total (€)', ascending=True
         ).reset_index(drop=True)
-        with col_total_2:
+        with contenedor_controles_resultado:
             solo_ofertas_un_anio = st.checkbox(
                 'Comparar solo ofertas de 1 año',
                 value=False,
@@ -428,7 +627,7 @@ with tab_potencia_energia:
             ofertas_potencia = ofertas_potencia.loc[
                 ofertas_potencia['oferta'].isin(resultado_total['Oferta'])
             ].reset_index(drop=True)
-        with col_total_2:
+        with contenedor_controles_resultado:
             opciones_referencia = resultado_total['Oferta'].tolist()
             if st.session_state.get(
                 'comparador_luz_oferta_referencia_total'
@@ -481,8 +680,8 @@ with tab_potencia_energia:
         for _, oferta_potencia in ofertas_potencia.iterrows():
             modalidad = str(
                 oferta_potencia.get('Potencia modalidad', 'BOE')
-            ).upper()
-            modalidad = 'BOE' if modalidad == 'BOE' else 'CON MARGEN'
+            ).strip().upper()
+            modalidad = 'CON MARGEN' if modalidad == 'CON MARGEN' else 'BOE'
             if modalidad == 'BOE':
                 precios_potencia = resolver_potencia_tarifa(
                     {'atr': atr, 'potencia': {'modalidad': 'BOE'}},
@@ -498,7 +697,7 @@ with tab_potencia_energia:
                 'Modalidad': modalidad,
                 **{periodo: precios_potencia.get(periodo) for periodo in periodos},
             })
-        with col_total_1:
+        with contenedor_precios_potencia:
             st.markdown('#### Precios de potencia (€/kW día)')
             st.dataframe(
                 pd.DataFrame(filas_precios_potencia).style.format({
@@ -553,6 +752,20 @@ with tab_potencia_energia:
         altura_graficos = max(
             420, 34 * max(len(resultado_total), len(df_comisiones)) + 80
         )
+        nombres_indexados = set(
+            resultado_total.loc[
+                resultado_total['Tipo'].eq('Indexado'), 'Oferta'
+            ].astype(str)
+        )
+        nombres_fijos_propios = (
+            set(
+                ofertas_potencia.loc[
+                    ofertas_potencia['Plataforma'].isna(), 'oferta'
+                ].astype(str)
+            )
+            if 'Plataforma' in ofertas_potencia.columns
+            else set()
+        )
         with col_resultados_2:
             if df_comisiones.empty:
                 st.info('No hay comisiones informadas para las ofertas filtradas.')
@@ -569,16 +782,6 @@ with tab_potencia_energia:
                     )['Oferta'].tolist()
                 # Plotly coloca abajo el primer elemento de categoryarray.
                 orden_comisiones = orden_visual_comisiones[::-1]
-                nombres_indexados = set(
-                    resultado_total.loc[
-                        resultado_total['Tipo'].eq('Indexado'), 'Oferta'
-                    ].astype(str)
-                )
-                nombres_fijos_propios = set(
-                    ofertas_potencia.loc[
-                        ofertas_potencia['Plataforma'].isna(), 'oferta'
-                    ].astype(str)
-                )
                 grafico_comisiones = px.bar(
                     df_comisiones,
                     x='Comisión gráfica (€)', y='Oferta', orientation='h',
@@ -599,7 +802,7 @@ with tab_potencia_energia:
                     if nombre_oferta in nombres_indexados or nombre_oferta in nombres_fijos_propios:
                         etiquetas_comisiones.append('')
                         color_fondo = (
-                            '#B71C1C' if nombre_oferta in nombres_indexados
+                            COLOR_INDEXADO_ETIQUETA if nombre_oferta in nombres_indexados
                             else '#1565C0'
                         )
                         grafico_comisiones.add_annotation(
@@ -670,35 +873,39 @@ with tab_potencia_energia:
                 'Oferta': orden_ofertas,
             },
             color_discrete_map={
-                'Potencia': '#2D9CDB',
+                'Potencia': '#F2994A',
                 'Sobrecoste s/BOE': '#E53935',
                 'Energía': '#F2C94C',
             },
         )
+        separacion_importes = float(
+            resultado_total['Coste total (€)'].max()
+        ) * 0.012
         grafico_total.add_scatter(
-            x=resultado_total['Coste total (€)'], y=resultado_total['Oferta'],
+            x=resultado_total['Coste total (€)'] + separacion_importes,
+            y=resultado_total['Oferta'],
             mode='text',
             text=[f'{formato_numero_es(valor, 0)} €' for valor in resultado_total['Coste total (€)']],
             textposition='middle right', showlegend=False, hoverinfo='skip',
             cliponaxis=False,
+            textfont=dict(size=14),
         )
         grafico_total = aplicar_estilo(grafico_total)
         etiquetas_eje = []
         for nombre_oferta in orden_ofertas:
-            if nombre_oferta in nombres_indexados or nombre_oferta in nombres_fijos_propios:
+            es_indexado = nombre_oferta in nombres_indexados
+            es_manual = nombre_oferta in nombres_fijos_propios
+            if es_indexado or es_manual:
                 etiquetas_eje.append('')
-                color_fondo = (
-                    '#B71C1C' if nombre_oferta in nombres_indexados else '#1565C0'
-                )
                 grafico_total.add_annotation(
-                    x=0, xref='paper', xshift=-7,
+                    x=0, xref='paper', xshift=-10,
                     y=nombre_oferta, yref='y',
                     text=nombre_oferta,
                     showarrow=False,
                     xanchor='right', yanchor='middle',
-                    bgcolor=color_fondo,
-                    borderpad=3,
-                    font=dict(color='white', size=10),
+                    bgcolor=COLOR_INDEXADO_ETIQUETA if es_indexado else '#1565C0',
+                    borderpad=4,
+                    font=dict(color='white', size=14),
                 )
             else:
                 etiquetas_eje.append(nombre_oferta)
@@ -706,7 +913,8 @@ with tab_potencia_energia:
             height=altura_graficos, yaxis_title=None,
             showlegend=False, bargap=0.45, barcornerradius=8,
             title=dict(text=' '),
-            margin=dict(l=10, r=40, t=15, b=45),
+            margin=dict(l=145, r=85, t=15, b=60),
+            font=dict(size=14),
         )
         grafico_total.update_yaxes(
             categoryorder='array', categoryarray=orden_ofertas,
@@ -714,9 +922,15 @@ with tab_potencia_energia:
             range=[-0.5, len(orden_ofertas) - 0.5],
             fixedrange=True,
             automargin=True,
+            tickfont=dict(size=14),
         )
         grafico_total.update_xaxes(
-            range=[0, float(resultado_total['Coste total (€)'].max()) * 1.18]
+            range=[0, float(resultado_total['Coste total (€)'].max()) * 1.22],
+            title_text='Coste (€)',
+            showticklabels=True,
+            automargin=True,
+            tickfont=dict(size=13),
+            title_font=dict(size=15),
         )
         with col_resultados_1:
             st.markdown(
@@ -726,9 +940,9 @@ with tab_potencia_energia:
                     Coste anual de potencia y energía por oferta
                   </div>
                   <div style="display:flex; justify-content:center; gap:.55rem;
-                              align-items:center; font-size:.70rem; height:1.2rem;
+                              align-items:center; font-size:.88rem; height:1.2rem;
                               white-space:nowrap;">
-                    <span><b style="color:#2D9CDB;">■</b>&nbsp; Potencia</span>
+                    <span><b style="color:#F2994A;">■</b>&nbsp; Potencia</span>
                     <span><b style="color:#E53935;">■</b>&nbsp; Sobrecoste s/BOE</span>
                     <span><b style="color:#F2C94C;">■</b>&nbsp; Energía</span>
                   </div>
@@ -737,8 +951,8 @@ with tab_potencia_energia:
                 unsafe_allow_html=True,
             )
             st.plotly_chart(grafico_total, use_container_width=True)
-        with col_total_1:
-            st.markdown('#### Costes anuales (€)')
+        with contenedor_resultado_comparativa:
+            st.markdown('#### RESULTADO COMPARATIVA')
             tabla_costes_anuales = resultado_total[[
                 'Oferta', 'Coste potencia (€)', 'Coste energía (€)',
                 'Coste total (€)', 'Diferencia vs referencia (€)',
@@ -762,9 +976,43 @@ with tab_potencia_energia:
                 tabla_costes_anuales['Delta vs ref. (%)']
                 .map(lambda x: f'{formato_numero_es(x, 2)} %')
             )
+            estilo_costes_anuales = tabla_costes_anuales.style.apply(
+                lambda columna: [
+                    (
+                        f'background-color: {COLOR_INDEXADO_ETIQUETA}; '
+                        'color: white; font-weight: 600;'
+                    )
+                    if str(valor) in nombres_indexados else ''
+                    for valor in columna
+                ],
+                subset=['Oferta'],
+            )
             st.dataframe(
-                tabla_costes_anuales,
+                estilo_costes_anuales,
                 hide_index=True, use_container_width=True,
+            )
+        with contenedor_grafico_resultado:
+            st.markdown(
+                '''
+                <div style="text-align:center; margin:0 0 .35rem 0; height:3.2rem;">
+                  <div style="font-size:1.05rem; font-weight:700; margin-bottom:.3rem;">
+                    Coste anual de potencia y energía por oferta
+                  </div>
+                  <div style="display:flex; justify-content:center; gap:.55rem;
+                              align-items:center; font-size:.88rem; height:1.2rem;
+                              white-space:nowrap;">
+                    <span><b style="color:#F2994A;">■</b>&nbsp; Potencia</span>
+                    <span><b style="color:#E53935;">■</b>&nbsp; Sobrecoste s/BOE</span>
+                    <span><b style="color:#F2C94C;">■</b>&nbsp; Energía</span>
+                  </div>
+                </div>
+                ''',
+                unsafe_allow_html=True,
+            )
+            st.plotly_chart(
+                grafico_total,
+                use_container_width=True,
+                key='grafico_total_tab_resultados',
             )
         with col_resultados_3:
             st.markdown('#### Resultado win-win')

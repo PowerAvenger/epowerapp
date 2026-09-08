@@ -6,6 +6,7 @@ import requests
 import glob
 import numpy as np
 from datetime import datetime,date
+from pathlib import Path
 from backend_comun import aplicar_estilo
 # Definimos los colores manualmente
 COLOR_MIBGAS_2026 = "#ff69b4"
@@ -1181,56 +1182,70 @@ def construir_ratios_maximos_horarios_por_mes(df_relacion):
     return tabla.reset_index(drop=True)[columnas]
 
 
-def graficar_da_comparado(df):
+def graficar_da_comparado(df, años=None, titulo=None):
 
     df = df.copy()
 
     df["fecha_entrega"] = pd.to_datetime(df["fecha_entrega"])
+    df["precio_gas"] = pd.to_numeric(df["precio_gas"], errors="coerce")
+    df = df.dropna(subset=["fecha_entrega", "precio_gas"])
+    df["año_entrega"] = df["fecha_entrega"].dt.year
 
-    # Clave interna para ordenar: 01-01, 01-02, ..., 12-31
-    df["mmdd"] = df["fecha_entrega"].dt.strftime("%m-%d")
-
-    # Etiqueta visible día-mes
-    if "fecha_corta" not in df.columns:
-        df["fecha_corta"] = df["fecha_entrega"].dt.strftime("%d-%m")
-
-    # Orden cronológico real por mes-día
-    orden_mmdd = sorted(
-        df["mmdd"].unique(),
-        key=lambda s: (int(s[:2]), int(s[3:]))
+    # La intensidad de los años cerrados representa su media anual. El año
+    # en curso conserva un verde propio para distinguirlo de los históricos.
+    año_actual = datetime.now().year
+    medias_anuales = (
+        df[df["año_entrega"] < año_actual]
+        .groupby("año_entrega")["precio_gas"]
+        .mean()
+        .sort_values()
     )
+    colores_comparacion = {}
+    if not medias_anuales.empty:
+        media_min = medias_anuales.min()
+        media_max = medias_anuales.max()
+        for año_media, media in medias_anuales.items():
+            posicion = (
+                1.0
+                if media_max == media_min
+                else (media - media_min) / (media_max - media_min)
+            )
+            colores_comparacion[str(int(año_media))] = px.colors.sample_colorscale(
+                [
+                    [0.0, "#D6EAF8"],
+                    [0.45, "#F4D03F"],
+                    [0.75, "#F39C12"],
+                    [1.0, "#EF553B"],
+                ],
+                [float(posicion)],
+            )[0]
+    colores_comparacion[str(año_actual)] = "#00CC96"
 
-    # Mapa mmdd -> fecha_corta
-    mapa_fechas = (
-        df.drop_duplicates("mmdd")
-          .set_index("mmdd")["fecha_corta"]
-          .to_dict()
+    if años is not None:
+        df = df[df["fecha_entrega"].dt.year.isin(años)].copy()
+    df["año_serie"] = df["año_entrega"].astype(str)
+
+    # Año bisiesto común para superponer años conservando un eje temporal.
+    df["fecha_eje"] = pd.to_datetime(
+        "2000-" + df["fecha_entrega"].dt.strftime("%m-%d")
     )
-
-    orden_fechas = [mapa_fechas[v] for v in orden_mmdd]
-
-    # Esta será la X visible y también la cabecera del hover
-    df["dia_mes"] = df["mmdd"].map(mapa_fechas)
 
     fig = px.line(
         df,
-        x="dia_mes",
+        x="fecha_eje",
         y="precio_gas",
-        color="año_entrega",
-        color_discrete_map=colores,
-        category_orders={"dia_mes": orden_fechas},
-        title="Comparación anual del precio del gas (2024 al 2026)",
+        color="año_serie",
+        color_discrete_map=colores_comparacion,
+        title=titulo or "Comparación anual del precio del gas (2024 al 2026)",
     )
 
-    # Etiquetas del eje X cada 15 días
-    tickvals = orden_fechas[::15]
-
     fig.update_xaxes(
-        tickmode="array",
-        tickvals=tickvals,
-        ticktext=tickvals,
-        tickangle=0,
-        type="category"
+        type="date",
+        tickmode="linear",
+        dtick="M1",
+        tickformat="%b",
+        hoverformat="%d-%m",
+        range=[pd.Timestamp(2000, 1, 1), pd.Timestamp(2000, 12, 31)],
     )
 
     fig.update_layout(
@@ -1257,13 +1272,13 @@ def graficar_da_comparado(df):
     fig.update_traces(
         hovertemplate="%{fullData.name}: %{y:.2f} €/MWh<extra></extra>"
     )
+    for traza in fig.data:
+        if traza.name == str(año_actual):
+            traza.update(line=dict(width=4))
 
-    # Líneas verticales al inicio de cada mes
-    cortes_mes = [mapa_fechas[v] for v in orden_mmdd if v.endswith("-01")]
-
-    for dia_mes in cortes_mes:
+    for mes in range(1, 13):
         fig.add_vline(
-            x=dia_mes,
+            x=pd.Timestamp(2000, mes, 1),
             line_width=1,
             line_dash="dot",
             line_color="rgba(200,200,200,0.2)"
@@ -1271,6 +1286,221 @@ def graficar_da_comparado(df):
 
     fig = aplicar_estilo(fig)
 
+    return fig
+
+
+def graficar_medias_acumuladas_comparadas(
+    df,
+    años,
+    df_prevision_actual=None,
+):
+    """Compara por día las medias acumuladas anuales de MIBGAS D+1."""
+    datos = df.copy()
+    datos["fecha_entrega"] = pd.to_datetime(
+        datos["fecha_entrega"], errors="coerce"
+    )
+    datos["precio_gas"] = pd.to_numeric(datos["precio_gas"], errors="coerce")
+    datos = datos.dropna(subset=["fecha_entrega", "precio_gas"])
+    datos["año"] = datos["fecha_entrega"].dt.year
+
+    año_actual = datetime.now().year
+    medias_historicas = (
+        datos[datos["año"] < año_actual]
+        .groupby("año")["precio_gas"]
+        .mean()
+        .sort_values()
+    )
+    colores_series = {}
+    if not medias_historicas.empty:
+        media_min = medias_historicas.min()
+        media_max = medias_historicas.max()
+        for año_media, media in medias_historicas.items():
+            posicion = (
+                1.0
+                if media_max == media_min
+                else (media - media_min) / (media_max - media_min)
+            )
+            colores_series[int(año_media)] = px.colors.sample_colorscale(
+                [
+                    [0.0, "#D6EAF8"],
+                    [0.45, "#F4D03F"],
+                    [0.75, "#F39C12"],
+                    [1.0, "#EF553B"],
+                ],
+                [float(posicion)],
+            )[0]
+    colores_series[año_actual] = "#00CC96"
+
+    datos = datos[datos["año"].isin(años)]
+    diario = (
+        datos.groupby(["año", "fecha_entrega"], as_index=False)["precio_gas"]
+        .mean()
+        .sort_values(["año", "fecha_entrega"])
+    )
+    diario["media_acumulada"] = (
+        diario.groupby("año")["precio_gas"]
+        .expanding()
+        .mean()
+        .reset_index(level=0, drop=True)
+    )
+    diario["fecha_eje"] = pd.to_datetime(
+        "2000-" + diario["fecha_entrega"].dt.strftime("%m-%d")
+    )
+
+    fig = go.Figure()
+    for año in sorted(años, reverse=True):
+        serie = diario[diario["año"] == año]
+        if serie.empty:
+            continue
+        fig.add_trace(go.Scatter(
+            x=serie["fecha_eje"],
+            y=serie["media_acumulada"],
+            mode="lines",
+            name=str(año),
+            line=dict(
+                color=colores_series.get(año, "#A0A0A0"),
+                width=4 if año == año_actual else 2,
+            ),
+            hovertemplate=(
+                f"{año}: "
+                "%{y:.2f} €/MWh<extra></extra>"
+            ),
+        ))
+
+    if (
+        año_actual in años
+        and df_prevision_actual is not None
+        and not df_prevision_actual.empty
+    ):
+        prevision = df_prevision_actual.copy()
+        prevision["fecha"] = pd.to_datetime(
+            prevision["fecha"], errors="coerce"
+        )
+        prevision["media_acumulada_prevista"] = pd.to_numeric(
+            prevision["media_acumulada_prevista"], errors="coerce"
+        )
+        prevision = prevision.dropna(
+            subset=["fecha", "media_acumulada_prevista"]
+        )
+        prevision = prevision[
+            prevision["fecha"].dt.year == año_actual
+        ]
+        prevision["fecha_eje"] = pd.to_datetime(
+            "2000-" + prevision["fecha"].dt.strftime("%m-%d")
+        )
+        fig.add_trace(go.Scatter(
+            x=prevision["fecha_eje"],
+            y=prevision["media_acumulada_prevista"],
+            mode="lines",
+            name=f"Previsión {año_actual}",
+            line=dict(color="#00CC96", width=3, dash="dot"),
+            hovertemplate=(
+                f"Previsión {año_actual}: "
+                "%{y:.2f} €/MWh<extra></extra>"
+            ),
+        ))
+
+    fig.update_layout(
+        title=dict(
+            text="Evolución de la media acumulada MIBGAS D+1",
+            x=0.5,
+            xanchor="center",
+            font=dict(size=24),
+        ),
+        xaxis_title="Día del año",
+        yaxis_title="Media acumulada (€/MWh)",
+        hovermode="x unified",
+        legend=dict(
+            title_text="",
+            orientation="h",
+            x=0.5,
+            xanchor="center",
+            y=1.03,
+            yanchor="bottom",
+        ),
+    )
+    fig.update_xaxes(
+        type="date",
+        tickmode="linear",
+        dtick="M1",
+        tickformat="%b",
+        hoverformat="%d-%m",
+        range=[pd.Timestamp(2000, 1, 1), pd.Timestamp(2000, 12, 31)],
+    )
+    return aplicar_estilo(fig)
+
+
+def graficar_ranking_medias_anuales_mibgas(df):
+    """Ranking de la media anual del producto diario MIBGAS D+1."""
+    datos = df.copy()
+    datos["fecha_entrega"] = pd.to_datetime(
+        datos["fecha_entrega"], errors="coerce"
+    )
+    datos["precio_gas"] = pd.to_numeric(datos["precio_gas"], errors="coerce")
+    datos = datos.dropna(subset=["fecha_entrega", "precio_gas"])
+    datos["año"] = datos["fecha_entrega"].dt.year
+    resumen = (
+        datos.groupby("año", as_index=False)
+        .agg(media=("precio_gas", "mean"), dias=("precio_gas", "size"))
+        .sort_values("media")
+    )
+
+    año_actual = datetime.now().year
+    historicos = resumen[resumen["año"] < año_actual]
+    colores_barras = {}
+    if not historicos.empty:
+        media_min = historicos["media"].min()
+        media_max = historicos["media"].max()
+        for fila in historicos.itertuples():
+            posicion = (
+                1.0
+                if media_max == media_min
+                else (fila.media - media_min) / (media_max - media_min)
+            )
+            colores_barras[int(fila.año)] = px.colors.sample_colorscale(
+                [
+                    [0.0, "#D6EAF8"],
+                    [0.45, "#F4D03F"],
+                    [0.75, "#F39C12"],
+                    [1.0, "#EF553B"],
+                ],
+                [float(posicion)],
+            )[0]
+    colores_barras[año_actual] = "#00CC96"
+
+    resumen["año_etiqueta"] = resumen["año"].astype(str)
+
+    fig = go.Figure(go.Bar(
+        x=resumen["media"],
+        y=resumen["año_etiqueta"],
+        orientation="h",
+        width=0.55,
+        marker_color=[colores_barras[int(año)] for año in resumen["año"]],
+        text=resumen["media"].map(lambda valor: f"{valor:.2f}"),
+        textposition="outside",
+        textfont=dict(size=17),
+        customdata=resumen[["dias"]],
+        hovertemplate=(
+            "%{y}: %{x:.2f} €/MWh<br>"
+            "%{customdata[0]} días<extra></extra>"
+        ),
+    ))
+    fig.update_layout(
+        title=dict(
+            text="Ranking media anual<br>MIBGAS D+1",
+            x=0.5,
+            xanchor="center",
+            font=dict(size=18),
+        ),
+        xaxis_title="€/MWh",
+        yaxis_title="",
+        showlegend=False,
+        height=520,
+        barcornerradius=8,
+        margin=dict(l=15, r=45, t=75, b=45),
+    )
+    fig.update_xaxes(range=[0, resumen["media"].max() * 1.18])
+    fig = aplicar_estilo(fig)
     return fig
 
 def graficar_da_comparado_old(df):
@@ -1344,12 +1574,32 @@ def graficar_da_comparado_old(df):
 
 
 def descargar_sendeco(año):
-    url=f'https://www.sendeco2.com/site_sendeco/service/download-csv.php?year={año}'
-    res=requests.get(url)
-    with open(f'local_bbdd/sendeco_files/sendeco_{año}.csv', 'wb') as file:
-            file.write(res.content)
-            
-    return
+    url = f'https://www.sendeco2.com/site_sendeco/service/download-csv.php?year={año}'
+    ruta_local = Path('local_bbdd/sendeco_files') / f'sendeco_{año}.csv'
+    ruta_local.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        res = requests.get(url, timeout=(5, 30))
+        res.raise_for_status()
+        if b"Fecha;EUA" not in res.content[:200]:
+            raise ValueError("La respuesta de SENDECO no contiene un CSV válido")
+
+        # Solo sustituir el fichero válido después de completar la descarga.
+        ruta_temporal = ruta_local.with_suffix('.csv.tmp')
+        ruta_temporal.write_bytes(res.content)
+        ruta_temporal.replace(ruta_local)
+    except (requests.RequestException, ValueError) as error:
+        if ruta_local.exists() and ruta_local.stat().st_size > 0:
+            print(
+                f"⚠️ SENDECO no disponible ({error}). "
+                f"Se conserva {ruta_local}."
+            )
+            return ruta_local
+        raise RuntimeError(
+            f"No se pudo descargar SENDECO {año} y no existe copia local"
+        ) from error
+
+    return ruta_local
 
 def obtener_sendeco():
     #OBTENEMOS UN DATAFRAME CON TODOS LOS HISTÓRICOS DE SENDECO

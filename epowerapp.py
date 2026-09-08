@@ -11,6 +11,8 @@ st.set_page_config(
     initial_sidebar_state='expanded'
 )
 
+from utilidades import init_datos_mercado
+
 c1, c2, c3 = st.columns(3)
 
 if 'acceso' not in st.session_state:
@@ -20,7 +22,7 @@ if 'acceso' not in st.session_state:
 with c2:
     zona_predator = st.empty()
     zona_objetos = st.empty()
-    
+
     with zona_objetos.container():
         st.title(':orange[e]PowerAPP© ⚡️:rainbow[TOTALPOWER]⚡️')
         st.subheader('Todo lo que necesitas para energizarte.')
@@ -77,13 +79,8 @@ with c2:
     if acceso:
         zona_objetos.empty()
         zona_predator.image('images/predator.png')
+        with st.spinner('Cargando datos SPOT y SSAA...'):
+            init_datos_mercado()
         #zona_predator.video('images/predator1.mp4', autoplay=True)
         time.sleep(2)
         st.switch_page('pages/powerapps.py')
-    
-
-
-    
-
-
-    

@@ -10,7 +10,6 @@ from backend_comun import (
     construir_media_acumulada_prevista,
 )
 from backend_escalacv import (
-    cargar_datos_escalacv,
     graficar_comparativa_spot_horaria_mensual,
     graficar_media_acumulada_periodo,
 )
@@ -48,7 +47,12 @@ from backend_telemindex import (
     graficar_media_acumulada_mensual_atr,
     graficar_precios_medios_horarios,
 )
-from utilidades import generar_menu, init_app, init_app_index
+from utilidades import (
+    generar_menu,
+    init_app,
+    init_app_index,
+    obtener_datos_mercado,
+)
 
 
 if (
@@ -72,12 +76,7 @@ año_base_comparativa = año_dashboard - 1
 st.subheader(f"Evolución del año {año_dashboard}.")
 
 with st.spinner("Cargando datos de mercado..."):
-    datos_spot, _, _ = cargar_datos_escalacv(
-        componente="SPOT",
-        file_id_spot=st.secrets["FILE_ID_SPOT"],
-        file_id_ssaa=st.secrets["FILE_ID_SSAA"],
-        creds_dict=st.secrets["GOOGLE_SHEETS_CREDENTIALS"],
-    )
+    datos_spot, _, _ = obtener_datos_mercado("SPOT")
 
 with st.spinner("Preparando mercado de gas..."):
     datos_mibgas = carga_mibgas()

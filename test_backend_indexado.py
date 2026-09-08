@@ -140,6 +140,17 @@ class MotorIndexadoTest(unittest.TestCase):
         self.assertAlmostEqual(tabla.loc["OMIE", "P1"], 40.0)
         self.assertAlmostEqual(tabla.loc["OMIE", "P2"], 80.0)
 
+    def test_desglose_ignora_componentes_vacios_sin_consumo(self):
+        df = self.df.copy()
+        df.loc[0, "consumo_neto_kWh"] = 0.0
+        df.loc[0, "spot"] = None
+
+        tabla = construir_desglose_precio_indexado(
+            df, "2.0", FormulaIndexada(), "consumo_neto_kWh"
+        ).set_index("Componente")
+
+        self.assertAlmostEqual(tabla.loc["OMIE", "Total"], 80.0)
+
     def test_desglose_ssaa_c2_reconstruye_componentes(self):
         df = self.df.assign(
             balx=[1.0, 3.0], dsv=[2.0, 6.0], ssaa=[3.0, 9.0]

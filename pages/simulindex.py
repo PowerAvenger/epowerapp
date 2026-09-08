@@ -19,7 +19,6 @@ from utilidades import (
     generar_menu,
     init_app,
     init_app_index,
-    mostrar_parametros_formula_indexado,
     persist_widget,
 )
 from backend_curvadecarga import graficar_media_horaria, graficar_queso_periodos
@@ -46,6 +45,17 @@ from backend_ofertas_fijas import (
     guardar_version_oferta,
 )
 from streamlit_paste_button import paste_image_button
+from componentes_ofertas_fijas import (
+    combinar_ofertas,
+    construir_ofertas,
+    normalizar_excel_ofertas,
+    periodos_con_consumo,
+)
+from componentes_indexados import (
+    render_escenarios_omie,
+    render_formula_indexada,
+    render_otros_escenarios,
+)
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
@@ -148,6 +158,7 @@ if isinstance(df_norm_simulindex, pd.DataFrame) and not df_norm_simulindex.empty
         fechas_firma_curva.min(),
         fechas_firma_curva.max(),
         st.session_state.get("atr_dfnorm"),
+        st.session_state.get("curva_reactiva_version", 0),
         len(df_base),
         fechas_firma_precios.max(),
     )
@@ -546,7 +557,7 @@ with tab7:
         curva_pricing_disponible = (
             df_curva_pricing_actual is not None
             and not df_curva_pricing_actual.empty
-            and atr_curva_pricing in {'2.0', '3.0', '6.1'}
+            and atr_curva_pricing in {'2.0', '3.0', '6.1', '6.2'}
         )
         opciones_origen_consumos = ['Subir Excel / SIPS']
         if curva_pricing_disponible:
@@ -577,22 +588,22 @@ with tab7:
         atr_pricing_pendiente = st.session_state.pop(
             '_pendiente_pricing_atr_seleccionado', None
         )
-        if atr_pricing_pendiente in {'2.0', '3.0', '6.1'}:
+        if atr_pricing_pendiente in {'2.0', '3.0', '6.1', '6.2'}:
             st.session_state.pricing_atr_seleccionado = atr_pricing_pendiente
 
         if usar_curva_pricing:
             st.session_state.pricing_atr_seleccionado = atr_curva_pricing
-        elif atr_sips_pricing in {'2.0', '3.0', '6.1'}:
+        elif atr_sips_pricing in {'2.0', '3.0', '6.1', '6.2'}:
             st.session_state.pricing_atr_seleccionado = atr_sips_pricing
 
         atr_pricing_seleccionado = st.selectbox(
             'ATR para ponderación por consumo',
-            options=['2.0', '3.0', '6.1'],
+            options=['2.0', '3.0', '6.1', '6.2'],
             format_func=lambda atr: f'{atr}TD',
             key='pricing_atr_seleccionado',
             disabled=(
                 usar_curva_pricing
-                or atr_sips_pricing in {'2.0', '3.0', '6.1'}
+                or atr_sips_pricing in {'2.0', '3.0', '6.1', '6.2'}
             ),
         )
         if sips_pricing_detectado is not None:
@@ -601,10 +612,10 @@ with tab7:
                     'El SIPS no informa el ATR. Selecciónalo manualmente antes '
                     'de calcular el pricing.'
                 )
-            elif atr_sips_pricing not in {'2.0', '3.0', '6.1'}:
+            elif atr_sips_pricing not in {'2.0', '3.0', '6.1', '6.2'}:
                 st.error(
                     f'El SIPS informa {atr_sips_pricing}TD, pero Pricing solo '
-                    'admite actualmente 2.0TD, 3.0TD y 6.1TD.'
+                    'admite actualmente 2.0TD, 3.0TD, 6.1TD y 6.2TD.'
                 )
             else:
                 st.info(
@@ -731,6 +742,34 @@ with tab7:
         df_spot_periodos = df_spot_periodos[
             df_spot_periodos['mes_pricing'].isin(meses_disponibles)
         ].copy()
+
+        # Compatibilidad con tablas horarias conservadas en sesión antes de
+        # incorporar 6.2TD. Ambas pérdidas comparten el mismo coeficiente K,
+        # por lo que la equivalencia por periodo se obtiene con la relación
+        # exacta entre los coeficientes BOE de 6.2TD y 6.1TD.
+        ratios_perdidas_62_61 = {
+            'P1': 0.052 / 0.065,
+            'P2': 0.054 / 0.068,
+            'P3': 0.049 / 0.065,
+            'P4': 0.050 / 0.065,
+            'P5': 0.035 / 0.043,
+            'P6': 0.054 / 0.077,
+        }
+        perdidas_61_compat = pd.to_numeric(
+            df_spot_periodos['perd_6.1'], errors='coerce'
+        )
+        perdidas_62_compat = pd.to_numeric(
+            df_spot_periodos.get(
+                'perd_6.2', pd.Series(index=df_spot_periodos.index, dtype=float)
+            ),
+            errors='coerce',
+        )
+        perdidas_62_calculadas = perdidas_61_compat * (
+            df_spot_periodos['dh_6p'].map(ratios_perdidas_62_61)
+        )
+        df_spot_periodos['perd_6.2'] = perdidas_62_compat.fillna(
+            perdidas_62_calculadas
+        )
 
         periodos_3p_pricing = ['P1', 'P2', 'P3']
         tabla_spot_3p = df_spot_periodos.pivot_table(
@@ -996,7 +1035,7 @@ with tab7:
         df_ppc_pricing['fecha'] = pd.to_datetime(
             df_ppc_pricing['fecha'], errors='coerce'
         )
-        columnas_ppc_pricing = ['ppcc_2.0', 'ppcc_3.0', 'ppcc_6.1']
+        columnas_ppc_pricing = ['ppcc_2.0', 'ppcc_3.0', 'ppcc_6.1', 'ppcc_6.2']
         for columna_ppc_pricing in columnas_ppc_pricing:
             df_ppc_pricing[columna_ppc_pricing] = pd.to_numeric(
                 df_ppc_pricing[columna_ppc_pricing], errors='coerce'
@@ -1010,6 +1049,7 @@ with tab7:
             '2.0TD': ('dh_3p', 'ppcc_2.0'),
             '3.0TD': ('dh_6p', 'ppcc_3.0'),
             '6.1TD': ('dh_6p', 'ppcc_6.1'),
+            '6.2TD': ('dh_6p', 'ppcc_6.2'),
         }
         tabla_ppc_pricing = pd.DataFrame.from_dict(
             {
@@ -1048,6 +1088,7 @@ with tab7:
             '2.0': ('dh_3p', ['P1', 'P2', 'P3']),
             '3.0': ('dh_6p', [f'P{i}' for i in range(1, 7)]),
             '6.1': ('dh_6p', [f'P{i}' for i in range(1, 7)]),
+            '6.2': ('dh_6p', [f'P{i}' for i in range(1, 7)]),
         }
         for atr_perdidas_pricing, (
             columna_periodo_perdidas,
@@ -1091,7 +1132,7 @@ with tab7:
                     )
                     for periodo, valor in pyc_2026[tarifa].items()
                 }
-                for tarifa in ['2.0TD', '3.0TD', '6.1TD']
+                for tarifa in ['2.0TD', '3.0TD', '6.1TD', '6.2TD']
             },
             orient='index',
         ).reindex(columns=periodos_pyc_pricing)
@@ -1152,6 +1193,13 @@ with tab7:
                 'spot': tabla_spot_forward,
                 'ssaa': tabla_ssaa_forward,
             },
+            '6.2': {
+                'etiqueta': '6.2TD',
+                'periodos': [f'P{i}' for i in range(1, 7)],
+                'col_periodo': 'dh_6p',
+                'spot': tabla_spot_forward,
+                'ssaa': tabla_ssaa_forward,
+            },
         }
 
         resumen_anual_pricing = []
@@ -1194,12 +1242,15 @@ with tab7:
                         'ppcc_2.0': 0.0,
                         'ppcc_3.0': 0.0,
                         'ppcc_6.1': 0.0,
+                        'ppcc_6.2': 0.0,
                         'perd_2.0': 0.0,
                         'perd_3.0': 0.0,
                         'perd_6.1': 0.0,
+                        'perd_6.2': 0.0,
                         'pyc_2.0': 0.0,
                         'pyc_3.0': 0.0,
                         'pyc_6.1': 0.0,
+                        'pyc_6.2': 0.0,
                     }
                     fila_fijo[f'ppcc_{atr_fijo}'] = tabla_ppc_pricing.loc[
                         config_fijo['etiqueta'], periodo_fijo
@@ -1571,7 +1622,7 @@ with tab8:
     if (
         not isinstance(df_combo_origen, pd.DataFrame)
         or df_combo_origen.empty
-        or atr_combo not in {'2.0', '3.0', '6.1'}
+        or atr_combo not in {'2.0', '3.0', '6.1', '6.2'}
     ):
         st.info('Carga primero una curva de carga en Telemindex/Simulindex.')
     else:
@@ -1942,13 +1993,13 @@ with tab5:
     curva_comparador_disponible = (
         isinstance(df_curva_pricing_actual, pd.DataFrame)
         and not df_curva_pricing_actual.empty
-        and atr_curva_pricing in {'2.0', '3.0', '6.1'}
+        and atr_curva_pricing in {'2.0', '3.0', '6.1', '6.2'}
     )
     consumos_pricing_comparador = st.session_state.get('df_consumos_pricing')
     atr_consumos_pricing = atr_pricing_seleccionado
     if st.session_state.get('df_consumos_pricing_origen') == 'sips':
         atr_sips_en_sesion = st.session_state.get('sips_pricing', {}).get('atr')
-        if atr_sips_en_sesion in {'2.0', '3.0', '6.1'}:
+        if atr_sips_en_sesion in {'2.0', '3.0', '6.1', '6.2'}:
             atr_consumos_pricing = atr_sips_en_sesion
     pricing_comparador_disponible = (
         isinstance(consumos_pricing_comparador, pd.DataFrame)
@@ -2024,10 +2075,10 @@ with tab5:
                         archivo_consumos_comparador
                     )
                     atr_sips_comparador = sips_comparador.get('atr')
-                    if atr_sips_comparador not in {'2.0', '3.0', '6.1'}:
+                    if atr_sips_comparador not in {'2.0', '3.0', '6.1', '6.2'}:
                         raise ValueError(
                             'El SIPS no contiene un ATR compatible '
-                            '(2.0TD, 3.0TD o 6.1TD).'
+                            '(2.0TD, 3.0TD, 6.1TD o 6.2TD).'
                         )
                     st.session_state.df_consumos_pricing = (
                         perfil_anual_meses_naturales(
@@ -2133,63 +2184,15 @@ with tab5:
         # ----------------------------
         # 6. MOSTRAR TABLA
         # ----------------------------
-        st.subheader('Parametriza escenarios OMIE', divider='rainbow')
-        c12, c13, c14 = st.columns(3)
-        with c12:
-            simul_a = st.number_input(
-                "OMIE simulado A (€/MWh)",
-                value=st.session_state.precio_omip_previsto - 5,
-            )
-        with c13:
-            simul_b = st.number_input(
-                "OMIE simulado B (€/MWh)",
-                value=st.session_state.precio_omip_previsto,
-            )
-        with c14:
-            simul_c = st.number_input(
-                "OMIE simulado C (€/MWh)",
-                value=st.session_state.precio_omip_previsto + 5,
-            )
-
-        lista_simul = [simul_a, simul_b, simul_c]
-
-        st.subheader('Parametriza resto de escenarios', divider='rainbow')
-        componentes_comparador = [
-            ('SSAA sin SRAD (€/MWh)', 'pricing_ssaa_forward_12m'),
-            ('SRAD (€/MWh)', 'pricing_srad_prev'),
-            ('FNEE (€/MWh)', 'pricing_fnee_prev'),
-        ]
-        columnas_componentes_comparador = st.columns(3)
-        for columna_componente, (etiqueta_componente, clave_pricing) in zip(
-            columnas_componentes_comparador, componentes_comparador
-        ):
-            clave_widget_comparador = f'_{clave_pricing}_comparador'
-            st.session_state[clave_widget_comparador] = st.session_state.get(
-                clave_pricing, 0.0
-            )
-
-            def actualizar_componente_comparador(
-                clave_widget=clave_widget_comparador,
-                clave_destino=clave_pricing,
-            ):
-                st.session_state[f'_pendiente_{clave_destino}'] = (
-                    st.session_state[clave_widget]
-                )
-
-            with columna_componente:
-                st.number_input(
-                    etiqueta_componente,
-                    min_value=0.0,
-                    step=0.1,
-                    key=clave_widget_comparador,
-                    on_change=actualizar_componente_comparador,
-                )
-
-        st.subheader('Fórmula indexada', divider='rainbow')
-        mostrar_parametros_formula_indexado(
-            widget_suffix='simulindex_comparador',
-            dos_filas_tres_columnas=True,
+        escenarios_omie_comparador = render_escenarios_omie(
+            st.session_state.precio_omip_previsto,
+            'simulindex_escenarios',
         )
+        lista_simul = list(escenarios_omie_comparador.values())
+
+        render_otros_escenarios('simulindex_comparador')
+
+        render_formula_indexada('simulindex_comparador')
 
         # Entradas de ofertas fijas propias de Simulindex.
         if "df_ofertas_fijas_excel_simulindex" not in st.session_state:
@@ -2206,7 +2209,7 @@ with tab5:
             key="uploaded_ofertas_fijas_simulindex",
         )
         if uploaded_file is not None:
-            df_new = pd.read_excel(uploaded_file)
+            df_new = normalizar_excel_ofertas(pd.read_excel(uploaded_file))
             df_new.columns = df_new.columns.str.strip()
             col_oferta = df_new.columns[0]
             df_new = df_new.rename(columns={col_oferta: "oferta"})
@@ -2231,11 +2234,14 @@ with tab5:
             .replace(" ", "")
             .upper()
         )
-        periodos_manuales = (
-            ["P1", "P2", "P3"]
-            if atr_comparador.startswith("2.0")
-            else [f"P{i}" for i in range(1, 7)]
+        periodos_manuales, periodos_sin_consumo = periodos_con_consumo(
+            consumos_comparador, atr_comparador
         )
+        if periodos_sin_consumo:
+            st.caption(
+                "No se exige precio en periodos sin consumo: "
+                + ", ".join(periodos_sin_consumo) + "."
+            )
 
         def reactivar_oferta_comparador(nombre_oferta):
             excluidas = set(st.session_state.get(
@@ -2399,6 +2405,7 @@ with tab5:
                             contenido_imagen_ia,
                             mime_imagen_ia,
                             clave_openai,
+                            atr_contexto=atr_comparador,
                         )
                     st.session_state.tabla_oferta_ia_simulindex = tabla_ia
                     st.session_state.nombre_oferta_ia_simulindex = (
@@ -2498,14 +2505,22 @@ with tab5:
                             "la magnitud de los precios; comprueba los valores "
                             "en €/kWh antes de añadir la oferta."
                         )
+                    if "oferta" not in fila_atr_ia:
+                        nombre_base_ia = st.session_state.get(
+                            "nombre_oferta_ia_simulindex", "Oferta desde imagen"
+                        )
+                        fila_atr_ia["oferta"] = [
+                            nombre_base_ia if len(fila_atr_ia) == 1
+                            else f"{nombre_base_ia} {indice}"
+                            for indice in range(1, len(fila_atr_ia) + 1)
+                        ]
                     st.success(
-                        f"Detectada la fila {atr_comparador}. Revisa los valores."
+                        f"Detectadas {len(fila_atr_ia)} ofertas para "
+                        f"{atr_comparador}. Revisa nombres y valores."
                     )
-                    nombre_confirmacion_ia = st.text_input(
-                        "Nombre de la oferta",
-                        key="nombre_oferta_ia_simulindex",
-                    )
-                    fila_atr_ia = fila_atr_ia[["ATR", *periodos_manuales]]
+                    fila_atr_ia = fila_atr_ia[
+                        ["oferta", "ATR", *periodos_manuales]
+                    ]
                     fila_editada_ia = st.data_editor(
                         fila_atr_ia,
                         hide_index=True,
@@ -2521,52 +2536,23 @@ with tab5:
                         },
                     )
                     if st.button(
-                        "Confirmar y añadir oferta",
+                        "Confirmar y añadir ofertas",
                         key="confirmar_oferta_ia_simulindex",
                         type="primary",
                         use_container_width=True,
                     ):
-                        valores_ia = fila_editada_ia.iloc[0]
-                        if not nombre_confirmacion_ia.strip():
-                            st.error("Indica un nombre para la oferta.")
-                        elif any(
-                            pd.isna(valores_ia[p]) or not 0 < float(valores_ia[p]) < 2
-                            for p in periodos_manuales
-                        ):
-                            st.error("Revisa los precios detectados.")
-                        else:
-                            fila_guardada_ia = {
-                                "oferta": nombre_confirmacion_ia.strip(),
-                                "Fee (€/MWh)": 0.0,
-                                **{f"P{i}": 0.0 for i in range(1, 7)},
-                            }
-                            fila_guardada_ia.update({
-                                p: float(valores_ia[p]) for p in periodos_manuales
-                            })
-                            ofertas_ia_guardadas = st.session_state.get(
-                                "df_ofertas_fijas_ia_simulindex",
-                                pd.DataFrame(),
-                            ).copy()
-                            nombre_nuevo_normalizado = (
-                                fila_guardada_ia["oferta"].strip().casefold()
+                        try:
+                            ofertas_nuevas_ia = construir_ofertas(
+                                fila_editada_ia, periodos_manuales
                             )
-                            if not ofertas_ia_guardadas.empty:
-                                nombres_normalizados = (
-                                    ofertas_ia_guardadas["oferta"]
-                                    .astype(str)
-                                    .str.strip()
-                                    .str.casefold()
-                                )
-                                ofertas_ia_guardadas = ofertas_ia_guardadas.loc[
-                                    nombres_normalizados != nombre_nuevo_normalizado
-                                ]
+                            ofertas_nuevas_ia["Fee (€/MWh)"] = 0.0
                             st.session_state.df_ofertas_fijas_ia_simulindex = (
-                                pd.concat(
-                                    [
-                                        ofertas_ia_guardadas,
-                                        pd.DataFrame([fila_guardada_ia]),
-                                    ],
-                                    ignore_index=True,
+                                combinar_ofertas(
+                                    st.session_state.get(
+                                        "df_ofertas_fijas_ia_simulindex",
+                                        pd.DataFrame(),
+                                    ),
+                                    ofertas_nuevas_ia,
                                 )
                             )
                             st.session_state.revision_ofertas_ia_simulindex = (
@@ -2574,13 +2560,14 @@ with tab5:
                                     "revision_ofertas_ia_simulindex", 0
                                 ) + 1
                             )
-                            reactivar_oferta_comparador(
-                                fila_guardada_ia['oferta']
-                            )
+                            for nombre_oferta_ia in ofertas_nuevas_ia["oferta"]:
+                                reactivar_oferta_comparador(nombre_oferta_ia)
                             st.success(
-                                "Oferta incorporada a la comparación sin "
-                                "eliminar las anteriores."
+                                f"{len(ofertas_nuevas_ia)} ofertas incorporadas "
+                                "a la comparación."
                             )
+                        except ValueError as error_ofertas_ia:
+                            st.error(str(error_ofertas_ia))
 
             ofertas_ia_actuales = st.session_state.get(
                 "df_ofertas_fijas_ia_simulindex", pd.DataFrame()
@@ -2671,7 +2658,9 @@ with tab5:
             elif any(
                 precios_manual_simul[p] <= 0 for p in periodos_manuales
             ):
-                st.error("Introduce un precio mayor que cero en todos los periodos.")
+                st.error(
+                    "Introduce un precio mayor que cero en todos los periodos con consumo."
+                )
             else:
                 fila_manual_simul = {"oferta": nombre_manual_limpio}
                 fila_manual_simul.update(
@@ -2759,9 +2748,9 @@ with tab5:
                             ] + srad_pricing,
                             'osom': osom_12m_pricing,
                             'fnee': fnee_pricing,
-                            **{f'ppcc_{atr}': 0.0 for atr in ['2.0', '3.0', '6.1']},
-                            **{f'perd_{atr}': 0.0 for atr in ['2.0', '3.0', '6.1']},
-                            **{f'pyc_{atr}': 0.0 for atr in ['2.0', '3.0', '6.1']},
+                            **{f'ppcc_{atr}': 0.0 for atr in ['2.0', '3.0', '6.1', '6.2']},
+                            **{f'perd_{atr}': 0.0 for atr in ['2.0', '3.0', '6.1', '6.2']},
+                            **{f'pyc_{atr}': 0.0 for atr in ['2.0', '3.0', '6.1', '6.2']},
                         }
                         fila_formula_escenario[
                             f'ppcc_{atr_calculo_comparador}'

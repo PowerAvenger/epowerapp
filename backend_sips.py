@@ -20,7 +20,8 @@ MESES = {
 def obtener_atr_sips(metadatos):
     """Extrae y normaliza el ATR informado en la ficha del SIPS."""
     for clave in (
-        "tarifa_atr", "tarifa_de_acceso", "tarifa", "peaje_acceso", "atr"
+        "tarifa_atr", "descripcion_tarifa", "tarifa_de_acceso", "tarifa",
+        "peaje_acceso", "atr"
     ):
         valor = str((metadatos or {}).get(clave, "") or "").upper()
         coincidencia = re.search(r"(2[.,]0|3[.,]0|6[.,][1-4])", valor)
@@ -87,6 +88,24 @@ def _tabla_magnitud(lecturas, prefijo, agregacion):
     ]
 
 
+def _extraer_metadatos(filas, limite):
+    """Localiza la ficha superior aunque el CSV incluya títulos y separadores."""
+    for indice, fila in enumerate(filas[:limite]):
+        cabecera = [_nombre_columna(valor) for valor in fila]
+        if "cups" not in cabecera:
+            continue
+        for valores in filas[indice + 1:limite]:
+            if not any(celda.strip() for celda in valores):
+                continue
+            return {
+                nombre: valores[posicion].strip()
+                if posicion < len(valores) else ""
+                for posicion, nombre in enumerate(cabecera)
+                if nombre
+            }
+    return {}
+
+
 def leer_sips_completo(origen):
     """Devuelve metadatos, activa, reactiva y maxímetros de un CSV SIPS."""
     texto = _decodificar(_leer_bytes(origen))
@@ -96,39 +115,60 @@ def leer_sips_completo(origen):
         raise ValueError("El CSV SIPS no contiene ficha y lecturas suficientes.")
 
     indice_lecturas = None
+    formato_lecturas = None
     for indice, fila in enumerate(filas):
         nombres = {_nombre_columna(celda) for celda in fila}
         if {"cups", "f_fin", "f_inicio", "ea1", "er1", "pt1"}.issubset(nombres):
             indice_lecturas = indice
+            formato_lecturas = "ea"
+            break
+        if {
+            "fecha", "energia_activa_kwhp1", "energia_reactiva_kvarhp1",
+            "potencia_demandada_kwp1",
+        }.issubset(nombres):
+            indice_lecturas = indice
+            formato_lecturas = "mensual"
             break
     if indice_lecturas is None:
         raise ValueError(
-            "No encuentro la cabecera de medidas SIPS con EA, ER y PT."
+            "No encuentro una cabecera de medidas SIPS reconocida."
         )
 
-    filas_ficha = [
-        fila for fila in filas[:indice_lecturas]
-        if any(celda.strip() for celda in fila)
-    ]
-    metadatos = {}
-    if len(filas_ficha) >= 2:
-        cabecera_ficha = [_nombre_columna(valor) for valor in filas_ficha[0]]
-        valores_ficha = filas_ficha[1]
-        metadatos = {
-            nombre: valores_ficha[posicion].strip()
-            if posicion < len(valores_ficha) else ""
-            for posicion, nombre in enumerate(cabecera_ficha)
-            if nombre
-        }
+    metadatos = _extraer_metadatos(filas, indice_lecturas)
 
     cabecera = [_nombre_columna(valor) for valor in filas[indice_lecturas]]
     datos = [
         fila for fila in filas[indice_lecturas + 1:]
         if any(celda.strip() for celda in fila)
     ]
+    # Ignora posibles secciones posteriores con una anchura distinta.
+    datos = [fila for fila in datos if len(fila) == len(cabecera)]
     lecturas = pd.DataFrame(datos, columns=cabecera)
+
+    if formato_lecturas == "mensual":
+        renombrado = {"fecha": "f_fin"}
+        for periodo in range(1, 7):
+            renombrado.update({
+                f"energia_activa_kwhp{periodo}": f"ea{periodo}",
+                f"energia_reactiva_kvarhp{periodo}": f"er{periodo}",
+                f"potencia_demandada_kwp{periodo}": f"pt{periodo}",
+            })
+        lecturas = lecturas.rename(columns=renombrado)
+        lecturas["cups"] = metadatos.get("cups", "")
+        lecturas["fecha_fin"] = pd.to_datetime(
+            lecturas["f_fin"], errors="coerce", dayfirst=True
+        )
+        lecturas["fecha_inicio"] = (
+            lecturas["fecha_fin"].dt.to_period("M").dt.start_time
+        )
+    else:
+        lecturas["fecha_fin"] = pd.to_datetime(lecturas["f_fin"], errors="coerce")
+        lecturas["fecha_inicio"] = pd.to_datetime(
+            lecturas["f_inicio"], errors="coerce"
+        )
+
     columnas_requeridas = {
-        "cups", "f_fin", "f_inicio",
+        "cups", "f_fin",
         *[f"ea{i}" for i in range(1, 7)],
         *[f"er{i}" for i in range(1, 7)],
         *[f"pt{i}" for i in range(1, 7)],
@@ -139,18 +179,17 @@ def leer_sips_completo(origen):
             "Faltan columnas SIPS: " + ", ".join(sorted(faltantes)) + "."
         )
 
-    lecturas["fecha_fin"] = pd.to_datetime(lecturas["f_fin"], errors="coerce")
-    lecturas["fecha_inicio"] = pd.to_datetime(
-        lecturas["f_inicio"], errors="coerce"
-    )
     lecturas = lecturas.dropna(subset=["fecha_fin", "fecha_inicio"]).copy()
     if lecturas.empty:
         raise ValueError("El SIPS no contiene ciclos con fechas válidas.")
     lecturas["periodo_mes"] = lecturas["fecha_fin"].dt.to_period("M")
-    lecturas["dias_facturacion"] = (
-        lecturas["fecha_fin"].dt.normalize()
-        - lecturas["fecha_inicio"].dt.normalize()
-    ).dt.days.clip(lower=0)
+    if formato_lecturas == "mensual":
+        lecturas["dias_facturacion"] = lecturas["fecha_fin"].dt.days_in_month
+    else:
+        lecturas["dias_facturacion"] = (
+            lecturas["fecha_fin"].dt.normalize()
+            - lecturas["fecha_inicio"].dt.normalize()
+        ).dt.days.clip(lower=0)
     for prefijo in ("ea", "er", "pt"):
         for periodo in range(1, 7):
             columna = f"{prefijo}{periodo}"

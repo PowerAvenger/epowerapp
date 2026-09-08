@@ -7,17 +7,17 @@ import plotly.graph_objects as go
 
 from utilidades import (
     generar_menu,
+    actualizar_datos_mercado,
     init_app_json_escalacv, init_app, init_app_index
 )
 
 from backend_escalacv import (
-    leer_json, diarios_totales, diarios, mensuales, horarios, medias_horarias, evolucion_mensual, meses_español,
+    diarios_totales, diarios, mensuales, horarios, medias_horarias, evolucion_mensual, meses_español,
     obtener_df_scatter_mensual, graficar_scatter_combo, obtener_puntos_anuales, graficar_simulacion_cuadratica, graficar_bandas_ssaa,
     mapa_calor_mes, mapa_calor_mes_gradual, graficar_media_acumulada_periodo,
     calcular_spreads_diarios
 )
 from backend_comun import aplicar_estilo, construir_media_acumulada_prevista
-from backend_spot import media_spot
 from formato_es import formato_numero_es
 from backend_previsiones import (
     guardar_prevision_omie_en_sesion,
@@ -54,39 +54,9 @@ datos_total = st.session_state.datos_total_escalacv
 fecha_ini = st.session_state.fecha_ini_escalacv
 fecha_fin = st.session_state.fecha_fin_escalacv
 
-# El selector diario del tab General siempre lo gobierna SPOT. Si el componente
-# activo ya es SPOT, reutilizamos esos datos y evitamos una segunda carga.
-if '_escalacv_datos_spot_general' not in st.session_state:
-    if st.session_state.componente == 'SPOT':
-        st.session_state._escalacv_datos_spot_general = datos_total
-    else:
-        datos_spot_general, _, _ = leer_json(
-            st.secrets['FILE_ID_SPOT'],
-            st.secrets['GOOGLE_SHEETS_CREDENTIALS'],
-        )
-        st.session_state._escalacv_datos_spot_general = datos_spot_general
-
-# SSAA se carga bajo demanda al seleccionar SSAA o SPOT+SSAA. No debe retrasar
-# el arranque normal del módulo cuando el componente activo es SPOT.
-if (
-    '_escalacv_datos_ssaa_general' not in st.session_state
-    and st.session_state.componente != 'SPOT'
-):
-    try:
-        datos_ssaa_general, _, _ = leer_json(
-            st.secrets['FILE_ID_SSAA'],
-            st.secrets['GOOGLE_SHEETS_CREDENTIALS'],
-        )
-        st.session_state._escalacv_error_ssaa_general = None
-    except Exception as exc:
-        datos_ssaa_general = pd.DataFrame()
-        st.session_state._escalacv_error_ssaa_general = str(exc)
-    st.session_state._escalacv_datos_ssaa_general = datos_ssaa_general
-
+# Ambas series ya llegan precargadas para toda ePowerApp.
 datos_spot_general = st.session_state._escalacv_datos_spot_general
-datos_ssaa_general = st.session_state.get(
-    '_escalacv_datos_ssaa_general', pd.DataFrame()
-)
+datos_ssaa_general = st.session_state._escalacv_datos_ssaa_general
 
 if '_escalacv_spreads_spot' not in st.session_state:
     st.session_state._escalacv_spreads_spot = calcular_spreads_diarios(
@@ -117,28 +87,24 @@ control_mes = (
 )
 
 
-ultimo_registro = datos_total['fecha'].max()
-valor_minimo_horario_total = datos_total['value'].min()
-valor_maximo_horario_total = datos_total['value'].max()
-fecha_min_horario_total = datos_total.loc[datos_total['value'].idxmin(), 'fecha'] 
-fecha_max_horario_total = datos_total.loc[datos_total['value'].idxmax(), 'fecha'] 
-
-# Ultimos doce meses completos respecto a la fecha mas reciente disponible.
-fecha_fin_año_movil = pd.Timestamp(datos_total['fecha'].max()).normalize()
-fecha_corte_año_movil = fecha_fin_año_movil - pd.DateOffset(years=1)
-fechas_total_normalizadas = pd.to_datetime(datos_total['fecha']).dt.normalize()
-datos_ultimo_año_movil = datos_total.loc[
-    (fechas_total_normalizadas > fecha_corte_año_movil)
-    & (fechas_total_normalizadas <= fecha_fin_año_movil)
-]
-precio_medio_ultimo_año_movil = media_spot(datos_ultimo_año_movil)
-
 #DATOS DIARIOS DESDE 2018
-datos_totales, graf_ecv_total = diarios_totales(datos_total, fecha_ini, fecha_fin)
-valor_minimo_diario_total = datos_totales['value'].min()
-valor_maximo_diario_total = datos_totales['value'].max()
-fecha_min_diario_total = datos_totales.loc[datos_totales['value'].idxmin(), 'fecha'] 
-fecha_max_diario_total = datos_totales.loc[datos_totales['value'].idxmax(), 'fecha']
+datos_totales, _ = diarios_totales(datos_total, fecha_ini, fecha_fin)
+fecha_ini_spot_historico = datos_spot_general['fecha'].min()
+fecha_fin_spot_historico = datos_spot_general['fecha'].max()
+fecha_ini_ssaa_historico = datos_ssaa_general['fecha'].min()
+fecha_fin_ssaa_historico = datos_ssaa_general['fecha'].max()
+_, graf_historico_spot = diarios_totales(
+    datos_spot_general,
+    fecha_ini_spot_historico,
+    fecha_fin_spot_historico,
+    componente='SPOT',
+)
+_, graf_historico_ssaa = diarios_totales(
+    datos_ssaa_general,
+    fecha_ini_ssaa_historico,
+    fecha_fin_ssaa_historico,
+    componente='SSAA',
+)
 
 #FILTRAMOS POR EL AÑO SELECCIONADO
 datos_año_filtrado = datos_total[datos_total['año'] == st.session_state.año_seleccionado_esc]
@@ -213,12 +179,20 @@ graf_ecv_evol_mes_años = evolucion_mensual(datos_totales)
 
 
 
+fecha_hoy_diario = pd.Timestamp(fecha_hoy).normalize()
+fecha_diaria_predeterminada = (
+    fecha_hoy_diario
+    if fecha_min_select_dia <= fecha_hoy_diario <= fecha_max_select_dia
+    else fecha_max_select_dia
+)
 if (
     'dia_seleccionado_esc' not in st.session_state
     or st.session_state.año_seleccionado_esc != st.session_state.año_anterior_esc
+    or not st.session_state.get('_escalacv_diario_inicializado_hoy')
 ):
-    st.session_state.dia_seleccionado_esc = fecha_max_select_dia
+    st.session_state.dia_seleccionado_esc = fecha_diaria_predeterminada
     st.session_state.año_anterior_esc = st.session_state.año_seleccionado_esc
+    st.session_state._escalacv_diario_inicializado_hoy = True
 
 st.session_state.dia_seleccionado_esc = pd.Timestamp(
     st.session_state.dia_seleccionado_esc
@@ -278,25 +252,13 @@ st.sidebar.markdown(f':blue-background[Sección dedicada a **Roberto Cavero Garc
 ultima_fecha_spot = pd.Timestamp(datos_spot_general['fecha'].max())
 st.sidebar.info(f'Última fecha SPOT disponible: {ultima_fecha_spot.strftime("%d.%m.%Y")}')
 if st.sidebar.button('Actualizar datos', use_container_width=True):
-    leer_json.clear()
-    for clave_datos_escalacv in (
-        'datos_total_escalacv',
-        'fecha_ini_escalacv',
-        'fecha_fin_escalacv',
-        '_escalacv_componente_cargado',
-        '_escalacv_datos_spot_general',
-        '_escalacv_datos_ssaa_general',
-        '_escalacv_error_ssaa_general',
-        '_escalacv_spreads_spot',
-        '_escalacv_spreads_ssaa',
-    ):
-        st.session_state.pop(clave_datos_escalacv, None)
+    with st.spinner('Actualizando SPOT y SSAA desde Drive...'):
+        actualizar_datos_mercado()
     st.rerun()
 
 st.sidebar.selectbox('Selecciona el año a visualizar', options = años_lista, key = 'año_seleccionado_esc')
 st.sidebar.selectbox('Selecciona el año a comparar la media anual', options = años_comp, key = 'año_seleccionado_comp')
 st.sidebar.selectbox('Selecciona el mes', options = meses_lista, key = 'mes_seleccionado_esc')
-st.sidebar.date_input('Selecciona el día', min_value= fecha_min_select_dia, max_value=fecha_max_select_dia, key = 'dia_seleccionado_esc')
 st.sidebar.radio('Selecciona el componente de mercado', options=['SPOT', 'SSAA', 'SPOT+SSAA'], key = 'componente')
 
 if st.session_state.componente == 'SPOT+SSAA':
@@ -306,29 +268,11 @@ if 'dos_colores' in st.session_state and st.session_state.dos_colores:
 
 # VISUALIZACIÓN ÁREA PRINCIPAL---------------------------------------------------------------------------------------------------------
 
-tab_general, tab_anual, tab_mensual, tab_mapa, tab_simulador = st.tabs(
-    ['General', 'Anual', 'Mensual', 'Mapa de Calor', 'Simulador']
+tab_diario, tab_mensual, tab_anual, tab_historica, tab_mapa, tab_simulador = st.tabs(
+    ['Diario', 'Mensual', 'Anual', 'Serie histórica', 'Mapa de Calor', 'Simulador']
 )
 
-with tab_general:
-    # Gráfijo fijo de medias diarias y anuales
-    with st.container():
-        col1,col2=st.columns([0.84,0.16])
-        with col1:
-            st.plotly_chart(graf_ecv_total)
-            #st.plotly_chart(graf_ecv_diario)
-        with col2:
-            st.subheader('Datos en €/MWh',divider='rainbow')
-            st.metric(f'Precio mínimo diario ( {fecha_min_diario_total})', value=formato_numero_es(valor_minimo_diario_total, 2))
-            st.metric(f'Precio máximo diario ({fecha_max_diario_total})', value=formato_numero_es(valor_maximo_diario_total, 2))
-            if precio_medio_ultimo_año_movil is not None:
-                st.metric(
-                    'Precio medio del último año móvil',
-                    value=formato_numero_es(
-                        precio_medio_ultimo_año_movil, 2
-                    ),
-                )
-
+with tab_diario:
     # SPOT y SSAA comparten exactamente la fecha marcada en el date_input.
     fecha_general = pd.Timestamp(st.session_state.dia_seleccionado_esc).date()
 
@@ -426,9 +370,23 @@ with tab_general:
     ssaa_perfil_medio_anual = _perfil_horario_medio_año(
         datos_ssaa_general, año_fecha_general
     )
-    col_spot_graf, col_spot_met, col_ssaa_graf, col_ssaa_met = st.columns(
-        [.34, .16, .34, .16]
+    (
+        col_fecha,
+        col_spot_graf,
+        col_spot_met,
+        col_ssaa_graf,
+        col_ssaa_met,
+    ) = st.columns(
+        [.12, .34, .10, .34, .10]
     )
+    with col_fecha:
+        st.subheader('Fecha', divider='rainbow')
+        st.date_input(
+            'Selecciona el día',
+            min_value=fecha_min_select_dia,
+            max_value=fecha_max_select_dia,
+            key='dia_seleccionado_esc',
+        )
     with col_spot_graf:
         if spot_dia_general.empty:
             st.info('No hay datos SPOT para la fecha seleccionada.')
@@ -526,10 +484,95 @@ with tab_mensual:
     if mes_sel == 'todos':
         st.info('Selecciona un mes en la barra lateral para ver el análisis mensual.')
     else:
-        col5,col6,col7=st.columns([.4,.4,.2])
-        with col5:
-            st.plotly_chart(graf_ecv_evol_mes_años, use_container_width=True)
-        with col6:
+        perfil_horario_mes = (
+            datos_mes_filtrado.groupby('hora', as_index=False)['value'].mean()
+        )
+        spreads_mes_grafico = calcular_spreads_diarios(datos_mes_filtrado)
+        graf_spreads_mes = None
+        if not spreads_mes_grafico.empty:
+            graf_spreads_mes = go.Figure(
+                go.Bar(
+                    x=spreads_mes_grafico['fecha'],
+                    y=spreads_mes_grafico['spread_diario'],
+                    marker_color='#4C78A8',
+                    marker_cornerradius=8,
+                    hovertemplate=(
+                        '<b>%{x|%d.%m.%Y}</b><br>'
+                        'Spread: %{y:.2f} €/MWh<extra></extra>'
+                    ),
+                )
+            )
+            graf_spreads_mes.update_layout(
+                title=(
+                    f'{st.session_state.componente}: spread diario '
+                    f'· {mes_sel} '
+                    f'{st.session_state.año_seleccionado_esc}'
+                ),
+                xaxis_title='Día',
+                yaxis_title='€/MWh',
+                separators=',.',
+            )
+            inicio_mes_spread = pd.Timestamp(
+                st.session_state.año_seleccionado_esc,
+                mes_num_sel,
+                1,
+            )
+            fin_mes_spread = inicio_mes_spread + pd.offsets.MonthEnd(0)
+            graf_spreads_mes.update_xaxes(
+                range=[
+                    inicio_mes_spread - pd.Timedelta(hours=12),
+                    fin_mes_spread + pd.Timedelta(hours=12),
+                ],
+                tickformat='%d',
+                dtick=24 * 60 * 60 * 1000,
+                showgrid=True,
+            )
+            graf_spreads_mes = aplicar_estilo(graf_spreads_mes)
+
+        col_evol, col_evol_met, col_perfil, col_perfil_met = st.columns(
+            [.36, .14, .36, .14]
+        )
+        with col_evol:
+            if df_media_acumulada_periodo.empty:
+                st.info(
+                    'No hay precios diarios con los que calcular la media '
+                    'acumulada de este mes.'
+                )
+            else:
+                st.plotly_chart(
+                    graf_media_acumulada_periodo, use_container_width=True
+                )
+        with col_evol_met:
+            st.subheader('Datos en €/MWh', divider='rainbow')
+            if not df_media_acumulada_periodo.empty:
+                fecha_min_periodo = df_media_acumulada_periodo.loc[
+                    df_media_acumulada_periodo['value'].idxmin(), 'fecha'
+                ]
+                fecha_max_periodo = df_media_acumulada_periodo.loc[
+                    df_media_acumulada_periodo['value'].idxmax(), 'fecha'
+                ]
+                st.metric(
+                    'Precio medio del periodo',
+                    formato_numero_es(
+                        df_media_acumulada_periodo[
+                            'media_acumulada'
+                        ].iloc[-1],
+                        2,
+                    ),
+                )
+                st.metric(
+                    f'Precio mínimo ({pd.Timestamp(fecha_min_periodo).strftime("%d.%m.%Y")})',
+                    formato_numero_es(
+                        df_media_acumulada_periodo['value'].min(), 2
+                    ),
+                )
+                st.metric(
+                    f'Precio máximo ({pd.Timestamp(fecha_max_periodo).strftime("%d.%m.%Y")})',
+                    formato_numero_es(
+                        df_media_acumulada_periodo['value'].max(), 2
+                    ),
+                )
+        with col_perfil:
             if medias_horarias_filtrado.empty:
                 st.info(
                     'No hay datos horarios para el mes, año y componente '
@@ -537,11 +580,8 @@ with tab_mensual:
                 )
             else:
                 st.plotly_chart(graf_medias_horarias, use_container_width=True)
-        with col7:
+        with col_perfil_met:
             st.subheader('Perfil horario medio', divider='rainbow')
-            perfil_horario_mes = (
-                datos_mes_filtrado.groupby('hora', as_index=False)['value'].mean()
-            )
             if perfil_horario_mes.empty:
                 st.info('No hay datos para calcular las métricas del perfil.')
             else:
@@ -567,103 +607,55 @@ with tab_mensual:
                     f'Máximo ({hora_max_perfil}:00)',
                     formato_numero_es(perfil_horario_mes['value'].max(), 2),
                 )
-                spreads_mes = calcular_spreads_diarios(datos_mes_filtrado)
-                if not spreads_mes.empty:
-                    st.metric(
-                        'Spread medio mensual',
-                        formato_numero_es(
-                            spreads_mes['spread_diario'].mean(), 2
-                        ),
-                    )
-
-        if df_media_acumulada_periodo.empty:
-            st.info(
-                'No hay precios diarios con los que calcular la media '
-                'acumulada de este mes.'
+        (
+            col_comparativa,
+            col_comparativa_met,
+            col_spread,
+            col_spread_met,
+        ) = st.columns([.36, .14, .36, .14])
+        with col_comparativa:
+            st.plotly_chart(
+                graf_ecv_evol_mes_años, use_container_width=True
             )
-        else:
-            col5,col6,col7=st.columns([.4,.4,.2])
-            with col5:
-                spreads_mes_grafico = calcular_spreads_diarios(
-                    datos_mes_filtrado
-                )
-                if spreads_mes_grafico.empty:
-                    st.info('No hay datos para calcular los spreads diarios.')
-                else:
-                    graf_spreads_mes = go.Figure(
-                        go.Bar(
-                            x=spreads_mes_grafico['fecha'],
-                            y=spreads_mes_grafico['spread_diario'],
-                            marker_color='#4C78A8',
-                            marker_cornerradius=8,
-                            hovertemplate=(
-                                '<b>%{x|%d.%m.%Y}</b><br>'
-                                'Spread: %{y:.2f} €/MWh<extra></extra>'
-                            ),
-                        )
-                    )
-                    graf_spreads_mes.update_layout(
-                        title=(
-                            f'{st.session_state.componente}: spread diario '
-                            f'· {mes_sel} '
-                            f'{st.session_state.año_seleccionado_esc}'
-                        ),
-                        xaxis_title='Día',
-                        yaxis_title='€/MWh',
-                        separators=',.',
-                    )
-                    inicio_mes_spread = pd.Timestamp(
-                        st.session_state.año_seleccionado_esc,
-                        mes_num_sel,
-                        1,
-                    )
-                    fin_mes_spread = (
-                        inicio_mes_spread
-                        + pd.offsets.MonthEnd(0)
-                    )
-                    graf_spreads_mes.update_xaxes(
-                        range=[
-                            inicio_mes_spread - pd.Timedelta(hours=12),
-                            fin_mes_spread + pd.Timedelta(hours=12),
-                        ],
-                        tickformat='%d',
-                        dtick=24 * 60 * 60 * 1000,
-                        showgrid=True,
-                    )
-                    graf_spreads_mes = aplicar_estilo(graf_spreads_mes)
-                    st.plotly_chart(
-                        graf_spreads_mes, use_container_width=True
-                    )
-            with col6:
-                st.plotly_chart(
-                    graf_media_acumulada_periodo, use_container_width=True
-                )
-            with col7:
-                fecha_min_periodo = df_media_acumulada_periodo.loc[
-                    df_media_acumulada_periodo['value'].idxmin(), 'fecha'
+        with col_comparativa_met:
+            st.empty()
+        with col_spread:
+            if graf_spreads_mes is None:
+                st.info('No hay datos para calcular los spreads diarios.')
+            else:
+                st.plotly_chart(graf_spreads_mes, use_container_width=True)
+        with col_spread_met:
+            st.subheader('Spread diario', divider='rainbow')
+            if not spreads_mes_grafico.empty:
+                fila_spread_min = spreads_mes_grafico.loc[
+                    spreads_mes_grafico['spread_diario'].idxmin()
                 ]
-                fecha_max_periodo = df_media_acumulada_periodo.loc[
-                    df_media_acumulada_periodo['value'].idxmax(), 'fecha'
+                fila_spread_max = spreads_mes_grafico.loc[
+                    spreads_mes_grafico['spread_diario'].idxmax()
                 ]
-                st.subheader('Datos en €/MWh', divider='rainbow')
                 st.metric(
-                    'Precio medio del periodo',
+                    'Spread medio',
                     formato_numero_es(
-                        df_media_acumulada_periodo['media_acumulada'].iloc[-1], 2
+                        spreads_mes_grafico['spread_diario'].mean(), 2
                     ),
                 )
                 st.metric(
-                    f'Precio mínimo ({pd.Timestamp(fecha_min_periodo).strftime("%d.%m.%Y")})',
-                    formato_numero_es(df_media_acumulada_periodo['value'].min(), 2),
+                    f'Mínimo ({pd.Timestamp(fila_spread_min["fecha"]).strftime("%d.%m.%Y")})',
+                    formato_numero_es(fila_spread_min['spread_diario'], 2),
                 )
                 st.metric(
-                    f'Precio máximo ({pd.Timestamp(fecha_max_periodo).strftime("%d.%m.%Y")})',
-                    formato_numero_es(df_media_acumulada_periodo['value'].max(), 2),
+                    f'Máximo ({pd.Timestamp(fila_spread_max["fecha"]).strftime("%d.%m.%Y")})',
+                    formato_numero_es(fila_spread_max['spread_diario'], 2),
                 )
 
 
     
         
+
+with tab_historica:
+    st.plotly_chart(graf_historico_spot, use_container_width=True)
+    st.plotly_chart(graf_historico_ssaa, use_container_width=True)
+
 
 with tab_mapa:
     with st.container():

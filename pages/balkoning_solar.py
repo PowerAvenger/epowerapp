@@ -79,8 +79,19 @@ df_pvgis_ini = obtener_pvgis_horario(latitud, longitud, año_pvgis, inclinacion,
 
 df_pvgis = arreglar_pvgis(df_pvgis_ini)
 
-if 'df_norm_h' in st.session_state and "atr_dfnorm" in st.session_state and st.session_state.atr_dfnorm == "2.0":
-    curva = st.session_state.df_norm_h
+curva_sesion = st.session_state.get("df_norm_h")
+atr_balkoning = (
+    str(st.session_state.get("atr_dfnorm", ""))
+    .strip()
+    .upper()
+    .removesuffix("TD")
+)
+if (
+    isinstance(curva_sesion, pd.DataFrame)
+    and not curva_sesion.empty
+    and atr_balkoning == "2.0"
+):
+    curva = curva_sesion
     demo = False
     print('Entramos en modo curva de carga uploaded')
 else:
@@ -226,9 +237,23 @@ graf_amortizacion = graficar_amortizacion(df_amortizacion, coste_inversion)
 
 with st.sidebar:
     st.header('Balkoning Solar')
-    if not st.session_state.get('usuario_autenticado', False):
+    if not demo:
+        fechas_curva_balkoning = pd.to_datetime(
+            curva_sesion["fecha_hora"], errors="coerce"
+        ).dropna()
+        texto_rango_balkoning = (
+            f"{fechas_curva_balkoning.min():%d/%m/%Y} → "
+            f"{fechas_curva_balkoning.max():%d/%m/%Y}"
+            if not fechas_curva_balkoning.empty
+            else "rango no disponible"
+        )
+        st.success(
+            f"Curva de carga personalizada activa · ATR {atr_balkoning}TD · "
+            f"{texto_rango_balkoning}."
+        )
+    elif not st.session_state.get('usuario_autenticado', False):
         st.warning('🔒 Estas viendo un ejemplo con curva de carga predeterminada. Si quieres usar curvas personalizadas (usarios premium), pasa por caja.')
-    else: 
+    else:
         st.warning('Usa tu curva de carga para personalizar resultados.')
 st.header('Balkoning Solar: ¿Es para todos? No te tires a la piscina sin comprobar si hay agua...', divider='rainbow')
 
@@ -247,8 +272,16 @@ with st.container():
 
         # Leer coordenadas clicadas
         if mapa["last_clicked"]:
-            st.session_state.latitud = mapa["last_clicked"]["lat"]
-            st.session_state.longitud = mapa["last_clicked"]["lng"]
+            nueva_latitud = float(mapa["last_clicked"]["lat"])
+            nueva_longitud = float(mapa["last_clicked"]["lng"])
+            ubicacion_cambiada = (
+                not np.isclose(st.session_state.latitud, nueva_latitud)
+                or not np.isclose(st.session_state.longitud, nueva_longitud)
+            )
+            if ubicacion_cambiada:
+                st.session_state.latitud = nueva_latitud
+                st.session_state.longitud = nueva_longitud
+                st.rerun()
 
         st.write(f"📍 Latitud: {st.session_state.latitud:.5f}")
         st.write(f"📍 Longitud: {st.session_state.longitud:.5f}")

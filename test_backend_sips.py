@@ -67,6 +67,37 @@ class LectorSipsTest(unittest.TestCase):
         self.assertEqual(resultado["reactiva"].loc[0, "P1"], 6)
         self.assertEqual(resultado["maximetros"].loc[0, "P1"], 20)
 
+    def test_lee_exportacion_sips_con_fecha_y_nombres_descriptivos(self):
+        contenido = (
+            '"Datos de suministro"\n\n'
+            '"CUPS";"Descripción Tarifa";"Potencia Contratada Kw P1"\n'
+            '"ES001";"6.2TD";"320,5"\n\n'
+            '"Consumos"\n\n'
+            '"Fecha";"Codigo ATR";'
+            + ";".join(f'"Energia Activa kWhP{i}"' for i in range(1, 7))
+            + ";"
+            + ";".join(f'"Energia Reactiva kVArhP{i}"' for i in range(1, 7))
+            + ";"
+            + ";".join(f'"Potencia demandada kWP{i}"' for i in range(1, 7))
+            + "\n"
+            + '"31-01-2025";"22";'
+            + ";".join(str(i) for i in range(1, 7))
+            + ";"
+            + ";".join(str(i * 10) for i in range(1, 7))
+            + ";"
+            + ";".join(str(i * 100) for i in range(1, 7))
+            + "\n"
+        )
+
+        resultado = leer_sips_completo(io.BytesIO(contenido.encode("utf-8")))
+
+        self.assertEqual(resultado["atr"], "6.2")
+        self.assertEqual(resultado["metadatos"]["potencia_contratada_kw_p1"], "320,5")
+        self.assertEqual(resultado["consumos"].loc[0, "P6"], 6)
+        self.assertEqual(resultado["reactiva"].loc[0, "P2"], 20)
+        self.assertEqual(resultado["maximetros"].loc[0, "P4"], 400)
+        self.assertEqual(resultado["consumos"].loc[0, "dias_facturacion"], 31)
+
 
 if __name__ == "__main__":
     unittest.main()

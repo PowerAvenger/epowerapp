@@ -1,6 +1,7 @@
 import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
+import io
 
 import pandas as pd
 import datetime
@@ -9,6 +10,7 @@ from backend_telemindex import (
     graficar_precios_medios_horarios, graficar_queso_componentes,
     tabla_precios, tabla_costes, tabla_pyc, tabla_margen, tabla_apuntamiento_spot,
     evol_mensual, evol_precios_diarios, graficar_diferencial_precios_mensuales, tabla_evol_mes_por_años,
+    preparar_comparativa_mensual_indexados,
     evol_diario,
     construir_df_curva_sheets, añadir_costes_curva,
     calcular_verificacion_ssaa,
@@ -19,6 +21,13 @@ from backend_telemindex import (
 from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, aplicar_estilo, NOMBRE_ZONA_PERIODOS, calcular_precios_atr
 from backend_curvadecarga import graficar_media_horaria, graficar_queso_periodos
 from backend_previsiones import obtener_prevision_omie_anual
+from backend_ia_ofertas import extraer_oferta_imagen
+from streamlit_paste_button import paste_image_button
+from componentes_ofertas_fijas import (
+    combinar_ofertas, construir_oferta, normalizar_excel_ofertas,
+    periodos_con_consumo, render_oferta_ia, render_oferta_manual,
+    selector_origen_oferta,
+)
 from backend_simulindex import (
     construir_prevision_indexados_2026,
     obtener_hist_mensual,
@@ -57,6 +66,9 @@ if "df_ofertas_fijas" not in st.session_state:
 
 if "df_oferta_fija_manual" not in st.session_state:
     st.session_state.df_oferta_fija_manual = pd.DataFrame()
+
+if "df_oferta_fija_ia_telemindex" not in st.session_state:
+    st.session_state.df_oferta_fija_ia_telemindex = pd.DataFrame()
 
 
 if "margen_fijo" not in st.session_state:
@@ -206,6 +218,11 @@ if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None an
         "6.1": media_61
     }
     media_atr = atr_map.get(st.session_state.atr_dfnorm)
+    apuntamiento_final = (
+        round(media_atr_curva / media_atr, 3)
+        if media_atr is not None and media_atr != 0
+        else float("nan")
+    )
     coste_sin_ponderar = round(consumo_total_curva * media_atr / 100,2)
     desvio_coste_total = coste_total_curva-coste_sin_ponderar
     desvio_coste_total_porc = (desvio_coste_total / coste_sin_ponderar) * 100
@@ -644,7 +661,13 @@ with tab1:
                     st.metric(':orange[Precio medio 2.0 c€/kWh]', value=formato_cent_eur_kwh(media_20, 2, False))
                     if media_atr_curva is not None:
                         st.markdown("<div style='height: 1.5rem;'></div>", unsafe_allow_html=True)
-                        st.metric(f'Precio medio curva {st.session_state.atr_dfnorm} c€/kWh', value=formato_cent_eur_kwh(media_atr_curva, 2, False))
+                        st.metric(
+                            f'Precio medio curva {st.session_state.atr_dfnorm} c€/kWh',
+                            value=formato_cent_eur_kwh(media_atr_curva, 2, False),
+                            delta=f'APf = {formato_numero_es(apuntamiento_final, 3)}',
+                            delta_color='inverse',
+                            help='APf: apuntamiento del precio final.',
+                        )
                 with col6:
                     st.metric(':red[Precio medio 3.0 c€/kWh]', value=formato_cent_eur_kwh(media_30, 2, False))
                     if media_atr_curva is not None:
@@ -659,7 +682,13 @@ with tab1:
                     st.metric(':green[Precio medio Spot €/MWh]', value=formato_eur_mwh(media_spot, 2, False))
                     if media_atr_curva is not None:
                         st.markdown("<div style='height: 1.5rem;'></div>", unsafe_allow_html=True)
-                        st.metric('Precio medio Spot curva €/MWh', value=formato_eur_mwh(media_spot_curva, 2, False), delta=formato_numero_es(apuntamiento_spot, 3), delta_color='inverse', help = 'Se indica apuntamiento.')
+                        st.metric(
+                            'Precio medio Spot curva €/MWh',
+                            value=formato_eur_mwh(media_spot_curva, 2, False),
+                            delta=f'APo = {formato_numero_es(apuntamiento_spot, 3)}',
+                            delta_color='inverse',
+                            help='APo: apuntamiento de OMIE/SPOT.',
+                        )
                 with col9:
                     st.metric(':violet[Precio medio SSAA €/MWh]', value=formato_eur_mwh(media_ssaa, 2, False), delta=formato_pct(sobrecoste_ssaa, 1), delta_color='inverse', help= 'Se indica su valor medio y en qué % aumenta el precio medio Spot')
                     if media_atr_curva is not None:
@@ -703,8 +732,22 @@ with tab1:
 
         with col2:
             if media_atr_curva is not None:
-                apuntamiento_spot_fmt = formato_numero_es(apuntamiento_spot, 2)
-                st.subheader(f"Perfil de consumo (kWh) vs coste (€) - Ap: :orange[{apuntamiento_spot_fmt}]", divider='rainbow')
+                apuntamiento_spot_fmt = formato_numero_es(apuntamiento_spot, 3)
+                apuntamiento_final_fmt = formato_numero_es(apuntamiento_final, 3)
+                st.subheader(
+                    "Perfil de consumo vs coste - "
+                    f"APo: :orange[{apuntamiento_spot_fmt}] · "
+                    f"APf: :orange[{apuntamiento_final_fmt}]",
+                    divider='rainbow',
+                    help=(
+                        "APo es el apuntamiento de OMIE/SPOT: precio SPOT "
+                        "ponderado por la curva dividido por su media aritmética. "
+                        "APf es el apuntamiento del precio final del ATR: precio "
+                        "final ponderado por la curva dividido por su media "
+                        "aritmética. Un valor inferior a 1 reduce el precio; "
+                        "un valor superior a 1 lo incrementa."
+                    ),
+                )
                 
                 df_coste = st.session_state.df_curva_sheets.copy()
                 df_coste_h = (
@@ -805,14 +848,33 @@ with tab2:
     
     
 
-    df_delta, fig_delta = graficar_diferencial_precios_mensuales(
-        df_mensual=df_precios_mensuales_sin_curva,
+    resumen_comparativa, fechas_corte_comparativa = preparar_comparativa_mensual_indexados(
+        st.session_state.df_sheets,
         anio_base=2025,
         anio_comp=2026,
-        convertir_a_cent_kwh=True
+    )
+    df_delta, fig_delta = graficar_diferencial_precios_mensuales(
+        df_mensual=resumen_comparativa,
+        anio_base=2025,
+        anio_comp=2026,
+        convertir_a_cent_kwh=False
     )
     c1, c2 = st.columns(2)
     with c1:
+        fecha_corte_mes_actual = (
+            max(fechas_corte_comparativa.values())
+            if fechas_corte_comparativa
+            else None
+        )
+        st.caption(
+            "Precios finales según ATR · diferencias en c€/kWh · "
+            "2026 frente a 2025"
+            + (
+                f" · ambos hasta el {fecha_corte_mes_actual.strftime('%d.%m')}"
+                if fecha_corte_mes_actual is not None
+                else ""
+            )
+        )
         st.plotly_chart(fig_delta, use_container_width=True)
         
     with c2:
@@ -913,9 +975,10 @@ with tab3:
 
         # CARGAR EXCEL CON PRECIOS FIJOS
         st.subheader(f'Tabla de precios :red[FIJOS] para comparar')
-        uploaded_file = st.file_uploader(
-            "Sube el Excel con ofertas de precio fijo",
-            type=["xlsx", "xls"]
+        origen_oferta_fija = selector_origen_oferta("telemindex_fijos")
+        uploaded_file = (
+            st.file_uploader("Sube el Excel con ofertas de precio fijo", type=["xlsx", "xls"])
+            if origen_oferta_fija == "Excel" else None
         )
         st.caption("Los precios de las columnas P1…P6 deben indicarse en €/kWh.")
 
@@ -926,10 +989,21 @@ with tab3:
             .upper()
             .startswith("2.0")
         )
-        periodos_manuales = (
-            ["P1", "P2", "P3"]
-            if es_20td_manual else [f"P{i}" for i in range(1, 7)]
+        periodos_manuales, periodos_sin_consumo = periodos_con_consumo(
+            df_resumen.loc["Consumo (kWh)"],
+            st.session_state.get("atr_dfnorm", ""),
         )
+        if periodos_sin_consumo:
+            st.caption(
+                "Solo se solicitan precios para los periodos con consumo en "
+                "la curva. Sin consumo: " + ", ".join(periodos_sin_consumo) + "."
+            )
+        oferta_ia_nueva = render_oferta_ia(
+            st.session_state.get("atr_dfnorm", ""), periodos_manuales,
+            "oferta_ia_telemindex",
+        ) if origen_oferta_fija == "IA" else pd.DataFrame()
+        if not oferta_ia_nueva.empty:
+            st.session_state.df_oferta_fija_ia_telemindex = oferta_ia_nueva
         with st.form("form_oferta_fija_manual", clear_on_submit=False):
             nombre_oferta_manual = st.text_input(
                 "Nombre de la oferta manual",
@@ -958,12 +1032,12 @@ with tab3:
                 use_container_width=True,
             )
 
-        if guardar_oferta_manual:
+        if guardar_oferta_manual and origen_oferta_fija == "Oferta manual":
             nombre_limpio = nombre_oferta_manual.strip()
             if not nombre_limpio:
                 st.error("Indica un nombre para la oferta manual.")
             elif any(precios_manuales[p] <= 0 for p in periodos_manuales):
-                st.error("Introduce un precio mayor que cero en todos los periodos.")
+                st.error("Introduce un precio mayor que cero en los periodos con consumo.")
             else:
                 fila_manual = {"oferta": nombre_limpio}
                 fila_manual.update({f"P{i}": 0.0 for i in range(1, 7)})
@@ -974,7 +1048,7 @@ with tab3:
                 st.success(f"Oferta manual «{nombre_limpio}» actualizada.")
 
         if uploaded_file is not None:
-            df_new = pd.read_excel(uploaded_file)
+            df_new = normalizar_excel_ofertas(pd.read_excel(uploaded_file))
             df_new.columns = df_new.columns.str.strip()
 
             # Primera columna = oferta
@@ -1038,12 +1112,9 @@ with tab3:
                         df_ofertas_calc[p] = df_ofertas_calc[p] + st.session_state.margen_fijo/1000   
                 
             oferta_manual = st.session_state.get("df_oferta_fija_manual")
-            ofertas_combinadas = [df_ofertas_calc]
-            if oferta_manual is not None and not oferta_manual.empty:
-                ofertas_combinadas.append(oferta_manual)
-            st.session_state.df_ofertas_fijas = (
-                pd.concat(ofertas_combinadas, ignore_index=True)
-                .drop_duplicates(subset=["oferta"], keep="last")
+            st.session_state.df_ofertas_fijas = combinar_ofertas(
+                df_ofertas_calc, oferta_manual,
+                st.session_state.get("df_oferta_fija_ia_telemindex"),
             )
                 
             df_ofertas_view = formatear_df_resumen(st.session_state.df_ofertas_fijas)
@@ -1062,9 +1133,13 @@ with tab3:
                     use_container_width=True,
                     hide_index=True
                 )
-        elif not st.session_state.df_oferta_fija_manual.empty:
-            st.session_state.df_ofertas_fijas = (
-                st.session_state.df_oferta_fija_manual.copy()
+        elif (
+            not st.session_state.df_oferta_fija_manual.empty
+            or not st.session_state.df_oferta_fija_ia_telemindex.empty
+        ):
+            st.session_state.df_ofertas_fijas = combinar_ofertas(
+                st.session_state.df_oferta_fija_manual,
+                st.session_state.df_oferta_fija_ia_telemindex,
             )
             st.markdown("Oferta fija manual cargada")
             st.dataframe(

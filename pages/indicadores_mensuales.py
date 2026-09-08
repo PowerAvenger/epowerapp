@@ -5,7 +5,6 @@ import streamlit as st
 
 from backend_comun import carga_mibgas, colores_precios
 from backend_escalacv import (
-    cargar_datos_escalacv,
     graficar_comparativa_spot_horaria_mensual,
     graficar_comparativa_spot_mensual,
     graficar_media_acumulada_periodo,
@@ -18,6 +17,7 @@ from backend_telemindex import (
     graficar_diferencial_precios_mensuales,
     graficar_media_acumulada_mensual_atr,
     graficar_precios_medios_horarios,
+    preparar_comparativa_mensual_indexados,
 )
 from backend_mibgas import (
     filtrar_por_producto,
@@ -31,7 +31,12 @@ from backend_redata_potgen import (
     leer_json as leer_json_redata,
     preparar_mix_generacion_mensual,
 )
-from utilidades import generar_menu, init_app, init_app_index
+from utilidades import (
+    generar_menu,
+    init_app,
+    init_app_index,
+    obtener_datos_mercado,
+)
 from formato_es import (
     formato_cent_eur_kwh,
     formato_eur_mwh,
@@ -150,18 +155,8 @@ unidad_mix_comparativo = st.sidebar.selectbox(
 st.subheader(f"Evolución del mes de {meses[mes_dashboard]}.")
 
 with st.spinner("Cargando datos de mercado..."):
-    datos, _, fecha_fin = cargar_datos_escalacv(
-        componente=componente,
-        file_id_spot=st.secrets["FILE_ID_SPOT"],
-        file_id_ssaa=st.secrets["FILE_ID_SSAA"],
-        creds_dict=st.secrets["GOOGLE_SHEETS_CREDENTIALS"],
-    )
-    datos_spot_comparativa, _, fecha_fin_spot = cargar_datos_escalacv(
-        componente="SPOT",
-        file_id_spot=st.secrets["FILE_ID_SPOT"],
-        file_id_ssaa=st.secrets["FILE_ID_SSAA"],
-        creds_dict=st.secrets["GOOGLE_SHEETS_CREDENTIALS"],
-    )
+    datos, _, fecha_fin = obtener_datos_mercado(componente)
+    datos_spot_comparativa, _, fecha_fin_spot = obtener_datos_mercado("SPOT")
 
 datos_mes = datos[
     (datos["año"] == año_dashboard) & (datos["mes"] == mes_dashboard)
@@ -710,37 +705,15 @@ with comp_col1:
         )
 
 with comp_col2:
-    columnas_indexado = ["spot", "precio_2.0", "precio_3.0", "precio_6.1"]
-    datos_indexado_comparativa = datos_indexado[
-        (datos_indexado["fecha"].dt.month == mes_dashboard)
-        & datos_indexado["fecha"].dt.year.isin(
-            [año_actual_comparativa, año_base_comparativa]
+    resumen_indexado_comparativa, fechas_corte_indexado = (
+        preparar_comparativa_mensual_indexados(
+            datos_indexado,
+            anio_base=año_base_comparativa,
+            anio_comp=año_actual_comparativa,
+            mes_num=mes_dashboard,
         )
-    ].copy()
-    fechas_indexado_actual = datos_indexado_comparativa.loc[
-        datos_indexado_comparativa["fecha"].dt.year
-        == año_actual_comparativa,
-        "fecha",
-    ].dropna()
-    fecha_corte_indexado = (
-        fechas_indexado_actual.max()
-        if not fechas_indexado_actual.empty
-        else None
     )
-    if fecha_corte_indexado is not None:
-        datos_indexado_comparativa = datos_indexado_comparativa[
-            datos_indexado_comparativa["fecha"].dt.day
-            <= fecha_corte_indexado.day
-        ]
-    resumen_indexado_comparativa = (
-        datos_indexado_comparativa.assign(
-            año=lambda df: df["fecha"].dt.year,
-            mes_num=lambda df: df["fecha"].dt.month,
-        )
-        .groupby(["año", "mes_num"], as_index=False)[columnas_indexado]
-        .mean()
-    )
-    resumen_indexado_comparativa[columnas_indexado] /= 10
+    fecha_corte_indexado = fechas_corte_indexado.get(mes_dashboard)
 
     st.caption(
         "Precios finales según ATR · diferencias en c€/kWh · "

@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 
 
-ATRS_INDEXADOS = ("2.0", "3.0", "6.1")
+ATRS_INDEXADOS = ("2.0", "3.0", "6.1", "6.2")
+ATRS_COMPONENTES_OBLIGATORIOS = ("2.0", "3.0", "6.1")
 POSICIONES_FORMULA = {"perdidas", "tm", "neto"}
 
 
@@ -33,7 +34,7 @@ def _validar_formula_y_componentes(
     requeridas = {"spot", "ssaa", "osom"}
     if formula.incluir_fnee:
         requeridas.add("fnee")
-    for atr in ATRS_INDEXADOS:
+    for atr in ATRS_COMPONENTES_OBLIGATORIOS:
         requeridas.update({f"ppcc_{atr}", f"perd_{atr}", f"pyc_{atr}"})
     faltantes = sorted(requeridas.difference(df.columns))
     if faltantes:
@@ -46,9 +47,28 @@ def _validar_formula_y_componentes(
         resultado[columna] = pd.to_numeric(resultado[columna], errors="coerce")
         invalidos = resultado[columna].isna() | ~np.isfinite(resultado[columna])
         if invalidos.any():
+            muestra = resultado.loc[invalidos]
+            if "fecha_hora" in muestra.columns:
+                referencias = pd.to_datetime(
+                    muestra["fecha_hora"], errors="coerce"
+                ).dt.strftime("%d/%m/%Y %H:%M")
+            elif {"fecha", "hora"}.issubset(muestra.columns):
+                referencias = (
+                    muestra["fecha"].astype(str)
+                    + " hora "
+                    + muestra["hora"].astype(str)
+                )
+            else:
+                referencias = pd.Series(dtype="string")
+            referencias = referencias.dropna().head(3).tolist()
+            detalle = (
+                " Intervalos: " + ", ".join(referencias) + "."
+                if referencias
+                else ""
+            )
             raise ValueError(
                 f"El componente {columna} contiene {int(invalidos.sum())} "
-                "valores vacíos o no numéricos."
+                f"valores vacíos o no numéricos.{detalle}"
             )
     return resultado
 
@@ -63,7 +83,15 @@ def calcular_precios_atr_formula(
     margen = formula.margen
     resultado = _validar_formula_y_componentes(df, formula)
 
-    for atr in ATRS_INDEXADOS:
+    atrs_disponibles = [
+        atr for atr in ATRS_INDEXADOS
+        if all(
+            columna in resultado
+            and pd.to_numeric(resultado[columna], errors="coerce").notna().all()
+            for columna in (f"ppcc_{atr}", f"perd_{atr}", f"pyc_{atr}")
+        )
+    ]
+    for atr in atrs_disponibles:
         base = (
             resultado["spot"]
             + resultado["ssaa"]
@@ -261,6 +289,9 @@ def construir_desglose_precio_indexado(
     """
     if atr not in ATRS_INDEXADOS:
         raise ValueError(f"ATR no soportado: {atr}.")
+    if columna_consumo:
+        consumo = pd.to_numeric(df[columna_consumo], errors="coerce")
+        df = df[consumo.fillna(0) != 0].copy()
     calculado = calcular_precios_atr_formula(df, formula)
     periodo = _columna_periodo_desglose(calculado, atr)
     pesos = calculado[columna_consumo] if columna_consumo else None

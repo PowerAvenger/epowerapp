@@ -17,12 +17,29 @@ from backend_comun import aplicar_estilo
 from report_generator import preparar_informe, generar_formato_informe
 from utils_docx import generar_docx_bytes, insertar_tabla
 from formato_es import formato_euros, formato_numero_es
+from componentes_curva import render_origen_curva
 
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
 
 generar_menu()
+
+tab_entrada, tab_optimizacion, tab_verificacion, tab_comparacion, tab_informe = st.tabs(
+    ['Datos de entrada', 'Optimización', 'Verificación', 'Comparar potencias', 'Informe']
+)
+with tab_entrada:
+    col_origen_curva, col_datos_potencia, col_avisos_acciones = st.columns(
+        [0.36, 0.34, 0.30], gap="large"
+    )
+
+col_avisos_acciones.subheader("Avisos y acciones", divider="rainbow")
+
+render_origen_curva(
+    col_origen_curva,
+    col_avisos_acciones,
+    clave="termino_potencia_curva",
+)
 
 
 
@@ -51,9 +68,10 @@ if "df_pot" not in st.session_state:
 else:
     df_pot_ini = st.session_state.df_pot
 
-st.sidebar.markdown("### Potencias contratadas")
+col_datos_potencia.subheader("Datos de potencia", divider="rainbow")
+col_datos_potencia.markdown("#### Potencias contratadas")
 
-df_pot_edit = st.sidebar.data_editor(
+df_pot_edit = col_datos_potencia.data_editor(
     df_pot_ini,
     use_container_width=True,
     num_rows="fixed",
@@ -80,15 +98,20 @@ def validar_potencias(df):
     return errores
 
 
-if st.sidebar.button('Cargar potencias contratadas', use_container_width=True, type='primary'):
+if col_avisos_acciones.button(
+    'Cargar potencias contratadas',
+    use_container_width=True,
+    type='primary',
+    key='cargar_potencias_contratadas',
+):
     errores = validar_potencias(df_pot_edit)
 
     if errores:
         for e in errores:
-            st.sidebar.error(e)
+            col_avisos_acciones.error(e)
     else:
         st.session_state.df_pot = df_pot_edit
-        st.sidebar.success("Potencias cargadas correctamente")
+        col_avisos_acciones.success("Potencias cargadas correctamente")
     st.session_state.df_pot = df_pot_edit
 
 
@@ -103,7 +126,7 @@ modo1 = p6 <= 50
 if st.session_state.forzar_maximetros:
     modo1 =p6
 
-st.sidebar.radio(
+col_datos_potencia.radio(
     "Selecciona potencia P6",
     ["Mantener", "No mantener"],
     horizontal=True,
@@ -147,7 +170,7 @@ if atr_sips_potencia in {"2.0", "3.0", "6.1", "6.2", "6.3", "6.4"}:
 
 #if modo1 and tarifa == "Ninguno":
 if modo1 and tarifa:
-    tarifa = st.sidebar.selectbox(
+    tarifa = col_datos_potencia.selectbox(
         "Peaje de acceso",
         ["2.0", "3.0", "6.1", "6.2", "6.3", "6.4"],
         index=1,
@@ -156,18 +179,18 @@ if modo1 and tarifa:
     )
     if sips_potencia_detectado is not None:
         if atr_sips_potencia is None:
-            st.sidebar.warning(
+            col_avisos_acciones.warning(
                 "El SIPS no informa el ATR. Selecciónalo manualmente."
             )
         else:
-            st.sidebar.info(
+            col_avisos_acciones.info(
                 f"ATR {atr_sips_potencia}TD leído del SIPS. "
                 "El selector queda bloqueado."
             )
 
 if p6>50:
         
-    st.sidebar.checkbox(
+    col_datos_potencia.checkbox(
         "Forzar optimización por maxímetro aunque P6 > 50 kW",
         value=False,
         help="Activa esta opción si quieres aplicar el método de maxímetro incluso en suministros con P6 superior a 50 kW.",
@@ -177,12 +200,12 @@ if p6>50:
 if modo1:
     # P6 <= 50 → maxímetros
 
-    st.sidebar.write(f'El peaje del suministro es **:orange[{tarifa}]**')
-    st.sidebar.info('Modo P6 ≤ 50: optimización mediante maxímetros')
+    col_avisos_acciones.write(f'El peaje del suministro es **:orange[{tarifa}]**')
+    col_avisos_acciones.info('Modo P6 ≤ 50: optimización mediante maxímetros')
     if st.session_state.forzar_maximetros:
-        st.sidebar.warning('¡¡Estás optimizando mediante maxímetros con P6 >50kW!!')
+        col_avisos_acciones.warning('¡¡Estás optimizando mediante maxímetros con P6 >50kW!!')
 
-    archivo_max = st.sidebar.file_uploader(
+    archivo_max = col_datos_potencia.file_uploader(
         "Sube tabla manual de maxímetros o CSV SIPS",
         type=["xlsx", "csv"],
         key="upload_maximetros"
@@ -199,7 +222,7 @@ if modo1:
                      "P1", "P2", "P3", "P4", "P5", "P6"]
                 ].copy()
                 st.session_state.sips_termino_potencia = sips_potencia
-                st.sidebar.info(
+                col_avisos_acciones.info(
                     "SIPS leído: consumos, reactiva y maxímetros disponibles."
                 )
             else:
@@ -211,15 +234,15 @@ if modo1:
                 )
 
             st.session_state.df_maximetros = df_maximetros
-            st.sidebar.success("Tabla de maxímetros cargada correctamente")
+            col_avisos_acciones.success("Tabla de maxímetros cargada correctamente")
 
         except Exception as e:
-            st.sidebar.error(f"Error en tabla de maxímetros: {e}")
+            col_avisos_acciones.error(f"Error en tabla de maxímetros: {e}")
             habilitar_opt = False
             habilitar_ver = False
 
     if 'df_maximetros' not in st.session_state or st.session_state.df_maximetros is None:
-        st.sidebar.warning('Por favor introduce una tabla de maxímetros')
+        col_avisos_acciones.warning('Por favor introduce una tabla de maxímetros')
         habilitar_opt = False
         habilitar_ver = False
 
@@ -236,23 +259,23 @@ if modo1:
         }
 
         meses_maximetros = len(df_in)
-        st.sidebar.caption('Costes regulados aplicados: 2026')
+        col_avisos_acciones.caption('Costes regulados aplicados: 2026')
         if len(df_maximetros_disponibles) > 12:
-            st.sidebar.caption(
+            col_avisos_acciones.caption(
                 f'Se usan los 12 meses más recientes de '
                 f'{len(df_maximetros_disponibles)} disponibles.'
             )
         if meses_maximetros < 12:
-            st.sidebar.warning(
+            col_avisos_acciones.warning(
                 f'Optimización basada en {meses_maximetros} mes(es) de '
                 'maxímetros. El resultado puede no representar la '
                 'estacionalidad anual.',
                 icon='⚠️'
             )
         elif meses_maximetros == 12:
-            st.sidebar.success('Periodo recomendado: 12 meses analizados.')
+            col_avisos_acciones.success('Periodo recomendado: 12 meses analizados.')
         else:
-            st.sidebar.info(
+            col_avisos_acciones.info(
                 f'Optimización basada en {meses_maximetros} meses.'
             )
 
@@ -262,22 +285,22 @@ if modo1:
 else:
     if 'df_norm' not in st.session_state or st.session_state.df_norm is None:
         #st.session_state.df_norm = None
-        st.sidebar.warning('Por favor introduce una curva de carga')
+        col_avisos_acciones.warning('Por favor introduce una curva de carga')
         habilitar_opt = False
         habilitar_ver = False
     else:
         #tarifa = st.session_state.atr_dfnorm
         if tarifa != '2.0':
             df_in = leer_curva_normalizada(pot_con)
-            st.sidebar.write(f'El peaje del suministro es **:orange[{st.session_state.atr_dfnorm}]**')
-            st.sidebar.info('Pincha en la opción activada')
+            col_avisos_acciones.write(f'El peaje del suministro es **:orange[{st.session_state.atr_dfnorm}]**')
+            col_avisos_acciones.info('Selecciona la acción que quieras ejecutar.')
             fecha_ini, fecha_fin = st.session_state.rango_curvadecarga
             fechas_verificacion_disponibles = pd.to_datetime(
                 df_in['fecha_hora'], errors='coerce'
             ).dropna()
             fecha_min_verificacion = fechas_verificacion_disponibles.min().date()
             fecha_max_verificacion = fechas_verificacion_disponibles.max().date()
-            rango_verificacion = st.sidebar.date_input(
+            rango_verificacion = col_datos_potencia.date_input(
                 'Rango de fechas de la verificación',
                 value=(fecha_min_verificacion, fecha_max_verificacion),
                 min_value=fecha_min_verificacion,
@@ -297,7 +320,7 @@ else:
 
             if st.session_state.frec =='H':
                 coef_excesos = 2
-                st.sidebar.warning('Cálculo de excesos con curva HORARIA', icon='⚠️')
+                col_avisos_acciones.warning('Cálculo de excesos con curva HORARIA', icon='⚠️')
             else:
                 coef_excesos = 1
 
@@ -318,24 +341,24 @@ else:
             meses_incompletos = cobertura_mensual[
                 cobertura_mensual['dias_observados'] < cobertura_mensual['dias_mes']
             ]
-            st.sidebar.caption('Costes regulados aplicados: 2026')
+            col_avisos_acciones.caption('Costes regulados aplicados: 2026')
             if periodos_analizados < 12:
-                st.sidebar.warning(
+                col_avisos_acciones.warning(
                     f'Optimización basada en {periodos_analizados} mes(es). '
                     'El resultado puede no representar la estacionalidad anual.',
                     icon='⚠️'
                 )
             elif periodos_analizados == 12:
-                st.sidebar.success('Periodo recomendado: 12 meses analizados.')
+                col_avisos_acciones.success('Periodo recomendado: 12 meses analizados.')
             else:
-                st.sidebar.info(
+                col_avisos_acciones.info(
                     f'Optimización basada en {periodos_analizados} meses.'
                 )
             if not meses_incompletos.empty:
                 etiquetas_incompletas = ', '.join(
                     str(periodo) for periodo in meses_incompletos.index
                 )
-                st.sidebar.warning(
+                col_avisos_acciones.warning(
                     'Meses parciales (coste de potencia prorrateado por días): '
                     f'{etiquetas_incompletas}.',
                     icon='⚠️'
@@ -351,7 +374,7 @@ else:
 
             # Un mes natural también se puede verificar.
             if dias_rango <= const_verif:
-                st.sidebar.info('Es posible verificar.')
+                col_avisos_acciones.info('Es posible verificar.')
                 habilitar_ver = True
                 pyc_tp_ver = pyc_tp[año_ver][tarifa]
                 tepp_ver = {
@@ -359,20 +382,22 @@ else:
                     for k, v in tepp123[año_ver][tarifa].items()
                 }
             else:
-                st.sidebar.info('Es posible optimizar.')
+                col_avisos_acciones.info('Es posible optimizar.')
                 habilitar_ver = False
             
         else:
-            st.sidebar.error('No es posible ejecutar ninguna acción. El peaje de acceso es 2.0TD', icon='⚠️')
+            col_avisos_acciones.error('No es posible ejecutar ninguna acción. El peaje de acceso es 2.0TD', icon='⚠️')
             habilitar_opt = False
             habilitar_ver = False
         
 
-submit_opt = st.sidebar.button("🔄 Calcular optimización", type='primary', use_container_width=True, disabled=not habilitar_opt)
-submit_ver = st.sidebar.button("🔄 Realizar verificación", type='primary', use_container_width=True, disabled=not habilitar_ver)
-
-tab_optimizacion, tab_verificacion, tab_comparacion, tab_informe = st.tabs(
-    ['Optimización', 'Verificación', 'Comparar potencias', 'Informe']
+submit_opt = col_avisos_acciones.button(
+    "🔄 Calcular optimización", type='primary', use_container_width=True,
+    disabled=not habilitar_opt,
+)
+submit_ver = col_avisos_acciones.button(
+    "🔄 Realizar verificación", type='primary', use_container_width=True,
+    disabled=not habilitar_ver,
 )
 
 resultados = None    

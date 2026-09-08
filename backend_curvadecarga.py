@@ -3,13 +3,18 @@ import plotly.express as px
 import pandas as pd
 import numpy as np
 import io, re
+from functools import lru_cache
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from pathlib import Path
 from unidecode import unidecode
 import plotly.graph_objects as go
-from backend_comun import aplicar_estilo, aplicar_texto_pie_porcentaje
+from backend_comun import (
+    aplicar_estilo,
+    aplicar_texto_pie_porcentaje,
+    filtrar_intervalos_inexistentes_madrid,
+)
 from formato_es import formato_numero_es
 
 
@@ -162,16 +167,37 @@ def analizar_calidad_curva(
     diagnostico["consumos_negativos"] = int((consumos < 0).sum())
 
     fechas_validas = fechas.dropna()
-    diagnostico["duplicados_fecha_hora"] = int(
-        len(fechas_validas) - fechas_validas.nunique()
+    conteos_fechas = fechas_validas.value_counts()
+    duplicados = (conteos_fechas - 1).clip(lower=0)
+    # En el último domingo de octubre, 02:00–02:59 ocurre dos veces.
+    duplicados_dst = (
+        (duplicados.index.month == 10)
+        & (duplicados.index.day >= 25)
+        & (duplicados.index.dayofweek == 6)
+        & duplicados.index.hour.isin([1, 2])
+    )
+    diagnostico["duplicados_fecha_hora"] = int(duplicados.sum())
+    diagnostico["duplicados_cambio_hora_octubre"] = int(
+        duplicados.loc[duplicados_dst].sum()
     )
     minutos_esperados = {"H": 60, "QH": 15, "10MIN": 10}.get(frecuencia)
     if minutos_esperados and not fechas_validas.empty:
-        diferencias = (
-            fechas_validas.drop_duplicates().sort_values().diff().dt.total_seconds()
-            / 60
+        fechas_ordenadas = fechas_validas.drop_duplicates().sort_values()
+        diferencias = pd.Series(
+            fechas_ordenadas.diff().dt.total_seconds().to_numpy() / 60,
+            index=pd.DatetimeIndex(fechas_ordenadas),
         ).dropna()
         saltos = diferencias[diferencias > minutos_esperados * 1.5]
+        # El último domingo de marzo salta oficialmente de 01:xx a 03:xx.
+        fechas_salto = saltos.index
+        saltos_dst = (
+            (fechas_salto.month == 3)
+            & (fechas_salto.day >= 25)
+            & (fechas_salto.dayofweek == 6)
+            & (fechas_salto.hour == 3)
+            & np.isclose(saltos, minutos_esperados + 60)
+        )
+        saltos = saltos.loc[~saltos_dst]
         diagnostico["saltos_temporales"] = int(len(saltos))
         diagnostico["intervalos_ausentes_estimados"] = int(
             ((saltos / minutos_esperados).round() - 1).clip(lower=0).sum()
@@ -214,6 +240,63 @@ def cargar_calendario_periodos(periodos_path, mtime_ns):
         dayfirst=True,
     )
     return df_periodos
+
+
+@lru_cache(maxsize=1)
+def cargar_matriz_periodos_zonas():
+    """Carga la matriz compacta derivada de los cinco calendarios oficiales."""
+    ruta = BASE_DIR / "utils" / "periodos_horarios_zonas.csv.gz"
+    matriz = pd.read_csv(ruta, parse_dates=["fecha_hora"], dtype="string")
+    matriz["fecha_hora"] = pd.to_datetime(matriz["fecha_hora"], errors="coerce")
+    return matriz
+
+
+def inferir_zonas_por_periodos(df_norm):
+    """Obtiene las zonas cuyos calendarios coinciden con los periodos de origen."""
+    zonas = ("peninsula", "baleares", "canarias", "ceuta", "melilla")
+    if df_norm is None or df_norm.empty or "periodo" not in df_norm.columns:
+        return [], 0.0
+
+    periodos = (
+        df_norm[["fecha_hora", "periodo"]]
+        .assign(
+            fecha_hora=lambda df: pd.to_datetime(
+                df["fecha_hora"], errors="coerce"
+            ).dt.floor("h"),
+            periodo=lambda df: (
+                df["periodo"].astype("string").str.upper().str.strip()
+            ),
+        )
+        .dropna()
+        .drop_duplicates(["fecha_hora", "periodo"])
+        .drop_duplicates("fecha_hora", keep="first")
+    )
+    if periodos.empty:
+        return [], 0.0
+    numeros = periodos["periodo"].str.extract(r"P?(\d+)", expand=False)
+    numeros = pd.to_numeric(numeros, errors="coerce").dropna()
+    if numeros.empty:
+        return [], 0.0
+
+    matriz = cargar_matriz_periodos_zonas()
+    comparacion = periodos.merge(matriz, on="fecha_hora", how="inner")
+    cobertura = len(comparacion) / len(periodos)
+    if comparacion.empty:
+        return [], cobertura
+
+    if numeros.max() <= 3:
+        compatibles = [
+            zona
+            for zona in zonas
+            if comparacion["periodo"].eq(comparacion["p3"]).all()
+        ]
+    else:
+        compatibles = [
+            zona
+            for zona in zonas
+            if comparacion["periodo"].eq(comparacion[f"p6_{zona}"]).all()
+        ]
+    return compatibles, cobertura
 
 def obtener_datos_contador(
     usuario,
@@ -1219,6 +1302,90 @@ def detectar_hojas_curva_excel(uploaded_or_path):
             uploaded_or_path.seek(posicion)
 
 
+def detectar_periodos_en_fuente(uploaded_or_path, preferred_sheet=None):
+    """Detecta mediante una prelectura ligera si el origen aporta periodos.
+
+    Solo se leen las primeras filas. La posición de los archivos en memoria se
+    restaura para que esta inspección no interfiera con la normalización.
+    """
+    posicion = None
+    if hasattr(uploaded_or_path, "tell"):
+        try:
+            posicion = uploaded_or_path.tell()
+        except Exception:
+            posicion = None
+
+    def muestra_contiene_periodos(muestra):
+        if muestra is None or muestra.empty:
+            return False
+        limite = min(10, len(muestra))
+        for indice_fila in range(limite):
+            cabecera = muestra.iloc[indice_fila].astype(str).map(_clean)
+            indices_periodo = [
+                indice
+                for indice, valor in enumerate(cabecera)
+                if re.search(r"periodo|^p$|^p[1-6]$", valor)
+            ]
+            for indice_columna in indices_periodo:
+                valores = (
+                    muestra.iloc[indice_fila + 1:, indice_columna]
+                    .astype("string")
+                    .str.strip()
+                    .str.lower()
+                )
+                if valores.str.match(
+                    r"^(?:p\s*)?[1-6](?:\.0)?$|^(?:punta|llano|valle)$",
+                    na=False,
+                ).any():
+                    return True
+        return False
+
+    try:
+        nombre = str(getattr(uploaded_or_path, "name", uploaded_or_path)).lower()
+        if nombre.endswith(".csv"):
+            if isinstance(uploaded_or_path, (str, Path)):
+                contenido = Path(uploaded_or_path).read_bytes()[:262144]
+            else:
+                uploaded_or_path.seek(0)
+                contenido = uploaded_or_path.read(262144)
+            texto = None
+            for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+                try:
+                    texto = contenido.decode(encoding)
+                    break
+                except UnicodeDecodeError:
+                    continue
+            if texto is None:
+                return False
+            muestra_texto = texto[:4096]
+            separador = ";" if muestra_texto.count(";") > muestra_texto.count(",") else ","
+            muestra = pd.read_csv(
+                io.StringIO(texto), sep=separador, dtype=str,
+                header=None, nrows=25, skip_blank_lines=True,
+            )
+            return muestra_contiene_periodos(muestra)
+
+        xls = pd.ExcelFile(uploaded_or_path)
+        if preferred_sheet in xls.sheet_names:
+            hojas = [preferred_sheet]
+        elif "Cuarto horarias" in xls.sheet_names:
+            hojas = ["Cuarto horarias"]
+        elif "Horarias" in xls.sheet_names:
+            hojas = ["Horarias"]
+        else:
+            hojas = xls.sheet_names
+        muestras = [
+            pd.read_excel(
+                xls, sheet_name=hoja, dtype=str, header=None, nrows=25
+            )
+            for hoja in hojas
+        ]
+        return any(muestra_contiene_periodos(muestra) for muestra in muestras)
+    finally:
+        if posicion is not None and hasattr(uploaded_or_path, "seek"):
+            uploaded_or_path.seek(posicion)
+
+
 def _read_any(uploaded_or_path, preferred_sheet=None):
     """
     Lee CSV o Excel forzando texto (sin autoconversión de fechas) y
@@ -1472,7 +1639,7 @@ def _guess_cols(df: pd.DataFrame):
         ])
     c_time = find([r"hora", r"hour",r"hr", r"time", r"^h$"])
     #c_quarter = find([r"cuarto", r"q$", r"qh", r"15"])
-    c_quarter = find([r"^cuarto$", r"q$", r"qh"])
+    c_quarter = find([r"^cuarto$", r"^ch$", r"q$", r"qh"])
     
     #c_kwh = find([r"consumo", r"energia", r"kwh", r"ae", r"active.?energy", r"importada", r"activa"])
     c_kwh = find(
@@ -1590,6 +1757,10 @@ def normalize_curve_simple(
     endesa_qh = False
     try:
         # Determinamos el formato de fecha hora
+        if c_time and c_quarter:
+            # Si existen hora y cuarto explícitos son más fiables que una
+            # columna Fecha de Excel con fórmulas o valores calculados.
+            raise ValueError("NO_DATETIME")
         if c_dt:
             # Disponemos de fecha y hora en la misma columna
             sample = str(df[c_dt].dropna().iloc[0]).strip()
@@ -1627,17 +1798,43 @@ def normalize_curve_simple(
         if str(e) == "NO_DATETIME":
             # --- Caso cuartohorario explícito: HORA + CUARTO EN COLUMNAS SEPARADAS. CASO TIPO ENDESA QH---
             if c_time and c_quarter:
-                d = _parse_date_ddmmyyyy(df[c_date])
+                d_raw = _parse_date_ddmmyyyy(df[c_date]).dt.normalize()
+                h = pd.to_numeric(df[c_time], errors="coerce")
+                q = pd.to_numeric(df[c_quarter], errors="coerce")
 
-                h = pd.to_numeric(df[c_time], errors="coerce").fillna(0)
-                q = pd.to_numeric(df[c_quarter], errors="coerce").fillna(1)
+                hora_base = 0 if h.min() == 0 else 1
+                inicio_dia = h.eq(hora_base) & q.eq(1)
+                grupo_dia = inicio_dia.cumsum()
 
-                # CUARTO: 1–4 → minutos 0,15,30,45
+                # La moda de cada bloque diario corrige celdas Fecha aisladas
+                # con fórmulas erróneas sin inventar días ausentes.
+                def fecha_representativa(serie):
+                    moda = serie.mode(dropna=True)
+                    return moda.iloc[0] if not moda.empty else pd.NaT
+
+                d = d_raw.groupby(grupo_dia).transform(fecha_representativa)
+                max_hora_dia = h.groupby(grupo_dia).transform("max")
+
+                if hora_base == 1:
+                    hora_reloj = h - 1
+                    # Día corto: después de 01:xx se salta a 03:xx.
+                    hora_reloj = hora_reloj.where(
+                        ~((max_hora_dia == 23) & (h >= 3)),
+                        h,
+                    )
+                    # Día largo: las horas ordinales 3 y 4 representan las
+                    # dos ocurrencias de 02:xx; después continúa 03…23.
+                    hora_reloj = hora_reloj.where(
+                        ~((max_hora_dia == 25) & (h >= 4)),
+                        h - 2,
+                    )
+                else:
+                    hora_reloj = h
+
                 minutos = (q - 1) * 15
-
                 dt0 = (
                     d
-                    + pd.to_timedelta(h, unit="h")
+                    + pd.to_timedelta(hora_reloj, unit="h")
                     + pd.to_timedelta(minutos, unit="m")
                 )
 
@@ -1763,6 +1960,22 @@ def normalize_curve_simple(
         # si empieza en 01:00, corregir desplazando 1h atrás
         if h0 == 1:
             dt_adj = dt0 - pd.Timedelta(hours=1)
+            # En curvas con marca de fin de intervalo, el salto oficial de
+            # primavera viene como 01:00 -> 03:00. La lectura rotulada 03:00
+            # corresponde al intervalo que comienza a las 01:00, no a una
+            # inexistente 02:00.
+            anterior = dt0.shift(1)
+            salto_primavera = (
+                (dt0.dt.month == 3)
+                & (dt0.dt.day >= 25)
+                & (dt0.dt.dayofweek == 6)
+                & (dt0.dt.hour == 3)
+                & (anterior.dt.normalize() == dt0.dt.normalize())
+                & (anterior.dt.hour == 1)
+            )
+            dt_adj.loc[salto_primavera] = (
+                dt0.loc[salto_primavera] - pd.Timedelta(hours=2)
+            )
         else:
             dt_adj = dt0.copy()
     elif freq == "QH":
@@ -1866,6 +2079,7 @@ def normalize_curve_simple(
         "capacitiva_kVArh": cap,
         "periodo": periodo
     }).sort_values("fecha_hora").reset_index(drop=True)
+    df_norm = filtrar_intervalos_inexistentes_madrid(df_norm).reset_index(drop=True)
 
     # Extraer la hora (0–23)
     df_norm["hora"] = df_norm["fecha_hora"].dt.hour

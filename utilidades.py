@@ -3,7 +3,11 @@ import datetime
 from pathlib import Path
 import pandas as pd
 from backend_comun import autenticar_google_sheets, carga_total_sheets, cargar_componentes_csv, cargar_precios_snp_csv, calcular_precios_atr
-from backend_escalacv import leer_json
+from backend_escalacv import (
+    cargar_series_mercado,
+    combinar_series_mercado,
+    leer_json,
+)
 from backend_telemindex import COMPONENTES_SSAA_FORMULA, construir_df_rad3_manual, añadir_fnee
 
 
@@ -412,12 +416,92 @@ def init_app_index_old():
         st.session_state.zona_periodos_index = "peninsula"
 
 
+_CLAVES_DATOS_MERCADO = (
+    '_mercado_datos_spot',
+    '_mercado_fecha_ini_spot',
+    '_mercado_fecha_fin_spot',
+    '_mercado_datos_ssaa',
+    '_mercado_fecha_ini_ssaa',
+    '_mercado_fecha_fin_ssaa',
+    'datos_total_escalacv',
+    'fecha_ini_escalacv',
+    'fecha_fin_escalacv',
+    '_escalacv_componente_cargado',
+    '_escalacv_datos_spot_general',
+    '_escalacv_datos_ssaa_general',
+    '_escalacv_error_ssaa_general',
+    '_escalacv_spreads_spot',
+    '_escalacv_spreads_ssaa',
+)
+
+
+def init_datos_mercado():
+    """Precarga SPOT y SSAA una vez por sesión para toda ePowerApp."""
+    if (
+        st.session_state.get('_mercado_datos_spot') is not None
+        and st.session_state.get('_mercado_datos_ssaa') is not None
+    ):
+        return (
+            (
+                st.session_state._mercado_datos_spot,
+                st.session_state._mercado_fecha_ini_spot,
+                st.session_state._mercado_fecha_fin_spot,
+            ),
+            (
+                st.session_state._mercado_datos_ssaa,
+                st.session_state._mercado_fecha_ini_ssaa,
+                st.session_state._mercado_fecha_fin_ssaa,
+            ),
+        )
+
+    datos_spot, datos_ssaa = cargar_series_mercado(
+        st.secrets['FILE_ID_SPOT'],
+        st.secrets['FILE_ID_SSAA'],
+        st.secrets['GOOGLE_SHEETS_CREDENTIALS'],
+    )
+    spot, fecha_ini_spot, fecha_fin_spot = datos_spot
+    ssaa, fecha_ini_ssaa, fecha_fin_ssaa = datos_ssaa
+    st.session_state._mercado_datos_spot = spot
+    st.session_state._mercado_fecha_ini_spot = fecha_ini_spot
+    st.session_state._mercado_fecha_fin_spot = fecha_fin_spot
+    st.session_state._mercado_datos_ssaa = ssaa
+    st.session_state._mercado_fecha_ini_ssaa = fecha_ini_ssaa
+    st.session_state._mercado_fecha_fin_ssaa = fecha_fin_ssaa
+    return datos_spot, datos_ssaa
+
+
+def actualizar_datos_mercado():
+    """Invalida exclusivamente SPOT/SSAA y vuelve a leerlos desde Drive."""
+    cargar_series_mercado.clear()
+    leer_json.clear()
+    for clave in _CLAVES_DATOS_MERCADO:
+        st.session_state.pop(clave, None)
+    return init_datos_mercado()
+
+
+def obtener_datos_mercado(componente):
+    """Devuelve SPOT, SSAA o la suma usando las series comunes de sesión."""
+    if componente not in {'SPOT', 'SSAA', 'SPOT+SSAA'}:
+        raise ValueError(f'Componente de mercado no válido: {componente}')
+
+    (datos_spot, fecha_ini_spot, fecha_fin_spot), (
+        datos_ssaa,
+        fecha_ini_ssaa,
+        fecha_fin_ssaa,
+    ) = init_datos_mercado()
+    if componente == 'SPOT':
+        return datos_spot, fecha_ini_spot, fecha_fin_spot
+    if componente == 'SSAA':
+        return datos_ssaa, fecha_ini_ssaa, fecha_fin_ssaa
+
+    datos = combinar_series_mercado(datos_spot, datos_ssaa)
+    return datos, max(fecha_ini_spot, fecha_ini_ssaa), min(
+        fecha_fin_spot, fecha_fin_ssaa
+    )
+
+
 def init_app_json_escalacv():
-    """
-    Inicializa los datos OMIE (SPOT, SSAA o ambos combinados)
-    y los guarda en st.session_state para uso compartido entre páginas.
-    """
-    
+    """Expone el mercado precargado con el componente elegido en Escala CV."""
     componente_actual = st.session_state.get('componente', 'SPOT')
     if (
         st.session_state.get('_escalacv_componente_cargado')
@@ -428,57 +512,14 @@ def init_app_json_escalacv():
     ):
         return
 
-    #CODIGO ORIGINAL DE escalacv.py-----------------------------------------------------------------------------
-    CREDENTIALS = st.secrets['GOOGLE_SHEETS_CREDENTIALS']
-    #componente = st.session_state.get('componente', 'SPOT')
+    (datos_spot, _, _), (datos_ssaa, _, _) = init_datos_mercado()
 
-    if st.session_state.get('componente', 'SPOT') == 'SPOT':
-        FILE_ID = st.secrets['FILE_ID_SPOT']
-        datos_total, fecha_ini, fecha_fin = leer_json(FILE_ID, CREDENTIALS)
-        st.session_state._escalacv_datos_spot_general = datos_total
+    st.session_state._escalacv_datos_spot_general = datos_spot
+    st.session_state._escalacv_datos_ssaa_general = datos_ssaa
+    datos_total, fecha_ini, fecha_fin = obtener_datos_mercado(
+        componente_actual
+    )
 
-    elif st.session_state.get('componente', 'SPOT') == 'SSAA':
-        FILE_ID = st.secrets['FILE_ID_SSAA']
-        datos_total, fecha_ini, fecha_fin = leer_json(FILE_ID, CREDENTIALS)
-        st.session_state._escalacv_datos_ssaa_general = datos_total
-
-    else:
-        # 🔹 Caso combinado (SPOT + SSAA)
-        FILE_ID_SPOT = st.secrets['FILE_ID_SPOT']
-        FILE_ID_SSAA = st.secrets['FILE_ID_SSAA']
-        datos_spot, fecha_ini_spot, fecha_fin_spot = leer_json(FILE_ID_SPOT, CREDENTIALS)
-        datos_ssaa, fecha_ini_ssaa, fecha_fin_ssaa = leer_json(FILE_ID_SSAA, CREDENTIALS)
-
-        # Conservamos las dos series ya obtenidas para el panel General. Así
-        # no se vuelven a materializar desde cache justo después de combinarlas.
-        st.session_state._escalacv_datos_spot_general = datos_spot
-        st.session_state._escalacv_datos_ssaa_general = datos_ssaa
-
-        datos_spot = datos_spot.reset_index()
-        datos_ssaa = datos_ssaa.reset_index()
-
-        datos_total = (
-            datos_spot[['datetime', 'value']].rename(columns={'value': 'value_spot'})
-            .merge(
-                datos_ssaa[['datetime', 'value']].rename(columns={'value': 'value_ssaa'}),
-                on='datetime',
-                how='inner'
-            )
-        )
-        datos_total['value'] = datos_total['value_spot'] + datos_total['value_ssaa']
-        datos_total['fecha'] = datos_total['datetime'].dt.date
-        datos_total['hora'] = datos_total['datetime'].dt.hour
-        datos_total['dia'] = datos_total['datetime'].dt.day
-        datos_total['mes'] = datos_total['datetime'].dt.month
-        datos_total['año'] = datos_total['datetime'].dt.year
-        datos_total.set_index('datetime', inplace=True)
-
-        fecha_ini = datos_total['fecha'].min()
-        fecha_fin = datos_total['fecha'].max()
-
-
-
-    # 💾 Guardar todo en sesión para reuso
     st.session_state.datos_total_escalacv = datos_total
     st.session_state.fecha_ini_escalacv = fecha_ini
     st.session_state.fecha_fin_escalacv = fecha_fin

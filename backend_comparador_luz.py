@@ -181,8 +181,12 @@ def calcular_costes_potencia(
     for _, oferta in ofertas.iterrows():
         modalidad_original = str(
             oferta.get("Potencia modalidad", "BOE")
-        ).upper()
-        modalidad = "BOE" if modalidad_original == "BOE" else "CON MARGEN"
+        ).strip().upper()
+        # Las ofertas manuales/IA antiguas pueden no tener modalidad. En
+        # ausencia de precios de potencia propios se aplica la referencia BOE.
+        modalidad = (
+            "CON MARGEN" if modalidad_original == "CON MARGEN" else "BOE"
+        )
         coste = 0.0
         for anio, dias in dias_por_anio.items():
             if modalidad == "BOE":
@@ -271,6 +275,7 @@ def calcular_escenarios_indexados_mensuales(
         var_name="periodo", value_name="consumo",
     )
     filas_resultado = []
+    filas_detalle = []
     for nombre, omie in escenarios.items():
         componentes = grupo.copy()
         componentes["spot"] = componentes["ap_spot"] * float(omie)
@@ -278,7 +283,7 @@ def calcular_escenarios_indexados_mensuales(
             componentes["ap_ssaa"] * float(ssaa_previsto) + float(srad_previsto)
         )
         componentes["fnee"] = float(fnee_previsto)
-        for tarifa in ("2.0", "3.0", "6.1"):
+        for tarifa in ("2.0", "3.0", "6.1", "6.2"):
             componentes[f"ppcc_{tarifa}"] = 0.0
             componentes[f"perd_{tarifa}"] = 0.0
             componentes[f"pyc_{tarifa}"] = 0.0
@@ -293,6 +298,15 @@ def calcular_escenarios_indexados_mensuales(
         ponderacion["coste"] = (
             ponderacion["consumo"] * ponderacion[f"precio_{atr}"] / 1000
         )
+        detalle_escenario = ponderacion[
+            ["mes", "periodo", "consumo", f"precio_{atr}", "coste"]
+        ].copy()
+        detalle_escenario["Oferta"] = nombre
+        detalle_escenario = detalle_escenario.rename(columns={
+            "mes": "Mes", "periodo": "Periodo", "consumo": "Consumo (kWh)",
+            f"precio_{atr}": "Precio (€/MWh)", "coste": "Coste (€)",
+        })
+        filas_detalle.append(detalle_escenario)
         coste = ponderacion["coste"].sum()
         energia = ponderacion["consumo"].sum()
         filas_resultado.append({
@@ -300,7 +314,12 @@ def calcular_escenarios_indexados_mensuales(
             "Coste energía (€)": coste,
             "Precio medio energía (€/kWh)": coste / energia if energia else np.nan,
         })
-    return pd.DataFrame(filas_resultado)
+    resultado = pd.DataFrame(filas_resultado)
+    resultado.attrs["detalle"] = (
+        pd.concat(filas_detalle, ignore_index=True)
+        if filas_detalle else pd.DataFrame()
+    )
+    return resultado
 
 
 def ofertas_catalogo_para_atr(catalogo: list[dict], atr: str) -> pd.DataFrame:

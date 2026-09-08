@@ -12,6 +12,20 @@ NOMBRE_ZONA_PERIODOS = {
     "melilla": "MELILLA",
 }
 
+
+def filtrar_intervalos_inexistentes_madrid(df, columna="fecha_hora"):
+    """Elimina marcas civiles que no existen por el salto horario de marzo."""
+    salida = df.copy()
+    fechas = pd.to_datetime(salida[columna], errors="coerce")
+    if fechas.dt.tz is not None:
+        return salida
+    fechas_locales = fechas.dt.tz_localize(
+        "Europe/Madrid",
+        ambiguous=True,
+        nonexistent="NaT",
+    )
+    return salida.loc[fechas.isna() | fechas_locales.notna()].copy()
+
 @st.cache_data
 def cargar_componentes_regulados(path_componentes="utils/004 LUZ componentes regulados.xlsx"):
     """
@@ -75,7 +89,8 @@ def recalcular_componentes_regulados(df):
     # =====================================================
     # 1. RECALCULAR PPCC
     # =====================================================
-    for col in ["ppcc_2.0", "ppcc_3.0", "ppcc_6.1"]:
+    columnas_ppcc = ["ppcc_2.0", "ppcc_3.0", "ppcc_6.1", "ppcc_6.2"]
+    for col in columnas_ppcc:
         df[col] = None
 
     for _, row in df_ppcc.iterrows():
@@ -95,9 +110,10 @@ def recalcular_componentes_regulados(df):
         df.loc[mask_2p, "ppcc_2.0"] = row["2.0TD"]
         df.loc[mask_6p, "ppcc_3.0"] = row["3.0TD"]
         df.loc[mask_6p, "ppcc_6.1"] = row["6.1TD"]
+        df.loc[mask_6p, "ppcc_6.2"] = row["6.2TD"]
 
-    df[["ppcc_2.0", "ppcc_3.0", "ppcc_6.1"]] = (
-        df[["ppcc_2.0", "ppcc_3.0", "ppcc_6.1"]]
+    df[columnas_ppcc] = (
+        df[columnas_ppcc]
         .apply(pd.to_numeric, errors="coerce")
         * 1000
     ).round(2)
@@ -108,14 +124,17 @@ def recalcular_componentes_regulados(df):
     mapa_perd_20 = df_perdidas_boe.set_index("periodo")["2.0TD"]
     mapa_perd_30 = df_perdidas_boe.set_index("periodo")["3.0TD"]
     mapa_perd_61 = df_perdidas_boe.set_index("periodo")["6.1TD"]
+    mapa_perd_62 = df_perdidas_boe.set_index("periodo")["6.2TD"]
 
     df["perd_2.0_boe"] = df["dh_3p"].map(mapa_perd_20)
     df["perd_3.0_boe"] = df["dh_6p"].map(mapa_perd_30)
     df["perd_6.1_boe"] = df["dh_6p"].map(mapa_perd_61)
+    df["perd_6.2_boe"] = df["dh_6p"].map(mapa_perd_62)
 
     df["perd_2.0_boe"] = pd.to_numeric(df["perd_2.0_boe"], errors="coerce")
     df["perd_3.0_boe"] = pd.to_numeric(df["perd_3.0_boe"], errors="coerce")
     df["perd_6.1_boe"] = pd.to_numeric(df["perd_6.1_boe"], errors="coerce")
+    df["perd_6.2_boe"] = pd.to_numeric(df["perd_6.2_boe"], errors="coerce")
 
     # =====================================================
     # 3. RECALCULAR PÉRDIDAS CON COEF_K
@@ -123,11 +142,13 @@ def recalcular_componentes_regulados(df):
     df["perd_2.0"] = df["perd_2.0_boe"] * df["coef_k"]
     df["perd_3.0"] = df["perd_3.0_boe"] * df["coef_k"]
     df["perd_6.1"] = df["perd_6.1_boe"] * df["coef_k"]
+    df["perd_6.2"] = df["perd_6.2_boe"] * df["coef_k"]
 
     # =====================================================
     # 4. RECALCULAR PYC ENERGÍA
     # =====================================================
-    for col in ["pyc_2.0", "pyc_3.0", "pyc_6.1"]:
+    columnas_pyc = ["pyc_2.0", "pyc_3.0", "pyc_6.1", "pyc_6.2"]
+    for col in columnas_pyc:
         df[col] = None
 
     for _, row in df_pycs_energia.iterrows():
@@ -147,9 +168,10 @@ def recalcular_componentes_regulados(df):
         df.loc[mask_2p, "pyc_2.0"] = row["2.0TD"]
         df.loc[mask_6p, "pyc_3.0"] = row["3.0TD"]
         df.loc[mask_6p, "pyc_6.1"] = row["6.1TD"]
+        df.loc[mask_6p, "pyc_6.2"] = row["6.2TD"]
 
-    df[["pyc_2.0", "pyc_3.0", "pyc_6.1"]] = (
-        df[["pyc_2.0", "pyc_3.0", "pyc_6.1"]]
+    df[columnas_pyc] = (
+        df[columnas_pyc]
         .apply(pd.to_numeric, errors="coerce")
         * 1000
     )
@@ -159,9 +181,17 @@ def recalcular_componentes_regulados(df):
     # =====================================================
     cols_check = [
         "ppcc_2.0", "ppcc_3.0", "ppcc_6.1",
+        "ppcc_6.2",
+        "ppcc_6.2",
         "perd_2.0_boe", "perd_3.0_boe", "perd_6.1_boe",
+        "perd_6.2_boe",
+        "perd_6.2_boe",
         "perd_2.0", "perd_3.0", "perd_6.1",
+        "perd_6.2",
+        "perd_6.2",
         "pyc_2.0", "pyc_3.0", "pyc_6.1",
+        "pyc_6.2",
+        "pyc_6.2",
     ]
 
     nulos = df[cols_check].isna().sum()

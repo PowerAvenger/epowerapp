@@ -41,6 +41,41 @@ class OfertasImagenTest(unittest.TestCase):
                 oferta_30("EUR/kWh", [0.2, 0.2, 0.2, 0.2, 0.2, None])
             )
 
+    def test_usa_atr_del_contexto_si_no_aparece_en_la_imagen(self):
+        resultado = {
+            "nombre": None,
+            "unidad_original": "no indicada",
+            "tarifas": [{
+                "atr": "",
+                **{f"P{i}": valor for i, valor in enumerate(
+                    [0.176839, 0.148796, 0.122222, 0.107121, 0.088909, 0.095518],
+                    start=1,
+                )},
+            }],
+        }
+        tabla, _ = validar_oferta_extraida(resultado, atr_contexto="6.2TD")
+        self.assertEqual(tabla.loc[0, "ATR"], "6.2")
+        self.assertAlmostEqual(tabla.loc[0, "P1"], 0.176839)
+
+    def test_conserva_varias_ofertas_del_mismo_atr(self):
+        resultado = {
+            "nombre": "Tabla de precios",
+            "unidad_original": "EUR/kWh",
+            "tarifas": [
+                {
+                    "nombre": "Oferta A", "atr": "",
+                    **{f"P{i}": 0.1 for i in range(1, 7)},
+                },
+                {
+                    "nombre": "Oferta B", "atr": "",
+                    **{f"P{i}": 0.2 for i in range(1, 7)},
+                },
+            ],
+        }
+        tabla, _ = validar_oferta_extraida(resultado, atr_contexto="6.2TD")
+        self.assertEqual(tabla["oferta"].tolist(), ["Oferta A", "Oferta B"])
+        self.assertEqual(tabla["ATR"].tolist(), ["6.2", "6.2"])
+
 
 if __name__ == "__main__":
     unittest.main()

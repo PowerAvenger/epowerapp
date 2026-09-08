@@ -6,9 +6,13 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime
 from utilidades import generar_menu, init_app
-from backend_comun import carga_mibgas, carga_total_sheets
+from backend_comun import (
+    carga_mibgas,
+    carga_total_sheets,
+    construir_media_acumulada_prevista,
+)
 from backend_mibgas import (
-    filtrar_por_producto, graficar_qs, graficar_futuros_mibgas, graficar_da_corrido, graficar_da_2026_acumulado, graficar_da_comparado,
+    filtrar_por_producto, graficar_qs, graficar_futuros_mibgas, graficar_da_corrido, graficar_da_2026_acumulado, graficar_da_comparado, graficar_medias_acumuladas_comparadas, graficar_ranking_medias_anuales_mibgas,
     construir_comparativa_diaria_mibgas_omie, graficar_comparativa_diaria_mibgas_omie,
     construir_resumen_mensual_omie_mibgas, estimar_omie_mensual_desde_gas,
     ajustar_modelo_lineal_omie_gas, graficar_diagnostico_ratio_gas,
@@ -50,7 +54,12 @@ zona_mensajes = st.sidebar.empty()
 if 'mibgas_simul' not in st.session_state:
     st.session_state.mibgas_simul = 40
 
-df_mibgas_base = carga_mibgas()
+df_mibgas_completo = carga_mibgas()
+# Gas & Furious mantiene el horizonte operativo original (2024 en adelante),
+# aunque el Sheets compartido conserve el histórico completo desde 2018.
+df_mibgas_base = df_mibgas_completo.loc[
+    df_mibgas_completo["Trading day"] >= pd.Timestamp("2024-01-01")
+].copy()
 ultima_fecha_mibgas = df_mibgas_base['Trading day'].max()
 st.sidebar.info(f'Última fecha disponible: {ultima_fecha_mibgas.strftime("%d.%m.%Y")}')
 if st.sidebar.button('Actualizar datos', use_container_width=True):
@@ -79,12 +88,23 @@ graf_ys = graficar_futuros_mibgas(df_mg_y, tipo="Y")
 
 
 df_mg_da = filtrar_por_producto(df_mibgas_base, 'GDAES_D+1')
+df_mg_da_historico = filtrar_por_producto(
+    df_mibgas_completo,
+    'GDAES_D+1',
+)
 #print('mibgas da')
 #print(df_mg_da)
 
 df_mibgas_mensual = obtener_mibgas_mensual(df_mg_da)
 graf_mibgas_mensual_historico = graficar_mibgas_mensual_historico(df_mibgas_mensual)
 df_curva_mibgas_2026 = construir_curva_mibgas_2026(df_mibgas_mensual, df_mg_m, df_mg_q)
+df_media_acumulada_prevista_2026 = construir_media_acumulada_prevista(
+    datos_diarios_reales=df_mg_da,
+    curva_mensual_prevista=df_curva_mibgas_2026,
+    año=2026,
+    col_fecha_real="fecha_entrega",
+    col_valor_real="precio_gas",
+)
 precio_medio_mibgas_2026 = round(df_curva_mibgas_2026["precio"].mean(), 2)
 graf_mibgas_2026 = graficar_curva_mibgas_2026(df_curva_mibgas_2026, precio_medio_mibgas_2026)
 df_media_mibgas_2026 = construir_media_prevista_mibgas_2026_diaria(df_mg_da, df_mg_m, df_mg_q)
@@ -234,40 +254,59 @@ graf_hist, simul_spot, simul_gas = graf_simul_spot(
 
 zona_mensajes.empty()
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(['Históricos', 'Futuros', 'CO2', 'Simulador', 'Previsión anual'])
+tab1, tab_comparador, tab2, tab3, tab4, tab5 = st.tabs([
+    'Históricos',
+    'Comparador',
+    'Futuros',
+    'CO2',
+    'Simulador',
+    'Previsión anual',
+])
 
 with tab1:
     with st.container():
         col1,col2 = st.columns([.9,.1]) 
+        with col2:
+            for año_media in (2024, 2025, 2026):
+                media = df_medias.loc[
+                    df_medias["año_entrega"] == año_media,
+                    "precio_str",
+                ]
+                if not media.empty:
+                    st.metric(
+                        f"Precio medio gas {año_media} (€/MWh)",
+                        media.iloc[0],
+                    )
         with col1:
             st.write(graf_da_corrido)
             st.write(graf_da_comparado)
             st.write(graf_mibgas_mensual_historico)
             st.write(graf_da_2026_acumulado)
-            st.plotly_chart(
-                graf_comparativa_diaria_mibgas_omie,
+
+        st.plotly_chart(
+            graf_comparativa_diaria_mibgas_omie,
+            use_container_width=True,
+        )
+        with st.expander("Ver tabla diaria MIBGAS D+1 vs OMIE"):
+            st.dataframe(
+                df_comparativa_diaria_mibgas_omie,
                 use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "fecha": st.column_config.DateColumn(
+                        "Fecha", format="DD/MM/YYYY"
+                    ),
+                    "mibgas_d1": st.column_config.NumberColumn(
+                        "MIBGAS D+1 (€/MWh)", format="%.2f"
+                    ),
+                    "omie": st.column_config.NumberColumn(
+                        "OMIE (€/MWh)", format="%.2f"
+                    ),
+                    "rel_omie_gas": st.column_config.NumberColumn(
+                        "Rel. OMIE/Gas", format="%.4f"
+                    ),
+                },
             )
-            with st.expander("Ver tabla diaria MIBGAS D+1 vs OMIE"):
-                st.dataframe(
-                    df_comparativa_diaria_mibgas_omie,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "fecha": st.column_config.DateColumn(
-                            "Fecha", format="DD/MM/YYYY"
-                        ),
-                        "mibgas_d1": st.column_config.NumberColumn(
-                            "MIBGAS D+1 (€/MWh)", format="%.2f"
-                        ),
-                        "omie": st.column_config.NumberColumn(
-                            "OMIE (€/MWh)", format="%.2f"
-                        ),
-                        "rel_omie_gas": st.column_config.NumberColumn(
-                            "Rel. OMIE/Gas", format="%.4f"
-                        ),
-                    },
-                )
 
     col_mapa, col_metricas = st.columns([.85, .15])
     with col_mapa:
@@ -314,13 +353,6 @@ with tab1:
             graf_relacion_por_hora,
             use_container_width=True,
         )
-            
-            
-        with col2:
-            st.metric("Precio medio gas 2024 (€/MWh)", df_medias.loc[df_medias["año_entrega"] == 2024, "precio_str"].values[0])
-            st.metric("Precio medio gas 2025 (€/MWh)", df_medias.loc[df_medias["año_entrega"] == 2025, "precio_str"].values[0])
-            st.metric("Precio medio gas 2026 (€/MWh)", df_medias.loc[df_medias["año_entrega"] == 2026, "precio_str"].values[0])
-
     st.subheader("Ratios máximos horarios OMIE/MIBGAS por mes")
     st.caption(
         "Máximo ratio observado en cada hora dentro de cada mes · año 2026"
@@ -368,7 +400,55 @@ with tab1:
             },
         )
 
-
+with tab_comparador:
+    col_graf_comparador, col_selector_comparador, col_ranking = st.columns(
+        [.65, .06, .29]
+    )
+    with col_selector_comparador:
+        st.markdown("**Años**")
+        años_disponibles = sorted(
+            df_mg_da_historico["fecha_entrega"]
+            .dropna()
+            .dt.year
+            .astype(int)
+            .unique()
+            .tolist(),
+            reverse=True,
+        )
+        años_seleccionados = [
+            año
+            for año in años_disponibles
+            if st.checkbox(
+                str(año),
+                value=(año == 2026),
+                key=f"comparador_mibgas_{año}",
+            )
+        ]
+    with col_graf_comparador:
+        if años_seleccionados:
+            años_titulo = ", ".join(map(str, años_seleccionados))
+            graf_comparador = graficar_da_comparado(
+                df_mg_da_historico,
+                años=años_seleccionados,
+                titulo=f"Comparación anual del precio del gas: {años_titulo}",
+            )
+            st.plotly_chart(graf_comparador, use_container_width=True)
+            graf_medias_acumuladas = graficar_medias_acumuladas_comparadas(
+                df_mg_da_historico,
+                años=años_seleccionados,
+                df_prevision_actual=df_media_acumulada_prevista_2026,
+            )
+            st.plotly_chart(
+                graf_medias_acumuladas,
+                use_container_width=True,
+            )
+        else:
+            st.info("Selecciona al menos un año para mostrar la comparación.")
+    with col_ranking:
+        graf_ranking_mibgas = graficar_ranking_medias_anuales_mibgas(
+            df_mg_da_historico
+        )
+        st.plotly_chart(graf_ranking_mibgas, use_container_width=True)
 
 
 with tab2:

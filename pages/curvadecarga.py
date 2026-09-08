@@ -12,12 +12,11 @@ from datetime import timedelta
 import plotly.express as px
 from jinja2 import Environment, FileSystemLoader
 from backend_curvadecarga import (
-    normalize_curve_simple, detectar_hojas_curva_excel, obtener_datos_contador,
+    obtener_datos_contador,
     obtener_suministros_datadis,
     obtener_detalle_contrato_datadis, extraer_potencias_contratadas_datadis,
     obtener_consumo_datadis_cacheado, dataframe_como_archivo_curva,
-    completar_periodos_curva, agrupar_curva_horaria, dividir_energias_curva,
-    analizar_calidad_curva,
+    dividir_energias_curva,
     graficar_curva_horaria, graficar_diario_apilado, graficar_mensual_apilado, tabla_mensual_periodos, formatear_tabla_mensual_es, graficar_queso_periodos,
     graficar_media_horaria, graficar_media_horaria_combinada, graficar_boxplot_horario,
     graficar_dem_ver_mensual, graficar_con_gen_mensual,
@@ -65,6 +64,19 @@ from backend_contractual import (
     preparar_indexado_contractual,
     resumir_calculo_contractual,
 )
+from servicio_curva import (
+    limpiar_curva_sesion,
+    normalizar_fuentes_curva,
+    publicar_curva_sesion,
+    sincronizar_curva_sesion,
+)
+from componentes_curva import (
+    OPCIONES_ATR_CURVA,
+    guardar_selector_atr_curva,
+    preparar_selector_atr_curva,
+    render_campos_axon,
+    render_campos_archivo_curva,
+)
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
@@ -81,6 +93,7 @@ if 'zona_periodos_cdc' not in st.session_state:
 # ===============================
 
 hoja_curva_excel = None
+periodos_en_entrada = None
 
 
 def ultimos_doce_meses_completos(fecha_referencia=None):
@@ -91,16 +104,6 @@ def ultimos_doce_meses_completos(fecha_referencia=None):
     fin = referencia.replace(day=1) - pd.Timedelta(days=1)
     inicio = (fin.to_period("M") - 11).start_time
     return inicio.date(), fin.date()
-
-
-def guardar_credenciales_axon_sesion():
-    """Conserva las credenciales de Axon solo en la sesión de Streamlit."""
-    st.session_state.axon_usuario_sesion = st.session_state.get(
-        "_axon_usuario_input", ""
-    )
-    st.session_state.axon_password_sesion = st.session_state.get(
-        "_axon_password_input", ""
-    )
 
 
 def cargar_widget_desde_sesion(clave_widget, clave_sesion, valor_defecto=""):
@@ -128,54 +131,66 @@ def guardar_preferencias_datadis_sesion():
             guardar_widget_en_sesion(clave_widget, clave_sesion)
 
 
+ETIQUETAS_ZONA_PERIODOS = {
+    "peninsula": "Península",
+    "baleares": "Baleares",
+    "canarias": "Canarias",
+    "ceuta": "Ceuta",
+    "melilla": "Melilla",
+}
+
+
+def guardar_zona_confirmada_curva():
+    """Conserva en el contrato común la zona confirmada por el usuario."""
+    curva_actual = st.session_state.get("curva_actual")
+    if curva_actual is not None:
+        curva_actual["zona_confirmada"] = st.session_state.get(
+            "zona_periodos_confirmada"
+        )
+
+
+def mostrar_zonas_compatibles(slot, zonas, cobertura):
+    """Informa la inferencia y pide confirmación cuando no es unívoca."""
+    with slot.container():
+        if not zonas:
+            st.info(
+                "La curva incluye periodos, pero no se ha podido asociar de "
+                "forma fiable a uno de los calendarios disponibles. Los "
+                "periodos del archivo se respetarán."
+            )
+            return
+        etiquetas = [ETIQUETAS_ZONA_PERIODOS[zona] for zona in zonas]
+        if len(zonas) == 1:
+            st.session_state.zona_periodos_confirmada = zonas[0]
+            guardar_zona_confirmada_curva()
+            st.info(
+                f"Zona compatible con los periodos: **{etiquetas[0]}**. "
+                "Se respetarán los periodos del archivo."
+            )
+            return
+
+        st.info(
+            "Los periodos son compatibles con varias zonas: "
+            f"**{', '.join(etiquetas)}**. Confirma la zona del suministro."
+        )
+        zona_guardada = st.session_state.get("zona_periodos_confirmada")
+        if zona_guardada not in zonas:
+            st.session_state.zona_periodos_confirmada = (
+                "peninsula" if "peninsula" in zonas else zonas[0]
+            )
+        st.selectbox(
+            "Zona del suministro",
+            zonas,
+            key="zona_periodos_confirmada",
+            format_func=ETIQUETAS_ZONA_PERIODOS.get,
+            on_change=guardar_zona_confirmada_curva,
+        )
+        guardar_zona_confirmada_curva()
+
+
 def limpiar_curva_cargada():
     """Elimina la curva y los resultados calculados en esta sesión."""
-    claves_curva = (
-        "df_norm",
-        "df_norm_h",
-        "df_in",
-        "csv_bytes_norm",
-        "csv_bytes_h",
-        "lista_ficheros",
-        "consumo_total",
-        "reactiva_total",
-        "vertido_total",
-        "consumo_neto",
-        "vertido_neto",
-        "rango_curvadecarga",
-        "rango_fechas_comparativa",
-        "rango_fechas_comparativa_guardado",
-        "_rango_fechas_comparativa",
-        "precios_mensuales",
-        "df_curva_sheets",
-        "resumen_costes_contractuales",
-        "origen_costes_comparativa",
-        "cups_costes_comparativa",
-        "version_curva_costes_comparativa",
-        "df_axon_raw",
-        "frec_axon_raw",
-        "df_datadis_raw",
-        "frec_datadis_raw",
-        "suministros_datadis",
-        "datadis_curvas_cache",
-        "datadis_detalles_cache",
-        "detalle_datadis_actual",
-        "detalle_datadis_clave",
-        "cups_curva",
-        "reactiva_base_cache",
-        "reactiva_compensacion",
-        "curva_escala_manual_1000_aplicada",
-        "curva_reactiva_version",
-        "informe_reactiva_html",
-        "comparativa_informe_datos",
-        "informe_comparativa_html",
-        "diagnosticos_curva",
-    )
-    for clave in claves_curva:
-        st.session_state.pop(clave, None)
-    st.session_state.curva_uploader_version = (
-        st.session_state.get("curva_uploader_version", 0) + 1
-    )
+    limpiar_curva_sesion(st.session_state)
 
 
 tab_curva, tab1, tab2, tab3, tab4, tab_ahorro, tab5, tab6 = st.tabs(
@@ -199,10 +214,9 @@ with tab_curva:
 
     with col_curva_entrada:
         st.subheader("Datos de entrada", divider="rainbow")
-        st.caption(
-            "Lee CSV/Excel, detecta columnas y normaliza las horas al rango "
-            "0–23 del mismo día."
-        )
+        st.caption("Selecciona el origen de la curva.")
+        zona_periodos_slot = None
+        zona_control_con_inferencia = False
 
         if not st.session_state.get('usuario_autenticado', False):
             st.warning(
@@ -217,127 +231,29 @@ with tab_curva:
                 "_origen_curva_cdc", "origen_curva_cdc_sesion",
                 "Archivo CSV/Excel",
             )
-            origen_curva = st.selectbox(
+            origen_curva = st.radio(
                 "Origen de la curva",
                 ("Archivo CSV/Excel", "Axon", "Datadis"),
                 index=0,
+                horizontal=True,
                 key="_origen_curva_cdc",
                 on_change=guardar_widget_en_sesion,
                 args=("_origen_curva_cdc", "origen_curva_cdc_sesion"),
             )
             uploaded = None
             if origen_curva == "Archivo CSV/Excel":
-                uploaded = st.file_uploader(
-                    "📂 Sube uno o varios archivos CSV o Excel",
-                    type=["csv", "xlsx"],
-                    accept_multiple_files=True,
-                    key=(
-                        "curva_archivos_"
-                        f"{st.session_state.get('curva_uploader_version', 0)}"
-                    ),
-                )
-                if uploaded:
-                    archivos_excel = [
-                        archivo for archivo in uploaded
-                        if archivo.name.lower().endswith(".xlsx")
-                    ]
-                    hojas_por_archivo = []
-                    for archivo_excel in archivos_excel:
-                        try:
-                            hojas_por_archivo.append(
-                                set(detectar_hojas_curva_excel(archivo_excel))
-                            )
-                        except Exception:
-                            hojas_por_archivo.append(set())
-
-                    if hojas_por_archivo:
-                        hojas_comunes = set.intersection(*hojas_por_archivo)
-                        opciones_hoja = [
-                            hoja for hoja in ("Cuarto horarias", "Horarias")
-                            if hoja in hojas_comunes
-                        ]
-                        if len(opciones_hoja) > 1:
-                            hoja_curva_excel = st.radio(
-                                "Curva de los Excel",
-                                opciones_hoja,
-                                format_func=lambda hoja: {
-                                    "Cuarto horarias": "Cuarto horaria",
-                                    "Horarias": "Horaria",
-                                }[hoja],
-                                horizontal=True,
-                            )
-                        elif len(opciones_hoja) == 1:
-                            hoja_curva_excel = opciones_hoja[0]
+                campos_archivo = render_campos_archivo_curva("curva_carga")
+                uploaded = campos_archivo["archivos"]
+                hoja_curva_excel = campos_archivo["hoja_excel"]
+                periodos_en_entrada = campos_archivo["trae_periodos"]
             elif origen_curva == "Axon":
-                # Las claves "sesión" no pertenecen a widgets, por lo que
-                # sobreviven al cambiar de origen o de página. Session State
-                # es individual por conexión y no se comparte entre usuarios.
-                st.session_state.setdefault(
-                    "_axon_usuario_input",
-                    st.session_state.get("axon_usuario_sesion", ""),
-                )
-                st.session_state.setdefault(
-                    "_axon_password_input",
-                    st.session_state.get("axon_password_sesion", ""),
-                )
-                usuario_axon = st.text_input(
-                    "Usuario Axon",
-                    key="_axon_usuario_input",
-                    on_change=guardar_credenciales_axon_sesion,
-                )
-                password_axon = st.text_input(
-                    "Contraseña Axon",
-                    type="password",
-                    key="_axon_password_input",
-                    on_change=guardar_credenciales_axon_sesion,
-                )
-                cups_axon = st.text_input(
-                    "CUPS",
-                    help=(
-                        "Puedes pegar el CUPS completo. Axon utilizará "
-                        "automáticamente los primeros 20 caracteres."
-                    ),
-                )
-                cups_axon_base = re.sub(
-                    r"[^A-Z0-9]", "", str(cups_axon or "").upper()
-                )[:20]
-                if cups_axon:
-                    st.caption(f"CUPS base enviado a Axon: `{cups_axon_base}`")
-                hoy_axon = pd.Timestamp.today().date()
-                inicio_12m, fin_12m = ultimos_doce_meses_completos(hoy_axon)
-                seleccionar_12m_axon = st.checkbox(
-                    "Seleccionar automáticamente los últimos 12 meses completos",
-                    key="seleccionar_12m_completos_axon",
-                    help=(
-                        "Excluye el mes actual. Por ejemplo, en agosto selecciona "
-                        "del 1 de agosto del año anterior al 31 de julio."
-                    ),
-                )
-                st.session_state.setdefault(
-                    "rango_axon_curva",
-                    (
-                        hoy_axon - timedelta(days=30),
-                        hoy_axon - timedelta(days=1),
-                    ),
-                )
-                if seleccionar_12m_axon:
-                    st.session_state.rango_axon_curva = (inicio_12m, fin_12m)
-                rango_axon = st.date_input(
-                    "Periodo de la curva",
-                    max_value=hoy_axon,
-                    format="DD/MM/YYYY",
-                    key="rango_axon_curva",
-                    disabled=seleccionar_12m_axon,
-                )
-                tipo_curva_axon = st.selectbox(
-                    "Tipo de curva",
-                    ("TM2", "TM1"),
-                    index=0,
-                    format_func=lambda valor: {
-                        "TM1": "TM1 · Horaria (H)",
-                        "TM2": "TM2 · Cuartohoraria (QH)",
-                    }[valor],
-                )
+                campos_axon = render_campos_axon("curva_carga")
+                usuario_axon = campos_axon["usuario"]
+                password_axon = campos_axon["password"]
+                cups_axon = campos_axon["cups"]
+                cups_axon_base = campos_axon["cups_base"]
+                rango_axon = campos_axon["rango"]
+                tipo_curva_axon = campos_axon["tipo"]
             else:
                 cargar_widget_desde_sesion(
                     "_curva_datadis_usuario", "datadis_usuario_sesion"
@@ -557,10 +473,18 @@ with tab_curva:
                     )
                 ]
                 mes_anterior_datadis = str(mes_actual_datadis - 1).replace("-", "/")
-                indice_mes_defecto = meses_datadis.index(mes_anterior_datadis)
                 inicio_12m, fin_12m = ultimos_doce_meses_completos()
                 mes_inicio_12m = pd.Timestamp(inicio_12m).strftime("%Y/%m")
                 mes_fin_12m = pd.Timestamp(fin_12m).strftime("%Y/%m")
+                for clave_mes_datadis in (
+                    "mes_inicio_datadis",
+                    "mes_fin_datadis",
+                ):
+                    if (
+                        clave_mes_datadis not in st.session_state
+                        or st.session_state[clave_mes_datadis] not in meses_datadis
+                    ):
+                        st.session_state[clave_mes_datadis] = mes_anterior_datadis
                 seleccionar_12m_datadis = st.checkbox(
                     "Seleccionar automáticamente los últimos 12 meses completos",
                     key="seleccionar_12m_completos_datadis",
@@ -577,7 +501,6 @@ with tab_curva:
                     mes_inicio_datadis = st.selectbox(
                         "Mes inicial",
                         meses_datadis,
-                        index=indice_mes_defecto,
                         key="mes_inicio_datadis",
                         disabled=seleccionar_12m_datadis,
                     )
@@ -585,7 +508,6 @@ with tab_curva:
                     mes_fin_datadis = st.selectbox(
                         "Mes final",
                         meses_datadis,
-                        index=indice_mes_defecto,
                         key="mes_fin_datadis",
                         disabled=seleccionar_12m_datadis,
                     )
@@ -601,28 +523,67 @@ with tab_curva:
                         "fallback automático para evitar consumir otra consulta."
                     ),
                 )
+            clave_atr_entrada_cdc = "atr_dfnorm_entrada_cdc"
+            preparar_selector_atr_curva(clave_atr_entrada_cdc)
             atr_dfnorm = st.selectbox(
                 "Selecciona peaje de acceso",
-                ("2.0", "3.0", "6.1", "6.2", "6.3", "6.4"),
-                index=0,
-                key="atr_dfnorm_entrada_cdc",
+                OPCIONES_ATR_CURVA,
+                key=clave_atr_entrada_cdc,
+                on_change=guardar_selector_atr_curva,
+                args=(clave_atr_entrada_cdc,),
             )
-            opciones_zona_periodos = [
-                "peninsula", "baleares", "canarias", "ceuta", "melilla"
-            ]
-            st.selectbox(
-                "Selecciona zona de periodos horarios",
-                options=opciones_zona_periodos,
-                index=0,
-                key="zona_periodos_cdc",
-                format_func=lambda zona: {
-                    "peninsula": "Península",
-                    "baleares": "Baleares",
-                    "canarias": "Canarias",
-                    "ceuta": "Ceuta",
-                    "melilla": "Melilla",
-                }[zona],
-            )
+            zona_periodos_slot = st.empty()
+            zona_control_con_inferencia = False
+            if origen_curva == "Archivo CSV/Excel" and uploaded:
+                periodos_para_interfaz = periodos_en_entrada is True
+            else:
+                periodos_para_interfaz = st.session_state.get(
+                    "curva_periodos_en_origen", False
+                )
+            if periodos_para_interfaz:
+                curva_actual = st.session_state.get("curva_actual") or {}
+                nombres_entrada = [
+                    str(getattr(archivo, "name", archivo))
+                    for archivo in (uploaded or [])
+                ] if origen_curva == "Archivo CSV/Excel" else []
+                misma_entrada = (
+                    not nombres_entrada
+                    or nombres_entrada == curva_actual.get("nombres_archivos")
+                )
+                zonas_compatibles = (
+                    curva_actual.get("zonas_compatibles")
+                    if misma_entrada else None
+                )
+                if zonas_compatibles is not None:
+                    mostrar_zonas_compatibles(
+                        zona_periodos_slot,
+                        zonas_compatibles,
+                        curva_actual.get("cobertura_zonas", 0.0),
+                    )
+                    zona_control_con_inferencia = True
+                else:
+                    zona_periodos_slot.info(
+                        "La curva ya incluye periodos. Al normalizar se "
+                        "comprobarán las zonas compatibles."
+                    )
+            else:
+                opciones_zona_periodos = [
+                    "peninsula", "baleares", "canarias", "ceuta", "melilla"
+                ]
+                with zona_periodos_slot.container():
+                    st.selectbox(
+                        "Selecciona zona de periodos horarios",
+                        options=opciones_zona_periodos,
+                        index=0,
+                        key="zona_periodos_cdc",
+                        format_func=lambda zona: {
+                            "peninsula": "Península",
+                            "baleares": "Baleares",
+                            "canarias": "Canarias",
+                            "ceuta": "Ceuta",
+                            "melilla": "Melilla",
+                        }[zona],
+                    )
 
         entrada_lista = True
         motivo_entrada_pendiente = ""
@@ -903,63 +864,44 @@ if origen_curva == "Datadis":
 
 if normalizar and uploaded:
     try:
+        resultado_curva = normalizar_fuentes_curva(
+            uploaded,
+            atr=atr_dfnorm,
+            zona_periodos=st.session_state.get(
+                "zona_periodos_cdc", "peninsula"
+            ),
+            excel_sheet=hoja_curva_excel,
+        )
+        publicar_curva_sesion(st.session_state, resultado_curva)
 
-        dfs_norm = []
-        dfs_in = []
-        diagnosticos_curva = []
-
-        if not isinstance(uploaded, list):
-            uploaded = [uploaded]
-
-        for file in uploaded:
-            df_in_i, df_norm_i, msg_unidades, flag_periodos_en_origen, df_periodos, frec = normalize_curve_simple(
-                file,
-                origin=file.name if hasattr(file, "name") else file,
-                excel_sheet=hoja_curva_excel,
-                zona_periodos=st.session_state.get(
-                    "zona_periodos_cdc", "peninsula"
-                ),
+        df_norm = resultado_curva.df_norm
+        df_norm_h = resultado_curva.df_norm_h
+        df_in = resultado_curva.df_in
+        frec = resultado_curva.frecuencia
+        atr_dfnorm = resultado_curva.atr
+        periodos_en_todos_los_origenes = (
+            resultado_curva.periodos_en_origen
+        )
+        if (
+            periodos_en_todos_los_origenes
+            and zona_periodos_slot is not None
+            and not zona_control_con_inferencia
+        ):
+            mostrar_zonas_compatibles(
+                zona_periodos_slot,
+                resultado_curva.zonas_compatibles,
+                resultado_curva.cobertura_zonas,
             )
-            dfs_norm.append(df_norm_i)
-            dfs_in.append(df_in_i)
-            diagnosticos_curva.append(
-                analizar_calidad_curva(
-                    df_norm_i,
-                    df_origen=df_in_i,
-                    frecuencia=frec,
-                    periodos_en_origen=flag_periodos_en_origen,
-                    origen=file.name if hasattr(file, "name") else str(file),
-                )
-            )
-
-        df_norm = pd.concat(dfs_norm)
-        if len(dfs_in) == 1:
-            df_in = dfs_in[0]
-            st.session_state.lista_ficheros = None
-        else:
-            df_in = None
-            st.session_state.lista_ficheros = [file.name for file in uploaded]
-
-        consumo_total=df_norm['consumo_kWh'].sum()
-        vertido_total=df_norm['excedentes_kWh'].sum()
-        consumo_neto=df_norm['consumo_neto_kWh'].sum()
-        vertido_neto=df_norm['vertido_neto_kWh'].sum()
-        reactiva_total=df_norm['reactiva_kVArh'].sum()
-
-
         zona_mensajes.success("✅ Curva normalizada correctamente")
-        if msg_unidades != "":
-            zona_mensajes2.info(msg_unidades, icon="ℹ️")
+        if resultado_curva.mensajes_unidades:
+            zona_mensajes2.info(
+                " · ".join(resultado_curva.mensajes_unidades), icon="ℹ️"
+            )
 
         # --- Obtención de periodos ------------------------------------------------
-        if not flag_periodos_en_origen:
+        if not periodos_en_todos_los_origenes:
             msg_periodos = 'Cargados periodos desde fichero auxiliar.'
             zona_mensajes3.warning(msg_periodos, icon="⚠️")
-
-            df_norm = completar_periodos_curva(
-                df_norm, df_periodos, atr_dfnorm
-            )
-
         else:
             msg_periodos = 'Cargados periodos desde fichero origen'
             zona_mensajes3.info(msg_periodos, icon="ℹ️")
@@ -984,38 +926,6 @@ if normalizar and uploaded:
                     col_curva_info.warning("ATENCIÓN: NO HAY PERIODOS DETECTADOS")
             else:
                 atr_dfnorm = "3.0"
-
-
-        df_norm_h = agrupar_curva_horaria(df_norm, frec)
-
-
-        csv_bytes_norm = df_norm.reset_index(drop=True).to_csv(index=False, sep=";", decimal=",", float_format="%.3f").encode("utf-8")
-        csv_bytes_h = df_norm_h.reset_index(drop=True).to_csv(index=False, sep=";", decimal=",", float_format="%.3f").encode("utf-8")
-
-        st.session_state.df_norm = df_norm
-        st.session_state.curva_reactiva_version = (
-            st.session_state.get("curva_reactiva_version", 0) + 1
-        )
-        st.session_state.pop("reactiva_base_cache", None)
-        st.session_state.pop("reactiva_compensacion", None)
-        st.session_state.pop("informe_reactiva_html", None)
-        st.session_state.atr_dfnorm = atr_dfnorm
-        st.session_state.df_norm_h = df_norm_h
-        st.session_state.curva_escala_manual_1000_aplicada = False
-        st.session_state.csv_bytes_norm = csv_bytes_norm
-        st.session_state.csv_bytes_h = csv_bytes_h
-        st.session_state.frec = frec
-        st.session_state.df_in = df_in
-        st.session_state.consumo_total=consumo_total
-        st.session_state.reactiva_total = reactiva_total
-        st.session_state.vertido_total=vertido_total
-        st.session_state.consumo_neto=consumo_neto
-        st.session_state.vertido_neto=vertido_neto
-        st.session_state.diagnosticos_curva = diagnosticos_curva
-        # Obtener fechas mínima y máxima del df_norm_h y guardar para telemindex
-        fecha_ini = df_norm["fecha"].min()
-        fecha_fin = df_norm["fecha"].max()
-        st.session_state.rango_curvadecarga = (fecha_ini, fecha_fin)
 
     except Exception as e:
         zona_mensajes.error(f"❌ Error al normalizar: {e}")
@@ -1095,7 +1005,18 @@ if st.session_state.get("df_norm") is not None:
         for diagnostico in diagnosticos_curva:
             st.markdown(f"**{diagnostico['origen']}**")
             incidencias_archivo = [
-                f"{etiqueta}: {formato_numero_es(diagnostico.get(campo, 0))}"
+                (
+                    f"{etiqueta}: {formato_numero_es(diagnostico.get(campo, 0))}"
+                    + (
+                        " · posible repetición del cambio horario de octubre; "
+                        "se conservan ambas lecturas"
+                        if campo == "duplicados_fecha_hora"
+                        and diagnostico.get(
+                            "duplicados_cambio_hora_octubre", 0
+                        ) > 0
+                        else ""
+                    )
+                )
                 for campo, etiqueta in campos_incidencia.items()
                 if diagnostico.get(campo, 0) > 0
             ]
@@ -1128,6 +1049,13 @@ if st.session_state.get("df_norm") is not None:
                 .reset_index(drop=True)
                 .fillna("")
             )
+            # Algunos ficheros sin cabecera generan nombres de columna
+            # numpy.int64. La curva se normaliza correctamente, pero PyArrow
+            # no puede serializar esas etiquetas al renderizar el original.
+            df_in_preview.columns = [
+                str(columna) for columna in df_in_preview.columns
+            ]
+            df_in_preview.index.name = None
             st.caption(
                 f"Lecturas de origen: {formato_numero_es(len(df_in_preview))}"
             )
@@ -1204,8 +1132,11 @@ if st.session_state.get("df_norm") is not None:
                 "informe_reactiva_html",
                 "df_consumos_pricing",
                 "df_consumos_pricing_origen",
+                "df_curva_simulindex_persistente",
+                "_firma_curva_simulindex",
             ):
                 st.session_state.pop(clave_derivada, None)
+            sincronizar_curva_sesion(st.session_state)
             st.rerun()
         total_filas_norm = len(st.session_state.df_norm)
         st.caption(
