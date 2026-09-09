@@ -37,6 +37,8 @@ def _nombre_columna(valor):
 
 
 def _leer_bytes(origen):
+    if isinstance(origen, (bytes, bytearray, memoryview)):
+        return bytes(origen)
     if isinstance(origen, (str, Path)):
         return Path(origen).read_bytes()
     if hasattr(origen, "getvalue"):
@@ -206,6 +208,65 @@ def leer_sips_completo(origen):
         "reactiva": _tabla_magnitud(lecturas, "er", "sum"),
         "maximetros": _tabla_magnitud(lecturas, "pt", "max"),
     }
+
+
+def potencias_contratadas_sips(metadatos):
+    """Extrae P1-P6 de una ficha SIPS normalizada, en kW."""
+    potencias = pd.Series(
+        index=[f"P{i}" for i in range(1, 7)], dtype=float
+    )
+    metadatos = metadatos or {}
+    for numero_periodo in range(1, 7):
+        periodo = f"P{numero_periodo}"
+        claves = (
+            f"potencia_contratada_p{numero_periodo}",
+            f"potencia_contratada_{numero_periodo}",
+            f"pot_contratada_p{numero_periodo}",
+            f"pot_contratada_{numero_periodo}",
+            f"pot_cont_p{numero_periodo}",
+            f"pot_cont_{numero_periodo}",
+            f"potencia_p{numero_periodo}",
+            f"potencia_{numero_periodo}",
+            f"p{numero_periodo}",
+            f"pc{numero_periodo}",
+            f"pt{numero_periodo}",
+            *(["ptl"] if numero_periodo == 1 else []),
+        )
+        for clave in claves:
+            if metadatos.get(clave) in (None, ""):
+                continue
+            texto = str(metadatos[clave]).strip()
+            if "," in texto:
+                texto = texto.replace(".", "").replace(",", ".")
+            potencias[periodo] = pd.to_numeric(texto, errors="coerce")
+            break
+        if pd.notna(potencias[periodo]):
+            continue
+        patron = re.compile(
+            rf"(?:pot|potencia|pc).*?(?:p|periodo)?_?{numero_periodo}(?:_|$)"
+        )
+        for clave, valor in metadatos.items():
+            if not patron.search(clave):
+                continue
+            coincidencia = re.search(r"\d+(?:[.,]\d+)?", str(valor))
+            if coincidencia:
+                potencia = float(coincidencia.group().replace(",", "."))
+                if clave.endswith("_w"):
+                    potencia /= 1000
+                potencias[periodo] = potencia
+                break
+    if not potencias.notna().any():
+        for clave, valor in metadatos.items():
+            if "pot" not in clave or not valor:
+                continue
+            numeros = re.findall(r"\d+(?:[.,]\d+)?", str(valor))
+            if len(numeros) >= 6:
+                potencias[:] = [
+                    float(numero.replace(",", "."))
+                    for numero in numeros[:6]
+                ]
+                break
+    return potencias
 
 
 def perfil_anual_meses_naturales(tabla):

@@ -16,7 +16,11 @@ from backend_indexado import FormulaIndexada
 from backend_ofertas_fijas import cargar_catalogo_ofertas, resolver_potencia_tarifa
 from backend_opt2 import consumos_mensuales_desde_curva_normalizada
 from backend_simulindex import construir_curva_omip_mensual_12m, obtener_historicos_meff, obtener_meff_mensual, obtener_meff_trimestral
-from backend_sips import leer_sips_completo, perfil_anual_meses_naturales
+from backend_sips import (
+    leer_sips_completo,
+    perfil_anual_meses_naturales,
+    potencias_contratadas_sips,
+)
 from componentes_curva import render_origen_curva
 from componentes_indexados import (
     render_escenarios_omie,
@@ -112,62 +116,7 @@ if origen == 'CSV SIPS':
         atr = str(sips.get('atr') or '').upper().removesuffix('TD')
         perfil_mensual = perfil_anual_meses_naturales(sips['consumos'])
         metadatos_sips = sips.get('metadatos', {})
-        for numero_periodo in range(1, 7):
-            periodo = f'P{numero_periodo}'
-            for clave_potencia in (
-                f'potencia_contratada_p{numero_periodo}',
-                f'potencia_contratada_{numero_periodo}',
-                f'pot_contratada_p{numero_periodo}',
-                f'pot_contratada_{numero_periodo}',
-                f'pot_cont_p{numero_periodo}',
-                f'pot_cont_{numero_periodo}',
-                f'potencia_p{numero_periodo}',
-                f'potencia_{numero_periodo}',
-                f'p{numero_periodo}',
-                f'pc{numero_periodo}',
-                f'pt{numero_periodo}',
-                *(['ptl'] if numero_periodo == 1 else []),
-            ):
-                if metadatos_sips.get(clave_potencia) not in (None, ''):
-                    texto_potencia = str(metadatos_sips[clave_potencia]).strip()
-                    if ',' in texto_potencia:
-                        texto_potencia = texto_potencia.replace('.', '').replace(',', '.')
-                    potencias_contratadas[periodo] = pd.to_numeric(
-                        texto_potencia, errors='coerce'
-                    )
-                    break
-            if pd.isna(potencias_contratadas[periodo]):
-                patron_periodo = re.compile(
-                    rf'(?:pot|potencia|pc).*?(?:p|periodo)?_?{numero_periodo}(?:_|$)'
-                )
-                for clave_potencia, valor_potencia in metadatos_sips.items():
-                    if not patron_periodo.search(clave_potencia):
-                        continue
-                    texto_potencia = str(valor_potencia).strip()
-                    coincidencia_potencia = re.search(
-                        r'\d+(?:[.,]\d+)?', texto_potencia
-                    )
-                    if coincidencia_potencia:
-                        potencia_detectada = float(
-                            coincidencia_potencia.group().replace(',', '.')
-                        )
-                        if clave_potencia.endswith('_w'):
-                            potencia_detectada /= 1000
-                        potencias_contratadas[periodo] = potencia_detectada
-                        break
-        if not potencias_contratadas.notna().any():
-            for clave, valor in metadatos_sips.items():
-                if 'pot' not in clave or not valor:
-                    continue
-                numeros_potencia = re.findall(
-                    r'\d+(?:[.,]\d+)?', str(valor)
-                )
-                if len(numeros_potencia) >= 6:
-                    potencias_contratadas[:] = [
-                        float(numero.replace(',', '.'))
-                        for numero in numeros_potencia[:6]
-                    ]
-                    break
+        potencias_contratadas = potencias_contratadas_sips(metadatos_sips)
         st.session_state.comparador_luz_perfil_sips = perfil_mensual.copy()
         st.session_state.comparador_luz_atr_sips = atr
         st.session_state.comparador_luz_potencias_sips = potencias_contratadas.copy()

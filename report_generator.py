@@ -22,6 +22,8 @@ from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +102,10 @@ def build_context(
     cups: str = "",
     peaje: str = "",
     periodo_datos: str = "",
+    nif: str = "",
+    direccion: str = "",
+    fecha_realizacion: str = "",
+    objeto: str = "",
 ) -> dict:
     """
     Construye el diccionario de contexto que alimenta tanto la plantilla HTML
@@ -108,9 +114,15 @@ def build_context(
     return {
         "titulo": titulo,
         "subtitulo": subtitulo,
-        "fecha": datetime.now().strftime("%d/%m/%Y"),
+        "fecha": fecha_realizacion or datetime.now().strftime("%d/%m/%Y"),
+        "fecha_realizacion": (
+            fecha_realizacion or datetime.now().strftime("%d/%m/%Y")
+        ),
         "realizado_por": realizado_por,
         "cliente": cliente,
+        "nif": nif,
+        "direccion": direccion,
+        "objeto": objeto,
         "cups": cups,
         "peaje": peaje,
         "periodo_datos": periodo_datos,
@@ -180,77 +192,166 @@ def generate_docx(context: dict, df_potencias, figs: dict | None = None) -> byte
     Devuelve los bytes del archivo.
     """
     doc = Document()
+    azul = "17365D"
+    azul_rgb = RGBColor(0x17, 0x36, 0x5D)
+    verde_rgb = RGBColor(0x15, 0x80, 0x3D)
 
-    # ---- Estilos generales ----
+    section = doc.sections[0]
+    section.top_margin = Inches(0.65)
+    section.bottom_margin = Inches(0.65)
+    section.left_margin = Inches(0.72)
+    section.right_margin = Inches(0.72)
+
     style = doc.styles["Normal"]
-    style.font.name = "Calibri"
+    style.font.name = "Arial"
     style.font.size = Pt(10)
+    for style_name in ("Title", "Heading 1", "Heading 2"):
+        heading_style = doc.styles[style_name]
+        heading_style.font.name = "Arial"
+        heading_style.font.color.rgb = azul_rgb
 
-    # ---- Cabecera: logo + título ----
-    header = doc.add_heading("", level=0)
-    header.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    if context.get("logo"):
-        # Decodifica base64 y añade la imagen
-        header_para = doc.add_paragraph()
-        header_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        logo_data = base64.b64decode(context["logo"].split(",")[1])
-        logo_buf = io.BytesIO(logo_data)
-        run = header_para.add_run()
-        run.add_picture(logo_buf, width=Inches(2))
+    def set_cell_fill(cell, color):
+        tc_pr = cell._tc.get_or_add_tcPr()
+        shading = tc_pr.find(qn("w:shd"))
+        if shading is None:
+            shading = OxmlElement("w:shd")
+            tc_pr.append(shading)
+        shading.set(qn("w:fill"), color)
 
-    title_para = doc.add_heading(context["titulo"], level=1)
-    title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    def set_cell_margins(cell, top=90, start=100, bottom=90, end=100):
+        tc_pr = cell._tc.get_or_add_tcPr()
+        tc_mar = tc_pr.first_child_found_in("w:tcMar")
+        if tc_mar is None:
+            tc_mar = OxmlElement("w:tcMar")
+            tc_pr.append(tc_mar)
+        for margin, value in (
+            ("top", top), ("start", start),
+            ("bottom", bottom), ("end", end),
+        ):
+            node = tc_mar.find(qn(f"w:{margin}"))
+            if node is None:
+                node = OxmlElement(f"w:{margin}")
+                tc_mar.append(node)
+            node.set(qn("w:w"), str(value))
+            node.set(qn("w:type"), "dxa")
+
+    def add_level_heading(text):
+        table = doc.add_table(rows=1, cols=1)
+        table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        cell = table.cell(0, 0)
+        set_cell_fill(cell, "FFEDD5")
+        set_cell_margins(cell, top=120, start=160, bottom=120, end=160)
+        run = cell.paragraphs[0].add_run(text)
+        run.bold = True
+        run.font.name = "Arial"
+        run.font.size = Pt(16)
+        run.font.color.rgb = RGBColor(0x9A, 0x34, 0x12)
+        return table
+
+    # ---- Cabecera común de informes epowerapp ----
+    cabecera = doc.add_table(rows=1, cols=2)
+    cabecera.alignment = WD_TABLE_ALIGNMENT.CENTER
+    celda_titulo = cabecera.cell(0, 0)
+    titulo_p = celda_titulo.paragraphs[0]
+    titulo_run = titulo_p.add_run(context.get("titulo") or "Informe")
+    titulo_run.bold = True
+    titulo_run.font.name = "Arial"
+    titulo_run.font.size = Pt(22)
+    titulo_run.font.color.rgb = azul_rgb
     if context.get("subtitulo"):
-        sub = doc.add_paragraph(context["subtitulo"])
-        sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    date_para = doc.add_paragraph(f"Fecha: {context['fecha']}")
-    date_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    doc.add_paragraph()
+        sub_p = celda_titulo.add_paragraph(context["subtitulo"])
+        sub_p.runs[0].font.color.rgb = RGBColor(0x53, 0x65, 0x79)
+    firma_p = celda_titulo.add_paragraph()
+    firma_run = firma_p.add_run(
+        f"Realizado por {context.get('realizado_por') or '—'} · "
+        f"Fecha de realización: "
+        f"{context.get('fecha_realizacion') or context.get('fecha') or '—'}"
+    )
+    firma_run.bold = True
+    firma_run.font.size = Pt(9)
+    firma_run.font.color.rgb = RGBColor(0x53, 0x65, 0x79)
+    if context.get("logo"):
+        try:
+            logo_data = base64.b64decode(context["logo"].split(",", 1)[1])
+            logo_p = cabecera.cell(0, 1).paragraphs[0]
+            logo_p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            logo_p.add_run().add_picture(
+                io.BytesIO(logo_data), width=Inches(1.55)
+            )
+        except Exception:
+            pass
 
-    # ---- Datos del informe ----
-    doc.add_heading("Datos del informe", level=2)
+    borde = doc.add_paragraph()
+    borde.paragraph_format.space_after = Pt(10)
+    p_bdr = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:sz"), "24")
+    bottom.set(qn("w:color"), azul)
+    p_bdr.append(bottom)
+    borde._p.get_or_add_pPr().append(p_bdr)
+
+    objeto_p = doc.add_paragraph()
+    objeto_p.paragraph_format.space_after = Pt(10)
+    objeto_p.add_run("Objeto del informe: ").bold = True
+    objeto_p.add_run(
+        context.get("objeto")
+        or "Analizar y optimizar las potencias contratadas del suministro."
+    )
+
     ficha = doc.add_table(rows=3, cols=4)
     ficha.style = "Table Grid"
     ficha.alignment = WD_TABLE_ALIGNMENT.CENTER
     datos_ficha = [
-        ("Realizado por", context["realizado_por"], "CUPS", context["cups"]),
-        ("Fecha de realización", context["fecha"], "Peaje", context["peaje"]),
-        ("Cliente", context["cliente"], "Periodo analizado", context["periodo_datos"]),
+        ("Cliente", context.get("cliente"), "NIF / CIF", context.get("nif")),
+        ("Dirección", context.get("direccion"), "CUPS", context.get("cups")),
+        ("ATR", context.get("peaje"), "Periodo analizado", context.get("periodo_datos")),
     ]
     for fila, datos in enumerate(datos_ficha):
         for columna, valor in enumerate(datos):
             celda = ficha.cell(fila, columna)
-            celda.text = str(valor)
+            celda.text = str(valor or "—")
+            set_cell_margins(celda)
             if columna in (0, 2):
-                celda.paragraphs[0].runs[0].bold = True
+                set_cell_fill(celda, "EEF4F8")
+                run = celda.paragraphs[0].runs[0]
+                run.bold = True
+                run.font.color.rgb = azul_rgb
     doc.add_paragraph()
 
-    # ---- Resumen KPIs ----
-    doc.add_heading("Resumen económico", level=2)
+    add_level_heading("Nivel 1 · Resultado y propuesta")
+    doc.add_paragraph()
     kpi_table = doc.add_table(rows=2, cols=4)
     kpi_table.style = "Table Grid"
     kpi_table.alignment = WD_TABLE_ALIGNMENT.CENTER
 
-    headers = ["Coste tarifa contratada", "Coste tarifa óptima", "Ahorro estimado", "Ahorro (%)"]
+    headers = ["Coste actual", "Coste optimizado", "Ahorro estimado", "Ahorro"]
     values  = [
         context["coste_tp_potcon"],
         context["coste_tp_potopt"],
         context["ahorro_opt"],
         context["ahorro_opt_porc"],
     ]
-    accent = RGBColor(0x1A, 0x56, 0xDB)  # azul corporativo
-
     for i, (h, v) in enumerate(zip(headers, values)):
         hcell = kpi_table.cell(0, i)
         hcell.text = h
-        hcell.paragraphs[0].runs[0].bold = True
-        hcell.paragraphs[0].runs[0].font.color.rgb = accent
-        kpi_table.cell(1, i).text = v
+        set_cell_fill(hcell, "EEF4F8")
+        header_run = hcell.paragraphs[0].runs[0]
+        header_run.bold = True
+        header_run.font.color.rgb = azul_rgb
+        value_cell = kpi_table.cell(1, i)
+        value_cell.text = v
+        value_run = value_cell.paragraphs[0].runs[0]
+        value_run.bold = True
+        value_run.font.size = Pt(13)
+        if i >= 2:
+            value_run.font.color.rgb = verde_rgb
+        set_cell_margins(hcell)
+        set_cell_margins(value_cell, top=120, bottom=120)
 
     doc.add_paragraph()
 
-    # ---- Tabla de potencias ----
-    doc.add_heading("Detalle de potencias", level=2)
+    doc.add_heading("Potencias contratadas y propuesta optimizada", level=2)
     cols = list(df_potencias.columns)
     data_table = doc.add_table(rows=1 + len(df_potencias), cols=len(cols))
     data_table.style = "Table Grid"
@@ -258,24 +359,35 @@ def generate_docx(context: dict, df_potencias, figs: dict | None = None) -> byte
 
     for i, col in enumerate(cols):
         cell = data_table.cell(0, i)
-        cell.text = col
-        cell.paragraphs[0].runs[0].bold = True
+        cell.text = str(col)
+        set_cell_fill(cell, azul)
+        run = cell.paragraphs[0].runs[0]
+        run.bold = True
+        run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
 
-    for row_idx, row in df_potencias.iterrows():
+    for row_number, (_, row) in enumerate(df_potencias.iterrows(), start=1):
         for col_idx, val in enumerate(row):
-            data_table.cell(row_idx + 1, col_idx).text = str(val)
+            cell = data_table.cell(row_number, col_idx)
+            cell.text = str(val)
+            if row_number % 2 == 0:
+                set_cell_fill(cell, "F7F9FB")
 
     doc.add_paragraph()
 
-    # ---- Gráficos ----
-    doc.add_heading("Análisis gráfico", level=2)
+    add_level_heading("Nivel 2 · Análisis económico")
+    doc.add_paragraph()
     graficos_nombres = [
-        ("Resumen",                    "graf_resumen"),
-        ("Costes potencia contratada", "graf_costes_potcon"),
-        ("Ahorro estimado",            "graf_ahorro"),
-        ("Costes por periodos",        "graf_costes_pot_periodos"),
+        ("Resumen de costes", "graf_resumen"),
+        ("Ahorro estimado", "graf_ahorro"),
+        ("__NIVEL_3__", ""),
+        ("Costes mensuales", "graf_costes_potcon"),
+        ("Costes por periodos", "graf_costes_pot_periodos"),
     ]
     for nombre, key in graficos_nombres:
+        if nombre == "__NIVEL_3__":
+            add_level_heading("Nivel 3 · Detalle y trazabilidad")
+            doc.add_paragraph()
+            continue
         doc.add_paragraph(nombre).runs[0].bold = True
         fig = (figs or {}).get(key)
         imagen_contexto = context.get(key, "")
@@ -309,7 +421,15 @@ def generate_docx(context: dict, df_potencias, figs: dict | None = None) -> byte
             doc.add_paragraph(f"[Gráfico '{nombre}' no disponible]")
         doc.add_paragraph()
 
-    # ---- Bytes de salida ----
+    footer_p = doc.add_paragraph(
+        "Informe elaborado con los datos y costes regulados disponibles en "
+        "epowerapp. Revisa los datos del suministro antes de entregar el documento."
+    )
+    footer_p.paragraph_format.space_before = Pt(12)
+    for run in footer_p.runs:
+        run.font.size = Pt(8)
+        run.font.color.rgb = RGBColor(0x65, 0x75, 0x8B)
+
     out_buf = io.BytesIO()
     doc.save(out_buf)
     out_buf.seek(0)
@@ -338,6 +458,10 @@ def preparar_informe(
     cups: str = "",
     peaje: str = "",
     periodo_datos: str = "",
+    nif: str = "",
+    direccion: str = "",
+    fecha_realizacion: str = "",
+    objeto: str = "",
     template_path: str = "templates/informe.html",
 ) -> dict:
     """Prepara una sola vez el contexto, los gráficos y la vista HTML."""
@@ -359,6 +483,10 @@ def preparar_informe(
         cups=cups,
         peaje=peaje,
         periodo_datos=periodo_datos,
+        nif=nif,
+        direccion=direccion,
+        fecha_realizacion=fecha_realizacion,
+        objeto=objeto,
     )
     return {
         "context": context,
@@ -405,6 +533,10 @@ def generar_informe(
     cups: str = "",
     peaje: str = "",
     periodo_datos: str = "",
+    nif: str = "",
+    direccion: str = "",
+    fecha_realizacion: str = "",
+    objeto: str = "",
     template_path: str = "templates/informe.html",
 ) -> dict:
     """
@@ -437,6 +569,10 @@ def generar_informe(
         cups=cups,
         peaje=peaje,
         periodo_datos=periodo_datos,
+        nif=nif,
+        direccion=direccion,
+        fecha_realizacion=fecha_realizacion,
+        objeto=objeto,
         template_path=template_path,
     )
     return {

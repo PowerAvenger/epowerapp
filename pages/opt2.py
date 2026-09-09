@@ -11,7 +11,7 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 from utilidades import generar_menu
 from backend_opt2 import (leer_curva_normalizada, calcular_costes, calcular_optimizacion, pyc_tp, tepp45, tepp123, meses, normalizar_tabla_maximetros, prorratear_excesos_ciclo_tipo_123)
-from backend_sips import leer_sips_completo
+from backend_sips import leer_sips_completo, potencias_contratadas_sips
 from backend_curvadecarga import colores_periodo
 from backend_comun import aplicar_estilo
 from report_generator import preparar_informe, generar_formato_informe
@@ -35,17 +35,81 @@ with tab_entrada:
 
 col_avisos_acciones.subheader("Avisos y acciones", divider="rainbow")
 
-render_origen_curva(
-    col_origen_curva,
-    col_avisos_acciones,
-    clave="termino_potencia_curva",
+col_origen_curva.subheader("Origen de datos", divider="rainbow")
+origen_datos_potencia = col_origen_curva.radio(
+    "Selecciona el origen de datos",
+    ["Curva", "SIPS"],
+    horizontal=True,
+    label_visibility="collapsed",
+    key="termino_potencia_origen_datos",
 )
+potencias_sips_entrada = None
+sips_nuevo_entrada = False
+if origen_datos_potencia == "Curva":
+    render_origen_curva(
+        col_origen_curva,
+        col_origen_curva,
+        clave="termino_potencia_curva",
+        titulo_compacto=True,
+    )
+else:
+    col_origen_curva.markdown("#### Archivo SIPS")
+    archivo_sips_entrada = col_origen_curva.file_uploader(
+        "Sube el CSV SIPS",
+        type=["csv"],
+        key="termino_potencia_sips",
+    )
+    if archivo_sips_entrada is None:
+        if st.session_state.get("sips_termino_potencia") is None:
+            col_origen_curva.info(
+                "Sube un CSV SIPS para cargar ATR, potencias y maxímetros."
+            )
+        else:
+            col_origen_curva.caption("SIPS recuperado de la sesión.")
+    else:
+        try:
+            contenido_sips = archivo_sips_entrada.getvalue()
+            firma_sips = hashlib.sha256(contenido_sips).hexdigest()
+            sips_entrada = leer_sips_completo(archivo_sips_entrada)
+            atr_sips_entrada = sips_entrada.get("atr")
+            if atr_sips_entrada not in {
+                "2.0", "3.0", "6.1", "6.2", "6.3", "6.4"
+            }:
+                raise ValueError("El SIPS no contiene un ATR compatible.")
+            potencias_sips_entrada = potencias_contratadas_sips(
+                sips_entrada.get("metadatos")
+            )
+            st.session_state.sips_termino_potencia = sips_entrada
+            st.session_state.df_maximetros = sips_entrada["maximetros"][
+                [
+                    "periodo_mes", "mes_nom", "dias_facturacion",
+                    "P1", "P2", "P3", "P4", "P5", "P6",
+                ]
+            ].copy()
+            st.session_state.atr_dfnorm = atr_sips_entrada
+            st.session_state.tarifa_maximetros = atr_sips_entrada
+            sips_nuevo_entrada = (
+                st.session_state.get("termino_potencia_firma_sips")
+                != firma_sips
+            )
+            st.session_state.termino_potencia_firma_sips = firma_sips
+            col_origen_curva.success(
+                f"SIPS cargado · ATR {atr_sips_entrada}TD · "
+                f"{len(st.session_state.df_maximetros)} ciclos."
+            )
+        except Exception as error_sips:
+            col_origen_curva.error(f"No se pudo leer el SIPS: {error_sips}")
 
 
 
 if 'mantener_potencia' not in st.session_state:
     st.session_state.mantener_potencia = "Mantener" 
 if 'forzar_maximetros' not in st.session_state:
+    st.session_state.forzar_maximetros = False
+
+# Interfaz manual reservada para una posible reactivacion futura.
+MOSTRAR_CARGA_MANUAL_MAXIMETROS = False
+if not MOSTRAR_CARGA_MANUAL_MAXIMETROS:
     st.session_state.forzar_maximetros = False
 
 pot_con_ini = {
@@ -68,14 +132,49 @@ if "df_pot" not in st.session_state:
 else:
     df_pot_ini = st.session_state.df_pot
 
+if sips_nuevo_entrada and potencias_sips_entrada is not None:
+    potencias_base = pd.Series(pot_con_ini, dtype=float)
+    potencias_base.update(potencias_sips_entrada.dropna())
+    st.session_state.df_pot = pd.DataFrame(
+        {"Potencia (kW)": potencias_base}
+    ).rename_axis("Periodo")
+    df_pot_ini = st.session_state.df_pot
+
 col_datos_potencia.subheader("Datos de potencia", divider="rainbow")
 col_datos_potencia.markdown("#### Potencias contratadas")
 
+df_pot_editor = df_pot_ini.copy()
+df_pot_editor["Potencia (kW)"] = df_pot_editor["Potencia (kW)"].map(
+    lambda valor: formato_numero_es(valor, 3)
+)
 df_pot_edit = col_datos_potencia.data_editor(
-    df_pot_ini,
+    df_pot_editor,
     use_container_width=True,
     num_rows="fixed",
+    column_config={
+        "Potencia (kW)": st.column_config.TextColumn(
+            "Potencia (kW)",
+            help="Admite coma o punto decimal.",
+        )
+    },
 )
+
+def normalizar_potencias_editadas(df):
+    resultado = df.copy()
+
+    def convertir(valor):
+        if isinstance(valor, (int, float)):
+            return float(valor)
+        texto = str(valor).strip().replace(" ", "")
+        if "," in texto:
+            texto = texto.replace(".", "").replace(",", ".")
+        return pd.to_numeric(texto, errors="coerce")
+
+    resultado["Potencia (kW)"] = resultado["Potencia (kW)"].map(
+        convertir
+    )
+    return resultado
+
 
 MIN_P1 = 0.1
 #MIN_P6 = 50.01
@@ -98,22 +197,44 @@ def validar_potencias(df):
     return errores
 
 
-if col_avisos_acciones.button(
+if col_datos_potencia.button(
     'Cargar potencias contratadas',
     use_container_width=True,
     type='primary',
     key='cargar_potencias_contratadas',
 ):
-    errores = validar_potencias(df_pot_edit)
+    df_pot_candidata = normalizar_potencias_editadas(df_pot_edit)
+    if df_pot_candidata["Potencia (kW)"].isna().any():
+        errores = [
+            "Introduce valores numéricos válidos en todas las potencias."
+        ]
+    else:
+        errores = validar_potencias(df_pot_candidata)
 
     if errores:
         for e in errores:
             col_avisos_acciones.error(e)
     else:
-        st.session_state.df_pot = df_pot_edit
+        st.session_state.df_pot = df_pot_candidata
         col_avisos_acciones.success("Potencias cargadas correctamente")
-    st.session_state.df_pot = df_pot_edit
 
+
+def _formato_kw(valor):
+    texto = f"{float(valor):,.3f}"
+    return texto.replace(",", "_").replace(".", ",").replace("_", ".")
+
+
+potencias_cargadas = st.session_state.df_pot["Potencia (kW)"]
+detalle_potencias = [
+    f"**P{i}:** {_formato_kw(potencias_cargadas.loc[f'P{i}'])} kW"
+    for i in range(1, 7)
+]
+col_avisos_acciones.info(
+    f"**Potencias cargadas · {origen_datos_potencia}**\n\n"
+    + " · ".join(detalle_potencias[:3])
+    + "  \n"
+    + " · ".join(detalle_potencias[3:])
+)
 
 print('df_pot')
 print(st.session_state.df_pot)
@@ -121,10 +242,10 @@ print(st.session_state.df_pot)
 p6 = float(st.session_state.df_pot.loc["P6", "Potencia (kW)"])
 # modo1 = True  -> tipos 4/5: maxímetros
 # modo1 = False -> tipos 1/2/3: curva de carga
-modo1 = p6 <= 50
+modo1 = origen_datos_potencia == "SIPS" or p6 <= 50
 
 if st.session_state.forzar_maximetros:
-    modo1 =p6
+    modo1 = True
 
 col_datos_potencia.radio(
     "Selecciona potencia P6",
@@ -132,6 +253,34 @@ col_datos_potencia.radio(
     horizontal=True,
     key='mantener_potencia'
 )
+
+if (
+    origen_datos_potencia == "SIPS"
+    and st.session_state.get("df_maximetros") is not None
+):
+    tabla_maximetros_sips = st.session_state.df_maximetros[
+        ["periodo_mes", "P1", "P2", "P3", "P4", "P5", "P6"]
+    ].copy()
+    tabla_maximetros_sips = tabla_maximetros_sips.sort_values(
+        "periodo_mes", ascending=False
+    )
+    with col_datos_potencia.expander(
+        "Ver maxímetros SIPS P1–P6 (kW)"
+    ):
+        st.dataframe(
+            tabla_maximetros_sips,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "periodo_mes": st.column_config.TextColumn("Periodo"),
+                **{
+                    f"P{i}": st.column_config.NumberColumn(
+                        f"P{i}", format="%.3f"
+                    )
+                    for i in range(1, 7)
+                },
+            },
+        )
 
 if 'atr_dfnorm' not in st.session_state:
     st.session_state.atr_dfnorm = 'Ninguno'
@@ -149,10 +298,23 @@ habilitar_opt = False
 habilitar_ver = False
 tarifa = st.session_state.atr_dfnorm
 
-archivo_max_sesion = st.session_state.get("upload_maximetros")
-sips_potencia_detectado = None
-atr_sips_potencia = None
+# La lectura manual queda preparada, pero por ahora los maximetros
+# se obtienen unicamente desde el SIPS.
+archivo_max_sesion = (
+    st.session_state.get("upload_maximetros")
+    if MOSTRAR_CARGA_MANUAL_MAXIMETROS else None
+)
+sips_potencia_detectado = (
+    st.session_state.get("sips_termino_potencia")
+    if origen_datos_potencia == "SIPS" else None
+)
+atr_sips_potencia = (
+    sips_potencia_detectado.get("atr")
+    if sips_potencia_detectado is not None else None
+)
 if (
+    sips_potencia_detectado is None
+    and
     modo1
     and archivo_max_sesion is not None
     and archivo_max_sesion.name.lower().endswith(".csv")
@@ -165,11 +327,12 @@ if (
         pass
 if atr_sips_potencia in {"2.0", "3.0", "6.1", "6.2", "6.3", "6.4"}:
     st.session_state.tarifa_maximetros = atr_sips_potencia
+    tarifa = atr_sips_potencia
 
 
 
 #if modo1 and tarifa == "Ninguno":
-if modo1 and tarifa:
+if MOSTRAR_CARGA_MANUAL_MAXIMETROS and modo1 and tarifa:
     tarifa = col_datos_potencia.selectbox(
         "Peaje de acceso",
         ["2.0", "3.0", "6.1", "6.2", "6.3", "6.4"],
@@ -188,7 +351,11 @@ if modo1 and tarifa:
                 "El selector queda bloqueado."
             )
 
-if p6>50:
+if (
+    MOSTRAR_CARGA_MANUAL_MAXIMETROS
+    and p6 > 50
+    and origen_datos_potencia == "Curva"
+):
         
     col_datos_potencia.checkbox(
         "Forzar optimización por maxímetro aunque P6 > 50 kW",
@@ -201,15 +368,38 @@ if modo1:
     # P6 <= 50 → maxímetros
 
     col_avisos_acciones.write(f'El peaje del suministro es **:orange[{tarifa}]**')
-    col_avisos_acciones.info('Modo P6 ≤ 50: optimización mediante maxímetros')
+    if origen_datos_potencia == "SIPS":
+        col_avisos_acciones.info(
+            'Modo SIPS: optimización mediante maxímetros.'
+        )
+        if p6 > 50:
+            col_avisos_acciones.warning(
+                "Se va a optimizar un suministro tipo 1, 2 o 3 "
+                "mediante maxímetros. Es preferible hacerlo con una "
+                "curva de carga.",
+                icon="⚠️",
+            )
+    else:
+        col_avisos_acciones.info(
+            'Modo P6 ≤ 50: optimización mediante maxímetros'
+        )
     if st.session_state.forzar_maximetros:
         col_avisos_acciones.warning('¡¡Estás optimizando mediante maxímetros con P6 >50kW!!')
 
-    archivo_max = col_datos_potencia.file_uploader(
-        "Sube tabla manual de maxímetros o CSV SIPS",
-        type=["xlsx", "csv"],
-        key="upload_maximetros"
-    )
+    archivo_max = None
+    if (
+        MOSTRAR_CARGA_MANUAL_MAXIMETROS
+        and origen_datos_potencia == "Curva"
+    ):
+        archivo_max = col_datos_potencia.file_uploader(
+            "Sube tabla manual de maxímetros o CSV SIPS",
+            type=["xlsx", "csv"],
+            key="upload_maximetros"
+        )
+    elif origen_datos_potencia == "SIPS":
+        col_datos_potencia.caption(
+            "Maxímetros cargados desde el SIPS de la columna 1."
+        )
 
     if archivo_max is not None:
         try:
@@ -258,6 +448,45 @@ if modo1:
             for k, v in tepp45[año_opt][tarifa].items()
         }
 
+        if origen_datos_potencia == "SIPS":
+            periodos_sips = sorted(
+                df_maximetros_disponibles["periodo_mes"]
+                .dropna().astype(str).unique(),
+                reverse=True,
+            )
+            clave_mes_sips = "mes_verificacion_sips_potencia"
+            if st.session_state.get(clave_mes_sips) not in periodos_sips:
+                st.session_state[clave_mes_sips] = periodos_sips[0]
+            mes_verificacion_sips = col_datos_potencia.selectbox(
+                "Mes de la verificación",
+                periodos_sips,
+                format_func=lambda periodo: (
+                    f"{meses[int(periodo[5:7]) - 1]} {periodo[:4]}"
+                ),
+                key=clave_mes_sips,
+            )
+            df_verificacion_sips = df_maximetros_disponibles.loc[
+                df_maximetros_disponibles["periodo_mes"]
+                .astype(str).eq(mes_verificacion_sips)
+            ].copy()
+            año_ver = int(mes_verificacion_sips[:4])
+            if año_ver in pyc_tp and año_ver in tepp45:
+                pyc_tp_ver = {
+                    periodo: valor if valor is not None else 0.0
+                    for periodo, valor in pyc_tp[año_ver][tarifa].items()
+                }
+                tepp_ver = {
+                    periodo: valor if valor is not None else 0.0
+                    for periodo, valor in tepp45[año_ver][tarifa].items()
+                }
+                habilitar_ver = True
+            else:
+                col_avisos_acciones.warning(
+                    f"No hay costes regulados disponibles para {año_ver}.",
+                    icon="⚠️",
+                )
+                habilitar_ver = False
+
         meses_maximetros = len(df_in)
         col_avisos_acciones.caption('Costes regulados aplicados: 2026')
         if len(df_maximetros_disponibles) > 12:
@@ -280,7 +509,8 @@ if modo1:
             )
 
         habilitar_opt = True
-        habilitar_ver = False
+        if origen_datos_potencia != "SIPS":
+            habilitar_ver = False
 
 else:
     if 'df_norm' not in st.session_state or st.session_state.df_norm is None:
@@ -294,25 +524,91 @@ else:
             df_in = leer_curva_normalizada(pot_con)
             col_avisos_acciones.write(f'El peaje del suministro es **:orange[{st.session_state.atr_dfnorm}]**')
             col_avisos_acciones.info('Selecciona la acción que quieras ejecutar.')
-            fecha_ini, fecha_fin = st.session_state.rango_curvadecarga
             fechas_verificacion_disponibles = pd.to_datetime(
                 df_in['fecha_hora'], errors='coerce'
             ).dropna()
-            fecha_min_verificacion = fechas_verificacion_disponibles.min().date()
-            fecha_max_verificacion = fechas_verificacion_disponibles.max().date()
-            rango_verificacion = col_datos_potencia.date_input(
-                'Rango de fechas de la verificación',
-                value=(fecha_min_verificacion, fecha_max_verificacion),
-                min_value=fecha_min_verificacion,
-                max_value=fecha_max_verificacion,
-                format='DD/MM/YYYY',
-                key='rango_verificacion_excesos',
+            fecha_min_verificacion = (
+                fechas_verificacion_disponibles.min().date()
             )
-            if (
-                isinstance(rango_verificacion, (tuple, list))
-                and len(rango_verificacion) == 2
-            ):
-                fecha_ini, fecha_fin = rango_verificacion
+            fecha_max_verificacion = (
+                fechas_verificacion_disponibles.max().date()
+            )
+            rango_completo = True
+            rango_dentro_curva = True
+            tipo_periodo_verificacion = col_datos_potencia.radio(
+                'Periodo de la verificación',
+                ('Mes natural', 'Rango de fechas'),
+                horizontal=True,
+                key='tipo_periodo_verificacion_excesos',
+            )
+            if tipo_periodo_verificacion == 'Mes natural':
+                periodos_verificacion = sorted(
+                    fechas_verificacion_disponibles.dt.to_period('M')
+                    .astype(str)
+                    .unique(),
+                    reverse=True,
+                )
+                clave_periodo_verificacion = 'periodo_verificacion_excesos'
+                if (
+                    st.session_state.get(clave_periodo_verificacion)
+                    not in periodos_verificacion
+                ):
+                    st.session_state[clave_periodo_verificacion] = (
+                        periodos_verificacion[0]
+                    )
+                periodo_verificacion = col_datos_potencia.selectbox(
+                    'Mes de la verificación',
+                    periodos_verificacion,
+                    format_func=lambda periodo: (
+                        f"{meses[int(periodo[5:7]) - 1]} {periodo[:4]}"
+                    ),
+                    key=clave_periodo_verificacion,
+                )
+                fechas_periodo_verificacion = fechas_verificacion_disponibles[
+                    fechas_verificacion_disponibles.dt.to_period('M')
+                    .astype(str)
+                    .eq(periodo_verificacion)
+                ]
+                fecha_ini = fechas_periodo_verificacion.min().date()
+                fecha_fin = fechas_periodo_verificacion.max().date()
+            else:
+                col_datos_potencia.caption(
+                    'Fechas disponibles en la curva: '
+                    f'{fecha_min_verificacion:%d/%m/%Y} - '
+                    f'{fecha_max_verificacion:%d/%m/%Y}'
+                )
+                clave_curva_verificacion = (
+                    f'{fecha_min_verificacion:%Y%m%d}_'
+                    f'{fecha_max_verificacion:%Y%m%d}'
+                )
+                fecha_inicio_predeterminada = max(
+                    fecha_min_verificacion,
+                    (
+                        pd.Timestamp(fecha_max_verificacion)
+                        - pd.Timedelta(days=30)
+                    ).date(),
+                )
+                col_fecha_ini, col_fecha_fin = col_datos_potencia.columns(2)
+                fecha_ini = col_fecha_ini.date_input(
+                    'Desde',
+                    value=fecha_inicio_predeterminada,
+                    min_value=fecha_min_verificacion,
+                    max_value=fecha_max_verificacion,
+                    format='DD/MM/YYYY',
+                    key=f'fecha_ini_verificacion_{clave_curva_verificacion}',
+                )
+                fecha_fin = col_fecha_fin.date_input(
+                    'Hasta',
+                    value=fecha_max_verificacion,
+                    min_value=fecha_min_verificacion,
+                    max_value=fecha_max_verificacion,
+                    format='DD/MM/YYYY',
+                    key=f'fecha_fin_verificacion_{clave_curva_verificacion}',
+                )
+                rango_dentro_curva = (
+                    fecha_min_verificacion <= fecha_ini
+                    <= fecha_fin <= fecha_max_verificacion
+                )
             dias_rango = (fecha_fin - fecha_ini).days + 1
             año_ver = fecha_ini.year
 
@@ -372,8 +668,21 @@ else:
             }
             habilitar_opt = True
 
-            # Un mes natural también se puede verificar.
-            if dias_rango <= const_verif:
+            # Un mes natural o un ciclo equivalente también se puede verificar.
+            if not rango_completo:
+                col_avisos_acciones.warning(
+                    'Selecciona también la fecha final del rango.',
+                    icon='⚠️',
+                )
+                habilitar_ver = False
+            elif not rango_dentro_curva:
+                col_avisos_acciones.warning(
+                    'El rango de verificación debe estar incluido en las '
+                    'fechas disponibles de la curva.',
+                    icon='⚠️',
+                )
+                habilitar_ver = False
+            elif dias_rango <= const_verif:
                 col_avisos_acciones.info('Es posible verificar.')
                 habilitar_ver = True
                 pyc_tp_ver = pyc_tp[año_ver][tarifa]
@@ -565,27 +874,97 @@ if resultados is not None:
             
 
     with tab_informe:
-        st.subheader("📄 Generar informe")
-        st.selectbox(
-            'Tipo de informe disponible',
-            ['Informe de optimización'],
-            disabled=True,
-            help=(
-                'La verificación ya dispone de una pestaña y estado propios. '
-                'Su plantilla documental se incorporará cuando se defina su contenido.'
-            )
-        )
-
-        # Opciones que el usuario puede personalizar
-        col_titulo, col_logo = st.columns([2, 2])
+        st.subheader("Informes", divider="rainbow")
+        col_titulo, col_generar_informe = st.columns([0.34, 0.66])
+        clave_cups_informe = "opt2_informe_cups"
+        st.session_state.setdefault(clave_cups_informe, "")
+        if origen_datos_potencia == "SIPS":
+            sips_informe = st.session_state.get("sips_termino_potencia") or {}
+            cups_sips_informe = str(
+                (sips_informe.get("metadatos") or {}).get("cups", "") or ""
+            ).strip()
+            if (
+                cups_sips_informe
+                and st.session_state.get("opt2_cups_sips_autocargado")
+                != cups_sips_informe
+            ):
+                st.session_state[clave_cups_informe] = cups_sips_informe
+                st.session_state.opt2_cups_sips_autocargado = cups_sips_informe
         with col_titulo:
-            titulo    = st.text_input("Título del informe",    "Informe de Optimización de Potencias")
-            subtitulo = st.text_input("Subtítulo (opcional)",  "Prueba de subtítulo")
-            realizado_por = st.text_input("Realizado por", "")
-            cliente       = st.text_input("Cliente", "")
-            cups          = st.text_input("CUPS", "")
-        #with col_logo:
-            logo_file = st.file_uploader("Logo (PNG/JPG)", type=["png", "jpg", "jpeg"])
+            st.selectbox(
+                'Tipo de informe disponible',
+                ['Informe de optimización'],
+                disabled=True,
+                help=(
+                    'La verificación ya dispone de una pestaña y estado propios. '
+                    'Su plantilla documental se incorporará cuando se defina su contenido.'
+                )
+            )
+            st.caption(
+                "Completa los datos del cliente y del realizador. "
+                "La cabecera sigue el esquema común de epowerapp."
+            )
+            with st.container(border=True):
+                st.markdown("#### Datos del cliente y del suministro")
+                col_cliente, col_nif = st.columns([0.68, 0.32])
+                cliente = col_cliente.text_input(
+                    "Cliente / Razón social", key="opt2_informe_cliente"
+                )
+                nif = col_nif.text_input(
+                    "NIF / CIF", key="opt2_informe_nif"
+                )
+                direccion = st.text_input(
+                    "Dirección", key="opt2_informe_direccion"
+                )
+                col_cups, col_atr = st.columns([0.68, 0.32])
+                cups = col_cups.text_input(
+                    "CUPS", key=clave_cups_informe
+                )
+                col_atr.text_input(
+                    "ATR", value=str(tarifa), disabled=True,
+                    key="opt2_informe_atr",
+                )
+
+            with st.container(border=True):
+                st.markdown("#### Datos del informe")
+                titulo = st.text_input(
+                    "Título del informe",
+                    "Informe de optimización de potencias",
+                )
+                subtitulo = st.text_input("Subtítulo (opcional)", "")
+                col_autor, col_fecha = st.columns([0.60, 0.40])
+                realizado_por = col_autor.text_input(
+                    "Realizado por", key="opt2_informe_realizado_por"
+                )
+                fecha_realizacion = col_fecha.text_input(
+                    "Fecha de realización",
+                    value=pd.Timestamp.today().strftime("%d/%m/%Y"),
+                    key="opt2_informe_fecha_realizacion",
+                )
+                objeto_informe = st.text_input(
+                    "Objeto del informe",
+                    value=(
+                        "Analizar y optimizar las potencias contratadas del "
+                        "suministro."
+                    ),
+                    key="opt2_informe_objeto",
+                )
+
+            with st.container(border=True):
+                st.markdown("#### Personalización")
+                logo_file = st.file_uploader(
+                    "Logo para el informe",
+                    type=["png", "jpg", "jpeg"],
+                    accept_multiple_files=False,
+                    key="opt2_informe_logo",
+                )
+                if logo_file is not None:
+                    st.image(logo_file, width=180)
+
+        col_generar_informe.markdown("#### Generar informe")
+        col_generar_informe.caption(
+            "Prepara la vista previa y descarga después el formato necesario."
+        )
 
         logo_bytes = logo_file.getvalue() if logo_file is not None else b""
         firma = hashlib.sha256()
@@ -600,7 +979,11 @@ if resultados is not None:
                 subtitulo,
                 realizado_por,
                 cliente,
+                nif,
+                direccion,
                 cups,
+                fecha_realizacion,
+                objeto_informe,
                 tarifa,
                 periodo_datos_informe,
             )).encode("utf-8")
@@ -613,8 +996,12 @@ if resultados is not None:
         firma.update(logo_bytes)
         firma_informe = firma.hexdigest()
 
-        if st.button("🚀 Preparar informe", type="primary"):
-            with st.spinner("Preparando vista previa y gráficos..."):
+        if col_generar_informe.button(
+            "Preparar informe", type="primary", use_container_width=True
+        ):
+            with st.spinner(
+                "Preparando vista previa y gráficos..."
+            ):
                 logo_path = None
                 try:
                     if logo_file is not None:
@@ -638,10 +1025,14 @@ if resultados is not None:
                         titulo=titulo,
                         subtitulo=subtitulo,
                         cliente=cliente,
+                        nif=nif,
+                        direccion=direccion,
                         cups=cups,
                         peaje=tarifa,
                         periodo_datos=periodo_datos_informe,
                         realizado_por=realizado_por,
+                        fecha_realizacion=fecha_realizacion,
+                        objeto=objeto_informe,
                         template_path="templates/informe.html",
                     )
                     st.session_state["opt2_informe_preparado"] = {
@@ -650,7 +1041,9 @@ if resultados is not None:
                         "formatos": {"html": preparado["html"]},
                     }
                 except Exception as e:
-                    st.error(f"Error al preparar el informe: {e}")
+                    col_generar_informe.error(
+                        f"Error al preparar el informe: {e}"
+                    )
                 finally:
                     if logo_path:
                         pathlib.Path(logo_path).unlink(missing_ok=True)
@@ -663,13 +1056,15 @@ if resultados is not None:
             else None
         )
         if informe_sesion and informe_vigente is None:
-            st.info(
+            col_generar_informe.info(
                 "Los datos han cambiado. Prepara de nuevo el informe para "
                 "actualizarlo."
             )
 
         if informe_vigente:
-            st.success("✅ Informe preparado y conservado durante esta sesión")
+            col_generar_informe.success(
+                "✅ Informe preparado y conservado durante esta sesión"
+            )
             formatos = informe_vigente["formatos"]
             partes_nombre_informe = [
                 "Informe de optimización de potencias",
@@ -691,7 +1086,7 @@ if resultados is not None:
             nombre_base_informe = re.sub(
                 r"_+", "_", nombre_base_informe
             ).strip("._")
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3 = col_generar_informe.columns(3)
             with col1:
                 if "pdf" not in formatos and st.button(
                     "Generar PDF", use_container_width=True
@@ -734,7 +1129,7 @@ if resultados is not None:
                     use_container_width=True,
                 )
 
-            with st.expander("👁️ Vista previa HTML"):
+            with col_generar_informe.expander("👁️ Vista previa HTML"):
                 st.components.v1.html(
                     formatos["html"], height=700, scrolling=True
                 )
@@ -750,7 +1145,128 @@ if resultados is None:
         )
 
 # VERIFICACIÓN DE EXCESOS. NO SE USA EN MODO DEMO
-if submit_ver and st.session_state.df_norm is not None:
+if submit_ver and origen_datos_potencia == "SIPS":
+    (
+        coste_potfra_potcon,
+        coste_excesos_potcon,
+        coste_tp_potcon,
+        df_coste_potfra_potcon,
+        df_coste_excesos_potcon,
+    ) = calcular_costes(
+        df_verificacion_sips, tarifa, pyc_tp_ver, tepp_ver, meses, pot_con
+    )
+
+    df_pot_mes = pd.DataFrame(
+        [df_coste_potfra_potcon.sum(axis=0)],
+        index=["Potencia contratada"],
+    )
+    df_exc_mes = pd.DataFrame(
+        [df_coste_excesos_potcon.sum(axis=0)],
+        index=["Excesos"],
+    )
+    df_pot_mes["Total (€)"] = df_pot_mes.sum(axis=1)
+    df_exc_mes["Total (€)"] = df_exc_mes.sum(axis=1)
+    df_coste = pd.concat([df_pot_mes, df_exc_mes]).reset_index()
+    df_coste = df_coste.rename(columns={"index": "Tipo coste"})
+    columnas_numericas = df_coste.select_dtypes(include="number").columns
+    df_coste[columnas_numericas] = df_coste[columnas_numericas].applymap(
+        lambda valor: formato_numero_es(valor, 2)
+    )
+
+    filas_detalle_verificacion = []
+    for _, fila_maximetros in df_verificacion_sips.iterrows():
+        periodo_mes = str(fila_maximetros["periodo_mes"])
+        dias_aplicados = int(
+            pd.to_numeric(
+                fila_maximetros.get("dias_facturacion"), errors="coerce"
+            )
+            if pd.notna(
+                pd.to_numeric(
+                    fila_maximetros.get("dias_facturacion"), errors="coerce"
+                )
+            )
+            else pd.Period(periodo_mes, freq="M").days_in_month
+        )
+        for periodo in pot_con:
+            maximetro = float(fila_maximetros.get(periodo, 0.0) or 0.0)
+            potencia = float(pot_con[periodo])
+            exceso_kw = max(maximetro - potencia, 0.0)
+            tepp_periodo = float(tepp_ver.get(periodo) or 0.0)
+            filas_detalle_verificacion.append({
+                "Mes": periodo_mes,
+                "Periodo": periodo,
+                "Potencia contratada (kW)": potencia,
+                "Maxímetro (kW)": maximetro,
+                "Exceso (kW)": exceso_kw,
+                "TEPp (€/kW día)": tepp_periodo,
+                "Días aplicados": dias_aplicados,
+                "Potencia (€)": float(
+                    df_coste_potfra_potcon.at[periodo_mes, periodo]
+                ),
+                "Excesos (€)": float(
+                    df_coste_excesos_potcon.at[periodo_mes, periodo]
+                ),
+            })
+    df_detalle_verificacion = pd.DataFrame(filas_detalle_verificacion)
+
+    df_pie = pd.DataFrame({
+        "Tipo coste": ["Potencia contratada", "Excesos"],
+        "Coste (€)": [coste_potfra_potcon, coste_excesos_potcon],
+    })
+    fig_pie = px.pie(
+        df_pie, names="Tipo coste", values="Coste (€)",
+        title="Distribución del coste del término de potencia", hole=0.35,
+    )
+    fig_pie.update_traces(
+        textposition="inside", textinfo="percent+label",
+        hovertemplate="%{label}<br>%{value:,.2f} €<extra></extra>",
+    )
+
+    periodos_grafico = list(pot_con)
+    fila_grafico = df_verificacion_sips.iloc[0]
+    fig_detalle_demanda = go.Figure()
+    fig_detalle_demanda.add_bar(
+        x=periodos_grafico,
+        y=[float(fila_grafico.get(p, 0.0) or 0.0) for p in periodos_grafico],
+        name="Maxímetro",
+        marker_color="#f59e0b",
+    )
+    fig_detalle_demanda.add_bar(
+        x=periodos_grafico,
+        y=[float(pot_con[p]) for p in periodos_grafico],
+        name="Potencia contratada",
+        marker_color="#2563eb",
+    )
+    fig_detalle_demanda = aplicar_estilo(fig_detalle_demanda)
+    fig_detalle_demanda.update_layout(
+        title="Maxímetros y potencias contratadas",
+        barmode="group",
+        xaxis_title="Periodo",
+        yaxis_title="kW",
+    )
+
+    etiqueta_mes_sips = (
+        f"{meses[int(mes_verificacion_sips[5:7]) - 1]} "
+        f"{mes_verificacion_sips[:4]}"
+    )
+    st.session_state.resultados_verificacion_potencia = {
+        "modo": "maximetros_sips",
+        "periodo_texto": etiqueta_mes_sips,
+        "df_coste": df_coste,
+        "df_pot_mes": df_pot_mes,
+        "df_detalle": df_detalle_verificacion,
+        "fig_pie": fig_pie,
+        "fig_detalle_demanda": fig_detalle_demanda,
+        "coste_excesos": coste_excesos_potcon,
+        "factores_prorrateo_excesos": None,
+        "potencias": pot_con.copy(),
+    }
+
+if (
+    submit_ver
+    and origen_datos_potencia == "Curva"
+    and st.session_state.df_norm is not None
+):
         fechas_df_verificacion = pd.to_datetime(
             df_in['fecha_hora'], errors='coerce'
         )
@@ -892,28 +1408,35 @@ if submit_ver and st.session_state.df_norm is not None:
 
         fecha_min = df_verificacion['fecha_hora'].min()
         fecha_max = df_verificacion['fecha_hora'].max()
-        demanda_max_global = pd.to_numeric(
-            df_verificacion['potencia'], errors='coerce'
-        ).max()
-        potencia_contratada_max = max(
-            float(pot_con[p]) for p in orden_visual
-        )
-        valor_max_global = max(
-            float(demanda_max_global) if pd.notna(demanda_max_global) else 0,
-            potencia_contratada_max
-        )
-        paso_eje = 500
-        ultimo_tick = max(
-            paso_eje,
-            math.ceil(valor_max_global * 1.05 / paso_eje) * paso_eje
-        )
-        # El margen coloca el último tick dentro del área del gráfico para
-        # que su línea de división sea visible y no coincida con el borde.
-        limite_superior = ultimo_tick + paso_eje * 0.08
+
+        def escala_y_periodo(valor_maximo):
+            objetivo = max(float(valor_maximo) * 1.08, 1.0)
+            paso_bruto = objetivo / 5
+            magnitud = 10 ** math.floor(math.log10(paso_bruto))
+            proporcion = paso_bruto / magnitud
+            factor = next(
+                candidato
+                for candidato in (1, 2, 5, 10)
+                if proporcion <= candidato
+            )
+            paso = factor * magnitud
+            limite = math.ceil(objetivo / paso) * paso
+            return limite, paso
         
         for fila, periodo in enumerate(orden_visual, start=1):
             df_p = df_verificacion[df_verificacion['periodo'] == periodo]
             color_periodo = colores_periodo[periodo]
+            demanda_max_periodo = pd.to_numeric(
+                df_p['potencia'], errors='coerce'
+            ).max()
+            valor_max_periodo = max(
+                float(demanda_max_periodo)
+                if pd.notna(demanda_max_periodo) else 0.0,
+                float(pot_con[periodo]),
+            )
+            limite_superior, paso_eje = escala_y_periodo(
+                valor_max_periodo
+            )
 
             fig_detalle_demanda.add_trace(
                 go.Bar(
@@ -930,6 +1453,17 @@ if submit_ver and st.session_state.df_norm is not None:
                 ),
                 row=fila,
                 col=1
+            )
+
+            fig_detalle_demanda.update_yaxes(
+                title_text='kW',
+                range=[0, limite_superior],
+                dtick=paso_eje,
+                showgrid=True,
+                gridwidth=1,
+                gridcolor='rgba(128, 128, 128, 0.35)',
+                row=fila,
+                col=1,
             )
 
             fig_detalle_demanda.add_trace(
@@ -958,15 +1492,6 @@ if submit_ver and st.session_state.df_norm is not None:
             bargap=0,
             margin=dict(t=100, b=70)
         )
-        fig_detalle_demanda.update_yaxes(
-            title_text='kW',
-            range=[0, limite_superior],
-            dtick=paso_eje,
-            showgrid=True,
-            gridwidth=1,
-            gridcolor='rgba(128, 128, 128, 0.35)'
-        )
-
         st.session_state.resultados_verificacion_potencia = {
             'fecha_inicio': fecha_inicio,
             'fecha_final': fecha_final,
@@ -986,11 +1511,15 @@ with tab_verificacion:
     if verificacion is None:
         st.info('Realiza una verificación para mostrar sus resultados.')
     else:
-        st.header('Resultados de la verificación', divider='rainbow')
-        st.write(
-            f"Datos del {verificacion['fecha_inicio']} al "
-            f"{verificacion['fecha_final']}"
-        )
+        if verificacion.get("periodo_texto"):
+            st.write(
+                f"Mes SIPS verificado: **{verificacion['periodo_texto']}**"
+            )
+        else:
+            st.write(
+                f"Datos del {verificacion['fecha_inicio']} al "
+                f"{verificacion['fecha_final']}"
+            )
         df_potencias_verificacion = pd.DataFrame(
             [verificacion['potencias']],
             index=['Potencia contratada (kW)']
@@ -1008,27 +1537,55 @@ with tab_verificacion:
                 use_container_width=True
             )
             st.subheader('Resultado económico')
+            tabla_resultado_economico = verificacion['df_coste']
+
+            def resaltar_total_excesos(tabla):
+                estilos = pd.DataFrame(
+                    '', index=tabla.index, columns=tabla.columns
+                )
+                columnas_total = [
+                    columna for columna in tabla.columns
+                    if str(columna).startswith('Total')
+                ]
+                if 'Tipo coste' in tabla.columns and columnas_total:
+                    filas_excesos = tabla['Tipo coste'].eq('Excesos')
+                    estilos.loc[filas_excesos, columnas_total[0]] = (
+                        'background-color: #f59e0b; color: #111827; '
+                        'font-weight: 700;'
+                    )
+                return estilos
+
             st.dataframe(
-                verificacion['df_coste'],
+                tabla_resultado_economico.style.apply(
+                    resaltar_total_excesos, axis=None
+                ),
                 hide_index=True,
                 use_container_width=True
             )
             st.subheader('Justificación de excesos')
             df_detalle_verificacion = verificacion.get('df_detalle')
-            columnas_excesos = [
-                'Mes',
-                'Periodo',
-                'Maxímetro (kW)',
-                'N.º sobrepasamientos',
-                'Σ excesos² (kW²)',
-                'Raíz Σ excesos² (kW)',
-                'TEPp (€/kW)',
-                'Excesos brutos (€)',
-                'Días ciclo',
-                'Días mes',
-                'Factor prorrateo',
-                'Excesos (€)',
-            ]
+            if verificacion.get("modo") == "maximetros_sips":
+                columnas_excesos = [
+                    'Mes', 'Periodo', 'Potencia contratada (kW)',
+                    'Maxímetro (kW)', 'Exceso (kW)',
+                    'TEPp (€/kW día)', 'Días aplicados',
+                    'Potencia (€)', 'Excesos (€)',
+                ]
+            else:
+                columnas_excesos = [
+                    'Mes',
+                    'Periodo',
+                    'Maxímetro (kW)',
+                    'N.º sobrepasamientos',
+                    'Σ excesos² (kW²)',
+                    'Raíz Σ excesos² (kW)',
+                    'TEPp (€/kW)',
+                    'Excesos brutos (€)',
+                    'Días ciclo',
+                    'Días mes',
+                    'Factor prorrateo',
+                    'Excesos (€)',
+                ]
             if (
                 df_detalle_verificacion is None
                 or not set(columnas_excesos).issubset(
@@ -1048,6 +1605,18 @@ with tab_verificacion:
                         'Maxímetro (kW)': st.column_config.NumberColumn(
                             format='%.2f kW'
                         ),
+                        'Potencia contratada (kW)': st.column_config.NumberColumn(
+                            format='%.2f kW'
+                        ),
+                        'Exceso (kW)': st.column_config.NumberColumn(
+                            format='%.2f kW'
+                        ),
+                        'TEPp (€/kW día)': st.column_config.NumberColumn(
+                            format='%.6f'
+                        ),
+                        'Días aplicados': st.column_config.NumberColumn(
+                            format='%d'
+                        ),
                         'Σ excesos² (kW²)': st.column_config.NumberColumn(
                             format='%.6f'
                         ),
@@ -1066,15 +1635,28 @@ with tab_verificacion:
                         'Excesos (€)': st.column_config.NumberColumn(format='%.2f €'),
                     },
                 )
+                es_verificacion_sips = (
+                    verificacion.get("modo") == "maximetros_sips"
+                )
+                columna_coste_detalle = (
+                    'Excesos (€)' if es_verificacion_sips
+                    else 'Excesos brutos (€)'
+                )
                 coste_excesos_sin_prorrateo = float(
-                    df_detalle_verificacion['Excesos brutos (€)'].sum()
+                    df_detalle_verificacion[columna_coste_detalle].sum()
                 )
-                st.caption(
-                    '**Coste de los excesos sin prorrateo:** '
-                    f'{formato_euros(coste_excesos_sin_prorrateo)}. '
-                    'El cálculo de los sobrepasamientos no se modifica; el '
-                    'prorrateo se aplica únicamente sobre su coste.'
-                )
+                if es_verificacion_sips:
+                    st.caption(
+                        'Excesos (€) = exceso de maxímetro (kW) × TEPp '
+                        '(€/kW día) × días informados por el SIPS.'
+                    )
+                else:
+                    st.caption(
+                        '**Coste de los excesos sin prorrateo:** '
+                        f'{formato_euros(coste_excesos_sin_prorrateo)}. '
+                        'El cálculo de los sobrepasamientos no se modifica; '
+                        'el prorrateo se aplica únicamente sobre su coste.'
+                    )
                 factores_prorrateo = verificacion.get(
                     'factores_prorrateo_excesos'
                 )
@@ -1087,7 +1669,7 @@ with tab_verificacion:
                         'se aplica al coste bruto de los excesos el factor '
                         'días del ciclo / días naturales del mes.'
                     )
-                else:
+                elif not es_verificacion_sips:
                     st.caption(
                         'Excesos (€) = TEPp × √Σ(demanda − potencia '
                         'contratada)², considerando únicamente los intervalos '

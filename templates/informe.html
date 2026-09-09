@@ -1,145 +1,93 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="es">
 <head>
-<meta charset="UTF-8"/>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
-    font-size: 10pt; color: #1e293b; background: #ffffff; padding: 28px 36px;
-  }
-  .header-table { width: 100%; border-bottom: 3px solid #1a56db; padding-bottom: 14px; margin-bottom: 28px; }
-  .header-table td { vertical-align: middle; }
-  .header-logo { width: 130px; }
-  .header-logo img { max-height: 40px; max-width: 120px; }
-  .header-title h1 { font-size: 17pt; font-weight: 700; color: #1a56db; line-height: 1.15; }
-  .header-title h2 { font-size: 10pt; font-weight: 400; color: #64748b; margin-top: 3px; }
-  .section { margin-top: 28px; margin-bottom: 10px; }
-  .section-title { font-size: 11pt; font-weight: 700; color: #1a56db; border-left: 4px solid #1a56db; padding-left: 8px; margin-bottom: 12px; }
-  .ficha-table { width: 100%; border-collapse: collapse; font-size: 9.5pt; }
-  .ficha-table td { padding: 3px 12px 3px 0; vertical-align: top; }
-  .ficha-label { color: #64748b; width: 160px; white-space: nowrap; }
-  .ficha-value { font-weight: 600; color: #1e293b; }
-  .ficha-sep   { width: 40px; }
-  .kpi-grid { width: 100%; border-collapse: separate; border-spacing: 8px 0; }
-  .kpi-card { background: #f0f6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 10px 12px; text-align: center; width: 25%; }
-  .kpi-card.ahorro { background: #f0fdf4; border-color: #86efac; }
-  .kpi-label { font-size: 8.5pt; color: #64748b; margin-bottom: 4px; }
-  .kpi-value { font-size: 13pt; font-weight: 700; color: #1e293b; }
-  .kpi-card.ahorro .kpi-value { color: #15803d; }
-  .tabla-datos { width: 100%; border-collapse: collapse; font-size: 9pt; }
-  .tabla-datos thead tr { background: #5a7080; color: #ffffff; }
-  .tabla-datos thead th { padding: 7px 10px; text-align: center; font-weight: 600; vertical-align: middle; }
-  .tabla-datos tbody tr:nth-child(even) { background: #f8fafc; }
-  .tabla-datos tbody td { padding: 6px 10px; border-bottom: 1px solid #e2e8f0; text-align: center; }
-  .tabla-datos tbody td:first-child { text-align: left; }
-  .graficos-fila { display: flex; gap: 10px; margin-bottom: 10px; }
-  .grafico-card { border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; page-break-inside: avoid; break-inside: avoid; margin-bottom: 10px; }
-  .grafico-card-half { flex: 1; }
-  .grafico-card-full { width: 100%; }
-  .grafico-titulo { font-size: 9pt; font-weight: 600; color: #475569; background: #f8fafc; padding: 6px 10px; border-bottom: 1px solid #e2e8f0; }
-  .grafico-card img { width: 100%; display: block; }
-  .footer { margin-top: 28px; padding-top: 10px; border-top: 1px solid #e2e8f0; font-size: 8pt; color: #94a3b8; text-align: center; }
-  @page { size: A4; margin: 20mm 18mm; }
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ titulo }}</title>
+  <style>
+    :root{--azul:#12304a;--verde:#15803d;--naranja:#d97706;--gris:#64748b}
+    *{box-sizing:border-box}
+    body{margin:0;background:#eef2f6;color:#172033;font:14px/1.45 Arial,sans-serif}
+    .documento{max-width:1040px;margin:24px auto;background:#fff;box-shadow:0 8px 30px #0f172a20}
+    header{padding:34px 44px 26px;border-bottom:5px solid var(--azul);display:flex;justify-content:space-between;gap:30px}
+    header img{max-width:190px;max-height:76px;object-fit:contain}
+    h1{margin:0;color:var(--azul);font-size:28px}
+    h3{margin:22px 0 10px;color:#334155}
+    .firma-cabecera{margin:9px 0 0;color:#536579;font-weight:600}
+    .subtitulo{margin:7px 0 0;color:#64748b}
+    .introduccion{padding:22px 44px;background:#f8fafc;border-bottom:1px solid #dbe3ec;color:#334155}
+    .meta{display:grid;grid-template-columns:repeat(3,1fr);gap:10px 24px;padding:22px 44px;border-bottom:1px solid #dbe3ec}
+    .meta span{display:block;color:var(--gris);font-size:12px;text-transform:uppercase}
+    .meta strong{display:block;margin-top:3px;overflow-wrap:anywhere}
+    section{padding:32px 44px;border-bottom:1px solid #dbe3ec}
+    .nivel>h2{background:#ffedd5;color:#9a3412;border-left:6px solid #f97316;border-radius:6px;padding:11px 14px;margin:0 0 18px;font-size:24px}
+    .impactos{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:18px 0 24px}
+    .impacto{padding:16px;border:1px solid #dbe3ec;border-radius:10px;background:#f8fafc}
+    .impacto.ahorro{background:#f0fdf4;border-color:#86efac}
+    .impacto span{display:block;color:var(--gris);font-size:12px}
+    .impacto strong{display:block;color:var(--azul);font-size:21px;margin-top:4px}
+    .impacto.ahorro strong{color:var(--verde)}
+    .tabla-wrap{overflow-x:auto;margin-bottom:24px}
+    .tabla-datos{width:100%;border-collapse:collapse;font-size:12px}
+    .tabla-datos th{background:var(--azul);color:#fff;padding:8px;text-align:right}
+    .tabla-datos td{padding:7px 8px;border-bottom:1px solid #e2e8f0;text-align:right}
+    .tabla-datos th:first-child,.tabla-datos td:first-child{text-align:left}
+    .graficos{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;align-items:start}
+    .grafico{border:1px solid #d9e2ea;border-radius:8px;padding:10px;margin:8px 0 18px;break-inside:avoid}
+    .grafico h3{margin:0 0 8px;font-size:14px}
+    .grafico img{display:block;width:100%;height:auto}
+    .grafico.ancho{grid-column:1/-1}
+    footer{padding:22px 44px 34px;color:var(--gris);font-size:12px}
+    @media(max-width:800px){.impactos,.meta,.graficos{grid-template-columns:1fr}.documento{margin:0}}
+    @media print{body{background:#fff}.documento{margin:0;box-shadow:none;max-width:none}section{break-inside:avoid}}
+  </style>
+  {% include "_estilos_informe_epower.html" %}
 </head>
 <body>
-
-<table class="header-table" cellpadding="0" cellspacing="0">
-  <tr>
-    {% if logo %}
-    <td class="header-logo"><img src="{{ logo }}" alt="Logo"/></td>
-    {% endif %}
-    <td class="header-title">
+<main class="documento">
+  <header>
+    <div>
       <h1>{{ titulo }}</h1>
-      {% if subtitulo %}<h2>{{ subtitulo }}</h2>{% endif %}
-    </td>
-  </tr>
-</table>
-
-<div class="section">
-  <div class="section-title">Datos del informe</div>
-  <table class="ficha-table" cellpadding="0" cellspacing="0">
-    <tr>
-      <td class="ficha-label">Realizado por:</td>
-      <td class="ficha-value">{{ realizado_por }}</td>
-      <td class="ficha-sep"></td>
-      <td class="ficha-label">CUPS:</td>
-      <td class="ficha-value">{{ cups }}</td>
-    </tr>
-    <tr>
-      <td class="ficha-label">Fecha de realización:</td>
-      <td class="ficha-value">{{ fecha }}</td>
-      <td class="ficha-sep"></td>
-      <td class="ficha-label">Peaje:</td>
-      <td class="ficha-value">{{ peaje }}</td>
-    </tr>
-    <tr>
-      <td class="ficha-label">Cliente:</td>
-      <td class="ficha-value">{{ cliente }}</td>
-      <td class="ficha-sep"></td>
-      <td class="ficha-label">Periodo analizado:</td>
-      <td class="ficha-value">{{ periodo_datos }}</td>
-    </tr>
-  </table>
-</div>
-
-<div class="section">
-  <div class="section-title">Resumen económico</div>
-  <table class="kpi-grid" cellpadding="0" cellspacing="0">
-    <tr>
-      <td class="kpi-card">
-        <div class="kpi-label">Coste tarifa contratada</div>
-        <div class="kpi-value">{{ coste_tp_potcon }}</div>
-      </td>
-      <td class="kpi-card">
-        <div class="kpi-label">Coste tarifa óptima</div>
-        <div class="kpi-value">{{ coste_tp_potopt }}</div>
-      </td>
-      <td class="kpi-card ahorro">
-        <div class="kpi-label">Ahorro estimado</div>
-        <div class="kpi-value">{{ ahorro_opt }}</div>
-      </td>
-      <td class="kpi-card ahorro">
-        <div class="kpi-label">Ahorro (%)</div>
-        <div class="kpi-value">{{ ahorro_opt_porc }}</div>
-      </td>
-    </tr>
-  </table>
-</div>
-
-<div class="section">
-  <div class="section-title">Detalle de potencias</div>
-  {{ tabla_potencias }}
-</div>
-
-<div class="section">
-  <div class="section-title">Análisis gráfico</div>
-
-  <div class="graficos-fila">
-    <div class="grafico-card grafico-card-half">
-      <div class="grafico-titulo">Resumen</div>
-      {{ graf_resumen | safe }}
+      {% if subtitulo %}<p class="subtitulo">{{ subtitulo }}</p>{% endif %}
+      <p class="firma-cabecera">Realizado por {{ realizado_por or "—" }} · Fecha de realización: {{ fecha_realizacion or fecha }}</p>
     </div>
-    <div class="grafico-card grafico-card-half">
-      <div class="grafico-titulo">Ahorro estimado</div>
-      {{ graf_ahorro | safe }}
+    {% if logo %}<img src="{{ logo }}" alt="Logo">{% endif %}
+  </header>
+  <div class="introduccion"><strong>Objeto del informe:</strong> {{ objeto or "Analizar y optimizar las potencias contratadas del suministro." }}</div>
+  <div class="meta">
+    <div><span>Cliente</span><strong>{{ cliente or "—" }}</strong></div>
+    <div><span>NIF / CIF</span><strong>{{ nif or "—" }}</strong></div>
+    <div><span>CUPS</span><strong>{{ cups or "—" }}</strong></div>
+    <div><span>ATR</span><strong>{{ peaje or "—" }}</strong></div>
+    <div><span>Dirección</span><strong>{{ direccion or "—" }}</strong></div>
+    <div><span>Periodo analizado</span><strong>{{ periodo_datos or "—" }}</strong></div>
+  </div>
+  <section class="nivel">
+    <h2>Nivel 1 · Resultado y propuesta</h2>
+    <div class="impactos">
+      <div class="impacto"><span>Coste actual</span><strong>{{ coste_tp_potcon }}</strong></div>
+      <div class="impacto"><span>Coste optimizado</span><strong>{{ coste_tp_potopt }}</strong></div>
+      <div class="impacto ahorro"><span>Ahorro estimado</span><strong>{{ ahorro_opt }}</strong></div>
+      <div class="impacto ahorro"><span>Ahorro</span><strong>{{ ahorro_opt_porc }}</strong></div>
     </div>
-  </div>
-
-  <div class="grafico-card grafico-card-full">
-    <div class="grafico-titulo">Costes mensuales</div>
-    {{ graf_costes_potcon | safe }}
-  </div>
-
-  <div class="grafico-card grafico-card-full">
-    <div class="grafico-titulo">Costes por periodos</div>
-    {{ graf_costes_pot_periodos | safe }}
-  </div>
-
-</div>
-
-<div class="footer">Informe generado automáticamente · {{ fecha }}</div>
-
+    <h3>Potencias contratadas y propuesta optimizada</h3>
+    <div class="tabla-wrap">{{ tabla_potencias | safe }}</div>
+  </section>
+  <section class="nivel">
+    <h2>Nivel 2 · Análisis económico</h2>
+    <div class="graficos">
+      <div class="grafico"><h3>Resumen de costes</h3>{{ graf_resumen | safe }}</div>
+      <div class="grafico"><h3>Ahorro estimado</h3>{{ graf_ahorro | safe }}</div>
+    </div>
+  </section>
+  <section class="nivel">
+    <h2>Nivel 3 · Detalle y trazabilidad</h2>
+    <div class="graficos">
+      <div class="grafico ancho"><h3>Costes mensuales</h3>{{ graf_costes_potcon | safe }}</div>
+      <div class="grafico ancho"><h3>Costes por periodos</h3>{{ graf_costes_pot_periodos | safe }}</div>
+    </div>
+  </section>
+  <footer>Informe elaborado con los datos y costes regulados disponibles en epowerapp. Revisa los datos del suministro antes de entregar el documento.</footer>
+</main>
 </body>
 </html>
