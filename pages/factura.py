@@ -78,6 +78,7 @@ from regulacion_reactiva import (
     tramos_reactiva,
 )
 from regulacion_iee import obtener_referencia_iee
+from componentes_curva import render_aviso_resolucion_curva
 
 
 generar_menu()
@@ -2794,23 +2795,7 @@ with tab_verificacion:
                         )
 
             if resultado_medida is not None:
-                frecuencia_medida = str(resultado_medida.frecuencia).upper()
-                if frecuencia_medida == "QH":
-                    st.info(
-                        "🕒 Resolución detectada: QH (cuartohoraria, intervalos "
-                        "de 15 minutos)."
-                    )
-                elif frecuencia_medida == "H":
-                    st.warning(
-                        "⚠️ Resolución detectada: H (horaria, intervalos de 60 "
-                        "minutos). Con esta resolución no se podrán verificar los "
-                        "excesos de potencia de los suministros tipos 1, 2 y 3."
-                    )
-                else:
-                    st.info(
-                        "🕒 Resolución detectada: "
-                        f"{frecuencia_medida or 'desconocida'}."
-                    )
+                render_aviso_resolucion_curva(resultado_medida.frecuencia)
 
             if resultado_medida is not None:
                 curva_graficos = resultado_medida.curva_periodo.copy()

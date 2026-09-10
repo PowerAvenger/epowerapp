@@ -6,9 +6,13 @@ import re
 from datetime import timedelta
 
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
+from backend_comun import aplicar_estilo
 from backend_curvadecarga import (
+    colores_periodo,
     dataframe_como_archivo_curva,
     detectar_hojas_curva_excel,
     obtener_consumo_datadis_cacheado,
@@ -16,6 +20,7 @@ from backend_curvadecarga import (
     obtener_suministros_datadis,
 )
 from servicio_curva import (
+    aviso_resolucion_curva,
     inspeccionar_periodos_fuentes,
     limpiar_curva_sesion,
     normalizar_fuentes_curva,
@@ -235,11 +240,127 @@ def _publicar(resultado, contenedor):
         f"Curva activa actualizada: {len(resultado.df_norm):,} registros."
         .replace(",", ".")
     )
+    render_aviso_resolucion_curva(resultado.frecuencia, contenedor)
     _mostrar_zonas(resultado, contenedor)
 
 
+def render_aviso_resolucion_curva(frecuencia, contenedor=st):
+    """Muestra de forma homogénea la resolución de cualquier curva cargada."""
+    nivel, mensaje = aviso_resolucion_curva(frecuencia)
+    getattr(contenedor, nivel)(mensaje)
+
+
+def render_resumen_grafico_curva(df_curva, clave="curva_comun", contenedor=st):
+    """Renderiza el resumen visual común de una curva normalizada."""
+    if not isinstance(df_curva, pd.DataFrame) or df_curva.empty:
+        return
+    curva = df_curva.copy()
+    curva["fecha_hora"] = pd.to_datetime(curva["fecha_hora"], errors="coerce")
+    curva["consumo_neto_kWh"] = pd.to_numeric(
+        curva["consumo_neto_kWh"], errors="coerce"
+    ).fillna(0.0)
+    curva = curva.dropna(subset=["fecha_hora"])
+    if curva.empty:
+        return
+
+    def estilizar(figura):
+        figura = aplicar_estilo(figura)
+        figura.update_layout(height=300, margin=dict(l=5, r=5, t=38, b=20))
+        return figura
+
+    diario = (
+        curva.assign(Fecha=curva["fecha_hora"].dt.date)
+        .groupby("Fecha", as_index=False)["consumo_neto_kWh"].sum()
+        .rename(columns={"consumo_neto_kWh": "Consumo diario (kWh)"})
+    )
+    por_hora_dia = (
+        curva.assign(
+            Fecha=curva["fecha_hora"].dt.date,
+            Hora=curva["fecha_hora"].dt.hour,
+        )
+        .groupby(["Fecha", "Hora"], as_index=False)["consumo_neto_kWh"].sum()
+    )
+    perfil = (
+        por_hora_dia.groupby("Hora", as_index=False)["consumo_neto_kWh"].mean()
+        .rename(columns={"consumo_neto_kWh": "Consumo medio (kWh)"})
+    )
+
+    fig_diario = px.bar(
+        diario, x="Fecha", y="Consumo diario (kWh)", title="Consumo diario y medio"
+    )
+    fig_diario.add_scatter(
+        x=diario["Fecha"],
+        y=[diario["Consumo diario (kWh)"].mean()] * len(diario),
+        name="Media diaria", mode="lines", line=dict(color="#f59e0b", width=2.5),
+    )
+    fig_diario.update_layout(
+        legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center")
+    )
+
+    fig_perfil = px.line(
+        perfil, x="Hora", y="Consumo medio (kWh)", title="Perfil medio horario"
+    )
+    fig_perfil.update_xaxes(dtick=2, range=[0, 23])
+    fig_perfil.update_yaxes(rangemode="tozero")
+
+    figuras_inferiores = []
+    if "periodo" in curva.columns and curva["periodo"].notna().any():
+        periodos = (
+            curva.groupby("periodo", as_index=False)["consumo_neto_kWh"].sum()
+            .rename(columns={"consumo_neto_kWh": "Consumo (kWh)"})
+        )
+        fig_periodos = px.pie(
+            periodos, names="periodo", values="Consumo (kWh)", hole=0.42,
+            title="Consumo por periodos", color="periodo",
+            color_discrete_map=colores_periodo,
+        )
+        fig_periodos.update_traces(
+            textinfo="label+percent", textposition="inside", textfont=dict(size=14)
+        )
+        fig_periodos.update_layout(showlegend=False)
+        figuras_inferiores.append((fig_periodos, "periodos"))
+
+    calor = curva.assign(
+        Fecha=curva["fecha_hora"].dt.strftime("%d/%m"),
+        Hora=curva["fecha_hora"].dt.hour,
+    ).pivot_table(
+        index="Fecha", columns="Hora", values="consumo_neto_kWh",
+        aggfunc="sum", fill_value=0, sort=False,
+    )
+    fig_calor = go.Figure(go.Heatmap(
+        z=calor.to_numpy(), x=calor.columns, y=calor.index,
+        colorscale="YlOrRd", colorbar=dict(title="kWh", thickness=10),
+        hovertemplate=(
+            "Fecha: %{y}<br>Hora: %{x}:00<br>Consumo: %{z:.2f} kWh<extra></extra>"
+        ),
+    ))
+    fig_calor.update_layout(
+        title="Mapa de calor del consumo",
+        xaxis_title="Hora", yaxis=dict(title="", autorange="reversed"),
+    )
+    figuras_inferiores.append((fig_calor, "calor"))
+
+    with contenedor:
+        izquierda, derecha = st.columns(2, gap="small")
+        izquierda.plotly_chart(
+            estilizar(fig_diario), use_container_width=True,
+            key=f"{clave}_resumen_diario",
+        )
+        derecha.plotly_chart(
+            estilizar(fig_perfil), use_container_width=True,
+            key=f"{clave}_resumen_perfil",
+        )
+        columnas = (izquierda, derecha) if len(figuras_inferiores) == 2 else (izquierda,)
+        for columna, (figura, sufijo) in zip(columnas, figuras_inferiores):
+            columna.plotly_chart(
+                estilizar(figura), use_container_width=True,
+                key=f"{clave}_resumen_{sufijo}",
+            )
+
+
 def render_origen_curva(
-    contenedor, acciones, clave="curva_comun", titulo_compacto=False
+    contenedor, acciones, clave="curva_comun", titulo_compacto=False,
+    resumen=None,
 ):
     """Renderiza los tres orígenes y publica una sola curva para toda la app."""
     with contenedor:
@@ -258,6 +379,7 @@ def render_origen_curva(
                 f"Curva activa: {actual.get('frecuencia', '—')} · "
                 f"ATR {actual.get('atr', '—')}{texto_rango}"
             )
+            render_aviso_resolucion_curva(actual.get("frecuencia"), st)
             zonas_actuales = actual.get("zonas_compatibles") or []
             if len(zonas_actuales) == 1:
                 st.info(
@@ -455,3 +577,11 @@ def render_origen_curva(
         ):
             limpiar_curva_sesion(st.session_state)
             st.rerun()
+
+    curva_resumen = obtener_curva_sesion(st.session_state)
+    if curva_resumen is not None:
+        render_resumen_grafico_curva(
+            curva_resumen.get("df_norm"),
+            clave=clave,
+            contenedor=resumen or contenedor,
+        )

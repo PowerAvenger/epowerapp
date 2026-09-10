@@ -27,6 +27,7 @@ from backend_curvadecarga import (
     resumir_consumo_por_periodo,
 )
 from servicio_curva import (
+    aviso_resolucion_curva,
     limpiar_curva_sesion,
     normalizar_fuentes_curva,
     obtener_curva_sesion,
@@ -35,6 +36,19 @@ from servicio_curva import (
 
 
 class CurvasComunesTest(unittest.TestCase):
+    def test_aviso_resolucion_cuartohoraria(self):
+        nivel, mensaje = aviso_resolucion_curva("qh")
+
+        self.assertEqual(nivel, "info")
+        self.assertIn("QH (cuartohoraria, intervalos de 15 minutos)", mensaje)
+
+    def test_aviso_resolucion_horaria_advierte_sobre_excesos(self):
+        nivel, mensaje = aviso_resolucion_curva("H")
+
+        self.assertEqual(nivel, "warning")
+        self.assertIn("intervalos de 60 minutos", mensaje)
+        self.assertIn("excesos de potencia", mensaje)
+
     def test_infiere_una_zona_en_curva_de_seis_periodos(self):
         matriz = cargar_matriz_periodos_zonas()
         matriz = matriz[matriz["fecha_hora"].dt.year.eq(2025)]

@@ -72,6 +72,28 @@ class ResultadoCurva:
         }
 
 
+def aviso_resolucion_curva(frecuencia: Any) -> tuple[str, str]:
+    """Devuelve el tipo de aviso y el texto común para una resolución."""
+    frecuencia_normalizada = str(frecuencia or "").strip().upper()
+    if frecuencia_normalizada == "QH":
+        return (
+            "info",
+            "🕒 Resolución detectada: QH (cuartohoraria, intervalos de 15 minutos).",
+        )
+    if frecuencia_normalizada == "H":
+        return (
+            "warning",
+            "⚠️ Resolución detectada: H (horaria, intervalos de 60 minutos). "
+            "Con esta resolución no se podrán verificar los excesos de potencia "
+            "de los suministros tipos 1, 2 y 3.",
+        )
+    return (
+        "info",
+        "🕒 Resolución detectada: "
+        f"{frecuencia_normalizada or 'desconocida'}.",
+    )
+
+
 def _nombre_fuente(fuente: Any) -> str:
     return str(getattr(fuente, "name", fuente))
 
