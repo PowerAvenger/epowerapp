@@ -336,6 +336,7 @@ def ofertas_catalogo_para_atr(catalogo: list[dict], atr: str) -> pd.DataFrame:
                 )
                 filas.append({
                     "oferta": version["nombre"],
+                    "ID oferta": version.get("id"),
                     "Vigencia desde": version.get("vigencia_desde"),
                     "Vigencia hasta": version.get("vigencia_hasta"),
                     "Fee (€/MWh)": 0.0,

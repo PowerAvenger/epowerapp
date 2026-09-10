@@ -20,6 +20,25 @@ from formato_es import formato_euros, formato_numero_es
 from componentes_curva import render_origen_curva
 
 
+CLAVES_RESULTADOS_POTENCIA = (
+    "resultados_potencia",
+    "resultados_verificacion_potencia",
+    "resultado_comparacion_potencias",
+    "opt2_informe_preparado",
+)
+
+
+def invalidar_resultados_potencia():
+    """Retira cálculos que ya no corresponden a los datos de entrada."""
+    habia_resultados = any(
+        clave in st.session_state for clave in CLAVES_RESULTADOS_POTENCIA
+    )
+    for clave in CLAVES_RESULTADOS_POTENCIA:
+        st.session_state.pop(clave, None)
+    st.session_state.pop("termino_potencia_contexto_resultados", None)
+    return habia_resultados
+
+
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
 
@@ -44,6 +63,7 @@ origen_datos_potencia = col_origen_curva.radio(
     key="termino_potencia_origen_datos",
 )
 potencias_sips_entrada = None
+periodos_potencia_sips_entrada = []
 sips_nuevo_entrada = False
 if origen_datos_potencia == "Curva":
     render_origen_curva(
@@ -55,14 +75,14 @@ if origen_datos_potencia == "Curva":
 else:
     col_origen_curva.markdown("#### Archivo SIPS")
     archivo_sips_entrada = col_origen_curva.file_uploader(
-        "Sube el CSV SIPS",
-        type=["csv"],
+        "Sube el CSV o Excel SIPS",
+        type=["csv", "xlsx", "xls"],
         key="termino_potencia_sips",
     )
     if archivo_sips_entrada is None:
         if st.session_state.get("sips_termino_potencia") is None:
             col_origen_curva.info(
-                "Sube un CSV SIPS para cargar ATR, potencias y maxímetros."
+                "Sube un CSV o Excel SIPS para cargar potencias y maxímetros."
             )
         else:
             col_origen_curva.caption("SIPS recuperado de la sesión.")
@@ -70,14 +90,54 @@ else:
         try:
             contenido_sips = archivo_sips_entrada.getvalue()
             firma_sips = hashlib.sha256(contenido_sips).hexdigest()
+            firma_archivo_anterior = st.session_state.get(
+                "termino_potencia_firma_archivo_sips_seleccionado",
+                st.session_state.get("termino_potencia_firma_sips"),
+            )
+            if (
+                firma_archivo_anterior is not None
+                and firma_archivo_anterior != firma_sips
+            ):
+                invalidar_resultados_potencia()
+                st.session_state.pop("sips_termino_potencia", None)
+                st.session_state.pop("termino_potencia_periodos_sips", None)
+                st.session_state.pop(
+                    "termino_potencia_firma_potencias_v2", None
+                )
+                if st.session_state.get(
+                    "termino_potencia_origen_maximetros"
+                ) == "SIPS":
+                    st.session_state.pop("df_maximetros", None)
+                    st.session_state.pop(
+                        "termino_potencia_origen_maximetros", None
+                    )
+                    st.session_state.pop(
+                        "termino_potencia_firma_maximetros", None
+                    )
+                st.session_state.pop("df_pot", None)
+                st.session_state.termino_potencia_potencias_confirmadas = False
+            st.session_state.termino_potencia_firma_archivo_sips_seleccionado = (
+                firma_sips
+            )
             sips_entrada = leer_sips_completo(archivo_sips_entrada)
             atr_sips_entrada = sips_entrada.get("atr")
-            if atr_sips_entrada not in {
+            if atr_sips_entrada is not None and atr_sips_entrada not in {
                 "2.0", "3.0", "6.1", "6.2", "6.3", "6.4"
             }:
                 raise ValueError("El SIPS no contiene un ATR compatible.")
             potencias_sips_entrada = potencias_contratadas_sips(
                 sips_entrada.get("metadatos")
+            )
+            periodos_potencia_sips_entrada = [
+                periodo
+                for periodo in [f"P{i}" for i in range(1, 7)]
+                if (
+                    pd.notna(potencias_sips_entrada.get(periodo))
+                    and float(potencias_sips_entrada.get(periodo)) > 0
+                )
+            ]
+            st.session_state.termino_potencia_periodos_sips = (
+                periodos_potencia_sips_entrada
             )
             st.session_state.sips_termino_potencia = sips_entrada
             st.session_state.df_maximetros = sips_entrada["maximetros"][
@@ -86,16 +146,24 @@ else:
                     "P1", "P2", "P3", "P4", "P5", "P6",
                 ]
             ].copy()
-            st.session_state.atr_dfnorm = atr_sips_entrada
-            st.session_state.tarifa_maximetros = atr_sips_entrada
+            st.session_state.termino_potencia_origen_maximetros = "SIPS"
+            st.session_state.termino_potencia_firma_maximetros = firma_sips
+            if atr_sips_entrada is not None:
+                st.session_state.atr_dfnorm = atr_sips_entrada
+                st.session_state.tarifa_maximetros = atr_sips_entrada
             sips_nuevo_entrada = (
-                st.session_state.get("termino_potencia_firma_sips")
+                st.session_state.get("termino_potencia_firma_potencias_v2")
                 != firma_sips
             )
             st.session_state.termino_potencia_firma_sips = firma_sips
+            st.session_state.termino_potencia_firma_potencias_v2 = firma_sips
             col_origen_curva.success(
-                f"SIPS cargado · ATR {atr_sips_entrada}TD · "
-                f"{len(st.session_state.df_maximetros)} ciclos."
+                "SIPS cargado · "
+                + (
+                    f"ATR {atr_sips_entrada}TD · "
+                    if atr_sips_entrada else "ATR no informado · "
+                )
+                + f"{len(st.session_state.df_maximetros)} ciclos."
             )
         except Exception as error_sips:
             col_origen_curva.error(f"No se pudo leer el SIPS: {error_sips}")
@@ -113,12 +181,12 @@ if not MOSTRAR_CARGA_MANUAL_MAXIMETROS:
     st.session_state.forzar_maximetros = False
 
 pot_con_ini = {
-    'P1' : 50,
-    'P2' : 50,
-    'P3' : 50,
-    'P4' : 50,
-    'P5' : 50,
-    'P6' : 110
+    'P1' : 0.0,
+    'P2' : 0.0,
+    'P3' : 0.0,
+    'P4' : 0.0,
+    'P5' : 0.0,
+    'P6' : 0.0,
 }
 df_pot_ini = pd.DataFrame(
     {
@@ -132,6 +200,9 @@ if "df_pot" not in st.session_state:
 else:
     df_pot_ini = st.session_state.df_pot
 
+if "termino_potencia_potencias_confirmadas" not in st.session_state:
+    st.session_state.termino_potencia_potencias_confirmadas = False
+
 if sips_nuevo_entrada and potencias_sips_entrada is not None:
     potencias_base = pd.Series(pot_con_ini, dtype=float)
     potencias_base.update(potencias_sips_entrada.dropna())
@@ -139,6 +210,9 @@ if sips_nuevo_entrada and potencias_sips_entrada is not None:
         {"Potencia (kW)": potencias_base}
     ).rename_axis("Periodo")
     df_pot_ini = st.session_state.df_pot
+    st.session_state.termino_potencia_potencias_confirmadas = (
+        len(periodos_potencia_sips_entrada) == 6
+    )
 
 col_datos_potencia.subheader("Datos de potencia", divider="rainbow")
 col_datos_potencia.markdown("#### Potencias contratadas")
@@ -177,7 +251,6 @@ def normalizar_potencias_editadas(df):
 
 
 MIN_P1 = 0.1
-#MIN_P6 = 50.01
 MIN_P6 = 0.1
 def validar_potencias(df):
     errores = []
@@ -187,7 +260,7 @@ def validar_potencias(df):
         errores.append("P1 debe ser ≥ 0,1 kW")
 
     if df.loc["P6", "Potencia (kW)"] < MIN_P6:
-        errores.append("P6 debe ser ≥ 50,01 kW")
+        errores.append("P6 debe ser ≥ 0,1 kW")
 
     # orden P1 ≤ P2 ≤ ... ≤ P6
     potencias = df["Potencia (kW)"].values
@@ -216,6 +289,7 @@ if col_datos_potencia.button(
             col_avisos_acciones.error(e)
     else:
         st.session_state.df_pot = df_pot_candidata
+        st.session_state.termino_potencia_potencias_confirmadas = True
         col_avisos_acciones.success("Potencias cargadas correctamente")
 
 
@@ -224,17 +298,52 @@ def _formato_kw(valor):
     return texto.replace(",", "_").replace(".", ",").replace("_", ".")
 
 
-potencias_cargadas = st.session_state.df_pot["Potencia (kW)"]
-detalle_potencias = [
-    f"**P{i}:** {_formato_kw(potencias_cargadas.loc[f'P{i}'])} kW"
-    for i in range(1, 7)
-]
-col_avisos_acciones.info(
-    f"**Potencias cargadas · {origen_datos_potencia}**\n\n"
-    + " · ".join(detalle_potencias[:3])
-    + "  \n"
-    + " · ".join(detalle_potencias[3:])
+potencias_confirmadas = st.session_state.get(
+    "termino_potencia_potencias_confirmadas", False
 )
+periodos_potencia_sips = st.session_state.get(
+    "termino_potencia_periodos_sips", []
+)
+
+if origen_datos_potencia == "SIPS" and st.session_state.get(
+    "sips_termino_potencia"
+) is not None:
+    if not periodos_potencia_sips:
+        mensaje_potencias_sips = (
+            "El SIPS no informa las potencias contratadas. "
+        )
+        if potencias_confirmadas:
+            mensaje_potencias_sips += (
+                "Se usarán las potencias introducidas manualmente."
+            )
+        else:
+            mensaje_potencias_sips += (
+                "Introduce P1–P6 y pulsa **Cargar potencias contratadas**."
+            )
+        col_avisos_acciones.warning(mensaje_potencias_sips, icon="⚠️")
+    elif len(periodos_potencia_sips) < 6 and not potencias_confirmadas:
+        periodos_faltantes = [
+            f"P{i}" for i in range(1, 7)
+            if f"P{i}" not in periodos_potencia_sips
+        ]
+        col_avisos_acciones.warning(
+            "El SIPS no informa todas las potencias contratadas. "
+            f"Completa {', '.join(periodos_faltantes)} y confirma la carga.",
+            icon="⚠️",
+        )
+
+if potencias_confirmadas:
+    potencias_cargadas = st.session_state.df_pot["Potencia (kW)"]
+    detalle_potencias = [
+        f"**P{i}:** {_formato_kw(potencias_cargadas.loc[f'P{i}'])} kW"
+        for i in range(1, 7)
+    ]
+    col_avisos_acciones.info(
+        f"**Potencias cargadas · {origen_datos_potencia}**\n\n"
+        + " · ".join(detalle_potencias[:3])
+        + "  \n"
+        + " · ".join(detalle_potencias[3:])
+    )
 
 print('df_pot')
 print(st.session_state.df_pot)
@@ -331,12 +440,18 @@ if atr_sips_potencia in {"2.0", "3.0", "6.1", "6.2", "6.3", "6.4"}:
 
 
 
-#if modo1 and tarifa == "Ninguno":
-if MOSTRAR_CARGA_MANUAL_MAXIMETROS and modo1 and tarifa:
+# Los Excel SIPS simplificados pueden incluir medidas y CUPS, pero no ATR.
+# En ese caso el peaje se solicita sin reactivar la carga manual antigua.
+if modo1 and (
+    MOSTRAR_CARGA_MANUAL_MAXIMETROS
+    or (origen_datos_potencia == "SIPS" and atr_sips_potencia is None)
+):
+    opciones_tarifa = ["2.0", "3.0", "6.1", "6.2", "6.3", "6.4"]
+    if st.session_state.get("tarifa_maximetros") not in opciones_tarifa:
+        st.session_state.tarifa_maximetros = "3.0"
     tarifa = col_datos_potencia.selectbox(
         "Peaje de acceso",
-        ["2.0", "3.0", "6.1", "6.2", "6.3", "6.4"],
-        index=1,
+        opciones_tarifa,
         key="tarifa_maximetros",
         disabled=atr_sips_potencia is not None,
     )
@@ -345,6 +460,9 @@ if MOSTRAR_CARGA_MANUAL_MAXIMETROS and modo1 and tarifa:
             col_avisos_acciones.warning(
                 "El SIPS no informa el ATR. Selecciónalo manualmente."
             )
+            st.session_state.atr_dfnorm = tarifa
+            sips_potencia_detectado["atr"] = tarifa
+            st.session_state.sips_termino_potencia = sips_potencia_detectado
         else:
             col_avisos_acciones.info(
                 f"ATR {atr_sips_potencia}TD leído del SIPS. "
@@ -424,6 +542,14 @@ if modo1:
                 )
 
             st.session_state.df_maximetros = df_maximetros
+            st.session_state.termino_potencia_origen_maximetros = (
+                "SIPS" if archivo_max.name.lower().endswith(".csv")
+                else "Manual"
+            )
+            st.session_state.termino_potencia_firma_maximetros = (
+                st.session_state.get("termino_potencia_firma_sips")
+                if archivo_max.name.lower().endswith(".csv") else None
+            )
             col_avisos_acciones.success("Tabla de maxímetros cargada correctamente")
 
         except Exception as e:
@@ -431,7 +557,26 @@ if modo1:
             habilitar_opt = False
             habilitar_ver = False
 
-    if 'df_maximetros' not in st.session_state or st.session_state.df_maximetros is None:
+    origen_maximetros = st.session_state.get(
+        "termino_potencia_origen_maximetros"
+    )
+    firma_maximetros = st.session_state.get(
+        "termino_potencia_firma_maximetros"
+    )
+    maximetros_de_fuente_actual = (
+        origen_datos_potencia == "SIPS"
+        and origen_maximetros == "SIPS"
+        and firma_maximetros
+        == st.session_state.get("termino_potencia_firma_sips")
+    ) or (
+        origen_datos_potencia == "Curva"
+        and origen_maximetros == "Manual"
+    )
+
+    if (
+        st.session_state.get("df_maximetros") is None
+        or not maximetros_de_fuente_actual
+    ):
         col_avisos_acciones.warning('Por favor introduce una tabla de maxímetros')
         habilitar_opt = False
         habilitar_ver = False
@@ -699,6 +844,60 @@ else:
             habilitar_opt = False
             habilitar_ver = False
         
+if not potencias_confirmadas:
+    habilitar_opt = False
+    habilitar_ver = False
+
+identificador_fuente = (
+    st.session_state.get("termino_potencia_firma_sips")
+    if origen_datos_potencia == "SIPS"
+    else st.session_state.get("curva_reactiva_version", 0)
+)
+contexto_calculo_actual = (
+    origen_datos_potencia,
+    identificador_fuente,
+    str(tarifa),
+    bool(modo1),
+    bool(fijar_P6),
+    str(st.session_state.get("frec")),
+    tuple(round(float(pot_con[f"P{i}"]), 6) for i in range(1, 7)),
+)
+if origen_datos_potencia == "SIPS" and "mes_verificacion_sips" in locals():
+    contexto_verificacion_actual = (
+        contexto_calculo_actual + ("mes", str(mes_verificacion_sips))
+    )
+elif (
+    origen_datos_potencia == "Curva"
+    and "fecha_ini" in locals()
+    and "fecha_fin" in locals()
+):
+    contexto_verificacion_actual = (
+        contexto_calculo_actual
+        + ("rango", str(fecha_ini), str(fecha_fin))
+    )
+else:
+    contexto_verificacion_actual = None
+contexto_resultados = st.session_state.get(
+    "termino_potencia_contexto_resultados"
+)
+hay_resultados_guardados = any(
+    clave in st.session_state for clave in CLAVES_RESULTADOS_POTENCIA
+)
+if hay_resultados_guardados and contexto_resultados != contexto_calculo_actual:
+    if invalidar_resultados_potencia():
+        col_avisos_acciones.info(
+            "Los datos de entrada han cambiado. Se han retirado los "
+            "resultados anteriores; ejecuta de nuevo el cálculo."
+        )
+
+datos_calculo_disponibles = (
+    "df_in" in locals()
+    and df_in is not None
+    and not df_in.empty
+)
+if not datos_calculo_disponibles:
+    habilitar_opt = False
+    habilitar_ver = False
 
 submit_opt = col_avisos_acciones.button(
     "🔄 Calcular optimización", type='primary', use_container_width=True,
@@ -751,9 +950,17 @@ if submit_opt:
     )
 
     st.session_state.resultados_potencia = resultados
+    st.session_state.termino_potencia_contexto_resultados = (
+        contexto_calculo_actual
+    )
 
 
-elif "resultados_potencia" in st.session_state:
+elif (
+    datos_calculo_disponibles
+    and st.session_state.get("termino_potencia_contexto_resultados")
+    == contexto_calculo_actual
+    and "resultados_potencia" in st.session_state
+):
     resultados = st.session_state.resultados_potencia
 
 
@@ -1250,6 +1457,7 @@ if submit_ver and origen_datos_potencia == "SIPS":
         f"{mes_verificacion_sips[:4]}"
     )
     st.session_state.resultados_verificacion_potencia = {
+        "contexto": contexto_verificacion_actual,
         "modo": "maximetros_sips",
         "periodo_texto": etiqueta_mes_sips,
         "df_coste": df_coste,
@@ -1261,6 +1469,9 @@ if submit_ver and origen_datos_potencia == "SIPS":
         "factores_prorrateo_excesos": None,
         "potencias": pot_con.copy(),
     }
+    st.session_state.termino_potencia_contexto_resultados = (
+        contexto_calculo_actual
+    )
 
 if (
     submit_ver
@@ -1493,6 +1704,7 @@ if (
             margin=dict(t=100, b=70)
         )
         st.session_state.resultados_verificacion_potencia = {
+            'contexto': contexto_verificacion_actual,
             'fecha_inicio': fecha_inicio,
             'fecha_final': fecha_final,
             'df_coste': df_coste,
@@ -1504,12 +1716,29 @@ if (
             'factores_prorrateo_excesos': factores_prorrateo_excesos,
             'potencias': pot_con.copy(),
         }
+        st.session_state.termino_potencia_contexto_resultados = (
+            contexto_calculo_actual
+        )
 
 
 with tab_verificacion:
     verificacion = st.session_state.get('resultados_verificacion_potencia')
+    verificacion_descartada = False
+    if (
+        verificacion is not None
+        and verificacion.get("contexto") != contexto_verificacion_actual
+    ):
+        st.session_state.pop("resultados_verificacion_potencia", None)
+        verificacion = None
+        verificacion_descartada = True
     if verificacion is None:
-        st.info('Realiza una verificación para mostrar sus resultados.')
+        if verificacion_descartada:
+            st.info(
+                "El periodo o los datos han cambiado. Realiza de nuevo la "
+                "verificación para actualizar sus resultados."
+            )
+        else:
+            st.info('Realiza una verificación para mostrar sus resultados.')
     else:
         if verificacion.get("periodo_texto"):
             st.write(

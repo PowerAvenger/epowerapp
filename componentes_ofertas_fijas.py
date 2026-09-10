@@ -7,9 +7,19 @@ import pandas as pd
 PERIODOS = [f"P{i}" for i in range(1, 7)]
 
 
+def normalizar_atr(atr: str) -> str:
+    """Devuelve el ATR en el formato canónico usado por la aplicación."""
+    return str(atr or "").upper().replace(" ", "").removesuffix("TD")
+
+
+def periodos_aplicables_atr(atr: str) -> list[str]:
+    """Una 2.0 TD sólo tiene precios de energía P1, P2 y P3."""
+    return PERIODOS[:3] if normalizar_atr(atr) == "2.0" else PERIODOS.copy()
+
+
 def periodos_con_consumo(consumos, atr: str) -> tuple[list[str], list[str]]:
     """Devuelve periodos exigibles y periodos sin consumo."""
-    candidatos = PERIODOS[:3] if str(atr).upper().startswith("2.0") else PERIODOS
+    candidatos = periodos_aplicables_atr(atr)
     serie = pd.to_numeric(pd.Series(consumos).reindex(candidatos), errors="coerce").fillna(0)
     activos = [p for p in candidatos if serie[p] > 0]
     activos = activos or candidatos
@@ -60,6 +70,69 @@ def construir_ofertas(filas: pd.DataFrame, exigibles: list[str]) -> pd.DataFrame
     return pd.concat(ofertas, ignore_index=True)
 
 
+def preparar_tarifas_extraidas(tabla: pd.DataFrame) -> pd.DataFrame:
+    """Normaliza el ATR visible y prepara la tabla común de revisión."""
+    from backend_ia_ofertas import detectar_atr_en_texto
+
+    datos = tabla.copy()
+    for periodo in PERIODOS:
+        if periodo not in datos:
+            datos[periodo] = None
+    if "ATR" not in datos:
+        datos["ATR"] = ""
+    datos["ATR"] = datos.apply(
+        lambda fila: detectar_atr_en_texto(fila.get("oferta"))
+        or normalizar_atr(fila.get("ATR")),
+        axis=1,
+    )
+    datos.loc[datos["ATR"].eq("2.0"), PERIODOS[3:]] = None
+    return datos[["ATR", *PERIODOS]].reset_index(drop=True)
+
+
+def campos_pendientes_tarifas(tarifas: pd.DataFrame) -> list[str]:
+    """Enumera únicamente las celdas obligatorias que necesitan revisión."""
+    pendientes = []
+    for _, fila in tarifas.iterrows():
+        atr = normalizar_atr(fila.get("ATR"))
+        for periodo in periodos_aplicables_atr(atr):
+            valor = pd.to_numeric(fila.get(periodo), errors="coerce")
+            if pd.isna(valor) or not 0 < float(valor) <= 2:
+                pendientes.append(f"{atr}TD/{periodo}")
+    return pendientes
+
+
+def oferta_actual_desde_tarifas(
+    tarifas: pd.DataFrame,
+    nombre: str,
+    atr: str,
+    exigibles: list[str],
+    vigencia_desde=None,
+    vigencia_hasta=None,
+) -> pd.DataFrame:
+    """Obtiene del conjunto confirmado la fila utilizable por el comparador."""
+    from backend_ofertas_fijas import normalizar_tarifas_oferta
+
+    tarifas = normalizar_tarifas_oferta(tarifas)
+    atr = normalizar_atr(atr)
+    fila_atr = tarifas.loc[tarifas["ATR"].eq(atr)]
+    if fila_atr.empty:
+        raise ValueError(f"La oferta no contiene precios para {atr}TD.")
+    precios = fila_atr.iloc[0].to_dict()
+    aplicables = periodos_aplicables_atr(atr)
+    # Conserva el juego de precios completo del peaje, aunque la curva actual
+    # no tenga consumo en alguno de sus periodos.
+    oferta = construir_oferta(nombre, precios, aplicables)
+    oferta["Vigencia desde"] = (
+        pd.Timestamp(vigencia_desde).date().isoformat()
+        if vigencia_desde is not None else None
+    )
+    oferta["Vigencia hasta"] = (
+        pd.Timestamp(vigencia_hasta).date().isoformat()
+        if vigencia_hasta is not None else None
+    )
+    return oferta
+
+
 def combinar_ofertas(*tablas) -> pd.DataFrame:
     validas = [t for t in tablas if isinstance(t, pd.DataFrame) and not t.empty]
     if not validas:
@@ -68,11 +141,17 @@ def combinar_ofertas(*tablas) -> pd.DataFrame:
 
 
 def render_oferta_ia(atr: str, periodos: list[str], clave: str) -> pd.DataFrame:
-    """Carga IA reutilizable; devuelve una oferta confirmada o una tabla vacía."""
+    """Revisa, guarda todos los ATR y devuelve el ATR activo al comparador."""
     import io
     import streamlit as st
     from streamlit_paste_button import paste_image_button
     from backend_ia_ofertas import extraer_oferta_imagen
+    from backend_ofertas_fijas import guardar_version_oferta
+
+    atr = normalizar_atr(atr)
+    aplicables = periodos_aplicables_atr(atr)
+    periodos = [periodo for periodo in periodos if periodo in aplicables]
+    periodos = periodos or aplicables
 
     with st.expander("Importar nueva oferta desde imagen con IA"):
         st.caption(
@@ -105,39 +184,104 @@ def render_oferta_ia(atr: str, periodos: list[str], clave: str) -> pd.DataFrame:
                 )
                 st.session_state[f"{clave}_tabla"] = tabla
                 st.session_state[f"{clave}_nombre"] = nombre or "Oferta desde imagen"
+                st.session_state[f"{clave}_nombre_editor"] = (
+                    nombre or "Oferta desde imagen"
+                )
             except Exception as error:
                 st.error(f"No se pudo analizar la imagen: {error}")
         tabla = st.session_state.get(f"{clave}_tabla")
         if isinstance(tabla, pd.DataFrame) and not tabla.empty:
-            atr = str(atr).upper().replace(" ", "").removesuffix("TD")
-            filas = tabla.loc[tabla["ATR"].astype(str).eq(atr)].copy()
-            if filas.empty:
-                st.warning(f"La imagen no contiene precios para {atr}TD.")
-            else:
-                if "oferta" not in filas:
-                    nombre_base = st.session_state.get(
-                        f"{clave}_nombre", "Oferta desde imagen"
+            tarifas = preparar_tarifas_extraidas(tabla)
+            if tabla.attrs.get("unidad_inferida"):
+                st.warning(
+                    "La imagen no indica la unidad. Se ha inferido por la "
+                    "magnitud de los precios; comprueba los valores en €/kWh."
+                )
+
+            clave_nombre_editor = f"{clave}_nombre_editor"
+            if clave_nombre_editor not in st.session_state:
+                st.session_state[clave_nombre_editor] = st.session_state.get(
+                    f"{clave}_nombre", "Oferta desde imagen"
+                )
+            nombre = st.text_input(
+                "Nombre de la oferta", key=clave_nombre_editor
+            )
+            hoy = pd.Timestamp.today().date()
+            columnas_fechas = st.columns(2)
+            with columnas_fechas[0]:
+                vigencia_desde = st.date_input(
+                    "Vigencia desde", value=hoy,
+                    key=f"{clave}_vigencia_desde",
+                )
+            with columnas_fechas[1]:
+                con_fecha_fin = st.checkbox(
+                    "Indicar fecha fin", value=True,
+                    key=f"{clave}_con_fecha_fin",
+                )
+                vigencia_hasta = None
+                if con_fecha_fin:
+                    vigencia_hasta = st.date_input(
+                        "Vigencia hasta",
+                        value=(
+                            pd.Timestamp(vigencia_desde)
+                            + pd.Timedelta(days=7)
+                        ).date(),
+                        key=f"{clave}_vigencia_hasta",
                     )
-                    filas["oferta"] = [
-                        nombre_base if len(filas) == 1 else f"{nombre_base} {i}"
-                        for i in range(1, len(filas) + 1)
-                    ]
-                st.caption(
-                    f"Se han detectado {len(filas)} ofertas. Revisa sus nombres "
-                    "y precios antes de incorporarlas."
+
+            st.caption(
+                f"Se han detectado {len(tarifas)} peajes. Revisa todos los "
+                "precios antes de cargarlos al sistema."
+            )
+            editada = st.data_editor(
+                tarifas,
+                hide_index=True,
+                disabled=["ATR"],
+                num_rows="fixed",
+                key=f"{clave}_editor",
+                column_config={
+                    "ATR": st.column_config.TextColumn("Tarifa", width="small"),
+                    **{
+                        periodo: st.column_config.NumberColumn(
+                            periodo,
+                            min_value=0.0,
+                            max_value=2.0,
+                            format="%.6f",
+                            width="small",
+                        )
+                        for periodo in PERIODOS
+                    },
+                },
+            )
+            pendientes = campos_pendientes_tarifas(editada)
+            if pendientes:
+                st.warning(
+                    "La IA no ha podido leer con seguridad: "
+                    + ", ".join(pendientes)
+                    + ". Completa esas celdas antes de confirmar."
                 )
-                editada = st.data_editor(
-                    filas[["oferta", "ATR", *periodos]],
-                    hide_index=True,
-                    disabled=["ATR"],
-                    num_rows="fixed",
-                    key=f"{clave}_editor",
-                )
-                if st.button("Confirmar y añadir ofertas", key=f"{clave}_confirmar", type="primary"):
-                    try:
-                        return construir_ofertas(editada, periodos)
-                    except ValueError as error:
-                        st.error(str(error))
+            if st.button(
+                "Confirmar y cargar oferta",
+                key=f"{clave}_confirmar",
+                type="primary",
+                use_container_width=True,
+            ):
+                try:
+                    oferta_actual = oferta_actual_desde_tarifas(
+                        editada, nombre, atr, periodos,
+                        vigencia_desde, vigencia_hasta,
+                    )
+                    registro_guardado = guardar_version_oferta(
+                        nombre, vigencia_desde, vigencia_hasta, editada
+                    )
+                    oferta_actual.attrs["id_oferta"] = registro_guardado["id"]
+                    st.success(
+                        f"Oferta «{nombre.strip()}» guardada con {len(editada)} "
+                        f"peajes. Se ha añadido {atr}TD a esta comparativa."
+                    )
+                    return oferta_actual
+                except (OSError, ValueError) as error:
+                    st.error(str(error))
         if not api_key:
             st.info("Configura OPENAI_API_KEY para activar el análisis.")
     return pd.DataFrame()
@@ -177,3 +321,136 @@ def render_oferta_manual(periodos: list[str], clave: str) -> pd.DataFrame:
         except ValueError as error:
             st.error(str(error))
     return pd.DataFrame()
+
+
+def render_bloque_ofertas_fijas(
+    consumos, atr: str, clave: str, titulo: str = "Ofertas a precio fijo"
+) -> pd.DataFrame:
+    """Renderiza el bloque completo de ofertas y devuelve las activas con fee."""
+    import streamlit as st
+    from backend_ofertas_fijas import cargar_catalogo_ofertas
+
+    clave_usuario = f"{clave}_ofertas_usuario"
+    clave_eliminadas = f"{clave}_ofertas_eliminadas"
+    clave_editor = f"{clave}_editor_ofertas"
+    st.subheader(titulo)
+
+    exigibles, sin_consumo = periodos_con_consumo(consumos, atr)
+    if sin_consumo:
+        st.caption(
+            "No se exige precio en periodos sin consumo: "
+            + ", ".join(sin_consumo) + "."
+        )
+
+    origen = selector_origen_oferta(clave)
+    nueva = pd.DataFrame()
+    if origen == "Oferta manual":
+        nueva = render_oferta_manual(exigibles, f"{clave}_manual")
+    elif origen == "Excel":
+        archivo = st.file_uploader(
+            "Sube el Excel con ofertas de precio fijo",
+            type=["xlsx", "xls"],
+            key=f"{clave}_excel",
+        )
+        st.caption("Las columnas P1…P6 deben estar expresadas en €/kWh.")
+        if archivo is not None:
+            try:
+                nueva = normalizar_excel_ofertas(pd.read_excel(archivo))
+            except (ValueError, OSError) as error:
+                st.error(str(error))
+    else:
+        nueva = render_oferta_ia(atr, exigibles, f"{clave}_ia")
+
+    if not nueva.empty:
+        if "Fee (€/MWh)" not in nueva:
+            nueva["Fee (€/MWh)"] = 0.0
+        st.session_state[clave_usuario] = combinar_ofertas(
+            st.session_state.get(clave_usuario), nueva
+        )
+
+    atr_catalogo = str(atr).replace(" ", "").upper().removesuffix("TD")
+    filas_catalogo = []
+    try:
+        catalogo = cargar_catalogo_ofertas()
+    except ValueError as error:
+        catalogo = []
+        st.warning(str(error))
+    for registro in catalogo:
+        for tarifa in registro.get("tarifas", []):
+            if str(tarifa.get("atr", "")).replace(" ", "").upper().removesuffix("TD") != atr_catalogo:
+                continue
+            filas_catalogo.append({
+                "oferta": registro.get("nombre", "Oferta guardada"),
+                **{p: tarifa.get(p, 0.0) for p in PERIODOS},
+                "Fee (€/MWh)": 0.0,
+            })
+    ofertas_catalogo = pd.DataFrame(filas_catalogo)
+    ofertas = combinar_ofertas(
+        ofertas_catalogo, st.session_state.get(clave_usuario)
+    )
+
+    eliminadas = set(st.session_state.get(clave_eliminadas, []))
+    if eliminadas and not ofertas.empty:
+        ofertas = ofertas.loc[
+            ~ofertas["oferta"].astype(str).str.strip().str.casefold().isin(eliminadas)
+        ].copy()
+    if ofertas.empty:
+        st.info(f"Aún no hay ofertas disponibles para {atr}.")
+        return pd.DataFrame(columns=["oferta", *PERIODOS, "Fee (€/MWh)"])
+
+    ofertas = ofertas.copy()
+    ofertas[PERIODOS] = ofertas[PERIODOS].apply(
+        pd.to_numeric, errors="coerce"
+    ).fillna(0.0)
+    if "Fee (€/MWh)" not in ofertas:
+        ofertas["Fee (€/MWh)"] = 0.0
+    ofertas["Fee (€/MWh)"] = pd.to_numeric(
+        ofertas["Fee (€/MWh)"], errors="coerce"
+    ).fillna(0.0)
+    ofertas.insert(0, "Comparar", True)
+    editadas = st.data_editor(
+        ofertas,
+        hide_index=True,
+        num_rows="fixed",
+        disabled=["oferta", *PERIODOS],
+        use_container_width=True,
+        key=clave_editor,
+        column_config={
+            "Comparar": st.column_config.CheckboxColumn(
+                "Comparar", help="Incluye o excluye la oferta del cálculo."
+            ),
+            "Fee (€/MWh)": st.column_config.NumberColumn(
+                "Fee (€/MWh)", min_value=0.0, max_value=100.0,
+                step=0.1, format="%.2f",
+            ),
+        },
+    )
+
+    a_eliminar = st.multiselect(
+        "Eliminar ofertas cargadas",
+        options=ofertas["oferta"].astype(str).tolist(),
+        key=f"{clave}_seleccion_eliminar",
+    )
+    if st.button(
+        "Eliminar de la comparativa",
+        key=f"{clave}_eliminar",
+        disabled=not a_eliminar,
+        use_container_width=True,
+    ):
+        eliminadas.update(str(n).strip().casefold() for n in a_eliminar)
+        st.session_state[clave_eliminadas] = sorted(eliminadas)
+        st.rerun()
+    if eliminadas and st.button(
+        "Restablecer ofertas eliminadas",
+        key=f"{clave}_restablecer",
+        use_container_width=True,
+    ):
+        st.session_state[clave_eliminadas] = []
+        st.rerun()
+
+    activas = editadas.loc[editadas["Comparar"]].drop(columns="Comparar").copy()
+    for periodo in exigibles:
+        activas[periodo] = pd.to_numeric(
+            activas[periodo], errors="coerce"
+        ).fillna(0.0) + activas["Fee (€/MWh)"] / 1000
+    return activas.reset_index(drop=True)

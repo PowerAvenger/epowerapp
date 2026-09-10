@@ -33,7 +33,11 @@ MODULOS = [
     ("Interpolados qh REE", None, "Cuando la interpolación REE apenas tiene impacto", None, "images/interpolados.jpg", "https://interpolados-epowerapp.streamlit.app/"),
 ]
 
-if (Path(__file__).resolve().parents[1] / ".local_data" / "epower_beta.sqlite3").exists():
+RAIZ_APP = Path(__file__).resolve().parents[1]
+if (
+    (RAIZ_APP / ".local_data" / "epower_beta.sqlite3").exists()
+    and (RAIZ_APP / "pages" / "bbdd_beta.py").exists()
+):
     MODULOS.append(
         (
             "BBDD beta local",

@@ -1219,7 +1219,7 @@ def graficar_da_comparado(df, años=None, titulo=None):
                 ],
                 [float(posicion)],
             )[0]
-    colores_comparacion[str(año_actual)] = "#00CC96"
+    colores_comparacion[str(año_actual)] = COLOR_MIBGAS_2026
 
     if años is not None:
         df = df[df["fecha_entrega"].dt.year.isin(años)].copy()
@@ -1329,7 +1329,7 @@ def graficar_medias_acumuladas_comparadas(
                 ],
                 [float(posicion)],
             )[0]
-    colores_series[año_actual] = "#00CC96"
+    colores_series[año_actual] = COLOR_MIBGAS_2026
 
     datos = datos[datos["año"].isin(años)]
     diario = (
@@ -1393,7 +1393,7 @@ def graficar_medias_acumuladas_comparadas(
             y=prevision["media_acumulada_prevista"],
             mode="lines",
             name=f"Previsión {año_actual}",
-            line=dict(color="#00CC96", width=3, dash="dot"),
+            line=dict(color=COLOR_MIBGAS_2026, width=3, dash="dot"),
             hovertemplate=(
                 f"Previsión {año_actual}: "
                 "%{y:.2f} €/MWh<extra></extra>"
@@ -1466,7 +1466,7 @@ def graficar_ranking_medias_anuales_mibgas(df):
                 ],
                 [float(posicion)],
             )[0]
-    colores_barras[año_actual] = "#00CC96"
+    colores_barras[año_actual] = COLOR_MIBGAS_2026
 
     resumen["año_etiqueta"] = resumen["año"].astype(str)
 

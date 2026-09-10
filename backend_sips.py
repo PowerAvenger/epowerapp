@@ -59,10 +59,45 @@ def _decodificar(contenido):
     raise ValueError("No se ha podido determinar la codificación del SIPS.")
 
 
-def _numero_es(serie):
+def _numero_es(serie, decimal_punto=False):
     texto = serie.astype("string").str.strip().str.replace(" ", "", regex=False)
-    texto = texto.str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
+    if decimal_punto:
+        texto = texto.str.replace(",", ".", regex=False)
+    else:
+        texto = texto.str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
     return pd.to_numeric(texto, errors="coerce")
+
+
+def _es_excel_sips(origen, contenido):
+    nombre = str(getattr(origen, "name", origen) or "").lower()
+    return (
+        nombre.endswith((".xlsx", ".xls"))
+        or contenido.startswith(b"PK\x03\x04")
+        or contenido.startswith(bytes.fromhex("D0CF11E0A1B11AE1"))
+    )
+
+
+def _filas_excel_sips(contenido):
+    """Localiza la hoja de medidas de un SIPS Excel y la convierte en filas."""
+    try:
+        hojas = pd.read_excel(
+            io.BytesIO(contenido), sheet_name=None, header=None, dtype=object
+        )
+    except (ImportError, OSError, ValueError) as exc:
+        raise ValueError(f"No se ha podido leer el Excel SIPS: {exc}") from exc
+    for tabla in hojas.values():
+        filas = [
+            ["" if pd.isna(valor) else str(valor).strip() for valor in fila]
+            for fila in tabla.itertuples(index=False, name=None)
+        ]
+        for fila in filas:
+            nombres = {_nombre_columna(celda) for celda in fila}
+            if {
+                "cups", "fecha_lectura_inicial", "fecha_lectura_final",
+                "p1_activa", "p1_reactiva", "p1_maximetro",
+            }.issubset(nombres):
+                return filas
+    raise ValueError("No encuentro una hoja de medidas SIPS reconocida.")
 
 
 def _tabla_magnitud(lecturas, prefijo, agregacion):
@@ -109,12 +144,17 @@ def _extraer_metadatos(filas, limite):
 
 
 def leer_sips_completo(origen):
-    """Devuelve metadatos, activa, reactiva y maxímetros de un CSV SIPS."""
-    texto = _decodificar(_leer_bytes(origen))
-    filas = list(csv.reader(io.StringIO(texto), delimiter=";"))
+    """Devuelve metadatos, activa, reactiva y maxímetros de un SIPS CSV/Excel."""
+    contenido = _leer_bytes(origen)
+    es_excel = _es_excel_sips(origen, contenido)
+    if es_excel:
+        filas = _filas_excel_sips(contenido)
+    else:
+        texto = _decodificar(contenido)
+        filas = list(csv.reader(io.StringIO(texto), delimiter=";"))
     filas_no_vacias = [fila for fila in filas if any(celda.strip() for celda in fila)]
     if len(filas_no_vacias) < 4:
-        raise ValueError("El CSV SIPS no contiene ficha y lecturas suficientes.")
+        raise ValueError("El SIPS no contiene ficha y lecturas suficientes.")
 
     indice_lecturas = None
     formato_lecturas = None
@@ -130,6 +170,13 @@ def leer_sips_completo(origen):
         }.issubset(nombres):
             indice_lecturas = indice
             formato_lecturas = "mensual"
+            break
+        if {
+            "cups", "fecha_lectura_inicial", "fecha_lectura_final",
+            "p1_activa", "p1_reactiva", "p1_maximetro",
+        }.issubset(nombres):
+            indice_lecturas = indice
+            formato_lecturas = "excel"
             break
     if indice_lecturas is None:
         raise ValueError(
@@ -163,6 +210,24 @@ def leer_sips_completo(origen):
         lecturas["fecha_inicio"] = (
             lecturas["fecha_fin"].dt.to_period("M").dt.start_time
         )
+    elif formato_lecturas == "excel":
+        renombrado = {
+            "fecha_lectura_inicial": "f_inicio",
+            "fecha_lectura_final": "f_fin",
+        }
+        for periodo in range(1, 7):
+            renombrado.update({
+                f"p{periodo}_activa": f"ea{periodo}",
+                f"p{periodo}_reactiva": f"er{periodo}",
+                f"p{periodo}_maximetro": f"pt{periodo}",
+            })
+        lecturas = lecturas.rename(columns=renombrado)
+        lecturas["fecha_fin"] = pd.to_datetime(
+            lecturas["f_fin"], errors="coerce"
+        )
+        lecturas["fecha_inicio"] = pd.to_datetime(
+            lecturas["f_inicio"], errors="coerce"
+        )
     else:
         lecturas["fecha_fin"] = pd.to_datetime(lecturas["f_fin"], errors="coerce")
         lecturas["fecha_inicio"] = pd.to_datetime(
@@ -181,6 +246,11 @@ def leer_sips_completo(origen):
             "Faltan columnas SIPS: " + ", ".join(sorted(faltantes)) + "."
         )
 
+    cups_lecturas = lecturas["cups"].dropna().astype(str).str.strip()
+    cups_lecturas = cups_lecturas.loc[cups_lecturas.ne("")]
+    if not metadatos.get("cups") and not cups_lecturas.empty:
+        metadatos["cups"] = cups_lecturas.iloc[0]
+
     lecturas = lecturas.dropna(subset=["fecha_fin", "fecha_inicio"]).copy()
     if lecturas.empty:
         raise ValueError("El SIPS no contiene ciclos con fechas válidas.")
@@ -195,11 +265,9 @@ def leer_sips_completo(origen):
     for prefijo in ("ea", "er", "pt"):
         for periodo in range(1, 7):
             columna = f"{prefijo}{periodo}"
-            lecturas[columna] = _numero_es(lecturas[columna]).fillna(0.0)
-
-    cups_lecturas = lecturas["cups"].dropna().astype(str).str.strip()
-    if not metadatos.get("cups") and not cups_lecturas.empty:
-        metadatos["cups"] = cups_lecturas.iloc[0]
+            lecturas[columna] = _numero_es(
+                lecturas[columna], decimal_punto=es_excel
+            ).fillna(0.0)
 
     return {
         "metadatos": metadatos,

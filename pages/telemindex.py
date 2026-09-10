@@ -21,8 +21,6 @@ from backend_telemindex import (
 from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, aplicar_estilo, NOMBRE_ZONA_PERIODOS, calcular_precios_atr
 from backend_curvadecarga import graficar_media_horaria, graficar_queso_periodos
 from backend_previsiones import obtener_prevision_omie_anual
-from backend_ia_ofertas import extraer_oferta_imagen
-from streamlit_paste_button import paste_image_button
 from componentes_ofertas_fijas import (
     combinar_ofertas, construir_oferta, normalizar_excel_ofertas,
     periodos_con_consumo, render_oferta_ia, render_oferta_manual,
@@ -434,7 +432,7 @@ try:
     prevision_omie_2026 = obtener_prevision_omie_anual(df_spot_prevision)
     df_prevision_indexados_2026 = construir_prevision_indexados_2026(
         df_hist_simulindex,
-        prevision_omie_2026["curva_mensual"],
+        prevision_omie_2026["curva_telemindex"],
         ajuste_hist=ajuste_hist_simulindex,
     )
 except Exception as exc:

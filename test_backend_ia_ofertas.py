@@ -1,5 +1,7 @@
 import unittest
 
+import pandas as pd
+
 from backend_ia_ofertas import validar_oferta_extraida
 
 
@@ -35,11 +37,29 @@ class OfertasImagenTest(unittest.TestCase):
         self.assertAlmostEqual(tabla.loc[0, "P1"], 0.236937)
         self.assertFalse(tabla.attrs["unidad_inferida"])
 
-    def test_rechaza_periodos_obligatorios_ausentes(self):
-        with self.assertRaisesRegex(ValueError, "P6"):
-            validar_oferta_extraida(
-                oferta_30("EUR/kWh", [0.2, 0.2, 0.2, 0.2, 0.2, None])
+    def test_deja_vacio_un_periodo_dudoso_para_corregirlo(self):
+        tabla, _ = validar_oferta_extraida(
+            oferta_30("EUR/kWh", [0.2, 0.2, 0.2, 0.2, 0.2, None])
+        )
+
+        self.assertTrue(pd.isna(tabla.loc[0, "P6"]))
+        self.assertEqual(tabla.attrs["campos_revisar"], [{
+            "atr": "3.0",
+            "periodo": "P6",
+            "valor_extraido": None,
+        }])
+
+    def test_acepta_coma_decimal_y_descarta_una_escala_imposible(self):
+        tabla, _ = validar_oferta_extraida(
+            oferta_30(
+                "EUR/kWh",
+                ["0,253962", 0.216140, 0.152730, 130714, 0.122770, 0.148385],
             )
+        )
+
+        self.assertAlmostEqual(tabla.loc[0, "P1"], 0.253962)
+        self.assertTrue(pd.isna(tabla.loc[0, "P4"]))
+        self.assertEqual(tabla.attrs["campos_revisar"][0]["periodo"], "P4")
 
     def test_usa_atr_del_contexto_si_no_aparece_en_la_imagen(self):
         resultado = {
@@ -56,6 +76,60 @@ class OfertasImagenTest(unittest.TestCase):
         tabla, _ = validar_oferta_extraida(resultado, atr_contexto="6.2TD")
         self.assertEqual(tabla.loc[0, "ATR"], "6.2")
         self.assertAlmostEqual(tabla.loc[0, "P1"], 0.176839)
+
+    def test_recupera_cada_atr_desde_el_nombre_antes_de_usar_el_contexto(self):
+        resultado = {
+            "nombre": "Tabla de precios",
+            "unidad_original": "no indicada",
+            "tarifas": [
+                {
+                    "nombre": "2.0 TD", "atr": "",
+                    "P1": 0.273046, "P2": 0.187682, "P3": 0.157153,
+                    "P4": None, "P5": None, "P6": None,
+                },
+                {
+                    "nombre": "3.0 TD", "atr": "",
+                    "P1": 0.253962, "P2": 0.216140, "P3": 0.152730,
+                    "P4": 0.130714, "P5": 0.122770, "P6": 0.148385,
+                },
+                {
+                    "nombre": "6.1 TD", "atr": "",
+                    **{f"P{i}": 0.1 for i in range(1, 7)},
+                },
+                {
+                    "nombre": "6.2 TD", "atr": "",
+                    **{f"P{i}": 0.1 for i in range(1, 7)},
+                },
+            ],
+        }
+
+        tabla, _ = validar_oferta_extraida(resultado, atr_contexto="3.0TD")
+
+        self.assertEqual(
+            tabla["ATR"].tolist(), ["2.0", "3.0", "6.1", "6.2"]
+        )
+        self.assertEqual(tabla.attrs["campos_revisar"], [])
+
+    def test_nombre_20_prevalece_sobre_atr_incorrecto_de_la_ia(self):
+        resultado = {
+            "nombre": "Tabla de precios",
+            "unidad_original": "EUR/kWh",
+            "tarifas": [{
+                "nombre": "2.0 TD",
+                "atr": "3.0 TD",
+                "P1": 0.273046,
+                "P2": 0.187682,
+                "P3": 0.157153,
+                "P4": None,
+                "P5": None,
+                "P6": None,
+            }],
+        }
+
+        tabla, _ = validar_oferta_extraida(resultado, atr_contexto="3.0TD")
+
+        self.assertEqual(tabla.loc[0, "ATR"], "2.0")
+        self.assertEqual(tabla.attrs["campos_revisar"], [])
 
     def test_conserva_varias_ofertas_del_mismo_atr(self):
         resultado = {

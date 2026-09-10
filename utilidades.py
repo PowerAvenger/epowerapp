@@ -49,7 +49,11 @@ def generar_menu():
         st.page_link('pages/redata_potgen.py', label = 'Tecnologías de generación', icon = "⚡️")
         st.page_link('pages/mibgas.py', label = 'Gas & Furious', icon = "🔥")
         st.page_link('pages/marginales.py', label = 'Marginales', icon = "🔀")
-        if (Path(__file__).resolve().parent / '.local_data' / 'epower_beta.sqlite3').exists():
+        raiz_app = Path(__file__).resolve().parent
+        if (
+            (raiz_app / '.local_data' / 'epower_beta.sqlite3').exists()
+            and (raiz_app / 'pages' / 'bbdd_beta.py').exists()
+        ):
             st.page_link('pages/bbdd_beta.py', label='BBDD beta local', icon='🗃️')
         st.sidebar.header('', divider='rainbow')
 

@@ -125,6 +125,45 @@ class LectorSipsTest(unittest.TestCase):
         self.assertEqual(resultado["maximetros"].loc[0, "P4"], 400)
         self.assertEqual(resultado["consumos"].loc[0, "dias_facturacion"], 31)
 
+    def test_lee_excel_sips_sin_atr_y_respeta_decimales(self):
+        import pandas as pd
+
+        columnas = (
+            ["CUPS", "Fecha Lectura Inicial", "Fecha Lectura Final"]
+            + [f"P{i} Activa" for i in range(1, 7)]
+            + [f"P{i} Reactiva" for i in range(1, 7)]
+            + [f"P{i} Maximetro" for i in range(1, 7)]
+        )
+        filas = [
+            ["ES0021000010312713HQ", *([None] * 20)],
+            [
+                None, "2024-12-31", "2025-01-31",
+                *range(1, 7), *range(11, 17),
+                30.1, 31.2, 32.3, 33.34, 34.5, 35.6,
+            ],
+            [
+                None, "2025-01-31", "2025-02-28",
+                *range(2, 8), *range(12, 18),
+                31.1, 32.2, 33.3, 34.4, 35.5, 36.6,
+            ],
+        ]
+        archivo = io.BytesIO()
+        pd.DataFrame(filas, columns=columnas).to_excel(
+            archivo, index=False, sheet_name="{worksheet}"
+        )
+        archivo.seek(0)
+
+        resultado = leer_sips_completo(archivo)
+
+        self.assertIsNone(resultado["atr"])
+        self.assertEqual(
+            resultado["metadatos"]["cups"], "ES0021000010312713HQ"
+        )
+        self.assertAlmostEqual(resultado["maximetros"].loc[0, "P4"], 33.34)
+        self.assertEqual(resultado["consumos"]["periodo_mes"].tolist(), [
+            "2025-01", "2025-02"
+        ])
+
 
 if __name__ == "__main__":
     unittest.main()

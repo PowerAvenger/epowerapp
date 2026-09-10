@@ -965,6 +965,295 @@ def construir_escenarios(df_uso, lista_simul, df_hist, colores_precios, añadir_
     return escenarios
 
 
+def construir_escenarios_pricing_trimestral(
+    df_consumos,
+    producto,
+    forwards,
+    atr,
+    apuntamientos_spot,
+    ssaa_previstos,
+    df_componentes,
+    columna_periodo,
+    tabla_ppc,
+    tabla_pyc,
+    osom,
+    srad,
+    fnee,
+    formula,
+):
+    """Cotiza un trimestre con el motor analítico de Pricing.
+
+    Conserva ``construir_escenarios`` como implementación histórica para
+    posibles comparaciones, pero no depende de su regresión.
+    """
+    from backend_indexado import calcular_precios_atr_formula
+
+    atr = str(atr).replace(" ", "").upper().removesuffix("TD")
+    periodos = ["P1", "P2", "P3"] if atr == "2.0" else [f"P{i}" for i in range(1, 7)]
+    trimestre = int(str(producto).split("-")[0].removeprefix("Q"))
+    meses_objetivo = list(range((trimestre - 1) * 3 + 1, trimestre * 3 + 1))
+
+    componentes = df_componentes.copy()
+    componentes["mes_pricing"] = pd.PeriodIndex(
+        componentes["mes_pricing"], freq="M"
+    )
+    perdidas = componentes.groupby(
+        ["mes_pricing", columna_periodo]
+    )[f"perd_{atr}"].mean()
+    horas = componentes.groupby(["mes_pricing", columna_periodo]).size()
+
+    indices_spot = {
+        pd.Period(indice, freq="M").month: indice
+        for indice in apuntamientos_spot.index
+    }
+    indices_ssaa = {
+        pd.Period(indice, freq="M").month: indice
+        for indice in ssaa_previstos.index
+    }
+    periodos_fuente = {
+        periodo.month: periodo
+        for periodo in sorted(componentes["mes_pricing"].unique())
+    }
+    faltan_meses = [
+        mes for mes in meses_objetivo
+        if mes not in indices_spot
+        or mes not in indices_ssaa
+        or mes not in periodos_fuente
+    ]
+    if faltan_meses:
+        raise ValueError(
+            "No hay histórico completo para perfilar los meses: "
+            + ", ".join(map(str, faltan_meses)) + "."
+        )
+
+    consumos = df_consumos.copy()
+    consumos["fecha_hora"] = pd.to_datetime(consumos["fecha_hora"], errors="coerce")
+    consumos["Mes"] = consumos["fecha_hora"].dt.month
+    consumos["Consumo"] = pd.to_numeric(
+        consumos["consumo_neto_kWh"], errors="coerce"
+    ).fillna(0.0)
+    consumos_mes_periodo = consumos.groupby(["Mes", "periodo"])["Consumo"].sum()
+
+    resultados = []
+    for etiqueta, forward in zip(["A", "B", "C"], forwards):
+        filas = []
+        for mes in meses_objetivo:
+            if isinstance(forward, (dict, pd.Series)):
+                forward_mes = pd.to_numeric(forward.get(mes), errors="coerce")
+                if pd.isna(forward_mes):
+                    raise ValueError(f"Falta el forward OMIP del mes {mes}.")
+            else:
+                forward_mes = float(forward)
+            indice_spot = indices_spot[mes]
+            indice_ssaa = indices_ssaa[mes]
+            periodo_fuente = periodos_fuente[mes]
+            for periodo in periodos:
+                clave = (periodo_fuente, periodo)
+                if clave not in perdidas.index or clave not in horas.index:
+                    continue
+                fila = {
+                    "Mes": mes,
+                    "Periodo": periodo,
+                    "Horas": horas.loc[clave],
+                    "spot": float(apuntamientos_spot.loc[indice_spot, periodo]) * float(forward_mes),
+                    "ssaa": float(ssaa_previstos.loc[indice_ssaa, periodo]) + float(srad),
+                    "osom": float(osom),
+                    "fnee": float(fnee),
+                    **{f"ppcc_{a}": 0.0 for a in ["2.0", "3.0", "6.1", "6.2"]},
+                    **{f"perd_{a}": 0.0 for a in ["2.0", "3.0", "6.1", "6.2"]},
+                    **{f"pyc_{a}": 0.0 for a in ["2.0", "3.0", "6.1", "6.2"]},
+                }
+                fila[f"ppcc_{atr}"] = tabla_ppc.loc[f"{atr}TD", periodo]
+                fila[f"perd_{atr}"] = perdidas.loc[clave]
+                fila[f"pyc_{atr}"] = tabla_pyc.loc[f"{atr}TD", periodo]
+                filas.append(fila)
+
+        detalle = calcular_precios_atr_formula(pd.DataFrame(filas), formula)
+        detalle["Consumo"] = [
+            float(consumos_mes_periodo.get((fila["Mes"], fila["Periodo"]), 0.0))
+            for _, fila in detalle.iterrows()
+        ]
+        detalle["Precio"] = detalle[f"precio_{atr}"] / 1000
+        detalle["Coste"] = detalle["Consumo"] * detalle["Precio"]
+        resumen = detalle.groupby("Periodo").agg(
+            **{"Consumo (kWh)": ("Consumo", "sum"), "Coste (€)": ("Coste", "sum")}
+        ).reindex(periodos).fillna(0.0)
+        resumen["Precio medio (€/kWh)"] = (
+            resumen["Coste (€)"]
+            / resumen["Consumo (kWh)"].where(resumen["Consumo (kWh)"].ne(0))
+        ).fillna(0.0)
+        resumen = resumen.T.reindex(columns=[f"P{i}" for i in range(1, 7)], fill_value=0.0)
+        resumen["TOTAL"] = [
+            resumen.loc["Consumo (kWh)"].sum(),
+            resumen.loc["Coste (€)"].sum(),
+            (
+                resumen.loc["Coste (€)"].sum()
+                / resumen.loc["Consumo (kWh)"].sum()
+                if resumen.loc["Consumo (kWh)"].sum() else 0.0
+            ),
+        ]
+        forward_es_curva = isinstance(forward, (dict, pd.Series))
+        resultados.append({
+            "label": (
+                f"Indexado simulado {etiqueta} (curva OMIP mensual)"
+                if forward_es_curva else
+                f"Indexado simulado {etiqueta} ({float(forward):.1f} €/MWh)"
+            ),
+            "forward": dict(forward) if forward_es_curva else float(forward),
+            "df_resumen": resumen,
+            "detalle": detalle,
+        })
+    return resultados
+
+
+def construir_forward_mensual_trimestre(df_mensual, df_trimestral, producto):
+    """Despliega un trimestre en meses, priorizando cotizaciones mensuales."""
+    trimestre_txt, anio_corto = str(producto).upper().split("-")
+    trimestre = int(trimestre_txt.removeprefix("Q"))
+    anio = 2000 + int(anio_corto)
+    meses = range((trimestre - 1) * 3 + 1, trimestre * 3 + 1)
+
+    mensuales = df_mensual.copy()
+    mensuales["Entrega_dt"] = pd.to_datetime(
+        mensuales["Entrega_dt"], errors="coerce"
+    )
+    mensuales["Fecha"] = pd.to_datetime(mensuales["Fecha"], errors="coerce")
+    mensuales["Precio"] = pd.to_numeric(mensuales["Precio"], errors="coerce")
+    trimestrales = df_trimestral.copy()
+    trimestrales["Fecha"] = pd.to_datetime(
+        trimestrales["Fecha"], errors="coerce"
+    )
+    trimestrales["Precio"] = pd.to_numeric(
+        trimestrales["Precio"], errors="coerce"
+    )
+    cotizacion_trimestre = trimestrales.loc[
+        trimestrales["Entrega"].astype(str).str.upper().eq(str(producto).upper())
+    ].dropna(subset=["Fecha", "Precio"]).sort_values("Fecha")
+    if cotizacion_trimestre.empty:
+        raise ValueError(f"No existe cotización para {producto}.")
+    precio_trimestre = float(cotizacion_trimestre.iloc[-1]["Precio"])
+
+    filas = []
+    for mes in meses:
+        entrega = mensuales.loc[
+            mensuales["Entrega_dt"].dt.year.eq(anio)
+            & mensuales["Entrega_dt"].dt.month.eq(mes)
+        ].dropna(subset=["Fecha", "Precio"]).sort_values("Fecha")
+        if entrega.empty:
+            precio = precio_trimestre
+            origen = str(producto).upper()
+            tipo = "Futuro trimestral"
+            fecha_cotizacion = cotizacion_trimestre.iloc[-1]["Fecha"]
+        else:
+            ultima = entrega.iloc[-1]
+            precio = float(ultima["Precio"])
+            origen = str(ultima["Entrega"]).upper()
+            tipo = "Futuro mensual"
+            fecha_cotizacion = ultima["Fecha"]
+        filas.append({
+            "Mes": pd.Timestamp(anio, mes, 1),
+            "Producto utilizado": origen,
+            "Origen": tipo,
+            "Fecha cotización": fecha_cotizacion,
+            "OMIP (€/MWh)": precio,
+        })
+    return pd.DataFrame(filas)
+
+
+def calcular_cobertura_trimestral_horaria(
+    df_curva,
+    precio_cobertura,
+    atr,
+    formula,
+    ssaa_objetivo_mes_periodo,
+    srad_forward,
+    fnee_forward,
+):
+    """Valora una cobertura total sustituyendo SPOT sobre la curva horaria.
+
+    Los SSAA conservan su forma horaria dentro de cada bloque mes-periodo,
+    pero su media coincide exactamente con el objetivo producido por Pricing.
+    El resto de componentes y las pérdidas permanecen por intervalo; FNEE
+    usa el valor futuro de Pricing.
+    """
+    from backend_indexado import calcular_precios_atr_formula
+
+    atr = str(atr).replace(" ", "").upper().removesuffix("TD")
+    detalle = df_curva.copy()
+    detalle["spot"] = float(precio_cobertura)
+    fechas = pd.to_datetime(detalle["fecha_hora"], errors="coerce")
+    detalle["_mes_cobertura"] = fechas.dt.month
+
+    ssaa_historico = pd.to_numeric(detalle["ssaa"], errors="coerce")
+    if "rad3" in detalle.columns:
+        ssaa_historico = ssaa_historico - pd.to_numeric(
+            detalle["rad3"], errors="coerce"
+        ).fillna(0.0)
+    detalle["_ssaa_historico_sin_srad"] = ssaa_historico
+    indices_objetivo = {
+        pd.Period(indice, freq="M").month: indice
+        for indice in ssaa_objetivo_mes_periodo.index
+    }
+    objetivos = []
+    for mes, periodo in zip(detalle["_mes_cobertura"], detalle["periodo"]):
+        indice = indices_objetivo.get(mes)
+        if indice is None or periodo not in ssaa_objetivo_mes_periodo.columns:
+            objetivos.append(float("nan"))
+        else:
+            objetivos.append(pd.to_numeric(
+                ssaa_objetivo_mes_periodo.loc[indice, periodo], errors="coerce"
+            ))
+    detalle["_ssaa_objetivo"] = objetivos
+    if detalle["_ssaa_objetivo"].isna().any():
+        raise ValueError(
+            "Faltan objetivos de SSAA de Pricing para algún mes-periodo."
+        )
+    medias_bloque = detalle.groupby(
+        ["_mes_cobertura", "periodo"]
+    )["_ssaa_historico_sin_srad"].transform("mean")
+    factores = detalle["_ssaa_objetivo"] / medias_bloque.where(
+        medias_bloque.abs().gt(1e-9)
+    )
+    ssaa_perfilado = (
+        detalle["_ssaa_historico_sin_srad"] * factores
+    ).where(factores.notna(), detalle["_ssaa_objetivo"])
+    detalle["ssaa"] = ssaa_perfilado + float(srad_forward)
+    detalle["fnee"] = float(fnee_forward)
+    detalle = calcular_precios_atr_formula(detalle, formula)
+
+    detalle["Consumo (kWh)"] = pd.to_numeric(
+        detalle["consumo_neto_kWh"], errors="coerce"
+    ).fillna(0.0)
+    detalle["Periodo"] = detalle["periodo"].astype(str)
+    detalle["Precio (€/kWh)"] = detalle[f"precio_{atr}"] / 1000
+    detalle["Coste (€)"] = (
+        detalle["Consumo (kWh)"] * detalle["Precio (€/kWh)"]
+    )
+    periodos = [f"P{i}" for i in range(1, 7)]
+    resumen = detalle.groupby("Periodo").agg(
+        **{
+            "Consumo (kWh)": ("Consumo (kWh)", "sum"),
+            "Coste (€)": ("Coste (€)", "sum"),
+        }
+    ).reindex(periodos).fillna(0.0)
+    resumen["Precio medio (€/kWh)"] = (
+        resumen["Coste (€)"]
+        / resumen["Consumo (kWh)"].where(resumen["Consumo (kWh)"].ne(0))
+    ).fillna(0.0)
+    resumen = resumen.T
+    consumo_total = resumen.loc["Consumo (kWh)"].sum()
+    coste_total = resumen.loc["Coste (€)"].sum()
+    resumen["TOTAL"] = [
+        consumo_total,
+        coste_total,
+        coste_total / consumo_total if consumo_total else 0.0,
+    ]
+    detalle = detalle.drop(columns=[
+        "_mes_cobertura", "_ssaa_historico_sin_srad", "_ssaa_objetivo"
+    ])
+    return detalle, resumen
+
+
 
 
 

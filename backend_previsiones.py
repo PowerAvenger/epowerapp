@@ -40,6 +40,58 @@ def _normalizar_spot_mensual(df_spot):
     return mensual
 
 
+def construir_curva_telemindex_con_omip_m(
+    curva_mensual,
+    df_ftb_mensual,
+    fecha_ref=None,
+    numero_cotizaciones=3,
+):
+    """Añade OMIP M a una copia de la curva usada solo por Telemindex.
+
+    El precio de OMIP M es la media de las últimas cotizaciones disponibles
+    del contrato con entrega en el mes en curso, igual que en SPO.
+    """
+    curva = curva_mensual.copy()
+    if curva.empty or df_ftb_mensual.empty:
+        return curva, None
+
+    fecha_ref = pd.Timestamp.today() if fecha_ref is None else pd.Timestamp(fecha_ref)
+    mes_ref = fecha_ref.to_period("M")
+    futuros = df_ftb_mensual.copy()
+    futuros["Fecha"] = pd.to_datetime(futuros["Fecha"], errors="coerce")
+    futuros["Entrega_dt"] = pd.to_datetime(
+        futuros["Entrega_dt"], errors="coerce"
+    )
+    futuros["Precio"] = pd.to_numeric(futuros["Precio"], errors="coerce")
+
+    cotizaciones_m = futuros[
+        futuros["Entrega_dt"].dt.to_period("M").eq(mes_ref)
+        & futuros["Fecha"].le(fecha_ref)
+    ].dropna(subset=["Fecha", "Precio"])
+    cotizaciones_m = cotizaciones_m.sort_values("Fecha")
+
+    if cotizaciones_m.empty:
+        return curva, None
+
+    ultimas = cotizaciones_m.tail(numero_cotizaciones)
+    precio_omip_m = round(float(ultimas["Precio"].mean()), 2)
+    fila_omip_m = pd.DataFrame([{
+        "mes": mes_ref.month,
+        "fecha": mes_ref.to_timestamp(),
+        "precio": precio_omip_m,
+        "tipo": "FTB mensual M",
+    }])
+    curva = pd.concat([curva, fila_omip_m], ignore_index=True)
+    curva = curva.sort_values(["fecha", "tipo"]).reset_index(drop=True)
+
+    return curva, {
+        "entrega": mes_ref.to_timestamp(),
+        "precio": precio_omip_m,
+        "fecha_cotizacion": cotizaciones_m["Fecha"].max(),
+        "numero_cotizaciones": len(ultimas),
+    }
+
+
 @st.cache_data(show_spinner=False)
 def obtener_prevision_omie_anual(df_spot):
     """Devuelve la curva híbrida OMIE-OMIP y su resumen anual compartido."""
@@ -71,6 +123,10 @@ def obtener_prevision_omie_anual(df_spot):
         df_ftb_trimestral,
         fecha_ultimo_omip_trimestral,
     )
+    curva_telemindex, omip_mes_actual = construir_curva_telemindex_con_omip_m(
+        curva_mensual,
+        df_ftb_mensual,
+    )
     media_anual = round(curva_mensual["precio"].mean(), 2)
 
     return {
@@ -78,6 +134,8 @@ def obtener_prevision_omie_anual(df_spot):
         "media_anual": media_anual,
         "fecha_corte": fecha_ultimo_omip_trimestral,
         "curva_mensual": curva_mensual,
+        "curva_telemindex": curva_telemindex,
+        "omip_mes_actual": omip_mes_actual,
     }
 
 

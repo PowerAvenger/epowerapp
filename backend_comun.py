@@ -816,11 +816,17 @@ def formatear_df_resultados(df):
 
     styler = df.style
 
-    styler = styler.format({
+    formatos = {
         "Coste anual (€)": formato_euros,
+        "Coste trimestre (€)": formato_euros,
         "Precio medio (€/kWh)": lambda x: formato_eur_kwh(x, unidad=False),
         "% sobre la más barata": formato_pct,
         "Δ vs más barata (€)": formato_euros,
+    }
+    styler = styler.format({
+        columna: formato
+        for columna, formato in formatos.items()
+        if columna in df.columns
     })
 
     # Alineación

@@ -5,6 +5,7 @@ from backend_comparador_luz import (
     calcular_escenarios_indexados_mensuales,
     comparar_ofertas_fijas,
     consumos_por_periodo,
+    ofertas_catalogo_para_atr,
 )
 from backend_indexado import FormulaIndexada
 
@@ -52,6 +53,22 @@ class ComparadorLuzTest(unittest.TestCase):
         self.assertAlmostEqual(
             resultado.iloc[0]['Precio medio energía (€/kWh)'], 0.0406
         )
+
+    def test_oferta_de_catalogo_conserva_id_para_gestionarla(self):
+        catalogo = [{
+            'id': 'version-1',
+            'nombre': 'Oferta semanal',
+            'vigencia_desde': '2026-09-10',
+            'vigencia_hasta': '2026-09-17',
+            'tarifas': [{
+                'atr': '2.0', 'P1': .25, 'P2': .17, 'P3': .14,
+                'P4': None, 'P5': None, 'P6': None,
+            }],
+        }]
+
+        salida = ofertas_catalogo_para_atr(catalogo, '2.0')
+
+        self.assertEqual(salida.loc[0, 'ID oferta'], 'version-1')
 
 
 if __name__ == '__main__':

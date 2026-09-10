@@ -4,9 +4,43 @@ import pandas as pd
 
 from backend_simulindex import construir_prevision_indexados_2026
 from backend_telemindex import evol_diario
+from backend_previsiones import construir_curva_telemindex_con_omip_m
 
 
 class PrevisionEvolTelemindexTest(unittest.TestCase):
+    def test_curva_telemindex_incluye_media_ultimas_tres_cotizaciones_omip_m(self):
+        curva = pd.DataFrame({
+            "mes": [9, 10],
+            "fecha": pd.to_datetime(["2026-09-01", "2026-10-01"]),
+            "precio": [50.0, 70.0],
+            "tipo": ["OMIE", "FTB mensual"],
+        })
+        futuros = pd.DataFrame({
+            "Fecha": pd.to_datetime([
+                "2026-09-04", "2026-09-07", "2026-09-08", "2026-09-09",
+                "2026-09-09",
+            ]),
+            "Entrega_dt": pd.to_datetime([
+                "2026-09-01", "2026-09-01", "2026-09-01", "2026-09-01",
+                "2026-10-01",
+            ]),
+            "Precio": [40.0, 50.0, 60.0, 70.0, 99.0],
+        })
+
+        curva_telemindex, resumen = construir_curva_telemindex_con_omip_m(
+            curva,
+            futuros,
+            fecha_ref="2026-09-10",
+        )
+
+        omip_m = curva_telemindex[
+            curva_telemindex["tipo"].eq("FTB mensual M")
+        ].iloc[0]
+        self.assertEqual(omip_m["fecha"], pd.Timestamp("2026-09-01"))
+        self.assertAlmostEqual(omip_m["precio"], 60.0)
+        self.assertAlmostEqual(resumen["precio"], 60.0)
+        self.assertEqual(resumen["numero_cotizaciones"], 3)
+
     def test_prevision_reutiliza_regresion_lineal_de_simulindex(self):
         historico = pd.DataFrame({
             "spot": [40.0, 50.0, 60.0],

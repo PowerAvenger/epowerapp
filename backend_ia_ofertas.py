@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import base64
 import json
+import math
+import re
 
 import pandas as pd
 
@@ -54,6 +56,32 @@ def _normalizar_atr(valor):
     return str(valor).upper().replace(" ", "").removesuffix("TD")
 
 
+def detectar_atr_en_texto(valor):
+    """Recupera el ATR cuando la IA lo deja en el nombre de la fila."""
+    texto = str(valor or "").upper().replace(",", ".")
+    coincidencia = re.search(
+        r"(?<!\d)(2\.0|3\.0|6\.1|6\.2)(?:\s*TD)?(?!\d)", texto
+    )
+    return coincidencia.group(1) if coincidencia else None
+
+
+def _numero_extraido(valor):
+    """Convierte una celda leída por IA sin inventar valores dudosos."""
+    if valor is None:
+        return None
+    if isinstance(valor, str):
+        texto = valor.strip().lower()
+        if not texto or texto in {"-", "--", "---", "null", "none", "n/a"}:
+            return None
+        texto = texto.replace(" ", "").replace(",", ".")
+        valor = texto
+    try:
+        numero = float(valor)
+    except (TypeError, ValueError):
+        return None
+    return numero if math.isfinite(numero) else None
+
+
 def _factor_a_eur_kwh(unidad, tarifas=None):
     unidad_limpia = str(unidad).lower().replace(" ", "")
     if "€/mwh" in unidad_limpia or "eur/mwh" in unidad_limpia:
@@ -69,14 +97,9 @@ def _factor_a_eur_kwh(unidad, tarifas=None):
     valores = []
     for tarifa in tarifas or []:
         for periodo in [f"P{i}" for i in range(1, 7)]:
-            valor = tarifa.get(periodo)
-            if valor is not None:
-                try:
-                    valor = float(valor)
-                except (TypeError, ValueError):
-                    continue
-                if valor > 0:
-                    valores.append(valor)
+            valor = _numero_extraido(tarifa.get(periodo))
+            if valor is not None and valor > 0:
+                valores.append(valor)
     if not valores:
         raise ValueError(f"No se reconoce la unidad de la oferta: {unidad}.")
 
@@ -96,11 +119,15 @@ def validar_oferta_extraida(resultado, atr_contexto=None):
         resultado.get("unidad_original"), resultado.get("tarifas")
     )
     filas = []
+    campos_revisar = []
     nombres_usados = {}
     numero_tarifas = len(resultado["tarifas"])
     nombre_global = str(resultado.get("nombre") or "Oferta desde imagen").strip()
     for indice, tarifa in enumerate(resultado["tarifas"], start=1):
-        atr = _normalizar_atr(tarifa.get("atr"))
+        # La etiqueta visible de la fila (p. ej. "2.0 TD") es más fiable que
+        # un ATR repetido erróneamente por el modelo en todas las filas.
+        atr_nombre = detectar_atr_en_texto(tarifa.get("nombre"))
+        atr = atr_nombre or _normalizar_atr(tarifa.get("atr"))
         if atr not in ATRS_OFERTA and atr_contexto is not None:
             atr = _normalizar_atr(atr_contexto)
         if atr not in ATRS_OFERTA:
@@ -118,17 +145,24 @@ def validar_oferta_extraida(resultado, atr_contexto=None):
             nombre_fila = f"{nombre_fila} ({repeticion})"
         fila = {"oferta": nombre_fila, "ATR": atr}
         for periodo in [f"P{i}" for i in range(1, 7)]:
-            valor = tarifa.get(periodo)
-            fila[periodo] = None if valor is None else float(valor) * factor
+            valor_original = tarifa.get(periodo)
+            valor = _numero_extraido(valor_original)
+            fila[periodo] = None if valor is None else valor * factor
         for periodo in PERIODOS_ATR[atr]:
             valor = fila[periodo]
             if valor is None or not 0 < valor < 2:
-                raise ValueError(f"El precio {periodo} de {atr}TD no es válido.")
+                fila[periodo] = None
+                campos_revisar.append({
+                    "atr": atr,
+                    "periodo": periodo,
+                    "valor_extraido": tarifa.get(periodo),
+                })
         filas.append(fila)
     if not filas:
         raise ValueError("No se ha detectado un ATR compatible.")
     tabla = pd.DataFrame(filas)
     tabla.attrs["unidad_inferida"] = unidad_inferida
+    tabla.attrs["campos_revisar"] = campos_revisar
     return tabla, resultado.get("nombre")
 
 
@@ -157,6 +191,12 @@ def extraer_oferta_imagen(
             "Eres un extractor de tablas de ofertas eléctricas. Transcribe "
             "exclusivamente datos visibles. No inventes precios ni periodos. "
             "Conserva la unidad original y convierte comas decimales a números. "
+            "Mantén exactamente la escala decimal: 0,130714 debe ser 0.130714, "
+            "nunca 130714. Los guiones son null, pero solo en la celda donde "
+            "aparecen. Las tarifas 3.0TD, 6.1TD y 6.2TD suelen tener P1-P6: "
+            "revisa por segunda vez esas seis columnas antes de responder. "
+            "Si la primera columna contiene 2.0TD, 3.0TD, 6.1TD o 6.2TD, "
+            "copia ese valor en el campo atr de su misma fila. "
             "Cada fila de precios es una oferta independiente: conserva en el "
             "campo nombre su etiqueta comercial completa. Si dos filas tienen "
             "la misma etiqueta, incorpora otro dato visible de la fila, como "

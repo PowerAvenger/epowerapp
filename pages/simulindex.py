@@ -1,11 +1,13 @@
 import streamlit as st
-import io
 from pathlib import Path
 from backend_simulindex import (obtener_historicos_meff, obtener_meff_anual, obtener_meff_trimestral, obtener_meff_mensual,
                                 pyc_2026,
                                 obtener_hist_mensual, obtener_spot_mensual, obtener_spot_diario,
                                 obtener_graf_hist, obtener_grafico_omip, obtener_grafico_omip_omie,
-                                obtener_trimestres_futuros, construir_escenarios,
+                                obtener_trimestres_futuros,
+                                construir_escenarios_pricing_trimestral,
+                                calcular_cobertura_trimestral_horaria,
+                                construir_forward_mensual_trimestre,
                                 graficar_2026,
                                 construir_curva_omip_mensual_12m, graficar_curva_omip_mensual_12m,
                                 construir_media_prevista_2026_diaria, graficar_media_prevista_2026,
@@ -39,23 +41,22 @@ from backend_opt2 import (
     normalizar_tabla_consumos_sips,
 )
 from backend_sips import leer_sips_completo, perfil_anual_meses_naturales
-from backend_ia_ofertas import extraer_oferta_imagen
 from backend_ofertas_fijas import (
     cargar_catalogo_ofertas,
-    guardar_version_oferta,
 )
-from streamlit_paste_button import paste_image_button
 from componentes_ofertas_fijas import (
     combinar_ofertas,
-    construir_ofertas,
     normalizar_excel_ofertas,
     periodos_con_consumo,
+    render_bloque_ofertas_fijas,
+    render_oferta_ia,
 )
 from componentes_indexados import (
     render_escenarios_omie,
     render_formula_indexada,
     render_otros_escenarios,
 )
+from informe_simulindex import mostrar_informe_comparador_trimestral
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
@@ -257,6 +258,15 @@ if 'margen_simulindex' not in st.session_state:
 graf_omip_trimestral = obtener_grafico_omip(df_FTB_trimestral_futuros)
 graf_omip_mensual = obtener_grafico_omip(df_FTB_mensual_simulindex)
 graf_omip_anual = obtener_grafico_omip(df_FTB_anual_simulindex)
+
+# Los futuros de Simulindex empiezan en M+1. El contrato del mes en curso se
+# conserva aparte para visualizar su evolución sin alterar esa metodología.
+df_FTB_mensual_mes_actual = df_FTB_mensual[
+    df_FTB_mensual["Entrega"].eq(mes_actual)
+].copy()
+graf_omip_mensual_mes_actual = obtener_grafico_omip(
+    df_FTB_mensual_mes_actual
+)
 
 df_trim_sel = df_FTB_trimestral[df_FTB_trimestral['Entrega'] == st.session_state.trimestre_futuro].copy()
 graf_omip_trimestral_select = obtener_grafico_omip(df_trim_sel)
@@ -497,7 +507,7 @@ for clave_pricing, clave_principal in {
 
 
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     'Principal',
     'Futuros',
     'Previsión anual',
@@ -506,6 +516,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     'Cobertura trimestral',
     'Pricing',
     'Combo index-fijo',
+    'Informes',
 ])
 
 # =======================================================================================================================================================================
@@ -1941,7 +1952,22 @@ with tab2:
     with col4:
         st.info('Aquí tienes la evolución de :blue[OMIP] por trimestres', icon = "ℹ️")
         st.write(graf_omip_trimestral)
-        st.info('Aquí tienes la evolución de :blue[OMIP] por meses', icon = "ℹ️")
+
+    col1, col2 = st.columns([0.18, 0.82])
+    with col1:
+        st.info(
+            f'Evolución de :blue[OMIP] para el mes en curso ({mes_actual})',
+            icon="ℹ️",
+        )
+        if df_FTB_mensual_mes_actual.empty:
+            st.warning('No hay cotizaciones OMIP para el mes en curso.')
+        else:
+            st.write(graf_omip_mensual_mes_actual)
+    with col2:
+        st.info(
+            'Aquí tienes la evolución de :blue[OMIP] por meses desde M+1',
+            icon="ℹ️",
+        )
         st.write(graf_omip_mensual)
         st.write(graf_omip_anual)
 
@@ -2361,267 +2387,79 @@ with tab5:
                     reactivar_oferta_comparador(nombre_local)
                     st.success(f'«{nombre_local}» añadida al comparador.')
 
-        with st.expander("Importar nueva oferta desde imagen con IA"):
-            st.caption(
-                "La IA transcribe la tabla. Revisa siempre los precios antes "
-                "de incorporarlos a la comparación."
+        oferta_ia_nueva = render_oferta_ia(
+            atr_comparador, periodos_manuales,
+            "oferta_ia_simulindex",
+        )
+        if not oferta_ia_nueva.empty:
+            oferta_ia_nueva = oferta_ia_nueva.copy()
+            oferta_ia_nueva["Fee (€/MWh)"] = 0.0
+            st.session_state.df_ofertas_fijas_ia_simulindex = combinar_ofertas(
+                st.session_state.get(
+                    "df_ofertas_fijas_ia_simulindex", pd.DataFrame()
+                ),
+                oferta_ia_nueva,
             )
-            resultado_portapapeles_ia = paste_image_button(
-                "📋 Pegar captura del portapapeles",
-                key="pegar_oferta_ia_simulindex",
-                errors="raise",
+            st.session_state.revision_ofertas_ia_simulindex = (
+                st.session_state.get(
+                    "revision_ofertas_ia_simulindex", 0
+                ) + 1
             )
+            for nombre_oferta_ia in oferta_ia_nueva["oferta"]:
+                reactivar_oferta_comparador(nombre_oferta_ia)
 
-            contenido_imagen_ia = None
-            mime_imagen_ia = None
-            vista_imagen_ia = None
-            if resultado_portapapeles_ia.image_data is not None:
-                buffer_imagen_ia = io.BytesIO()
-                resultado_portapapeles_ia.image_data.save(
-                    buffer_imagen_ia, format="PNG"
+        ofertas_ia_actuales = st.session_state.get(
+            "df_ofertas_fijas_ia_simulindex", pd.DataFrame()
+        )
+        if not ofertas_ia_actuales.empty:
+            if "Fee (€/MWh)" not in ofertas_ia_actuales.columns:
+                ofertas_ia_actuales = ofertas_ia_actuales.copy()
+                ofertas_ia_actuales["Fee (€/MWh)"] = 0.0
+                st.session_state.df_ofertas_fijas_ia_simulindex = (
+                    ofertas_ia_actuales
                 )
-                contenido_imagen_ia = buffer_imagen_ia.getvalue()
-                mime_imagen_ia = "image/png"
-                vista_imagen_ia = resultado_portapapeles_ia.image_data
-
-            if vista_imagen_ia is not None:
-                st.image(vista_imagen_ia, caption="Imagen a analizar")
-            clave_openai = st.secrets.get("OPENAI_API_KEY")
-            analizar_oferta_ia = st.button(
-                "Analizar imagen",
-                key="analizar_oferta_ia_simulindex",
-                disabled=contenido_imagen_ia is None or not bool(clave_openai),
-                use_container_width=True,
+            st.markdown("**Ofertas incorporadas con IA**")
+            revision_ofertas_ia = st.session_state.get(
+                "revision_ofertas_ia_simulindex", 0
             )
-            if not clave_openai:
-                st.info(
-                    "Para activar el análisis, configura OPENAI_API_KEY en "
-                    ".streamlit/secrets.toml."
-                )
-            if analizar_oferta_ia:
-                try:
-                    with st.spinner("Leyendo tarifas y precios..."):
-                        tabla_ia, nombre_ia = extraer_oferta_imagen(
-                            contenido_imagen_ia,
-                            mime_imagen_ia,
-                            clave_openai,
-                            atr_contexto=atr_comparador,
-                        )
-                    st.session_state.tabla_oferta_ia_simulindex = tabla_ia
-                    st.session_state.nombre_oferta_ia_simulindex = (
-                        nombre_ia or "Oferta desde imagen"
-                    )
-                except Exception as error_oferta_ia:
-                    st.error(f"No se pudo analizar la imagen: {error_oferta_ia}")
-
-            tabla_oferta_ia = st.session_state.get(
-                "tabla_oferta_ia_simulindex"
-            )
-            if isinstance(tabla_oferta_ia, pd.DataFrame) and not tabla_oferta_ia.empty:
-                st.markdown("#### Guardar todas las tarifas en el histórico local")
-                nombre_catalogo_ia = st.text_input(
-                    "Nombre para esta versión",
-                    value=st.session_state.get(
-                        "nombre_oferta_ia_simulindex",
-                        st.session_state.get(
-                            "nombre_oferta_ia_detectado_simulindex",
-                            "Oferta precio fijo",
+            ofertas_ia_editadas = st.data_editor(
+                ofertas_ia_actuales,
+                hide_index=True,
+                num_rows="fixed",
+                disabled=[f"P{i}" for i in range(1, 7)],
+                key=f"nombres_ofertas_ia_simulindex_{revision_ofertas_ia}",
+                column_config={
+                    "oferta": st.column_config.TextColumn(
+                        "Nombre de la oferta", required=True
+                    ),
+                    "Fee (€/MWh)": st.column_config.NumberColumn(
+                        "Fee (€/MWh)",
+                        min_value=0.0,
+                        max_value=100.0,
+                        step=0.1,
+                        format="%.2f",
+                        help=(
+                            "Se suma a todos los periodos de esta oferta."
                         ),
                     ),
-                    key="nombre_catalogo_oferta_ia_simulindex",
-                )
-                fechas_catalogo_ia = st.columns(2)
-                hoy_catalogo_ia = pd.Timestamp.today().date()
-                with fechas_catalogo_ia[0]:
-                    vigencia_desde_ia = st.date_input(
-                        "Vigencia desde",
-                        value=hoy_catalogo_ia,
-                        key="vigencia_desde_oferta_ia_simulindex",
-                    )
-                with fechas_catalogo_ia[1]:
-                    oferta_ia_con_fecha_fin = st.checkbox(
-                        'Indicar fecha fin de vigencia',
-                        value=True,
-                        key='oferta_ia_con_fecha_fin_simulindex_v2',
-                    )
-                    vigencia_hasta_ia = None
-                    if oferta_ia_con_fecha_fin:
-                        vigencia_hasta_ia = st.date_input(
-                            "Vigencia hasta",
-                            value=(
-                                pd.Timestamp(vigencia_desde_ia)
-                                + pd.Timedelta(days=7)
-                            ).date(),
-                            key="vigencia_hasta_oferta_ia_simulindex_v2",
-                        )
-                tabla_catalogo_editada_ia = st.data_editor(
-                    tabla_oferta_ia,
-                    hide_index=True,
-                    disabled=['ATR'],
-                    num_rows='fixed',
-                    key='editor_catalogo_oferta_ia_simulindex',
-                    column_config={
-                        periodo: st.column_config.NumberColumn(
-                            periodo,
-                            min_value=0.0,
-                            max_value=2.0,
-                            format='%.6f',
-                        )
-                        for periodo in [f'P{i}' for i in range(1, 7)]
-                    },
-                )
-                if st.button(
-                    "Guardar versión completa en local",
-                    key="guardar_catalogo_oferta_ia_simulindex",
-                    use_container_width=True,
-                ):
-                    try:
-                        registro_oferta_guardado = guardar_version_oferta(
-                            nombre_catalogo_ia,
-                            vigencia_desde_ia,
-                            vigencia_hasta_ia,
-                            tabla_catalogo_editada_ia,
-                        )
-                        st.success(
-                            "Versión guardada con todas las tarifas detectadas: "
-                            f"{registro_oferta_guardado['nombre']} · "
-                            f"{registro_oferta_guardado['vigencia_desde']} → "
-                            f"{registro_oferta_guardado['vigencia_hasta'] or 'sin fecha fin'}."
-                        )
-                    except (OSError, ValueError) as error_guardar_catalogo:
-                        st.error(f"No se pudo guardar la oferta: {error_guardar_catalogo}")
-
-                fila_atr_ia = tabla_oferta_ia[
-                    tabla_oferta_ia["ATR"] == atr_comparador.removesuffix("TD")
-                ].copy()
-                if fila_atr_ia.empty:
-                    st.warning(
-                        f"La imagen no contiene precios para {atr_comparador}."
-                    )
-                else:
-                    if tabla_oferta_ia.attrs.get("unidad_inferida"):
-                        st.warning(
-                            "La imagen no indica la unidad. Se ha inferido por "
-                            "la magnitud de los precios; comprueba los valores "
-                            "en €/kWh antes de añadir la oferta."
-                        )
-                    if "oferta" not in fila_atr_ia:
-                        nombre_base_ia = st.session_state.get(
-                            "nombre_oferta_ia_simulindex", "Oferta desde imagen"
-                        )
-                        fila_atr_ia["oferta"] = [
-                            nombre_base_ia if len(fila_atr_ia) == 1
-                            else f"{nombre_base_ia} {indice}"
-                            for indice in range(1, len(fila_atr_ia) + 1)
-                        ]
-                    st.success(
-                        f"Detectadas {len(fila_atr_ia)} ofertas para "
-                        f"{atr_comparador}. Revisa nombres y valores."
-                    )
-                    fila_atr_ia = fila_atr_ia[
-                        ["oferta", "ATR", *periodos_manuales]
-                    ]
-                    fila_editada_ia = st.data_editor(
-                        fila_atr_ia,
-                        hide_index=True,
-                        disabled=["ATR"],
-                        num_rows="fixed",
-                        key="editor_oferta_ia_simulindex",
-                        column_config={
-                            periodo: st.column_config.NumberColumn(
-                                periodo, min_value=0.0, max_value=2.0,
-                                format="%.6f",
-                            )
-                            for periodo in periodos_manuales
-                        },
-                    )
-                    if st.button(
-                        "Confirmar y añadir ofertas",
-                        key="confirmar_oferta_ia_simulindex",
-                        type="primary",
-                        use_container_width=True,
-                    ):
-                        try:
-                            ofertas_nuevas_ia = construir_ofertas(
-                                fila_editada_ia, periodos_manuales
-                            )
-                            ofertas_nuevas_ia["Fee (€/MWh)"] = 0.0
-                            st.session_state.df_ofertas_fijas_ia_simulindex = (
-                                combinar_ofertas(
-                                    st.session_state.get(
-                                        "df_ofertas_fijas_ia_simulindex",
-                                        pd.DataFrame(),
-                                    ),
-                                    ofertas_nuevas_ia,
-                                )
-                            )
-                            st.session_state.revision_ofertas_ia_simulindex = (
-                                st.session_state.get(
-                                    "revision_ofertas_ia_simulindex", 0
-                                ) + 1
-                            )
-                            for nombre_oferta_ia in ofertas_nuevas_ia["oferta"]:
-                                reactivar_oferta_comparador(nombre_oferta_ia)
-                            st.success(
-                                f"{len(ofertas_nuevas_ia)} ofertas incorporadas "
-                                "a la comparación."
-                            )
-                        except ValueError as error_ofertas_ia:
-                            st.error(str(error_ofertas_ia))
-
-            ofertas_ia_actuales = st.session_state.get(
-                "df_ofertas_fijas_ia_simulindex", pd.DataFrame()
+                },
             )
-            if not ofertas_ia_actuales.empty:
-                if "Fee (€/MWh)" not in ofertas_ia_actuales.columns:
-                    ofertas_ia_actuales = ofertas_ia_actuales.copy()
-                    ofertas_ia_actuales["Fee (€/MWh)"] = 0.0
-                    st.session_state.df_ofertas_fijas_ia_simulindex = (
-                        ofertas_ia_actuales
-                    )
-                st.markdown("**Ofertas incorporadas con IA**")
-                revision_ofertas_ia = st.session_state.get(
-                    "revision_ofertas_ia_simulindex", 0
+            nombres_ia_limpios = (
+                ofertas_ia_editadas["oferta"].astype(str).str.strip()
+            )
+            if (
+                nombres_ia_limpios.ne("").all()
+                and not nombres_ia_limpios.str.casefold().duplicated().any()
+            ):
+                ofertas_ia_editadas = ofertas_ia_editadas.copy()
+                ofertas_ia_editadas["oferta"] = nombres_ia_limpios
+                st.session_state.df_ofertas_fijas_ia_simulindex = (
+                    ofertas_ia_editadas
                 )
-                ofertas_ia_editadas = st.data_editor(
-                    ofertas_ia_actuales,
-                    hide_index=True,
-                    num_rows="fixed",
-                    disabled=[f"P{i}" for i in range(1, 7)],
-                    key=f"nombres_ofertas_ia_simulindex_{revision_ofertas_ia}",
-                    column_config={
-                        "oferta": st.column_config.TextColumn(
-                            "Nombre de la oferta", required=True
-                        ),
-                        "Fee (€/MWh)": st.column_config.NumberColumn(
-                            "Fee (€/MWh)",
-                            min_value=0.0,
-                            max_value=100.0,
-                            step=0.1,
-                            format="%.2f",
-                            help=(
-                                "Se suma a todos los periodos de esta oferta."
-                            ),
-                        ),
-                    },
+            else:
+                st.warning(
+                    "Cada oferta debe tener un nombre distinto y no vacío."
                 )
-                nombres_ia_limpios = (
-                    ofertas_ia_editadas["oferta"].astype(str).str.strip()
-                )
-                if (
-                    nombres_ia_limpios.ne("").all()
-                    and not nombres_ia_limpios.str.casefold().duplicated().any()
-                ):
-                    ofertas_ia_editadas = ofertas_ia_editadas.copy()
-                    ofertas_ia_editadas["oferta"] = nombres_ia_limpios
-                    st.session_state.df_ofertas_fijas_ia_simulindex = (
-                        ofertas_ia_editadas
-                    )
-                else:
-                    st.warning(
-                        "Cada oferta debe tener un nombre distinto y no vacío."
-                    )
-
         st.markdown("**Introducción manual de precios fijos (€/kWh)**")
         with st.form("form_oferta_fija_manual_simulindex", clear_on_submit=False):
             nombre_oferta_manual_simul = st.text_input(
@@ -3083,7 +2921,6 @@ with tab5:
             fig = aplicar_estilo(fig)
             st.plotly_chart(fig, use_container_width=True)
 
-
         with c1:
             if usar_pricing_en_comparador:
                 st.info(
@@ -3106,9 +2943,38 @@ with tab5:
 # SECCIÓN COBERTURA TRIMESTRAL
 # =======================================================================================================================================================================
 with tab6:
-    
-    if 'df_curva_sheets' not in st.session_state or st.session_state.df_curva_sheets is None or simulcurva is None:
+
+    df_curva_trim = st.session_state.get('df_curva_sheets')
+    if not isinstance(df_curva_trim, pd.DataFrame) or df_curva_trim.empty:
         st.warning('Introduce una curva de carga anual')
+        st.stop()
+
+    trimestre_num_trim = int(
+        st.session_state.trimestre_futuro.split('-')[0].removeprefix('Q')
+    )
+    meses_trim = range(
+        (trimestre_num_trim - 1) * 3 + 1,
+        trimestre_num_trim * 3 + 1,
+    )
+    fechas_curva_trim = pd.to_datetime(
+        df_curva_trim['fecha_hora'], errors='coerce'
+    )
+    periodos_mes_curva = fechas_curva_trim.dt.to_period('M')
+    ultimos_doce_meses_curva = sorted(
+        periodos_mes_curva.dropna().unique()
+    )[-12:]
+    mascara_trim = (
+        periodos_mes_curva.isin(ultimos_doce_meses_curva)
+        & fechas_curva_trim.dt.month.isin(meses_trim)
+    )
+    df_uso_trimestral = df_curva_trim.loc[mascara_trim].copy()
+    if set(pd.to_datetime(
+        df_uso_trimestral['fecha_hora'], errors='coerce'
+    ).dt.month.dropna().unique()) != set(meses_trim):
+        st.error(
+            'La curva no contiene los tres meses naturales necesarios para '
+            'el trimestre seleccionado.'
+        )
         st.stop()
 
     c1, c2, c3 = st.columns(3)
@@ -3137,7 +3003,7 @@ with tab6:
                     font-weight:600;
                     margin-bottom:5px;
                 ">
-                OMIE simulado A (€/MWh)
+                OMIP escenario A (€/MWh)
                 </div>
                 """,
                 unsafe_allow_html=True
@@ -3161,9 +3027,9 @@ with tab6:
             )
             st.session_state.simul_a_trim = precio_trim_sel
         with c13:
-            st.number_input("OMIE simulado B (€/MWh)", value=precio_trim_sel-5, key = 'simul_b_trim')
+            st.number_input("OMIP escenario B (€/MWh)", value=precio_trim_sel-5, key = 'simul_b_trim')
         with c14:
-            st.number_input("OMIE simulado C (€/MWh)", value=precio_trim_sel+5,key = 'simul_c_trim')
+            st.number_input("OMIP escenario C (€/MWh)", value=precio_trim_sel+5,key = 'simul_c_trim')
 
 
         
@@ -3175,8 +3041,15 @@ with tab6:
 
         #df_resumen_view = df_resumen.copy()
         
-        df_resumen_trim = obtener_df_resumen(df_uso_trimestral, simulcurva, 0.0)
-        df_consumos_trim = df_resumen_trim.loc[["Consumo (kWh)"]]
+        periodos_trim = [f"P{i}" for i in range(1, 7)]
+        consumo_por_periodo_trim = (
+            df_uso_trimestral.groupby("periodo")["consumo_neto_kWh"]
+            .sum().reindex(periodos_trim).fillna(0.0)
+        )
+        consumo_por_periodo_trim["TOTAL"] = consumo_por_periodo_trim.sum()
+        df_consumos_trim = pd.DataFrame(
+            [consumo_por_periodo_trim], index=["Consumo (kWh)"]
+        )
         df_consumos_trim_view = formatear_df_resumen(df_consumos_trim)
         
         # ----------------------------
@@ -3190,9 +3063,87 @@ with tab6:
             
         lista_simul_trim = [st.session_state.simul_a_trim, st.session_state.simul_b_trim, st.session_state.simul_c_trim]
 
-        escenarios_trim = construir_escenarios(df_uso_trimestral, lista_simul_trim, df_hist, colores_precios, añadir_hist)
+        atr_trim = str(
+            st.session_state.get("atr_dfnorm", "")
+        ).replace(" ", "").upper().removesuffix("TD")
+        config_trim = configuracion_fijos_pricing[atr_trim]
+        apuntamientos_spot_trim = (
+            tabla_apuntamientos_spot_3p
+            if atr_trim == "2.0" else tabla_apuntamientos
+        )
+        try:
+            escenarios_trim = construir_escenarios_pricing_trimestral(
+                df_uso_trimestral,
+                st.session_state.trimestre_futuro,
+                lista_simul_trim,
+                atr_trim,
+                apuntamientos_spot_trim,
+                config_trim["ssaa"],
+                df_spot_periodos,
+                config_trim["col_periodo"],
+                tabla_ppc_pricing,
+                tabla_pyc_pricing,
+                osom_12m_pricing,
+                srad_pricing,
+                fnee_pricing,
+                formula_pricing,
+            )
+            tabla_forward_mensual_trim = construir_forward_mensual_trimestre(
+                df_FTB_mensual,
+                df_FTB_trimestral,
+                st.session_state.trimestre_futuro,
+            )
+            forward_por_mes_trim = {
+                int(fila_forward_trim["Mes"].month): float(
+                    fila_forward_trim["OMIP (€/MWh)"]
+                )
+                for _, fila_forward_trim in tabla_forward_mensual_trim.iterrows()
+            }
+            escenario_a_forward_mensual_trim = (
+                construir_escenarios_pricing_trimestral(
+                    df_uso_trimestral,
+                    st.session_state.trimestre_futuro,
+                    [forward_por_mes_trim],
+                    atr_trim,
+                    apuntamientos_spot_trim,
+                    config_trim["ssaa"],
+                    df_spot_periodos,
+                    config_trim["col_periodo"],
+                    tabla_ppc_pricing,
+                    tabla_pyc_pricing,
+                    osom_12m_pricing,
+                    srad_pricing,
+                    fnee_pricing,
+                    formula_pricing,
+                )[0]
+            )
+        except (KeyError, ValueError) as error_pricing_trim:
+            st.error(
+                "No se pudo calcular la cobertura trimestral con Pricing: "
+                f"{error_pricing_trim}"
+            )
+            st.stop()
 
-        st.subheader('Resultado coberturas de indexados según escenario')
+        try:
+            detalle_cobertura_a_trim, resumen_cobertura_a_trim = (
+                calcular_cobertura_trimestral_horaria(
+                    df_uso_trimestral,
+                    st.session_state.simul_a_trim,
+                    atr_trim,
+                    formula_pricing,
+                    config_trim["ssaa"],
+                    srad_pricing,
+                    fnee_pricing,
+                )
+            )
+        except (KeyError, ValueError) as error_cobertura_trim:
+            st.error(
+                "No se pudo calcular la cobertura horaria A: "
+                f"{error_cobertura_trim}"
+            )
+            st.stop()
+
+        st.subheader('Simulación de indexado trimestral')
         for esc in escenarios_trim:
             st.markdown(esc["label"])
 
@@ -3205,58 +3156,93 @@ with tab6:
                 use_container_width=True
             )    
 
+        with st.expander(
+            "Prueba escenario A · forward trimestral frente a futuros mensuales",
+            expanded=True,
+        ):
+            tabla_forward_vista_trim = tabla_forward_mensual_trim.copy()
+            tabla_forward_vista_trim["Mes"] = tabla_forward_vista_trim[
+                "Mes"
+            ].dt.strftime("%m/%Y")
+            tabla_forward_vista_trim["Fecha cotización"] = pd.to_datetime(
+                tabla_forward_vista_trim["Fecha cotización"], errors="coerce"
+            ).dt.strftime("%d/%m/%Y")
+            st.dataframe(
+                tabla_forward_vista_trim.style.format({
+                    "OMIP (€/MWh)": lambda valor: formato_numero_es(valor, 2)
+                }),
+                hide_index=True,
+                use_container_width=True,
+            )
+            comparacion_forward_trim = pd.DataFrame({
+                f"Forward plano {st.session_state.trimestre_futuro}": (
+                    escenarios_trim[0]["df_resumen"].loc[
+                        "Precio medio (€/kWh)"
+                    ]
+                ),
+                "Futuros mensuales": (
+                    escenario_a_forward_mensual_trim["df_resumen"].loc[
+                        "Precio medio (€/kWh)"
+                    ]
+                ),
+            }).T
+            comparacion_forward_trim["Coste total (€)"] = [
+                escenarios_trim[0]["df_resumen"].loc["Coste (€)", "TOTAL"],
+                escenario_a_forward_mensual_trim["df_resumen"].loc[
+                    "Coste (€)", "TOTAL"
+                ],
+            ]
+            st.dataframe(
+                comparacion_forward_trim.style.format({
+                    **{
+                        columna: lambda valor: formato_numero_es(valor, 6)
+                        for columna in [f"P{i}" for i in range(1, 7)] + ["TOTAL"]
+                    },
+                    "Coste total (€)": lambda valor: formato_numero_es(valor, 2),
+                }),
+                use_container_width=True,
+            )
 
-        # CARGAR EXCEL CON PRECIOS FIJOS+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        st.subheader('Comparación escenario A: indexado frente a cobertura')
+        st.caption(
+            "Prueba de cobertura del 100 % del consumo: OMIE se sustituye "
+            "hora a hora por el precio A. Los SSAA mantienen su perfil "
+            "horario dentro de cada mes-periodo y su media coincide con el "
+            "objetivo futuro calculado por Pricing."
+        )
+        comparacion_a_trim = pd.DataFrame({
+            "Indexado escenario A": escenarios_trim[0]["df_resumen"].loc[
+                "Precio medio (€/kWh)"
+            ],
+            "Cobertura escenario A": resumen_cobertura_a_trim.loc[
+                "Precio medio (€/kWh)"
+            ],
+        }).T
+        comparacion_a_trim["Coste total (€)"] = [
+            escenarios_trim[0]["df_resumen"].loc["Coste (€)", "TOTAL"],
+            resumen_cobertura_a_trim.loc["Coste (€)", "TOTAL"],
+        ]
+        st.dataframe(
+            comparacion_a_trim.style.format({
+                **{
+                    columna: lambda valor: formato_numero_es(valor, 6)
+                    for columna in [f"P{i}" for i in range(1, 7)] + ["TOTAL"]
+                },
+                "Coste total (€)": lambda valor: formato_numero_es(valor, 2),
+            }),
+            use_container_width=True,
+        )
 
-        # 🔥 CLAVE: empezar siempre de cero
-        if 'df_ofertas_fijas_trim' not in st.session_state:
-            st.session_state.df_ofertas_fijas_trim = None
-
-        st.subheader("Carga excel con ofertas a precio FIJO")
-        st.file_uploader("Sube el Excel con ofertas de precio fijo", type=["xlsx", "xls"], key= 'uploaded_file_trim')
-
-        if st.session_state.uploaded_file_trim is not None:
-
-            df_new_trim = pd.read_excel(st.session_state.uploaded_file_trim)
-            df_new_trim.columns = df_new_trim.columns.str.strip()
-
-            # Primera columna = oferta
-            col_oferta = df_new_trim.columns[0]
-            df_new_trim = df_new_trim.rename(columns={col_oferta: "oferta"})
-
-            periodos = [f"P{i}" for i in range(1, 7)]
-
-            faltan = set(periodos) - set(df_new_trim.columns)
-            if faltan:
-                st.error(f"Faltan columnas de periodos: {faltan}")
-                st.stop()
-
-            for p in periodos:
-                df_new_trim[p] = pd.to_numeric(df_new_trim[p], errors="coerce")
-
-            if df_new_trim[periodos].isna().any().any():
-                st.error("Hay valores no numéricos en los precios")
-                st.stop()
-
-            
-            # 🔁 Reemplazar directamente
-            st.session_state.df_ofertas_fijas_simul_trim = df_new_trim.copy()
-
-        #if st.session_state.df_ofertas_fijas_simul_trim is not None: 
-        if st.session_state.get("df_ofertas_fijas_simul_trim") is not None:
-            df_ofertas_trim_view = formatear_df_resumen(st.session_state.df_ofertas_fijas_simul_trim)
-
-            st.markdown("Ofertas fijas cargadas")
-
-            if st.session_state.df_ofertas_fijas_simul_trim.empty:
-                st.info("Aún no hay ofertas cargadas")
-            else:
-                st.dataframe(
-                    #st.session_state.df_ofertas_fijas_simul,
-                    df_ofertas_trim_view,
-                    use_container_width=True,
-                    hide_index=True
-                )
+        consumos_trim = df_consumos_trim.loc[
+            "Consumo (kWh)", [f"P{i}" for i in range(1, 7)]
+        ]
+        st.session_state.df_ofertas_fijas_simul_trim = (
+            render_bloque_ofertas_fijas(
+                consumos_trim,
+                st.session_state.get("atr_dfnorm", ""),
+                "simulindex_trim_fijos",
+            )
+        )
 
 
         with c2:
@@ -3264,12 +3250,26 @@ with tab6:
             periodos = [f"P{i}" for i in range(1, 7)]
 
             # Consumos por periodo
-            consumos_trim = df_resumen_trim.loc["Consumo (kWh)", periodos]
+            consumos_trim = df_consumos_trim.loc["Consumo (kWh)", periodos]
 
             resultados_trim = []
 
+            resultados_trim.append({
+                "Oferta": (
+                    "Cobertura escenario A "
+                    f"({st.session_state.simul_a_trim:.1f} €/MWh)"
+                ),
+                "Tipo": "Cobertura",
+                "Coste trimestre (€)": resumen_cobertura_a_trim.loc[
+                    "Coste (€)", "TOTAL"
+                ],
+                "Precio medio (€/kWh)": resumen_cobertura_a_trim.loc[
+                    "Precio medio (€/kWh)", "TOTAL"
+                ],
+            })
+
             # Ofertas fijas
-            if st.session_state.get("df_ofertas_fijas_simul_trim") is not None:
+            if not st.session_state.df_ofertas_fijas_simul_trim.empty:
                 for _, row in st.session_state.df_ofertas_fijas_simul_trim.iterrows():
                     coste_total = (consumos_trim * row[periodos]).sum()
                     energia_total = consumos_trim.sum()
@@ -3278,7 +3278,7 @@ with tab6:
                     resultados_trim.append({
                         "Oferta": row["oferta"],
                         "Tipo": "Fijo",
-                        "Coste anual (€)": coste_total,
+                        "Coste trimestre (€)": coste_total,
                         "Precio medio (€/kWh)": precio_medio
                     })
 
@@ -3294,22 +3294,22 @@ with tab6:
                 resultados_trim.append({
                     "Oferta": esc["label"],
                     "Tipo": "Indexado",
-                    "Coste anual (€)": coste_index,
+                    "Coste trimestre (€)": coste_index,
                     "Precio medio (€/kWh)": precio_medio_index
                 })
 
             df_resultados_trim = pd.DataFrame(resultados_trim)
-            # Ordenar por coste anual (de más barato a más caro)
-            df_resultados_trim = df_resultados_trim.sort_values("Coste anual (€)").reset_index(drop=True)
+            # Ordenar por coste trimestral (de más barato a más caro)
+            df_resultados_trim = df_resultados_trim.sort_values("Coste trimestre (€)").reset_index(drop=True)
 
-            coste_min = df_resultados_trim["Coste anual (€)"].iloc[0]
+            coste_min = df_resultados_trim["Coste trimestre (€)"].iloc[0]
 
             df_resultados_trim["% sobre la más barata"] = (
-                (df_resultados_trim["Coste anual (€)"] - coste_min) / coste_min * 100
+                (df_resultados_trim["Coste trimestre (€)"] - coste_min) / coste_min * 100
             )
 
             df_resultados_trim["Δ vs más barata (€)"] = (
-                df_resultados_trim["Coste anual (€)"] - coste_min
+                df_resultados_trim["Coste trimestre (€)"] - coste_min
             )
 
             
@@ -3322,48 +3322,181 @@ with tab6:
             st.subheader("📊 Comparativa TOTALPOWER")
             st.dataframe(df_resultados_trim_view, use_container_width=True, hide_index=True)
 
-            orden_ofertas_trim = df_resultados_trim["Oferta"].tolist()
-
-            fig = px.bar(
-                df_resultados_trim,
-                x="Oferta",
-                y="Coste anual (€)",
-                color="Tipo",
-                #title="Coste anual por oferta (€)",
-                text_auto=".0f",
-                category_orders={"Oferta": orden_ofertas_trim}
+            df_grafico_trim = df_resultados_trim.copy()
+            df_grafico_trim["Oferta gráfico"] = df_grafico_trim["Oferta"].map(
+                lambda nombre: (
+                    f"Index Esc. {letra}"
+                    if str(nombre).startswith("Indexado simulado ")
+                    and (letra := str(nombre).removeprefix(
+                        "Indexado simulado "
+                    )[:1]) in {"A", "B", "C"}
+                    else str(nombre)
+                )
+            )
+            df_grafico_trim["Coste mostrado"] = df_grafico_trim[
+                "Coste trimestre (€)"
+            ].map(lambda valor: f"{formato_numero_es(valor, 0)} €")
+            df_grafico_trim = df_grafico_trim.sort_values(
+                "Coste trimestre (€)", ascending=True
+            )
+            orden_ofertas_trim = df_grafico_trim["Oferta gráfico"].tolist()
+            margen_izquierdo_trim = min(
+                380,
+                max(120, max(map(len, orden_ofertas_trim), default=0) * 7),
             )
 
-            # qué barra quieres resaltar
-            target = "simulado A"
-            highlight = "#FF8C00"  # amarillo-anaranjado
+            fig = px.bar(
+                df_grafico_trim,
+                x="Coste trimestre (€)",
+                y="Oferta gráfico",
+                color="Tipo",
+                orientation="h",
+                text="Coste mostrado",
+                category_orders={"Oferta gráfico": orden_ofertas_trim},
+                color_discrete_map={
+                    "Indexado": "#00A878",
+                    "Fijo": "#1C83E1",
+                    "Cobertura": "#E4579A",
+                },
+            )
 
             for trace in fig.data:
-                # trace.x son las ofertas que caen en este trace (Tipo)
+                color_base = {
+                    "Indexado": "#00A878",
+                    "Fijo": "#1C83E1",
+                    "Cobertura": "#E4579A",
+                }.get(trace.name, "#64748B")
                 trace.marker.color = [
-                    (highlight if (isinstance(x, str) and target in x) else c)
-                    for x, c in zip(
-                        trace.x,
-                        [trace.marker.color] * len(trace.x)  # color base del trace
-                    )
+                    "#FF8C00" if etiqueta == "Index Esc. A" else color_base
+                    for etiqueta in trace.y
                 ]
 
             fig.update_layout(
-                yaxis_title="Coste anual (€)",
-                xaxis_title="",
+                xaxis_title="Coste trimestre (€)",
+                yaxis_title="",
                 legend_title="",
                 bargap=.4,
+                barcornerradius=12,
+                separators=",.",
+                height=max(430, 38 * len(df_grafico_trim) + 170),
+                margin=dict(l=margen_izquierdo_trim, r=95, t=115, b=45),
+                legend=dict(
+                    orientation="h",
+                    x=0.5,
+                    xanchor="center",
+                    y=1.02,
+                    yanchor="bottom",
+                ),
                 title=dict(
                     text="Coste TRIMESTRAL por oferta (€)",
                     x=0.5,
-                    xanchor="center"
+                    xanchor="center",
                 )
             )
             fig.update_traces(
-                textposition="inside",
-                textfont_size=16  # ← ajusta aquí
+                texttemplate="<b>%{text}</b>",
+                textposition="outside",
+                textfont_size=16,
+                cliponaxis=False,
+                marker_cornerradius=12,
             )
-
-
-
+            coste_maximo_trim = df_grafico_trim["Coste trimestre (€)"].max()
+            if pd.notna(coste_maximo_trim) and coste_maximo_trim > 0:
+                fig.update_xaxes(range=[0, float(coste_maximo_trim) * 1.2])
+            fig.update_yaxes(automargin=True)
+            fig = aplicar_estilo(fig)
             st.plotly_chart(fig, use_container_width=True)
+
+        filas_detalle_informe_trim = []
+        for escenario_informe_trim in escenarios_trim:
+            precios_informe_trim = escenario_informe_trim["df_resumen"].loc[
+                "Precio medio (€/kWh)"
+            ]
+            filas_detalle_informe_trim.append({
+                "Oferta": escenario_informe_trim["label"],
+                "Tipo": "Indexado",
+                **{
+                    periodo_informe_trim: precios_informe_trim.get(
+                        periodo_informe_trim, 0.0
+                    )
+                    for periodo_informe_trim in periodos
+                },
+                "Precio medio (€/kWh)": precios_informe_trim.get("TOTAL", 0.0),
+            })
+        precios_cobertura_informe_trim = resumen_cobertura_a_trim.loc[
+            "Precio medio (€/kWh)"
+        ]
+        filas_detalle_informe_trim.append({
+            "Oferta": (
+                "Cobertura escenario A "
+                f"({st.session_state.simul_a_trim:.1f} €/MWh)"
+            ),
+            "Tipo": "Cobertura",
+            **{
+                periodo_informe_trim: precios_cobertura_informe_trim.get(
+                    periodo_informe_trim, 0.0
+                )
+                for periodo_informe_trim in periodos
+            },
+            "Precio medio (€/kWh)": precios_cobertura_informe_trim.get(
+                "TOTAL", 0.0
+            ),
+        })
+        for _, oferta_informe_trim in (
+            st.session_state.df_ofertas_fijas_simul_trim.iterrows()
+        ):
+            coste_oferta_informe = sum(
+                float(consumos_trim[periodo_informe_trim])
+                * float(oferta_informe_trim[periodo_informe_trim])
+                for periodo_informe_trim in periodos
+            )
+            filas_detalle_informe_trim.append({
+                "Oferta": oferta_informe_trim["oferta"],
+                "Tipo": "Fijo",
+                **{
+                    periodo_informe_trim: oferta_informe_trim[periodo_informe_trim]
+                    for periodo_informe_trim in periodos
+                },
+                "Precio medio (€/kWh)": (
+                    coste_oferta_informe / consumos_trim.sum()
+                    if consumos_trim.sum() else 0.0
+                ),
+            })
+        firma_datos_informe_trim = (
+            st.session_state.trimestre_futuro,
+            st.session_state.get("atr_dfnorm", ""),
+            int(pd.util.hash_pandas_object(
+                df_resultados_trim, index=True
+            ).sum()),
+        )
+        if (
+            st.session_state.get("simulindex_informe_trimestral_firma")
+            != firma_datos_informe_trim
+        ):
+            st.session_state.pop("informe_simulindex_trimestral_html", None)
+        st.session_state.simulindex_informe_trimestral_firma = (
+            firma_datos_informe_trim
+        )
+        st.session_state.simulindex_informe_trimestral_datos = {
+            "resultados": df_resultados_trim.copy(),
+            "detalle_precios": pd.DataFrame(filas_detalle_informe_trim),
+            "grafico": fig,
+            "trimestre": st.session_state.trimestre_futuro,
+            "atr": st.session_state.get("atr_dfnorm", ""),
+            "cups": st.session_state.get(
+                "cups_curva", st.session_state.get("cups_dfnorm", "")
+            ),
+        }
+
+
+with tab9:
+    st.subheader("Informes", divider="rainbow")
+    datos_informe_trimestral = st.session_state.get(
+        "simulindex_informe_trimestral_datos"
+    )
+    if datos_informe_trimestral:
+        mostrar_informe_comparador_trimestral(datos_informe_trimestral)
+    else:
+        st.info(
+            "Calcula primero una cobertura trimestral para preparar el informe."
+        )

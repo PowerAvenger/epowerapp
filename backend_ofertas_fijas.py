@@ -14,6 +14,7 @@ import pandas as pd
 RUTA_CATALOGO_OFERTAS = Path(__file__).resolve().parent / "data" / "ofertas_fijas.json"
 PATRON_CATALOGOS_IMPORTADOS = "ofertas_fijas_importadas_*.json"
 PERIODOS = [f"P{i}" for i in range(1, 7)]
+ATRS_OFERTA = {"2.0", "3.0", "6.1", "6.2"}
 UNIDAD_POTENCIA_DIARIA = "€/kW/día"
 
 
@@ -117,6 +118,85 @@ def cargar_catalogo_ofertas(ruta=RUTA_CATALOGO_OFERTAS) -> list[dict]:
     return catalogo
 
 
+def eliminar_versiones_oferta(
+    ids,
+    ruta=RUTA_CATALOGO_OFERTAS,
+) -> list[str]:
+    """Elimina versiones del catálogo manual y devuelve los ID eliminados."""
+    ids_objetivo = {str(valor).strip() for valor in ids if str(valor).strip()}
+    if not ids_objetivo:
+        return []
+    ruta = Path(ruta)
+    catalogo = _leer_catalogo(ruta)
+    eliminados = [
+        str(registro.get("id"))
+        for registro in catalogo
+        if str(registro.get("id")) in ids_objetivo
+    ]
+    if not eliminados:
+        return []
+    catalogo = [
+        registro for registro in catalogo
+        if str(registro.get("id")) not in ids_objetivo
+    ]
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    temporal = ruta.with_name(f".{ruta.name}.{uuid4().hex}.tmp")
+    temporal.write_text(
+        json.dumps(catalogo, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    os.replace(temporal, ruta)
+    return eliminados
+
+
+def normalizar_tarifas_oferta(tarifas: pd.DataFrame) -> pd.DataFrame:
+    """Valida todos los peajes de una oferta antes de guardarlos.
+
+    P4, P5 y P6 no son aplicables a 2.0 TD y se conservan como nulos. En los
+    demás peajes sí se exige un precio positivo para P1–P6.
+    """
+    if not isinstance(tarifas, pd.DataFrame) or tarifas.empty:
+        raise ValueError("No hay tarifas que guardar.")
+    requeridas = {"ATR", *PERIODOS}
+    faltantes = requeridas.difference(tarifas.columns)
+    if faltantes:
+        raise ValueError("Faltan columnas: " + ", ".join(sorted(faltantes)))
+
+    salida = tarifas.copy()
+    salida["ATR"] = (
+        salida["ATR"].astype(str).str.strip().str.upper()
+        .str.replace(" ", "", regex=False).str.removesuffix("TD")
+    )
+    atrs_invalidos = sorted(set(salida["ATR"]).difference(ATRS_OFERTA))
+    if atrs_invalidos:
+        raise ValueError("ATR no compatible: " + ", ".join(atrs_invalidos) + ".")
+    duplicados = salida.loc[salida["ATR"].duplicated(), "ATR"].unique().tolist()
+    if duplicados:
+        raise ValueError(
+            "Hay más de una fila para el mismo ATR: "
+            + ", ".join(f"{atr}TD" for atr in duplicados) + "."
+        )
+
+    for indice, fila in salida.iterrows():
+        atr = fila["ATR"]
+        aplicables = PERIODOS[:3] if atr == "2.0" else PERIODOS
+        invalidos = []
+        for periodo in PERIODOS:
+            valor = pd.to_numeric(fila.get(periodo), errors="coerce")
+            if periodo not in aplicables:
+                salida.at[indice, periodo] = None
+            elif pd.isna(valor) or not 0 < float(valor) <= 2:
+                salida.at[indice, periodo] = None
+                invalidos.append(periodo)
+            else:
+                salida.at[indice, periodo] = float(valor)
+        if invalidos:
+            raise ValueError(
+                f"Introduce un precio mayor que cero en {atr}TD: "
+                + ", ".join(invalidos) + "."
+            )
+    return salida[["ATR", *PERIODOS]].reset_index(drop=True)
+
+
 def guardar_version_oferta(
     nombre: str,
     vigencia_desde: date,
@@ -136,10 +216,7 @@ def guardar_version_oferta(
     )
     if hasta is not None and hasta < desde:
         raise ValueError("La fecha fin no puede ser anterior a la fecha inicio.")
-    requeridas = {"ATR", *PERIODOS}
-    faltantes = requeridas.difference(tarifas.columns)
-    if faltantes:
-        raise ValueError("Faltan columnas: " + ", ".join(sorted(faltantes)))
+    tarifas = normalizar_tarifas_oferta(tarifas)
 
     potencias_por_atr = {}
     if potencia_tarifas is not None and not potencia_tarifas.empty:

@@ -13,7 +13,11 @@ from backend_comparador_luz import (
     ofertas_catalogo_para_atr,
 )
 from backend_indexado import FormulaIndexada
-from backend_ofertas_fijas import cargar_catalogo_ofertas, resolver_potencia_tarifa
+from backend_ofertas_fijas import (
+    cargar_catalogo_ofertas,
+    eliminar_versiones_oferta,
+    resolver_potencia_tarifa,
+)
 from backend_opt2 import consumos_mensuales_desde_curva_normalizada
 from backend_simulindex import construir_curva_omip_mensual_12m, obtener_historicos_meff, obtener_meff_mensual, obtener_meff_trimestral
 from backend_sips import (
@@ -336,7 +340,12 @@ with col2:
             atr, periodos_oferta, 'comparador_luz_oferta_ia'
         )
     if not oferta_nueva.empty:
+        id_oferta_nueva = oferta_nueva.attrs.get('id_oferta')
         oferta_nueva = oferta_nueva.copy()
+        if 'ID oferta' not in oferta_nueva:
+            oferta_nueva['ID oferta'] = (
+                id_oferta_nueva if id_oferta_nueva else pd.NA
+            )
         oferta_nueva['Potencia modalidad'] = oferta_nueva.get(
             'Potencia modalidad', 'BOE'
         )
@@ -358,13 +367,26 @@ with col2:
         )
 
     st.subheader('Ofertas disponibles', divider='rainbow')
+    mensaje_borrado = st.session_state.pop(
+        'comparador_luz_mensaje_borrado', None
+    )
+    if mensaje_borrado:
+        tipo_mensaje, texto_mensaje = mensaje_borrado
+        getattr(st, tipo_mensaje)(texto_mensaje)
     ofertas = combinar_ofertas(
         ofertas_catalogo_para_atr(cargar_catalogo_ofertas(), atr),
         st.session_state.get('comparador_luz_ofertas_usuario'),
     )
     if ofertas.empty: st.info(f'No hay ofertas disponibles para {atr}TD.')
     else:
-        clave_editor_ofertas = 'comparador_luz_editor_ofertas_guardadas'
+        if 'ID oferta' not in ofertas:
+            ofertas['ID oferta'] = pd.NA
+        revision_editor_ofertas = st.session_state.get(
+            'comparador_luz_revision_editor_ofertas', 0
+        )
+        clave_editor_ofertas = (
+            f'comparador_luz_editor_ofertas_guardadas_{revision_editor_ofertas}'
+        )
         st.session_state.comparador_luz_nombres_editor = (
             ofertas['oferta'].astype(str).tolist()
         )
@@ -401,15 +423,26 @@ with col2:
         )
         columnas_potencia_oferta = ['Potencia modalidad', *[f'Potencia {p}' for p in periodos]]
         columnas_internas_oferta = [
-            *columnas_potencia_oferta, 'Plataforma', 'Comisión tipo',
+            'ID oferta', *columnas_potencia_oferta, 'Plataforma', 'Comisión tipo',
             'Comisión estimada (€)', 'Comisión (€/MWh)',
             'Comisión participación (%)',
         ]
+        ofertas_vista_editor = ofertas.drop(
+            columns=columnas_internas_oferta, errors='ignore'
+        ).copy()
+        ofertas_vista_editor.insert(0, 'Eliminar', False)
         ofertas_editadas = st.data_editor(
-            ofertas.drop(columns=columnas_internas_oferta, errors='ignore'),
+            ofertas_vista_editor,
             hide_index=True, num_rows='fixed', use_container_width=True,
             disabled=['oferta', 'Vigencia desde', 'Vigencia hasta', *periodos],
-            column_config={'Fee (€/MWh)': st.column_config.NumberColumn(min_value=0.0, step=0.1)},
+            column_config={
+                'Eliminar': st.column_config.CheckboxColumn(
+                    'Eliminar', help='Marca las ofertas que quieres borrar.'
+                ),
+                'Fee (€/MWh)': st.column_config.NumberColumn(
+                    min_value=0.0, step=0.1
+                ),
+            },
             key=clave_editor_ofertas,
             on_change=guardar_cambios_fee_editor,
         )
@@ -438,7 +471,67 @@ with col2:
             ofertas_editadas[columna_interna] = ofertas[
                 columna_interna
             ].reset_index(drop=True)
-        ofertas = ofertas_editadas
+        seleccionadas_borrar = ofertas_editadas.loc[
+            ofertas_editadas['Eliminar'].fillna(False).astype(bool)
+        ].copy()
+        if not seleccionadas_borrar.empty:
+            st.caption(
+                'Al borrar una oferta guardada se elimina su versión completa, '
+                'incluidos todos sus peajes.'
+            )
+        if st.button(
+            'Eliminar ofertas seleccionadas',
+            key='comparador_luz_eliminar_ofertas',
+            disabled=seleccionadas_borrar.empty,
+            use_container_width=True,
+        ):
+            ids_solicitados = {
+                str(valor).strip()
+                for valor in seleccionadas_borrar['ID oferta'].dropna()
+                if str(valor).strip()
+            }
+            ids_eliminados = set(eliminar_versiones_oferta(ids_solicitados))
+            nombres_borrar = set(
+                seleccionadas_borrar['oferta'].astype(str).str.strip().str.casefold()
+            )
+            ofertas_usuario = st.session_state.get(
+                'comparador_luz_ofertas_usuario', pd.DataFrame()
+            )
+            if isinstance(ofertas_usuario, pd.DataFrame) and not ofertas_usuario.empty:
+                st.session_state.comparador_luz_ofertas_usuario = ofertas_usuario.loc[
+                    ~ofertas_usuario['oferta'].astype(str).str.strip()
+                    .str.casefold().isin(nombres_borrar)
+                ].copy()
+            fees_sesion = dict(st.session_state.get(
+                'comparador_luz_fees_por_oferta', {}
+            ))
+            st.session_state.comparador_luz_fees_por_oferta = {
+                nombre: fee for nombre, fee in fees_sesion.items()
+                if str(nombre).strip().casefold() not in nombres_borrar
+            }
+            ids_no_eliminados = ids_solicitados.difference(ids_eliminados)
+            cantidad_temporales = int(
+                seleccionadas_borrar['ID oferta'].isna().sum()
+            )
+            cantidad_eliminadas = len(ids_eliminados) + cantidad_temporales
+            if ids_no_eliminados:
+                mensaje = (
+                    f'Se eliminaron {cantidad_eliminadas} oferta(s). '
+                    f'{len(ids_no_eliminados)} oferta(s) proceden de un catálogo '
+                    'importado de solo lectura y no se modificaron.'
+                )
+                st.session_state.comparador_luz_mensaje_borrado = (
+                    'warning', mensaje
+                )
+            else:
+                st.session_state.comparador_luz_mensaje_borrado = (
+                    'success', f'Se eliminaron {cantidad_eliminadas} oferta(s).'
+                )
+            st.session_state.comparador_luz_revision_editor_ofertas = (
+                revision_editor_ofertas + 1
+            )
+            st.rerun()
+        ofertas = ofertas_editadas.drop(columns='Eliminar')
         ofertas, ofertas_excluidas = filtrar_ofertas_elegibles(
             ofertas, float(consumos.sum()), potencias_contratadas,
             cups=cups_comparacion,
