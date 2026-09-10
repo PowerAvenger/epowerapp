@@ -111,15 +111,59 @@ SRAD = {
 
 from regulacion_fnee import FNEE_TRAMOS
 
-def filtrar_datos():
-   
-    if st.session_state.rango_temporal == 'Por años': 
-        df_filtrado = st.session_state.df_sheets[st.session_state.df_sheets['año'] == st.session_state.año_seleccionado]
+def filtrar_datos_por_rango(df, rango):
+    """Filtra datos de mercado sin modificar el rango elegido en la interfaz."""
+
+    if not isinstance(rango, (tuple, list)) or len(rango) != 2:
+        return df.iloc[0:0].copy()
+
+    inicio, fin = (pd.to_datetime(valor, errors="coerce") for valor in rango)
+    if pd.isna(inicio) or pd.isna(fin):
+        return df.iloc[0:0].copy()
+
+    fechas = pd.to_datetime(df["fecha"], errors="coerce")
+    mascara = fechas.between(inicio.normalize(), fin.normalize(), inclusive="both")
+    return df.loc[mascara].copy()
+
+
+def filtrar_datos(
+    df=None,
+    *,
+    rango_temporal=None,
+    año_seleccionado=None,
+    mes_seleccionado=None,
+    dias_seleccionados=None,
+):
+    """Filtra mercado permitiendo un estado explícito o el legado compartido."""
+
+    df_origen = st.session_state.df_sheets if df is None else df
+    rango_temporal = (
+        st.session_state.rango_temporal
+        if rango_temporal is None else rango_temporal
+    )
+    año_seleccionado = (
+        st.session_state.año_seleccionado
+        if año_seleccionado is None else año_seleccionado
+    )
+    mes_seleccionado = (
+        st.session_state.mes_seleccionado
+        if mes_seleccionado is None else mes_seleccionado
+    )
+    dias_seleccionados = (
+        st.session_state.dias_seleccionados
+        if dias_seleccionados is None else dias_seleccionados
+    )
+
+    if rango_temporal == 'Por años':
+        df_filtrado = df_origen[df_origen['año'] == año_seleccionado]
         lista_meses = df_filtrado['mes_nombre'].unique().tolist()
         print('Filtrado por año')
-    elif st.session_state.rango_temporal == 'Por meses': 
-        df_filtrado_año = st.session_state.df_sheets[st.session_state.df_sheets['año'] == st.session_state.año_seleccionado]
-        df_filtrado = st.session_state.df_sheets[(st.session_state.df_sheets['año'] == st.session_state.año_seleccionado) & (st.session_state.df_sheets['mes_nombre'] == st.session_state.mes_seleccionado)]
+    elif rango_temporal == 'Por meses':
+        df_filtrado_año = df_origen[df_origen['año'] == año_seleccionado]
+        df_filtrado = df_origen[
+            (df_origen['año'] == año_seleccionado)
+            & (df_origen['mes_nombre'] == mes_seleccionado)
+        ]
         #print('df_filtrado AÑO')
         #print(df_filtrado)
         lista_meses = df_filtrado_año['mes_nombre'].unique().tolist()
@@ -128,10 +172,10 @@ def filtrar_datos():
         #forzamos de nuevo la columna fecha a date para evitar error en el filtrado, ya que dia seleccionado debe ser un date
         #st.session_state.df_sheets['fecha'] = pd.to_datetime(st.session_state.df_sheets['fecha']).dt.date
         
-        inicio, fin = st.session_state.dias_seleccionados
-        df_filtrado = st.session_state.df_sheets[
-            (st.session_state.df_sheets['fecha'] >= inicio) &
-            (st.session_state.df_sheets['fecha'] <= fin)
+        inicio, fin = dias_seleccionados
+        df_filtrado = df_origen[
+            (df_origen['fecha'] >= inicio) &
+            (df_origen['fecha'] <= fin)
         ]
         lista_meses = None
         print('Filtrado por dia')
@@ -508,6 +552,196 @@ def graficar_precios_medios_horarios(
     return graf_pt1
 
 
+def graficar_perfil_atr_ponderado(df_mercado, df_curva, atr, color="#FF8C00"):
+    """Compara el perfil aritmético del ATR con el ponderado por consumo."""
+
+    columna_precio = f"precio_{atr}"
+    requeridas_curva = {
+        "hora", "consumo_neto_kWh", columna_precio, "spot", "ssaa"
+    }
+    faltantes = sorted(requeridas_curva.difference(df_curva.columns))
+    if faltantes:
+        raise ValueError(
+            "Faltan columnas para construir el perfil ponderado: "
+            + ", ".join(faltantes)
+        )
+
+    mercado = df_mercado[["hora", columna_precio]].copy()
+    mercado[columna_precio] = pd.to_numeric(
+        mercado[columna_precio], errors="coerce"
+    )
+    referencia = (
+        mercado.groupby("hora", as_index=False)[columna_precio]
+        .mean()
+        .rename(columns={columna_precio: "ATR · referencia aritmética"})
+    )
+
+    curva = df_curva[
+        ["hora", "consumo_neto_kWh", columna_precio, "spot", "ssaa"]
+    ].copy()
+    for columna in ("consumo_neto_kWh", columna_precio, "spot", "ssaa"):
+        curva[columna] = pd.to_numeric(curva[columna], errors="coerce")
+
+    filas = []
+    for hora, grupo in curva.groupby("hora", observed=False):
+        consumo = grupo["consumo_neto_kWh"].sum()
+        fila = {"hora": hora}
+        for columna, etiqueta in (
+            (columna_precio, "ATR · ponderado"),
+            ("spot", "SPOT / OMIE · ponderado"),
+            ("ssaa", "SSAA · ponderado"),
+        ):
+            fila[etiqueta] = (
+                (grupo[columna] * grupo["consumo_neto_kWh"]).sum() / consumo
+                if consumo != 0 else float("nan")
+            )
+        filas.append(fila)
+    perfil = referencia.merge(pd.DataFrame(filas), on="hora", how="outer")
+    perfil = perfil.sort_values("hora")
+
+    figura = go.Figure()
+    figura.add_bar(
+        x=perfil["hora"],
+        y=perfil["SPOT / OMIE · ponderado"],
+        name="SPOT / OMIE ponderado",
+        marker_color="#2EAD65",
+        width=0.42,
+    )
+    figura.add_bar(
+        x=perfil["hora"],
+        y=perfil["SSAA · ponderado"],
+        name="SSAA ponderados",
+        marker_color="#7C3AED",
+        width=0.42,
+    )
+    figura.add_scatter(
+        x=perfil["hora"],
+        y=perfil["ATR · referencia aritmética"],
+        mode="lines",
+        name=f"ATR {atr} · referencia aritmética",
+        line=dict(color=color, width=3, dash="dot"),
+    )
+    figura.add_scatter(
+        x=perfil["hora"],
+        y=perfil["ATR · ponderado"],
+        mode="lines",
+        name=f"ATR {atr} · ponderado",
+        line=dict(color=color, width=6),
+    )
+    figura.update_layout(
+        barmode="relative",
+        hovermode="x unified",
+        height=520,
+        margin=dict(l=20, r=15, t=55, b=25),
+        xaxis=dict(title="Hora", tickmode="array", tickvals=list(range(24))),
+        yaxis=dict(title="€/MWh", rangemode="tozero"),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="center",
+            x=0.5,
+            title_text=None,
+        ),
+    )
+    figura = aplicar_estilo(figura)
+    figura.update_layout(
+        title_text="",
+        bargap=0.42,
+        barcornerradius=6,
+        font=dict(size=16),
+        legend=dict(font=dict(size=15)),
+        hoverlabel=dict(font_size=15),
+        xaxis=dict(
+            title_font=dict(size=17),
+            tickfont=dict(size=14),
+        ),
+        yaxis=dict(
+            title_font=dict(size=17),
+            tickfont=dict(size=14),
+        ),
+    )
+    return figura
+
+
+def graficar_queso_componentes_ponderados(df_curva, atr):
+    """Distribuye el coste real de la curva entre componentes del ATR."""
+
+    consumo_mwh = pd.to_numeric(
+        df_curva["consumo_neto_kWh"], errors="coerce"
+    ) / 1000
+    columnas = {
+        "SPOT / OMIE": "spot",
+        "SSAA": "ssaa",
+        "OSOM": "osom",
+        "PPCC": f"ppcc_{atr}",
+        "Peajes y cargos": f"pyc_{atr}",
+        "Margen": f"margen_{atr}",
+    }
+    faltantes = sorted(
+        {f"precio_{atr}", f"perd_{atr}"}.union(columnas.values())
+        .difference(df_curva.columns)
+    )
+    if faltantes:
+        raise ValueError(
+            "Faltan columnas para construir los pesos ponderados: "
+            + ", ".join(faltantes)
+        )
+
+    costes = {
+        etiqueta: (
+            pd.to_numeric(df_curva[columna], errors="coerce") * consumo_mwh
+        ).sum()
+        for etiqueta, columna in columnas.items()
+    }
+    base_perdidas = sum(
+        pd.to_numeric(df_curva[columna], errors="coerce")
+        for columna in ("spot", "ssaa", "osom", f"ppcc_{atr}")
+    )
+    costes["Pérdidas"] = (
+        base_perdidas
+        * pd.to_numeric(df_curva[f"perd_{atr}"], errors="coerce")
+        * consumo_mwh
+    ).sum()
+    coste_total = (
+        pd.to_numeric(df_curva[f"precio_{atr}"], errors="coerce")
+        * consumo_mwh
+    ).sum()
+    costes["Otros componentes"] = coste_total - sum(costes.values())
+
+    tabla = pd.DataFrame(
+        {"Componente": costes.keys(), "Coste (€)": costes.values()}
+    )
+    tabla = tabla[tabla["Coste (€)"].abs() > 1e-9]
+    escalas = {
+        "2.0": ["#8B6508", "#B8860B", "#DAA520", "#F4C430", "#FFD700", "#FFE680", "#FFF4B0", "#FFF9DC"],
+        "3.0": px.colors.sequential.Reds_r,
+        "6.1": px.colors.sequential.Blues_r,
+        "6.2": px.colors.sequential.Purples_r,
+    }
+    figura = px.pie(
+        tabla,
+        names="Componente",
+        values="Coste (€)",
+        hole=0.32,
+        color_discrete_sequence=escalas.get(atr, px.colors.sequential.Oranges_r),
+    )
+    figura.update_traces(
+        textposition="inside",
+        textinfo="percent+label",
+        hovertemplate=(
+            "<b>%{label}</b><br>Coste: %{value:,.2f} €"
+            "<br>Peso: %{percent}<extra></extra>"
+        ),
+    )
+    figura.update_layout(
+        title=dict(text=f"ATR {atr} · coste ponderado", x=0.5),
+        height=390,
+        margin=dict(l=10, r=10, t=55, b=15),
+    )
+    return aplicar_estilo(figura)
+
+
 
 def construir_pie_atr_generico(df, atr, color_scale, titulo):
 
@@ -674,7 +908,8 @@ def construir_tabla_resumen(
     col_base_prefix,      # "precio", "coste", "pyc", "margen"
     col_curva,            # "coste_total", "coste_base", "coste_pyc", "coste_margen"
     etiqueta,             # "precio", "coste", "pyc", "margen"
-    decimals=4
+    decimals=4,
+    incluir_curva=True,
 ):
 
     dffm = df.copy()
@@ -701,13 +936,20 @@ def construir_tabla_resumen(
         dffm[f"{col_base_prefix}_6.1"].mean()
     ]
 
-    pt_trans = pt.transpose()
+    # Un mes puede contener solo parte de los periodos estacionales. Fijamos
+    # siempre la misma estructura para que las tablas no desplacen columnas.
+    periodos_tabla = [f"P{i}" for i in range(1, 7)]
+    pt_trans = pt.transpose().reindex(columns=periodos_tabla)
     pt_trans["Media"] = medias
 
     media_curva = None
     
     # ---- CURVA ----
-    if "df_curva_sheets" in st.session_state and st.session_state.df_curva_sheets is not None:
+    if (
+        incluir_curva
+        and "df_curva_sheets" in st.session_state
+        and st.session_state.df_curva_sheets is not None
+    ):
 
         dfc = st.session_state.df_curva_sheets.copy()
 
@@ -741,44 +983,48 @@ def construir_tabla_resumen(
 
     return pt_trans, media_curva
 
-def tabla_precios(df):
+def tabla_precios(df, incluir_curva=True):
     return construir_tabla_resumen(
         df,
         col_base_prefix="precio",
         col_curva="coste_total",
         etiqueta="precio",
-        decimals=4
+        decimals=4,
+        incluir_curva=incluir_curva,
     )
 
-def tabla_costes(df):
+def tabla_costes(df, incluir_curva=True):
     return construir_tabla_resumen(
         df,
         col_base_prefix="coste",
         col_curva="coste_base",
         etiqueta="coste",
-        decimals=4
+        decimals=4,
+        incluir_curva=incluir_curva,
     )
 
-def tabla_pyc(df):
+def tabla_pyc(df, incluir_curva=True):
     return construir_tabla_resumen(
         df,
         col_base_prefix="pyc",
         col_curva="coste_pyc",
         etiqueta="pyc",
-        decimals=4
+        decimals=4,
+        incluir_curva=incluir_curva,
     )
 
-def tabla_margen(df):
+def tabla_margen(df, incluir_curva=True):
     return construir_tabla_resumen(
         df,
         col_base_prefix="margen",
         col_curva="coste_margen",
         etiqueta="margen",
-        decimals=4
+        decimals=4,
+        incluir_curva=incluir_curva,
     )
 
 
-def tabla_apuntamiento_spot(df, decimals=3):
+def tabla_apuntamiento_spot(df, decimals=3, incluir_curva=True):
     """Resume el apuntamiento horario y el ponderado por la curva de carga."""
 
     dffm = df.copy()
@@ -797,10 +1043,11 @@ def tabla_apuntamiento_spot(df, decimals=3):
     tabla["Media"] = 1.0
 
     df_curva = st.session_state.get("df_curva_sheets")
-    if df_curva is not None and not df_curva.empty:
+    if incluir_curva and df_curva is not None and not df_curva.empty:
         dfc = df_curva.copy()
         atr = st.session_state.atr_dfnorm
         col_periodo = "dh_3p" if atr == "2.0" else "dh_6p"
+        media_spot_curva = dfc["spot"].mean()
         dfc["_spot_x_consumo"] = dfc["spot"] * dfc["consumo_neto_kWh"]
 
         agrupado = dfc.groupby(col_periodo, observed=False)[
@@ -809,13 +1056,13 @@ def tabla_apuntamiento_spot(df, decimals=3):
         ap_curva = (
             agrupado["_spot_x_consumo"]
             / agrupado["consumo_neto_kWh"].replace(0, float("nan"))
-            / media_spot
+            / media_spot_curva
         )
 
         consumo_total = dfc["consumo_neto_kWh"].sum()
         ap_curva_global = (
-            dfc["_spot_x_consumo"].sum() / consumo_total / media_spot
-            if consumo_total != 0
+            dfc["_spot_x_consumo"].sum() / consumo_total / media_spot_curva
+            if consumo_total != 0 and media_spot_curva != 0
             else float("nan")
         )
 
@@ -823,6 +1070,68 @@ def tabla_apuntamiento_spot(df, decimals=3):
         tabla.loc[f"Ap_{atr}_curva", "Media"] = ap_curva_global
 
     return tabla.round(decimals).apply(pd.to_numeric, errors="coerce")
+
+
+def _tabla_apuntamiento_por_atr(df, columnas_por_atr, decimals=3):
+    """Construye apuntamientos horarios por ATR para una magnitud dada."""
+
+    dffm = df.copy()
+    filas = []
+    indices = []
+    for atr, columna in columnas_por_atr.items():
+        media = pd.to_numeric(dffm[columna], errors="coerce").mean()
+        columna_periodo = "dh_3p" if atr == "2.0" else "dh_6p"
+        if pd.isna(media) or media == 0:
+            apuntamiento = pd.Series(dtype="float64")
+        else:
+            apuntamiento = (
+                dffm.assign(
+                    _valor_apuntamiento=pd.to_numeric(
+                        dffm[columna], errors="coerce"
+                    )
+                )
+                .groupby(columna_periodo, observed=False)["_valor_apuntamiento"]
+                .mean()
+                / media
+            )
+        filas.append(apuntamiento)
+        indices.append(f"Ap_{atr}")
+
+    tabla = pd.DataFrame(filas, index=indices).reindex(
+        columns=[f"P{i}" for i in range(1, 7)]
+    )
+    tabla["Media"] = [
+        1.0
+        if pd.notna(pd.to_numeric(dffm[columna], errors="coerce").mean())
+        and pd.to_numeric(dffm[columna], errors="coerce").mean() != 0
+        else float("nan")
+        for columna in columnas_por_atr.values()
+    ]
+    return tabla.round(decimals).apply(pd.to_numeric, errors="coerce")
+
+
+def tabla_apuntamiento_ssaa(df, decimals=3):
+    """Resume el apuntamiento horario de los SSAA por periodos de cada ATR."""
+
+    return _tabla_apuntamiento_por_atr(
+        df,
+        {"2.0": "ssaa", "3.0": "ssaa", "6.1": "ssaa"},
+        decimals=decimals,
+    )
+
+
+def tabla_apuntamiento_precio_final(df, decimals=3):
+    """Resume el apuntamiento horario del precio final de cada ATR."""
+
+    return _tabla_apuntamiento_por_atr(
+        df,
+        {
+            "2.0": "precio_2.0",
+            "3.0": "precio_3.0",
+            "6.1": "precio_6.1",
+        },
+        decimals=decimals,
+    )
 
         
 def evol_mensual(df, colores_precios):

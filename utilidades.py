@@ -26,8 +26,8 @@ def generar_menu():
         st.page_link('pages/factura.py', label = 'Análisis de facturas', icon = "🧾")
         st.page_link('pages/opt2.py', label = 'Término de Potencia', icon = "🎯")
         st.page_link('pages/opt2_rdl.py', label = 'Optimización RDL 7/2026', icon = "🎯")
-        st.page_link('pages/telemindex.py', label = 'Telemindex', icon = "📈")
-        st.page_link('pages/simulindex.py', label = 'Simulindex', icon = "🔮")
+        st.page_link('pages/telemindex.py', label = 'Telemindex: Histórico de indexados', icon = "📈")
+        st.page_link('pages/simulindex.py', label = 'Simulindex: Futuros de indexados', icon = "🔮")
         try:
             st.page_link(
                 'pages/comparador_luz.py',
@@ -43,7 +43,7 @@ def generar_menu():
         st.page_link('pages/indicadores_anuales.py', label = 'Indicadores anuales', icon = "📅")
         st.page_link('pages/fijovspvpc.py', label = 'FijovsPVPC', icon = "⚖️")
         st.page_link('pages/balkoning_solar.py', label = 'Balkoning Solar', icon = "🏊‍♂️")
-        st.page_link('pages/escalacv.py', label = 'Escala CV', icon = "📊")
+        st.page_link('pages/escalacv.py', label = 'Escala CV: Mercados OMIE', icon = "📊")
         st.page_link('pages/excedentes.py', label = 'Excedentes', icon = "💰")
         st.page_link('pages/demanda.py', label = 'Demanda', icon = "🏭")
         st.page_link('pages/redata_potgen.py', label = 'Tecnologías de generación', icon = "⚡️")
@@ -98,6 +98,31 @@ def aplicar_precio_snp(df, df_snp, zona):
     resultado["ssaa"] = 0.0
     return resultado.drop(columns=columna)
 
+
+def construir_base_index_por_zona(zona):
+    """Construye una vista de mercado por zona sin alterar el estado activo."""
+
+    if "df_sheets_base_index" not in st.session_state:
+        raise RuntimeError("No está inicializada la base de datos de indexados.")
+
+    df_index = st.session_state.df_sheets_base_index.copy()
+    if zona != "peninsula" and "csv_precios_snp" not in st.session_state:
+        st.session_state.csv_precios_snp = cargar_precios_snp_csv()
+    df_index = aplicar_precio_snp(
+        df_index,
+        st.session_state.get("csv_precios_snp"),
+        zona,
+    )
+    df_index = aplicar_periodos_zona(df_index, zona)
+    df_index = recalcular_componentes_regulados(df_index)
+    columnas_calculadas = [
+        columna
+        for columna in df_index.columns
+        if columna.startswith("coste_") or columna.startswith("precio_")
+    ]
+    return df_index.drop(columns=columnas_calculadas, errors="ignore")
+
+
 def actualizar_df_index_por_zona(forzar=False):
     """
     Recalcula st.session_state.df_sheets desde la base limpia
@@ -126,31 +151,10 @@ def actualizar_df_index_por_zona(forzar=False):
 
     print(f"Recalculando indexados para zona: {zona}")
 
-    # 1. Partimos siempre de la base limpia
-    df_index = st.session_state.df_sheets_base_index.copy()
+    # Construimos una vista limpia y específica de la zona solicitada.
+    df_index = construir_base_index_por_zona(zona)
 
-    # 2. En SNP sustituimos spot+SSAA por SphdemDD y excluimos el provisional ESIOS.
-    if zona != "peninsula" and "csv_precios_snp" not in st.session_state:
-        st.session_state.csv_precios_snp = cargar_precios_snp_csv()
-    df_index = aplicar_precio_snp(
-        df_index, st.session_state.get("csv_precios_snp"), zona
-    )
-
-    # 3. Aplicamos los periodos 3P y 6P de la zona.
-    df_index = aplicar_periodos_zona(df_index, zona)
-
-    # 4. Recalculamos componentes regulados que dependen de los periodos
-    df_index = recalcular_componentes_regulados(df_index)
-
-    # 5. Eliminamos precios/costes antiguos por seguridad
-    cols_drop = [
-        c for c in df_index.columns
-        if c.startswith("coste_") or c.startswith("precio_")
-    ]
-
-    df_index = df_index.drop(columns=cols_drop, errors="ignore")
-
-    # 6. Recalculamos precios finales
+    # Recalculamos precios finales con la fórmula compartida.
     df_index = calcular_precios_atr(df_index)
 
     # 7. Guardamos resultado activo
@@ -568,30 +572,35 @@ def mostrar_parametros_formula_indexado(
     widget_suffix=None,
     diferido=False,
     dos_filas_tres_columnas=False,
+    claves_estado=None,
 ):
-    """Dibuja la configuración de fórmula compartida por los indexados."""
+    """Dibuja una fórmula compartida o aislada mediante un mapa de claves."""
 
     valores = {}
+    claves_estado = claves_estado or {}
 
     def widget(widget_func, label, *args, key, default, **kwargs):
+        clave_estado = claves_estado.get(key, key)
+        if clave_estado not in st.session_state:
+            st.session_state[clave_estado] = st.session_state.get(key, default)
         if diferido:
-            if key not in st.session_state:
-                st.session_state[key] = default
-            temp_key = f"_{key}_{widget_suffix or 'diferido'}"
+            temp_key = f"_{clave_estado}_{widget_suffix or 'diferido'}"
             if temp_key not in st.session_state:
-                st.session_state[temp_key] = st.session_state[key]
+                st.session_state[temp_key] = st.session_state[clave_estado]
             valor = widget_func(label, *args, key=temp_key, **kwargs)
             valores[key] = valor
             return valor
-        return persist_widget(
+        persist_widget(
             widget_func,
             label,
             *args,
-            key=key,
+            key=clave_estado,
             default=default,
             widget_suffix=widget_suffix,
             **kwargs,
         )
+        valores[key] = st.session_state[clave_estado]
+        return valores[key]
 
     if dos_filas_tres_columnas:
         fila1_col1, fila1_col2, fila1_col3 = st.columns(3)

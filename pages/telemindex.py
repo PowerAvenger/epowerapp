@@ -6,9 +6,12 @@ import io
 import pandas as pd
 import datetime
 from backend_telemindex import (
-    filtrar_datos, añadir_fnee, #calcular_precios_atr,
+    filtrar_datos, filtrar_datos_por_rango, añadir_fnee, #calcular_precios_atr,
     graficar_precios_medios_horarios, graficar_queso_componentes,
-    tabla_precios, tabla_costes, tabla_pyc, tabla_margen, tabla_apuntamiento_spot,
+    graficar_perfil_atr_ponderado, graficar_queso_componentes_ponderados,
+    tabla_precios, tabla_costes, tabla_pyc, tabla_margen,
+    tabla_apuntamiento_spot, tabla_apuntamiento_ssaa,
+    tabla_apuntamiento_precio_final,
     evol_mensual, evol_precios_diarios, graficar_diferencial_precios_mensuales, tabla_evol_mes_por_años,
     preparar_comparativa_mensual_indexados,
     evol_diario,
@@ -18,7 +21,7 @@ from backend_telemindex import (
     analizar_dependencia_omie, graficar_elasticidad_lineal,
     
 ) 
-from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, aplicar_estilo, NOMBRE_ZONA_PERIODOS, calcular_precios_atr
+from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, aplicar_estilo, NOMBRE_ZONA_PERIODOS, calcular_precios_atr, formatear_columnas_tabla
 from backend_curvadecarga import graficar_media_horaria, graficar_queso_periodos
 from backend_previsiones import obtener_prevision_omie_anual
 from componentes_ofertas_fijas import (
@@ -26,17 +29,20 @@ from componentes_ofertas_fijas import (
     periodos_con_consumo, render_oferta_ia, render_oferta_manual,
     selector_origen_oferta,
 )
+from componentes_curva import render_origen_curva
 from backend_simulindex import (
     construir_prevision_indexados_2026,
     obtener_hist_mensual,
 )
 from backend_indexado import (
     FormulaIndexada,
+    calcular_precios_atr_formula,
     construir_desglose_precio_indexado,
     construir_desglose_ssaa_c2,
 )
 from backend_telemindex import COMPONENTES_SSAA_FORMULA
 from utilidades import (
+    construir_base_index_por_zona,
     generar_menu,
     init_app,
     init_app_index,
@@ -52,6 +58,96 @@ from formato_es import (
     formato_numero_es,
     formato_pct,
 )
+
+
+CLAVES_FORMULA_HISTORICO = {
+    "desvios_apant": "telemindex_historico_desvios_apant",
+    "margen_telemindex": "telemindex_historico_margen",
+    "cfg_margen_pos": "telemindex_historico_margen_pos",
+    "cfg_fnee": "telemindex_historico_incluir_fnee",
+    "cfg_fnee_pos": "telemindex_historico_fnee_pos",
+    "cf_pct": "telemindex_historico_cf_pct",
+}
+
+CLAVES_FILTRO_HISTORICO = {
+    "rango": "telemindex_historico_rango",
+    "año": "telemindex_historico_año",
+    "mes": "telemindex_historico_mes",
+    "dias": "telemindex_historico_dias",
+    "texto": "telemindex_historico_texto_periodo",
+    "zona": "telemindex_historico_zona",
+}
+
+DEFAULTS_FORMULA_HISTORICO = {
+    "desvios_apant": 0.0,
+    "margen_telemindex": 0.0,
+    "cfg_margen_pos": "tm",
+    "cfg_fnee": True,
+    "cfg_fnee_pos": "perdidas",
+    "cf_pct": 0.0,
+}
+
+
+def inicializar_estado_historico():
+    """Migra una vez los valores compartidos al ámbito histórico aislado."""
+
+    for clave_legacy, clave_historica in CLAVES_FORMULA_HISTORICO.items():
+        st.session_state.setdefault(
+            clave_historica,
+            st.session_state.get(
+                clave_legacy,
+                DEFAULTS_FORMULA_HISTORICO[clave_legacy],
+            ),
+        )
+
+    migraciones_filtro = {
+        CLAVES_FILTRO_HISTORICO["rango"]: st.session_state.get(
+            "rango_temporal", "Selecciona un rango de fechas"
+        ),
+        CLAVES_FILTRO_HISTORICO["año"]: st.session_state.get(
+            "año_seleccionado", 2026
+        ),
+        CLAVES_FILTRO_HISTORICO["mes"]: st.session_state.get(
+            "mes_seleccionado", "enero"
+        ),
+        CLAVES_FILTRO_HISTORICO["dias"]: st.session_state.get(
+            "dias_seleccionados"
+        ),
+        CLAVES_FILTRO_HISTORICO["zona"]: st.session_state.get(
+            "zona_periodos_index", "peninsula"
+        ),
+    }
+    for clave, valor in migraciones_filtro.items():
+        if valor is not None:
+            st.session_state.setdefault(clave, valor)
+
+
+def obtener_formula_historico():
+    """Construye la fórmula exclusiva del tab Históricos."""
+
+    estado = st.session_state
+    return FormulaIndexada(
+        desvios_apant=float(estado[CLAVES_FORMULA_HISTORICO["desvios_apant"]]),
+        margen=float(estado[CLAVES_FORMULA_HISTORICO["margen_telemindex"]]),
+        margen_pos=estado[CLAVES_FORMULA_HISTORICO["cfg_margen_pos"]],
+        incluir_fnee=bool(estado[CLAVES_FORMULA_HISTORICO["cfg_fnee"]]),
+        fnee_pos=estado[CLAVES_FORMULA_HISTORICO["cfg_fnee_pos"]],
+        cf_pct=float(estado[CLAVES_FORMULA_HISTORICO["cf_pct"]]),
+    )
+
+
+def obtener_formula_compartida():
+    """Construye la fórmula vigente para Curva y el resto de indexados."""
+
+    estado = st.session_state
+    return FormulaIndexada(
+        desvios_apant=float(estado.get("desvios_apant", 0.0)),
+        margen=float(estado.get("margen_telemindex", 0.0)),
+        margen_pos=estado.get("cfg_margen_pos", "tm"),
+        incluir_fnee=bool(estado.get("cfg_fnee", False)),
+        fnee_pos=estado.get("cfg_fnee_pos", "perdidas"),
+        cf_pct=float(estado.get("cf_pct", 0.0)),
+    )
 
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
@@ -95,27 +191,33 @@ if st.session_state.get('atr_dfnorm') in ['6.3', '6.4']:
 
 init_app()
 
-st.sidebar.header('⚡ Histórico de indexados ⚡')
-zona_mensajes = st.sidebar.empty()
-#if 'df_sheets' not in st.session_state:
-if 'df_sheets_old' not in st.session_state:    
-    zona_mensajes.warning('Cargando históricos de indexado. Espera a que estén disponibles...', icon = '⚠️')
-
 init_app_index()
+inicializar_estado_historico()
+formula_historico = obtener_formula_historico()
 
+# La vista compartida permanece intacta para Curva, Simulindex y el resto.
 st.session_state.df_sheets = calcular_precios_atr(st.session_state.df_sheets)
 print (st.session_state.df_sheets)
 
-if "rango_curvadecarga" in st.session_state:
-    if st.session_state.rango_temporal == "Selecciona un rango de fechas":
-        st.session_state.dias_seleccionados = st.session_state.rango_curvadecarga
+# Históricos recalcula una vista propia sin sobrescribir el mercado compartido.
+zona_historico = st.session_state[CLAVES_FILTRO_HISTORICO["zona"]]
+base_mercado_historico = construir_base_index_por_zona(zona_historico)
+df_mercado_historico = calcular_precios_atr_formula(
+    base_mercado_historico,
+    formula_historico,
+)
+df_filtrado_historico, lista_meses = filtrar_datos(
+    df_mercado_historico,
+    rango_temporal=st.session_state[CLAVES_FILTRO_HISTORICO["rango"]],
+    año_seleccionado=st.session_state[CLAVES_FILTRO_HISTORICO["año"]],
+    mes_seleccionado=st.session_state[CLAVES_FILTRO_HISTORICO["mes"]],
+    dias_seleccionados=st.session_state[CLAVES_FILTRO_HISTORICO["dias"]],
+)
+df_filtrado_compartido, _ = filtrar_datos(
+    st.session_state.df_sheets,
+)
 
-
-
-
-df_filtrado_sheets, lista_meses = filtrar_datos()
-
-check_medias(df_filtrado_sheets, "3.0")
+check_medias(df_filtrado_historico, "3.0")
 
 def check_componentes_ssaa_simple(df):
     
@@ -140,55 +242,67 @@ def check_componentes_ssaa_simple(df):
 
 
 
-#df_filtrado = calcular_precios_atr(df_filtrado_sheets)
-df_filtrado = df_filtrado_sheets #por mantener nombre antiguo
+if df_filtrado_historico.empty:
+    fecha_ultima_filtrado = st.session_state.ultima_fecha_sheets
+else:
+    fecha_ultima_filtrado = df_filtrado_historico['fecha'].iloc[-1]
 
-try:
-    fecha_ultima_filtrado = df_filtrado['fecha'].iloc[-1]
-except:
-    st.session_state.dia_seleccionado = datetime.date(2025,1,1)
-    df_filtrado, lista_meses = filtrar_datos()
+hay_curva = (
+    st.session_state.get("df_norm_h") is not None
+    and "rango_curvadecarga" in st.session_state
+)
 
-if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
+if hay_curva:
+    # La curva se cruza siempre con el mercado de sus propias fechas. El
+    # selector histórico del sidebar conserva un rango completamente separado.
+    df_mercado_curva = filtrar_datos_por_rango(
+        st.session_state.df_sheets,
+        st.session_state.rango_curvadecarga,
+    )
 
-    df_curva_sheets = construir_df_curva_sheets(df_filtrado)
+    df_curva_sheets = construir_df_curva_sheets(df_mercado_curva)
     df_curva_sheets = añadir_costes_curva(df_curva_sheets)
     
-    df_uso = df_curva_sheets.copy()
-    df_uso = df_uso.drop_duplicates(subset=["fecha", "hora", "spot"])
-    st.session_state.df_curva_sheets = df_uso
+    df_curva_uso = df_curva_sheets.copy()
+    df_curva_uso = df_curva_uso.drop_duplicates(subset=["fecha", "hora", "spot"])
+    st.session_state.df_curva_sheets = df_curva_uso
 
     #consumo total curva
-    consumo_total_curva = df_uso['consumo_neto_kWh'].sum()
+    consumo_total_curva = df_curva_uso['consumo_neto_kWh'].sum()
     
     #calculamos el coste spot ponderado en €/MWh
-    media_spot_curva = round(df_uso['coste_spot'].sum()/(consumo_total_curva/1000),2)
-    media_ssaa_curva = round(df_uso['coste_ssaa'].sum()/(consumo_total_curva/1000),2)
+    media_spot_curva = round(df_curva_uso['coste_spot'].sum()/(consumo_total_curva/1000),2)
+    media_ssaa_curva = round(df_curva_uso['coste_ssaa'].sum()/(consumo_total_curva/1000),2)
         
-    coste_total_curva = round(df_uso['coste_total'].sum(), 2)
+    coste_total_curva = round(df_curva_uso['coste_total'].sum(), 2)
 
     
     
 else:
+    df_mercado_curva = None
     st.session_state.df_curva_sheets = None
-    df_uso = df_filtrado.copy()
-    #para usar en simulindex
-    #st.session_state.df_uso = df_uso
+
+# Históricos obedece solo a sus selectores y su fórmula aislada.
+df_historico = df_filtrado_historico.copy()
 
 
 #ejecutamos la función para obtener la tabla resumen y precios medios
-media_20 = df_uso["precio_2.0"].mean()
-media_30 = df_uso["precio_3.0"].mean()
-media_61 = df_uso["precio_6.1"].mean()
-media_spot = df_uso["spot"].mean()
-media_ssaa = df_uso["ssaa"].mean()
+media_20 = df_historico["precio_2.0"].mean()
+media_30 = df_historico["precio_3.0"].mean()
+media_61 = df_historico["precio_6.1"].mean()
+media_spot = df_historico["spot"].mean()
+media_ssaa = df_historico["ssaa"].mean()
 
-df_tabla_precios, media_curva_precio = tabla_precios(df_uso)
-media_atr_curva = media_curva_precio #por compatibilidad de media_atr_curva
-df_tabla_costes, media_curva_coste = tabla_costes(df_uso)
-df_tabla_pyc, media_curva_pyc = tabla_pyc(df_uso)
-df_tabla_margen, media_curva_margen = tabla_margen(df_uso)
-df_tabla_apuntamiento = tabla_apuntamiento_spot(df_uso)
+df_tabla_precios, _ = tabla_precios(df_historico, incluir_curva=False)
+df_tabla_costes, _ = tabla_costes(df_historico, incluir_curva=False)
+df_tabla_pyc, _ = tabla_pyc(df_historico, incluir_curva=False)
+df_tabla_margen, _ = tabla_margen(df_historico, incluir_curva=False)
+df_tabla_apuntamiento = tabla_apuntamiento_spot(
+    df_historico,
+    incluir_curva=False,
+)
+df_tabla_apuntamiento_ssaa = tabla_apuntamiento_ssaa(df_historico)
+df_tabla_apuntamiento_precio = tabla_apuntamiento_precio_final(df_historico)
 
 #media_20 = round(media_20 / 10, 1)
 media_20 = media_20 / 10
@@ -204,18 +318,21 @@ sobrecoste_ssaa = ((media_combo / media_spot) - 1) * 100
 
 
 
-if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None and st.session_state.rango_temporal == "Selecciona un rango de fechas":
+if hay_curva:
 
-    media_atr_curva = media_curva_precio / 10
-    apuntamiento_spot = round(media_spot_curva/media_spot,3)
-    apuntamiento_ssaa = round(media_ssaa_curva/media_ssaa,3)
+    media_atr_curva = (
+        df_curva_uso["coste_total"].sum()
+        / df_curva_uso["consumo_neto_kWh"].sum()
+        * 1000
+        / 10
+    )
+    media_spot_referencia_curva = df_mercado_curva["spot"].mean()
+    media_ssaa_referencia_curva = df_mercado_curva["ssaa"].mean()
+    apuntamiento_spot = round(media_spot_curva/media_spot_referencia_curva,3)
+    apuntamiento_ssaa = round(media_ssaa_curva/media_ssaa_referencia_curva,3)
 
-    atr_map = {
-        "2.0": media_20,
-        "3.0": media_30,
-        "6.1": media_61
-    }
-    media_atr = atr_map.get(st.session_state.atr_dfnorm)
+    col_precio_atr_curva = f"precio_{st.session_state.atr_dfnorm}"
+    media_atr = df_mercado_curva[col_precio_atr_curva].mean() / 10
     apuntamiento_final = (
         round(media_atr_curva / media_atr, 3)
         if media_atr is not None and media_atr != 0
@@ -227,7 +344,7 @@ if "df_norm_h" in st.session_state and st.session_state.df_norm_h is not None an
 
 
 
-    df_filtrado_cober = df_filtrado_sheets.copy()
+    df_filtrado_cober = df_mercado_curva.copy()
     
     
     if 'precio_cobertura' not in st.session_state:
@@ -443,88 +560,567 @@ df_precios_diarios, graf_precios_diarios = evol_diario(
     df_prevision_2026=df_prevision_indexados_2026,
 )
 
-#ELEMENTOS DE LA BARRA LATERAL ---------------------------------------------------------------------------------------
-zona_mensajes.info(
-    f"Última fecha disponible: {st.session_state.ultima_fecha_sheets.strftime('%d.%m.%Y')}"
-)
-st.sidebar.info(
-    f"Última fecha C2 liquicomun: {st.session_state.ultima_fecha_csv.strftime('%d.%m.%Y')}"
-)
+def actualizar_texto_periodo_telemindex(fecha_ultima_filtrado):
+    """Sincroniza el texto del resumen antes de dibujar sus controles."""
 
-st.sidebar.subheader('Opciones')
-with st.sidebar.container(border=True):
-    #st.sidebar.radio("Seleccionar rango temporal", ['Por años', 'Por meses', 'Selecciona un rango de fechas'], key = "rango_temporal")
-    persist_widget(st.sidebar.radio,"Seleccionar rango temporal", ['Por años', 'Por meses', 'Selecciona un rango de fechas'], key = "rango_temporal")
-    #persist_widget(st.number_input, "Desvíos apantallados (€/MWh)", min_value=0.0, max_value=20.0, step=0.1, key="desvios_apant", default=1)
+    clave_rango = CLAVES_FILTRO_HISTORICO["rango"]
+    clave_año = CLAVES_FILTRO_HISTORICO["año"]
+    clave_mes = CLAVES_FILTRO_HISTORICO["mes"]
+    clave_dias = CLAVES_FILTRO_HISTORICO["dias"]
+    clave_texto = CLAVES_FILTRO_HISTORICO["texto"]
 
-    if st.session_state.rango_temporal == 'Por años':
-        st.sidebar.selectbox('Seleccione el año', options = [2026, 2025, 2024], key = 'año_seleccionado') 
-        st.session_state.texto_precios = f'Año {st.session_state.año_seleccionado}, hasta el día {fecha_ultima_filtrado}'
-    elif st.session_state.rango_temporal =='Por meses' : 
-        col_sb1, col_sb2 = st.sidebar.container().columns(2)      
-        with col_sb1:
-            st.sidebar.selectbox('Seleccione el año', options = [2026, 2025, 2024], key = 'año_seleccionado') 
-        with col_sb2:
-            st.sidebar.selectbox('Seleccionar mes', lista_meses, key = 'mes_seleccionado')
-            st.session_state.texto_precios = f'Seleccionado: {st.session_state.mes_seleccionado} de {st.session_state.año_seleccionado}'
+    if st.session_state[clave_rango] == 'Por años':
+        st.session_state[clave_texto] = (
+            f'Año {st.session_state[clave_año]}, '
+            f'hasta el día {fecha_ultima_filtrado}'
+        )
+    elif st.session_state[clave_rango] == 'Por meses':
+        st.session_state[clave_texto] = (
+            f'Seleccionado: {st.session_state[clave_mes]} '
+            f'de {st.session_state[clave_año]}'
+        )
     else:
-        with st.sidebar.form(key='form_fechas_telemindex'):
-            # Asegurar que ultima_fecha_sheets es un objeto datetime.date
-            ultima_fecha_sheets = st.session_state.ultima_fecha_sheets
-            if isinstance(ultima_fecha_sheets, (pd.Timestamp, datetime.datetime)):
-                ultima_fecha_sheets = ultima_fecha_sheets.date()
-            st.date_input('Selecciona un rango de días', min_value = datetime.date(2023, 1, 1), max_value = ultima_fecha_sheets, key = 'dias_seleccionados')   
-            inicio, fin = st.session_state.dias_seleccionados
-            st.session_state.texto_precios = (f"Rango seleccionado: {inicio.strftime('%d/%m/%Y')} → {fin.strftime('%d/%m/%Y')}")
-            st.form_submit_button('Actualizar cálculos')
+        inicio, fin = st.session_state[clave_dias]
+        st.session_state[clave_texto] = (
+            f"Rango seleccionado: {inicio.strftime('%d/%m/%Y')} → "
+            f"{fin.strftime('%d/%m/%Y')}"
+        )
 
-    #st.selectbox("Selecciona zona de periodos horarios", options=["Península", "Baleares", "Canarias", "Ceuta", "Melilla"], index=0, key="zona_periodos_index")
-    opciones_zona_periodos = ["peninsula", "baleares", "canarias", "ceuta", "melilla"]
 
-    persist_widget(
-        st.selectbox,
-        "Selecciona sistema eléctrico",
-        options=opciones_zona_periodos,
-        index=0,
-        key="zona_periodos_index",
-        default="peninsula",
-        disabled=not bool(st.secrets.get("CSV_SNP")),
-        format_func=lambda x: {
-            "peninsula": "Península",
-            "baleares": "Baleares",
-            "canarias": "Canarias",
-            "ceuta": "Ceuta",
-            "melilla": "Melilla",
-        }[x]
+def mostrar_controles_telemindex(lista_meses, fecha_ultima_filtrado):
+    """Dibuja los controles exclusivos del tab Históricos."""
+
+    clave_rango = CLAVES_FILTRO_HISTORICO["rango"]
+    clave_año = CLAVES_FILTRO_HISTORICO["año"]
+    clave_mes = CLAVES_FILTRO_HISTORICO["mes"]
+    clave_dias = CLAVES_FILTRO_HISTORICO["dias"]
+    clave_zona = CLAVES_FILTRO_HISTORICO["zona"]
+
+    st.subheader('Info sobre datos', divider='rainbow')
+    st.info(
+        f"Última fecha disponible: {st.session_state.ultima_fecha_sheets.strftime('%d.%m.%Y')}"
     )
-    if not st.secrets.get("CSV_SNP"):
-        st.caption("Configura `CSV_SNP` para habilitar Baleares, Canarias, Ceuta y Melilla.")
-st.sidebar.subheader('Parámetros de fórmula')
-    
-with st.sidebar.container(border=True):
-    mostrar_parametros_formula_indexado()
+    st.info(
+        f"Última fecha C2 liquicomun: {st.session_state.ultima_fecha_csv.strftime('%d.%m.%Y')}"
+    )
+
+    st.subheader('Opciones', divider='rainbow')
+    with st.container(border=True):
+        persist_widget(
+            st.radio,
+            "Seleccionar rango temporal",
+            ['Por años', 'Por meses', 'Selecciona un rango de fechas'],
+            key=clave_rango,
+        )
+
+        if st.session_state[clave_rango] == 'Por años':
+            st.selectbox(
+                'Seleccione el año',
+                options=[2026, 2025, 2024],
+                key=clave_año,
+            )
+        elif st.session_state[clave_rango] == 'Por meses':
+            col_filtro1, col_filtro2 = st.columns(2)
+            with col_filtro1:
+                st.selectbox(
+                    'Seleccione el año',
+                    options=[2026, 2025, 2024],
+                    key=clave_año,
+                )
+            with col_filtro2:
+                st.selectbox(
+                    'Seleccionar mes',
+                    lista_meses,
+                    key=clave_mes,
+                )
+        else:
+            with st.form(key='form_fechas_telemindex_historico'):
+                ultima_fecha_sheets = st.session_state.ultima_fecha_sheets
+                if isinstance(
+                    ultima_fecha_sheets, (pd.Timestamp, datetime.datetime)
+                ):
+                    ultima_fecha_sheets = ultima_fecha_sheets.date()
+                st.date_input(
+                    'Selecciona un rango de días',
+                    min_value=datetime.date(2023, 1, 1),
+                    max_value=ultima_fecha_sheets,
+                    key=clave_dias,
+                )
+                st.form_submit_button('Actualizar cálculos')
+
+        opciones_zona_periodos = [
+            "peninsula", "baleares", "canarias", "ceuta", "melilla"
+        ]
+        persist_widget(
+            st.selectbox,
+            "Selecciona sistema eléctrico",
+            options=opciones_zona_periodos,
+            index=0,
+            key=clave_zona,
+            default="peninsula",
+            disabled=not bool(st.secrets.get("CSV_SNP")),
+            format_func=lambda x: {
+                "peninsula": "Península",
+                "baleares": "Baleares",
+                "canarias": "Canarias",
+                "ceuta": "Ceuta",
+                "melilla": "Melilla",
+            }[x],
+        )
+        if not st.secrets.get("CSV_SNP"):
+            st.caption(
+                "Configura `CSV_SNP` para habilitar Baleares, Canarias, Ceuta y Melilla."
+            )
+
+    st.subheader('Parámetros de fórmula', divider='rainbow')
+    with st.container(border=True):
+        mostrar_parametros_formula_indexado(
+            widget_suffix="telemindex_historico",
+            claves_estado=CLAVES_FORMULA_HISTORICO,
+        )
+
+
+def construir_grafico_perfil_consumo_coste(df_curva):
+    """Recupera el perfil medio de consumo y añade el coste horario."""
+
+    df_coste_h = (
+        df_curva.groupby("hora", as_index=False)["coste_total"].mean()
+    )
+    figura = graficar_media_horaria('Total')
+    figura.add_trace(
+        go.Scatter(
+            x=df_coste_h["hora"],
+            y=df_coste_h["coste_total"],
+            mode="lines",
+            name="Coste medio indexado",
+            line=dict(color="#E53935", width=5),
+            yaxis="y2",
+        )
+    )
+    figura.update_layout(
+        yaxis2=dict(
+            title="Coste medio (€)",
+            overlaying="y",
+            side="right",
+            showgrid=False,
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.0,
+            xanchor="center",
+            x=0.5,
+        ),
+    )
+    return figura
+
+
+def mostrar_graficos_curva(apuntamiento_spot, apuntamiento_final):
+    """Gráficos de curva reservados para el futuro tab específico."""
+
+    apuntamiento_spot_fmt = formato_numero_es(apuntamiento_spot, 3)
+    apuntamiento_final_fmt = formato_numero_es(apuntamiento_final, 3)
+    st.subheader(
+        "Perfil de consumo vs coste - "
+        f"APo: :orange[{apuntamiento_spot_fmt}] · "
+        f"APf: :orange[{apuntamiento_final_fmt}]",
+        divider='rainbow',
+        help=(
+            "APo es el apuntamiento de OMIE/SPOT: precio SPOT "
+            "ponderado por la curva dividido por su media aritmética. "
+            "APf es el apuntamiento del precio final del ATR: precio "
+            "final ponderado por la curva dividido por su media "
+            "aritmética. Un valor inferior a 1 reduce el precio; "
+            "un valor superior a 1 lo incrementa."
+        ),
+    )
+
+    graf_medias_horarias = construir_grafico_perfil_consumo_coste(
+        st.session_state.df_curva_sheets
+    )
+    st.plotly_chart(graf_medias_horarias, use_container_width=True)
+
+    st.subheader("Consumo por periodos")
+    graf_periodos, _ = graficar_queso_periodos(st.session_state.df_norm_h)
+    st.plotly_chart(graf_periodos, use_container_width=True)
+
+
+def mostrar_metricas_curva(
+    media_atr_curva,
+    apuntamiento_final,
+    consumo_total_curva,
+    coste_total_curva,
+    desvio_coste_total_porc,
+    media_spot_curva,
+    apuntamiento_spot,
+    media_ssaa_curva,
+    apuntamiento_ssaa,
+):
+    """Métricas reservadas para el futuro tab específico de curva."""
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1:
+        st.metric(
+            f'Precio ponderado {st.session_state.atr_dfnorm} c€/kWh',
+            value=formato_cent_eur_kwh(media_atr_curva, 2, False),
+            delta=f'APf = {formato_numero_es(apuntamiento_final, 3)}',
+            delta_color='inverse',
+            help='APf: apuntamiento del precio final.',
+        )
+    with col2:
+        st.metric(
+            'Consumo neto kWh',
+            value=formato_kwh(consumo_total_curva, 0, False),
+        )
+    with col3:
+        st.metric(
+            'Coste total €',
+            value=formato_euros(coste_total_curva, 0, False),
+            delta=formato_pct(desvio_coste_total_porc),
+            delta_color='inverse',
+            help='El % indica el desvío con respecto al coste medio aritmético',
+        )
+    with col4:
+        st.metric(
+            'SPOT ponderado €/MWh',
+            value=formato_eur_mwh(media_spot_curva, 2, False),
+            delta=f'APo = {formato_numero_es(apuntamiento_spot, 3)}',
+            delta_color='inverse',
+            help='APo: apuntamiento de OMIE/SPOT.',
+        )
+    with col5:
+        st.metric(
+            'SSAA ponderados €/MWh',
+            value=formato_eur_mwh(media_ssaa_curva, 2, False),
+            delta=f'APs = {formato_numero_es(apuntamiento_ssaa, 3)}',
+            delta_color='inverse',
+            help='APs: apuntamiento de los servicios de ajuste.',
+        )
+
+
+def ocultar_filas_curva(tabla):
+    """Devuelve una vista sin curva conservando intacta la tabla completa."""
+
+    indices = tabla.index.astype(str)
+    return tabla.loc[~indices.str.endswith("_curva")].copy()
+
+
+def mostrar_impacto_spot():
+    """Muestra la evolución y elasticidad del SPOT dentro del tab Evol."""
+
+    df_res, fig_dependencia = analizar_dependencia_omie(
+        st.session_state.df_sheets,
+        st.session_state.peaje_analisis,
+    )
+    st.subheader('Impacto del SPOT en el precio final', divider='rainbow')
+    col_selector, col_dependencia, col_elasticidad = st.columns([.2, .4, .4])
+    with col_selector:
+        st.selectbox(
+            "Selecciona peaje de acceso",
+            ["2.0", "3.0", "6.1"],
+            index=0,
+            key='peaje_analisis',
+        )
+        st.markdown('Tabla de datos')
+        st.dataframe(df_res, hide_index=True)
+    with col_dependencia:
+        st.plotly_chart(fig_dependencia, use_container_width=True)
+    with col_elasticidad:
+        fig_elasticidad = graficar_elasticidad_lineal(
+            df_res,
+            st.session_state.peaje_analisis,
+        )
+        st.plotly_chart(fig_elasticidad, use_container_width=True)
+
+
+def mostrar_desgloses_precios_historicos(df, formula):
+    """Muestra una justificación aritmética independiente para cada ATR."""
+
+    for atr in ("2.0", "3.0", "6.1"):
+        with st.expander(f"Desglose justificativo {atr}TD"):
+            try:
+                tabla = construir_desglose_precio_indexado(
+                    df,
+                    atr,
+                    formula,
+                    columna_consumo=None,
+                )
+                tabla_mostrar = tabla.copy()
+                for columna in tabla_mostrar.columns[1:]:
+                    tabla_mostrar[columna] = tabla_mostrar[columna].map(
+                        lambda valor: formato_eur_kwh(valor / 1000, 6, False)
+                    )
+                st.caption("Valores en €/kWh · media aritmética")
+                st.dataframe(
+                    tabla_mostrar,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=38 + 35 * len(tabla_mostrar),
+                )
+            except ValueError as exc:
+                st.warning(f"No se puede construir el desglose: {exc}")
+
+
+def mostrar_tabla_apuntamiento(tabla):
+    """Muestra apuntamientos con anchos idénticos en las tres tablas."""
+
+    tabla_mostrar = tabla.rename_axis("Peaje").reset_index()
+    columnas_valores = [f"P{i}" for i in range(1, 7)] + ["Media"]
+    configuracion = {
+        "Peaje": st.column_config.TextColumn("Peaje", width="small"),
+        **{
+            columna: st.column_config.NumberColumn(
+                columna,
+                format="%.3f",
+                width="small",
+            )
+            for columna in columnas_valores
+        },
+    }
+    st.dataframe(
+        tabla_mostrar,
+        column_config=configuracion,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+actualizar_texto_periodo_telemindex(fecha_ultima_filtrado)
 
 
 # ZONA PRINCIPAL DE GRÁFICOS++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ['Principal', 'Evol', 'Comparativa', 'Verificación SSAA', 'Desglose']
+tab1, tab_curva, tab2, tab3, tab4 = st.tabs(
+    [
+        'Históricos', 'Curva', 'Evol', 'Comparativa',
+        'Verificación SSAA',
+    ]
 )
 
-# Streamlit ejecuta el contenido de todos los tabs en orden. Este tab se
-# renderiza antes de Comparativa porque esa sección puede detener el script si
-# no hay curva de carga, aunque visualmente Desglose siga siendo el último tab.
-with tab5:
+with tab_curva:
+    curva_col1, curva_col2, curva_col3 = st.columns(
+        [.14, .58, .28],
+        gap="small",
+    )
+
+    with curva_col1:
+        contenedor_origen_curva = st.container(border=True)
+        contenedor_acciones_curva = st.container(border=True)
+        contenedor_formula_curva = st.container(border=True)
+
+    render_origen_curva(
+        contenedor_origen_curva,
+        contenedor_acciones_curva,
+        clave="telemindex_curva",
+        titulo_compacto=True,
+        mostrar_resumen=False,
+    )
+    if (
+        not hay_curva
+        and st.session_state.get("df_norm_h") is not None
+        and st.session_state.get("rango_curvadecarga") is not None
+    ):
+        st.rerun()
+
+    with contenedor_formula_curva:
+        st.markdown("#### Parámetros de fórmula")
+        mostrar_parametros_formula_indexado(
+            widget_suffix="telemindex_curva",
+        )
+
+    with curva_col2:
+        if hay_curva:
+            atr_curva = st.session_state.atr_dfnorm
+            st.subheader(
+                f"Perfil horario ponderado · ATR {atr_curva}",
+                divider="rainbow",
+            )
+            mostrar_metricas_curva(
+                media_atr_curva,
+                apuntamiento_final,
+                consumo_total_curva,
+                coste_total_curva,
+                desvio_coste_total_porc,
+                media_spot_curva,
+                apuntamiento_spot,
+                media_ssaa_curva,
+                apuntamiento_ssaa,
+            )
+            color_atr_curva = colores_precios.get(
+                f"precio_{atr_curva}", "#FF8C00"
+            )
+            st.plotly_chart(
+                graficar_perfil_atr_ponderado(
+                    df_mercado_curva,
+                    df_curva_uso,
+                    atr_curva,
+                    color=color_atr_curva,
+                ),
+                use_container_width=True,
+                key="telemindex_curva_perfil_ponderado",
+            )
+
+            st.subheader(
+                "Peso de los componentes",
+                divider="rainbow",
+            )
+            st.plotly_chart(
+                graficar_queso_componentes_ponderados(
+                    df_curva_uso,
+                    atr_curva,
+                ),
+                use_container_width=True,
+                key="telemindex_curva_queso_ponderado",
+            )
+        else:
+            st.subheader("Curva histórica ponderada", divider="rainbow")
+            st.info(
+                "Carga una curva para visualizar sus precios y apuntamientos "
+                "ponderados por consumo."
+            )
+
+    with curva_col3:
+        st.subheader("Resultados ponderados", divider="rainbow")
+        if hay_curva:
+            resumen_curva = obtener_df_resumen(df_curva_uso, None, 0.0)
+            resumen_curva_mostrar = resumen_curva.T
+            resumen_curva_mostrar = formatear_columnas_tabla(
+                resumen_curva_mostrar,
+                columnas_kwh=["Consumo (kWh)"],
+                columnas_euros=["Coste (€)"],
+                columnas_eur_kwh=["Precio medio (€/kWh)"],
+                incluir_unidades=False,
+            ).T
+            st.caption(
+                f"Consumos, costes y precios medios · ATR {atr_curva}"
+            )
+            st.dataframe(
+                resumen_curva_mostrar,
+                use_container_width=True,
+            )
+
+            with st.expander("Desglose justificativo"):
+                try:
+                    desglose_curva = construir_desglose_precio_indexado(
+                        df_curva_uso,
+                        atr_curva,
+                        obtener_formula_compartida(),
+                        columna_consumo="consumo_neto_kWh",
+                    )
+                    desglose_curva_mostrar = desglose_curva.copy()
+                    for columna in desglose_curva_mostrar.columns[1:]:
+                        desglose_curva_mostrar[columna] = (
+                            desglose_curva_mostrar[columna].map(
+                                lambda valor: formato_eur_kwh(
+                                    valor / 1000,
+                                    6,
+                                    False,
+                                )
+                            )
+                        )
+                    st.caption("Valores ponderados por consumo en €/kWh")
+                    st.dataframe(
+                        desglose_curva_mostrar,
+                        use_container_width=True,
+                        hide_index=True,
+                        height=38 + 35 * len(desglose_curva_mostrar),
+                    )
+                except ValueError as exc:
+                    st.warning(f"No se puede construir el desglose: {exc}")
+
+                fechas_curva = pd.to_datetime(
+                    df_curva_uso["fecha"], errors="coerce"
+                ).dt.date
+                fechas_validas_curva = fechas_curva.dropna()
+                fecha_limite_c2 = pd.to_datetime(
+                    st.session_state.ultima_fecha_csv
+                ).date()
+                rango_curva_dentro_c2 = (
+                    not fechas_validas_curva.empty
+                    and fechas_curva.notna().all()
+                    and fechas_validas_curva.max() <= fecha_limite_c2
+                )
+                curva_actual = st.session_state.get("curva_actual") or {}
+                zona_curva = (
+                    curva_actual.get("zona_confirmada")
+                    or curva_actual.get("zona_periodos")
+                    or st.session_state.get("zona_periodos_cdc", "peninsula")
+                )
+                componentes_ssaa_disponibles = all(
+                    columna in df_curva_uso.columns
+                    and df_curva_uso[columna].notna().all()
+                    for columna in COMPONENTES_SSAA_FORMULA
+                )
+
+                st.markdown("#### Desglose de los SSAA del C2 Compodem")
+                if zona_curva != "peninsula":
+                    st.info(
+                        "El desglose C2 de SSAA está disponible únicamente "
+                        "para Península."
+                    )
+                elif not rango_curva_dentro_c2:
+                    st.info(
+                        "El rango supera la última fecha con detalle C2 "
+                        f"({fecha_limite_c2.strftime('%d/%m/%Y')})."
+                    )
+                elif not componentes_ssaa_disponibles:
+                    st.warning(
+                        "La curva no contiene todas las columnas de detalle "
+                        "SSAA del C2."
+                    )
+                else:
+                    desglose_ssaa_curva = construir_desglose_ssaa_c2(
+                        df_curva_uso,
+                        COMPONENTES_SSAA_FORMULA,
+                        atr_curva,
+                        columna_consumo="consumo_neto_kWh",
+                    )
+                    desglose_ssaa_curva_mostrar = desglose_ssaa_curva.copy()
+                    for columna in desglose_ssaa_curva_mostrar.columns[1:]:
+                        desglose_ssaa_curva_mostrar[columna] = (
+                            desglose_ssaa_curva_mostrar[columna].map(
+                                lambda valor: formato_eur_kwh(
+                                    valor / 1000,
+                                    6,
+                                    False,
+                                )
+                            )
+                        )
+                    st.dataframe(
+                        desglose_ssaa_curva_mostrar,
+                        use_container_width=True,
+                        hide_index=True,
+                        height=38 + 35 * len(desglose_ssaa_curva_mostrar),
+                    )
+
+            st.subheader("Perfil de consumo vs coste", divider="rainbow")
+            st.plotly_chart(
+                construir_grafico_perfil_consumo_coste(df_curva_uso),
+                use_container_width=True,
+                key="telemindex_curva_perfil_consumo_coste",
+            )
+        else:
+            st.info(
+                "Carga una curva para calcular sus consumos, costes y precios."
+            )
+
+# Código del antiguo tab Desglose conservado temporalmente, pero sin renderizar.
+if False:
     st.subheader("Desglose justificativo del precio indexado", divider="rainbow")
+    df_desglose = (
+        st.session_state.df_curva_sheets
+        if st.session_state.get("df_curva_sheets") is not None
+        else df_filtrado_compartido
+    )
     columna_consumo = (
         "consumo_neto_kWh"
-        if "consumo_neto_kWh" in df_uso.columns
-        and pd.to_numeric(df_uso["consumo_neto_kWh"], errors="coerce").sum() > 0
+        if "consumo_neto_kWh" in df_desglose.columns
+        and pd.to_numeric(df_desglose["consumo_neto_kWh"], errors="coerce").sum() > 0
         else None
     )
     metodo_media = "ponderada por el consumo" if columna_consumo else "aritmética"
     fecha_limite_c2 = pd.to_datetime(st.session_state.ultima_fecha_csv).date()
-    fechas_desglose = pd.to_datetime(df_uso["fecha"], errors="coerce").dt.date
+    fechas_desglose = pd.to_datetime(df_desglose["fecha"], errors="coerce").dt.date
     fechas_validas_desglose = fechas_desglose.dropna()
     if fechas_validas_desglose.empty:
         texto_rango_desglose = "Sin fechas"
@@ -580,7 +1176,7 @@ with tab5:
     )
     try:
         tabla_desglose = construir_desglose_precio_indexado(
-            df_uso,
+            df_desglose,
             atr_desglose,
             formula_desglose,
             columna_consumo=columna_consumo,
@@ -609,7 +1205,7 @@ with tab5:
     )
     zona_peninsular = st.session_state.get("zona_periodos_index", "peninsula") == "peninsula"
     componentes_disponibles = all(
-        columna in df_uso.columns and df_uso[columna].notna().all()
+        columna in df_desglose.columns and df_desglose[columna].notna().all()
         for columna in COMPONENTES_SSAA_FORMULA
     )
 
@@ -626,7 +1222,7 @@ with tab5:
         st.warning("El rango no contiene todas las columnas de detalle SSAA del C2.")
     else:
         tabla_ssaa = construir_desglose_ssaa_c2(
-            df_uso,
+            df_desglose,
             COMPONENTES_SSAA_FORMULA,
             atr_desglose,
             columna_consumo=columna_consumo,
@@ -645,61 +1241,56 @@ with tab5:
 
 with tab1:
     
-        col1, col2 = st.columns([.7,.3])
+        col1, col2, col3 = st.columns([.14, .58, .28], gap="small")
 
         #COLUMNA PRINCIPAL
-        with col1:
-            zona_txt = NOMBRE_ZONA_PERIODOS.get(st.session_state.get("zona_periodos_index", "peninsula"), "PENÍNSULA")
-            st.subheader(f'Resumen de precios finales de INDEXADO - Zona :blue[{zona_txt}]. **:orange[{st.session_state.texto_precios}]**', divider = 'rainbow') 
+        with col2:
+            zona_txt = NOMBRE_ZONA_PERIODOS.get(zona_historico, "PENÍNSULA")
+            texto_periodo_historico = st.session_state[
+                CLAVES_FILTRO_HISTORICO["texto"]
+            ]
+            st.subheader(
+                'Resumen de precios finales de INDEXADO - '
+                f'Zona :blue[{zona_txt}]. '
+                f'**:orange[{texto_periodo_historico}]**',
+                divider='rainbow',
+            )
             
             with st.container():
                 col5, col6, col7, col8, col9 = st.columns(5)
                 with col5:
                     #st.metric(':orange[Precio medio 2.0 c€/kWh]',value = media_20)
-                    st.metric(':orange[Precio medio 2.0 c€/kWh]', value=formato_cent_eur_kwh(media_20, 2, False))
-                    if media_atr_curva is not None:
-                        st.markdown("<div style='height: 1.5rem;'></div>", unsafe_allow_html=True)
-                        st.metric(
-                            f'Precio medio curva {st.session_state.atr_dfnorm} c€/kWh',
-                            value=formato_cent_eur_kwh(media_atr_curva, 2, False),
-                            delta=f'APf = {formato_numero_es(apuntamiento_final, 3)}',
-                            delta_color='inverse',
-                            help='APf: apuntamiento del precio final.',
-                        )
+                    st.metric(':orange[Precio 2.0 c€/kWh]', value=formato_cent_eur_kwh(media_20, 2, False))
                 with col6:
-                    st.metric(':red[Precio medio 3.0 c€/kWh]', value=formato_cent_eur_kwh(media_30, 2, False))
-                    if media_atr_curva is not None:
-                        st.markdown("<div style='height: 1.5rem;'></div>", unsafe_allow_html=True)
-                        st.metric('Consumo curva kWh', value=formato_kwh(consumo_total_curva, 0, False))
+                    st.metric(':red[Precio 3.0 c€/kWh]', value=formato_cent_eur_kwh(media_30, 2, False))
                 with col7:
-                    st.metric(':blue[Precio medio 6.1 c€/kWh]', value=formato_cent_eur_kwh(media_61, 2, False))
-                    if media_atr_curva is not None:
-                        st.markdown("<div style='height: 1.5rem;'></div>", unsafe_allow_html=True)
-                        st.metric('Coste total curva €', value=formato_euros(coste_total_curva, 0, False), delta=formato_pct(desvio_coste_total_porc), delta_color='inverse', help = 'El % indica el desvío con respecto al coste medio aritmético')
+                    st.metric(':blue[Precio 6.1 c€/kWh]', value=formato_cent_eur_kwh(media_61, 2, False))
                 with col8:
-                    st.metric(':green[Precio medio Spot €/MWh]', value=formato_eur_mwh(media_spot, 2, False))
-                    if media_atr_curva is not None:
-                        st.markdown("<div style='height: 1.5rem;'></div>", unsafe_allow_html=True)
-                        st.metric(
-                            'Precio medio Spot curva €/MWh',
-                            value=formato_eur_mwh(media_spot_curva, 2, False),
-                            delta=f'APo = {formato_numero_es(apuntamiento_spot, 3)}',
-                            delta_color='inverse',
-                            help='APo: apuntamiento de OMIE/SPOT.',
-                        )
+                    st.metric(':green[SPOT €/MWh]', value=formato_eur_mwh(media_spot, 2, False))
                 with col9:
-                    st.metric(':violet[Precio medio SSAA €/MWh]', value=formato_eur_mwh(media_ssaa, 2, False), delta=formato_pct(sobrecoste_ssaa, 1), delta_color='inverse', help= 'Se indica su valor medio y en qué % aumenta el precio medio Spot')
-                    if media_atr_curva is not None:
-                        st.metric('Precio medio SSAA curva €/MWh', value=formato_eur_mwh(media_ssaa_curva, 2, False), delta=formato_numero_es(apuntamiento_ssaa, 3), delta_color='inverse', help = 'Se indica apuntamiento.')
+                    st.metric(':violet[SSAA €/MWh]', value=formato_eur_mwh(media_ssaa, 2, False), delta=formato_pct(sobrecoste_ssaa, 1), delta_color='inverse', help= 'Se indica su valor medio y en qué % aumenta el precio medio Spot')
 
             st.empty()
             # gráfico principal de barras y lineas precios medios y omie+ssaa
             #st.plotly_chart(graf_principal(df_filtrado, colores_precios))
-            st.plotly_chart(graficar_precios_medios_horarios(df_uso, colores_precios))
+            st.plotly_chart(
+                graficar_precios_medios_horarios(
+                    df_historico,
+                    colores_precios,
+                    incluir_curva=False,
+                    leyenda_horizontal=True,
+                ),
+                use_container_width=True,
+            )
             st.empty()
             st.subheader("Peso de los componentes por peaje de acceso", divider='rainbow')
             #_, graf20, graf30, graf61 = pt1(df_filtrado)
-            graf20, graf30, graf61 = graficar_queso_componentes(df_filtrado)
+            graf20, graf30, graf61 = graficar_queso_componentes(df_historico)
+            for graf_queso in (graf20, graf30, graf61):
+                graf_queso.update_layout(
+                    height=390,
+                    margin=dict(l=10, r=10, t=55, b=15),
+                )
             with st.container():
                 col10,col11,col12=st.columns(3)
                 with col10:
@@ -711,123 +1302,57 @@ with tab1:
                 
             
 
-            df_res, fig = analizar_dependencia_omie(st.session_state.df_sheets, st.session_state.peaje_analisis)
-
-            st.subheader('Impacto del SPOT en el precio final', divider='rainbow')
-            
-            with st.container():
-                col10,col11,col12=st.columns([.2,.4,.4])
-                with col10:
-                    st.selectbox("Selecciona peaje de acceso", ["2.0", "3.0", "6.1"], index=0, key ='peaje_analisis')
-                    st.markdown('Tabla de datos')
-                    st.dataframe(df_res, hide_index=True)
-                with col11:
-                    st.plotly_chart(fig, use_container_width=True)
-                with col12:
-                   fig = graficar_elasticidad_lineal(df_res, st.session_state.peaje_analisis)
-                   st.plotly_chart(fig)
-
-
-        with col2:
-            if media_atr_curva is not None:
-                apuntamiento_spot_fmt = formato_numero_es(apuntamiento_spot, 3)
-                apuntamiento_final_fmt = formato_numero_es(apuntamiento_final, 3)
-                st.subheader(
-                    "Perfil de consumo vs coste - "
-                    f"APo: :orange[{apuntamiento_spot_fmt}] · "
-                    f"APf: :orange[{apuntamiento_final_fmt}]",
-                    divider='rainbow',
-                    help=(
-                        "APo es el apuntamiento de OMIE/SPOT: precio SPOT "
-                        "ponderado por la curva dividido por su media aritmética. "
-                        "APf es el apuntamiento del precio final del ATR: precio "
-                        "final ponderado por la curva dividido por su media "
-                        "aritmética. Un valor inferior a 1 reduce el precio; "
-                        "un valor superior a 1 lo incrementa."
-                    ),
-                )
-                
-                df_coste = st.session_state.df_curva_sheets.copy()
-                df_coste_h = (
-                    df_coste
-                    .groupby("hora", as_index=False)["coste_total"]
-                    .mean()
-                )
-                graf_medias_horarias=graficar_media_horaria('Total')
-                graf_medias_horarias.add_trace(
-                    go.Scatter(
-                        x=df_coste_h["hora"],
-                        y=df_coste_h["coste_total"],
-                        mode="lines",
-                        name="Coste medio indexado",
-                        line=dict(
-                            color="#E53935",
-                            width=5
-                        ),
-                        yaxis="y2"
-                    )
-                )
-                graf_medias_horarias.update_layout(
-                    yaxis2=dict(
-                        title="Coste medio (€)",
-                        overlaying="y",
-                        side="right",
-                        showgrid=False
-                    ),
-                    legend=dict(
-                        orientation="h",
-                        yanchor="bottom",
-                        y=1.0,
-                        xanchor="center",
-                        x=0.5
-                    )
-                )
-                
-
-
-                
-                st.plotly_chart(graf_medias_horarias, use_container_width=True)
-
-                st.subheader("Consumo por periodos")
-                graf_periodos, df_periodos=graficar_queso_periodos(st.session_state.df_norm_h)
-                st.plotly_chart(graf_periodos, use_container_width=True)
+        with col3:
             st.subheader("Tabla resumen de precios por peaje de acceso", divider='rainbow')
-            with st.expander("Nota sobre los precios de indexado:"):
-                st.caption("Basados en la parametrización de la fórmula de indexado PT. Por supuesto peajes y cargos según tarifa de acceso.")
-                
             with st.container():
 
-                texto_precios=f'{st.session_state.texto_precios}. Precios en c€/kWh'
-                st.caption(st.session_state.texto_precios)
-
-                from backend_comun import formatear_columnas_tabla
                 cols_precios = ["P1", "P2", "P3", "P4", "P5", "P6", "Media"]
 
-                st.text ('Precios medios de indexado', help='PRECIO MEDIO FINAL DE LA ENERGÍA. Suma de costes (energía y ATR) y margen')
-                df_tabla_precios_fmt = formatear_columnas_tabla(df_tabla_precios, columnas_cent_eur_kwh=cols_precios, incluir_unidades=False)
+                st.text(
+                    'Precios finales (€/kWh)',
+                    help=(
+                        'Precios finales de indexado, basados en parámetros de fórmula. '
+                        'Incluyen peajes y cargos.'
+                    ),
+                )
+                df_tabla_precios_eur_kwh = ocultar_filas_curva(
+                    df_tabla_precios
+                )
+                df_tabla_precios_eur_kwh[cols_precios] = (
+                    df_tabla_precios_eur_kwh[cols_precios] / 100
+                )
+                df_tabla_precios_fmt = formatear_columnas_tabla(
+                    df_tabla_precios_eur_kwh,
+                    columnas_eur_kwh=cols_precios,
+                    incluir_unidades=False,
+                )
                 st.dataframe(df_tabla_precios_fmt, use_container_width=True)
-                
-                st.text ('Costes medios de indexado', help = 'COSTE MEDIO DE LA ENERGÍA, sin incluir ATR ni MARGEN.')
-                df_tabla_costes_fmt = formatear_columnas_tabla(df_tabla_costes, columnas_cent_eur_kwh=cols_precios, incluir_unidades=False)    
-                st.dataframe(df_tabla_costes_fmt, use_container_width=True)
 
-                st.text ('Costes de ATR')
-                df_tabla_pycs_fmt = formatear_columnas_tabla(df_tabla_pyc, columnas_cent_eur_kwh=cols_precios, incluir_unidades=False)
-                st.dataframe(df_tabla_pycs_fmt, use_container_width=True )
-                
-                st.text ('Margen')
-                df_tabla_margen_fmt = formatear_columnas_tabla(df_tabla_margen, columnas_cent_eur_kwh=cols_precios, incluir_unidades=False)
-                st.dataframe(df_tabla_margen_fmt, use_container_width=True )
+                # Las tablas resumidas de costes, ATR y margen se mantienen en
+                # df_tabla_costes, df_tabla_pyc y df_tabla_margen para poder
+                # recuperarlas, pero dejan de mostrarse en el tab Históricos.
+                mostrar_desgloses_precios_historicos(
+                    df_historico,
+                    formula_historico,
+                )
 
-                st.subheader("Apuntamiento SPOT / OMIE", divider="rainbow")
-                st.caption(
-                    "Las filas por peaje muestran el apuntamiento horario sin ponderar. "
-                    "La fila de curva, cuando existe, está ponderada por el consumo neto."
-                )
-                st.dataframe(
-                    df_tabla_apuntamiento.style.format("{:.3f}", na_rep="-"),
-                    use_container_width=True,
-                )
+                st.subheader("Tablas de apuntamientos", divider="rainbow")
+                with st.expander("Apuntamiento SPOT / OMIE"):
+                    st.caption(
+                        "Las filas por peaje muestran el apuntamiento horario sin ponderar."
+                    )
+                    mostrar_tabla_apuntamiento(
+                        ocultar_filas_curva(df_tabla_apuntamiento)
+                    )
+
+                with st.expander("Apuntamiento SSAA"):
+                    mostrar_tabla_apuntamiento(df_tabla_apuntamiento_ssaa)
+
+                with st.expander("Apuntamiento precio final"):
+                    mostrar_tabla_apuntamiento(df_tabla_apuntamiento_precio)
+
+        with col1:
+            mostrar_controles_telemindex(lista_meses, fecha_ultima_filtrado)
 
 
 with tab2:
@@ -900,8 +1425,7 @@ with tab2:
         use_container_width=True,
         hide_index=True
     )
-        
-
+    mostrar_impacto_spot()
 
 
 with tab3:
@@ -918,7 +1442,9 @@ with tab3:
         
         # TABLA RESUMEN DE CONSUMOS, COSTES Y PRECIOS MEDIOS DE INDEXADO PONDERADOS A LA CURVA DE CARGA
 
-        df_resumen = obtener_df_resumen(df_uso, None, 0.0)
+        df_resumen = obtener_df_resumen(
+            st.session_state.df_curva_sheets, None, 0.0
+        )
         from backend_comun import formatear_resumen_mixto
         #df_resumen_view = formatear_df_resumen(df_resumen)
         df_resumen_fmt = df_resumen.copy()
@@ -939,7 +1465,19 @@ with tab3:
 
         
         
-        st.subheader(f':orange[{st.session_state.texto_precios}]')
+        fecha_inicio_curva, fecha_fin_curva = (
+            pd.to_datetime(fecha).date()
+            for fecha in st.session_state.rango_curvadecarga
+        )
+        texto_periodo_curva = (
+            fecha_inicio_curva.strftime("%d/%m/%Y")
+            if fecha_inicio_curva == fecha_fin_curva
+            else (
+                f"{fecha_inicio_curva.strftime('%d/%m/%Y')} → "
+                f"{fecha_fin_curva.strftime('%d/%m/%Y')}"
+            )
+        )
+        st.subheader(f':orange[{texto_periodo_curva}]')
         st.subheader(f'Resumen de :blue[INDEXADO]')
         #st.dataframe(df_resumen_view, use_container_width=True)
         st.dataframe(df_resumen_fmt, use_container_width=True)
@@ -1315,11 +1853,16 @@ with tab3:
             st.subheader(titulo_comp)
             st.plotly_chart(fig_heat, use_container_width=True)
 
+            df_coste_index_h = (
+                st.session_state.df_curva_sheets
+                .groupby("hora", as_index=False)["coste_total"]
+                .mean()
+            )
             graf_medias_horarias=graficar_media_horaria('Total')
             graf_medias_horarias.add_trace(
                 go.Scatter(
-                    x=df_coste_h["hora"],
-                    y=df_coste_h["coste_total"],
+                    x=df_coste_index_h["hora"],
+                    y=df_coste_index_h["coste_total"],
                     mode="lines",
                     name="Coste medio indexado",
                     line=dict(

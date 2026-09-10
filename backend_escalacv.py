@@ -78,6 +78,313 @@ def calcular_spreads_diarios(datos):
     spreads['mes'] = fechas.dt.month
     return spreads[columnas]
 
+
+def calcular_volatilidad_diaria(datos):
+    """Calcula la dispersión de todos los precios horarios de cada día.
+
+    Se usa la desviación estándar poblacional (``ddof=0``), porque las
+    observaciones disponibles forman el día completo y no una muestra.
+    """
+    columnas = ['fecha', 'año', 'mes', 'volatilidad_diaria', 'registros']
+    if not isinstance(datos, pd.DataFrame) or datos.empty:
+        return pd.DataFrame(columns=columnas)
+    if not {'fecha', 'value'}.issubset(datos.columns):
+        return pd.DataFrame(columns=columnas)
+
+    base = datos[['fecha', 'value']].copy()
+    base['fecha'] = pd.to_datetime(base['fecha'], errors='coerce')
+    base['value'] = pd.to_numeric(base['value'], errors='coerce')
+    base = base.dropna(subset=['fecha', 'value'])
+    if base.empty:
+        return pd.DataFrame(columns=columnas)
+
+    volatilidad = (
+        base.groupby(base['fecha'].dt.floor('D'))['value']
+        .agg(
+            volatilidad_diaria=lambda serie: serie.std(ddof=0),
+            registros='count',
+        )
+        .reset_index()
+    )
+    volatilidad['año'] = volatilidad['fecha'].dt.year
+    volatilidad['mes'] = volatilidad['fecha'].dt.month
+    return volatilidad[columnas]
+
+
+def graficar_spreads_historicos(
+    spreads, fecha_inicio='2018-01-01', componente='SPOT'
+):
+    """Representa el spread horario de cada dia desde ``fecha_inicio``."""
+    if not isinstance(spreads, pd.DataFrame) or spreads.empty:
+        return None
+    if not {'fecha', 'spread_diario'}.issubset(spreads.columns):
+        return None
+
+    datos = spreads[['fecha', 'spread_diario']].copy()
+    datos['fecha'] = pd.to_datetime(datos['fecha'], errors='coerce')
+    datos['spread_diario'] = pd.to_numeric(
+        datos['spread_diario'], errors='coerce'
+    )
+    datos = datos.dropna(subset=['fecha', 'spread_diario'])
+    datos = datos[datos['fecha'] >= pd.Timestamp(fecha_inicio)]
+    if datos.empty:
+        return None
+
+    datos = datos.sort_values('fecha')
+    año_inicio = int(datos['fecha'].dt.year.min())
+    año_fin = int(datos['fecha'].dt.year.max())
+    figura = go.Figure(
+        go.Bar(
+            x=datos['fecha'],
+            y=datos['spread_diario'],
+            name='Spread diario',
+            marker=dict(color='#4682B4', line_width=0),
+            hovertemplate=(
+                '<b>Fecha:</b> %{x|%d-%m-%Y}<br>'
+                '<b>Spread:</b> %{y:.2f} €/MWh<extra></extra>'
+            ),
+        )
+    )
+    datos['año'] = datos['fecha'].dt.year
+    for año, datos_año in datos.groupby('año', sort=True):
+        spread_medio = datos_año['spread_diario'].mean()
+        fecha_inicio_año = datos_año['fecha'].min()
+        fecha_fin_año = datos_año['fecha'].max()
+        fecha_centro_año = fecha_inicio_año + (
+            fecha_fin_año - fecha_inicio_año
+        ) / 2
+        figura.add_trace(
+            go.Scatter(
+                x=[fecha_inicio_año, fecha_centro_año, fecha_fin_año],
+                y=[spread_medio, spread_medio, spread_medio],
+                mode='lines',
+                name='Spread medio anual',
+                line=dict(color='yellow', dash='dot'),
+                showlegend=bool(año == datos['año'].min()),
+                hovertemplate=(
+                    f'<b>{año}</b><br>'
+                    'Spread medio: %{y:.2f} €/MWh<extra></extra>'
+                ),
+            )
+        )
+        figura.add_annotation(
+            x=fecha_centro_año,
+            y=spread_medio,
+            text=f'<b>{spread_medio:.2f}</b>',
+            showarrow=False,
+            yshift=14,
+            font=dict(color='yellow', size=15, family='Arial'),
+        )
+    figura.update_layout(
+        title=(
+            f'Spread horario diario de {componente}. '
+            f'{año_inicio}-{año_fin}'
+        ),
+        xaxis=dict(
+            range=_rango_fechas_con_margen_barras(
+                datos['fecha'].min(), datos['fecha'].max()
+            ),
+            rangeslider=dict(
+                visible=True,
+                bgcolor='rgba(173, 216, 230, 0.5)',
+            ),
+            rangeselector=dict(
+                buttons=[
+                    dict(
+                        count=1,
+                        label='Último año',
+                        step='year',
+                        stepmode='backward',
+                    ),
+                    dict(
+                        label='Año anterior',
+                        step='year',
+                        stepmode='todate',
+                    ),
+                    dict(step='all', label='Todo'),
+                ]
+            ),
+        ),
+        yaxis=dict(
+            title='€/MWh',
+            rangemode='tozero',
+            showgrid=True,
+        ),
+    )
+    if str(componente).upper() == 'SSAA':
+        figura.update_layout(
+            updatemenus=[
+                dict(
+                    type='buttons',
+                    direction='right',
+                    x=1,
+                    y=1.15,
+                    xanchor='right',
+                    yanchor='top',
+                    bgcolor='rgba(0,0,0,0)',
+                    bordercolor='rgba(0,0,0,0)',
+                    showactive=False,
+                    buttons=[
+                        dict(
+                            label='🔓 Escala automática',
+                            method='relayout',
+                            args=[{'yaxis.autorange': True}],
+                        ),
+                        dict(
+                            label='🔒 Fijar [0, 100]',
+                            method='relayout',
+                            args=[{'yaxis.range': [0, 100]}],
+                        ),
+                    ],
+                )
+            ]
+        )
+    figura.update_xaxes(
+        tickformat='%Y',
+        tickvals=pd.date_range(
+            start=datos['fecha'].min(),
+            end=datos['fecha'].max(),
+            freq='YS',
+        ),
+        showgrid=True,
+    )
+    return aplicar_estilo(figura)
+
+
+def graficar_volatilidad_historica(volatilidad, fecha_inicio='2018-01-01'):
+    """Representa la volatilidad diaria y su media por año."""
+    if not isinstance(volatilidad, pd.DataFrame) or volatilidad.empty:
+        return None
+
+    datos = volatilidad.copy()
+    datos['fecha'] = pd.to_datetime(datos['fecha'], errors='coerce')
+    datos['volatilidad_diaria'] = pd.to_numeric(
+        datos['volatilidad_diaria'], errors='coerce'
+    )
+    datos = datos.dropna(subset=['fecha', 'volatilidad_diaria'])
+    datos = datos[datos['fecha'] >= pd.Timestamp(fecha_inicio)].sort_values(
+        'fecha'
+    )
+    if datos.empty:
+        return None
+
+    datos['año'] = datos['fecha'].dt.year
+    figura = go.Figure(
+        go.Bar(
+            x=datos['fecha'],
+            y=datos['volatilidad_diaria'],
+            name='Volatilidad diaria',
+            marker=dict(
+                color=datos['volatilidad_diaria'],
+                colorscale='Viridis',
+                showscale=True,
+                colorbar=dict(title='€/MWh'),
+                line_width=0,
+            ),
+            hovertemplate=(
+                '<b>Fecha:</b> %{x|%d-%m-%Y}<br>'
+                '<b>Volatilidad:</b> %{y:.2f} €/MWh<extra></extra>'
+            ),
+        )
+    )
+    for año, datos_año in datos.groupby('año', sort=True):
+        media_anual = datos_año['volatilidad_diaria'].mean()
+        inicio = datos_año['fecha'].min()
+        fin = datos_año['fecha'].max()
+        centro = inicio + (fin - inicio) / 2
+        figura.add_trace(
+            go.Scatter(
+                x=[inicio, centro, fin],
+                y=[media_anual] * 3,
+                mode='lines',
+                name='Volatilidad media anual',
+                line=dict(color='yellow', dash='dot'),
+                showlegend=bool(año == datos['año'].min()),
+                hovertemplate=(
+                    f'<b>{año}</b><br>'
+                    'Volatilidad media: %{y:.2f} €/MWh<extra></extra>'
+                ),
+            )
+        )
+        figura.add_annotation(
+            x=centro,
+            y=media_anual,
+            text=f'<b>{media_anual:.2f}</b>',
+            showarrow=False,
+            yshift=14,
+            font=dict(color='yellow', size=15, family='Arial'),
+        )
+
+    año_inicio = int(datos['año'].min())
+    año_fin = int(datos['año'].max())
+    figura.update_layout(
+        title=f'Volatilidad intradiaria del SPOT. {año_inicio}-{año_fin}',
+        xaxis=dict(
+            rangeslider=dict(
+                visible=True,
+                bgcolor='rgba(173, 216, 230, 0.5)',
+            ),
+            rangeselector=dict(
+                buttons=[
+                    dict(
+                        count=1, label='Último año', step='year',
+                        stepmode='backward'
+                    ),
+                    dict(
+                        label='Año anterior', step='year', stepmode='todate'
+                    ),
+                    dict(step='all', label='Todo'),
+                ]
+            ),
+        ),
+        yaxis=dict(
+            title='Desviación estándar (€/MWh)',
+            rangemode='tozero',
+            showgrid=True,
+        ),
+    )
+    figura.update_xaxes(tickformat='%Y', showgrid=True)
+    return aplicar_estilo(figura)
+
+
+def graficar_distribucion_volatilidad(volatilidad, fecha_inicio='2018-01-01'):
+    """Compara la distribución de la volatilidad diaria entre años."""
+    if not isinstance(volatilidad, pd.DataFrame) or volatilidad.empty:
+        return None
+
+    datos = volatilidad.copy()
+    datos['fecha'] = pd.to_datetime(datos['fecha'], errors='coerce')
+    datos['volatilidad_diaria'] = pd.to_numeric(
+        datos['volatilidad_diaria'], errors='coerce'
+    )
+    datos = datos.dropna(subset=['fecha', 'volatilidad_diaria'])
+    datos = datos[datos['fecha'] >= pd.Timestamp(fecha_inicio)]
+    if datos.empty:
+        return None
+    datos['año'] = datos['fecha'].dt.year.astype(str)
+
+    figura = px.box(
+        datos,
+        x='año',
+        y='volatilidad_diaria',
+        color='año',
+        points='outliers',
+        labels={
+            'año': 'Año',
+            'volatilidad_diaria': 'Desviación estándar diaria (€/MWh)',
+        },
+        title='Distribución anual de la volatilidad diaria del SPOT',
+    )
+    figura.update_layout(showlegend=False)
+    figura.update_traces(
+        hovertemplate=(
+            '<b>Año:</b> %{x}<br>'
+            '<b>Volatilidad:</b> %{y:.2f} €/MWh<extra></extra>'
+        )
+    )
+    figura.update_yaxes(rangemode='tozero', showgrid=True)
+    return aplicar_estilo(figura)
+
 from backend_comun import rango_componentes
 
 

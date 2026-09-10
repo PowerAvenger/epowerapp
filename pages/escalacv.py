@@ -15,7 +15,9 @@ from backend_escalacv import (
     diarios_totales, diarios, mensuales, horarios, medias_horarias, evolucion_mensual, meses_español,
     obtener_df_scatter_mensual, graficar_scatter_combo, obtener_puntos_anuales, graficar_simulacion_cuadratica, graficar_bandas_ssaa,
     mapa_calor_mes, mapa_calor_mes_gradual, graficar_media_acumulada_periodo,
-    calcular_spreads_diarios
+    calcular_spreads_diarios, graficar_spreads_historicos,
+    calcular_volatilidad_diaria, graficar_volatilidad_historica,
+    graficar_distribucion_volatilidad
 )
 from backend_comun import aplicar_estilo, construir_media_acumulada_prevista
 from formato_es import formato_numero_es
@@ -74,6 +76,15 @@ if (
     )
 spreads_spot = st.session_state._escalacv_spreads_spot
 spreads_ssaa = st.session_state._escalacv_spreads_ssaa
+graf_historico_spread = graficar_spreads_historicos(spreads_spot)
+graf_historico_spread_ssaa = graficar_spreads_historicos(
+    spreads_ssaa, componente='SSAA'
+)
+volatilidad_spot = calcular_volatilidad_diaria(datos_spot_general)
+graf_volatilidad_historica = graficar_volatilidad_historica(volatilidad_spot)
+graf_distribucion_volatilidad = graficar_distribucion_volatilidad(
+    volatilidad_spot
+)
 
 # 1️⃣ Conteo total por mes
 control_mes = (
@@ -247,7 +258,7 @@ años_comp = [
 
 
 # ELEMENTOS DE LA BARRA LATERAL DE OPCIONES-----------------------------------------------------------------------------------------------
-st.sidebar.header('⚡ Escala Cavero-Vidal ⚡')
+st.sidebar.header('⚡ Escala CV: Mercados OMIE ⚡')
 st.sidebar.markdown(f':blue-background[Sección dedicada a **Roberto Cavero García**]')
 ultima_fecha_spot = pd.Timestamp(datos_spot_general['fecha'].max())
 st.sidebar.info(f'Última fecha SPOT disponible: {ultima_fecha_spot.strftime("%d.%m.%Y")}')
@@ -268,8 +279,8 @@ if 'dos_colores' in st.session_state and st.session_state.dos_colores:
 
 # VISUALIZACIÓN ÁREA PRINCIPAL---------------------------------------------------------------------------------------------------------
 
-tab_diario, tab_mensual, tab_anual, tab_historica, tab_mapa, tab_simulador = st.tabs(
-    ['Diario', 'Mensual', 'Anual', 'Serie histórica', 'Mapa de Calor', 'Simulador']
+tab_diario, tab_mensual, tab_anual, tab_historica, tab_spread, tab_volatilidad, tab_mapa, tab_simulador = st.tabs(
+    ['Diario', 'Mensual', 'Anual', 'Serie histórica', 'Spread', 'Volatilidad', 'Mapa de Calor', 'Simulador']
 )
 
 with tab_diario:
@@ -655,6 +666,68 @@ with tab_mensual:
 with tab_historica:
     st.plotly_chart(graf_historico_spot, use_container_width=True)
     st.plotly_chart(graf_historico_ssaa, use_container_width=True)
+
+
+with tab_spread:
+    st.info(
+        '**¿Cuánta diferencia hay entre la hora más cara y la más barata?** '
+        'El spread diario es el precio horario máximo menos el mínimo de '
+        'cada día. Las líneas amarillas muestran la media de los spreads '
+        'diarios de cada año.'
+    )
+    if graf_historico_spread is None:
+        st.info('No hay datos de SPOT para calcular el spread desde 2018.')
+    else:
+        st.plotly_chart(graf_historico_spread, use_container_width=True)
+    if graf_historico_spread_ssaa is None:
+        st.info('No hay datos de SSAA para calcular el spread desde 2018.')
+    else:
+        st.plotly_chart(graf_historico_spread_ssaa, use_container_width=True)
+
+
+with tab_volatilidad:
+    st.info(
+        '**¿Cuánto se mueve el precio dentro de cada día?** La volatilidad '
+        'se calcula como la desviación estándar de todos sus precios '
+        'horarios. A diferencia del spread, tiene en cuenta las 24 horas y '
+        'no solo el máximo y el mínimo.'
+    )
+    if graf_volatilidad_historica is None:
+        st.info('No hay datos para calcular la volatilidad desde 2018.')
+    else:
+        st.plotly_chart(graf_volatilidad_historica, use_container_width=True)
+        volatilidad_boxplot = volatilidad_spot.copy()
+        volatilidad_boxplot['fecha'] = pd.to_datetime(
+            volatilidad_boxplot['fecha'], errors='coerce'
+        )
+        volatilidad_boxplot = volatilidad_boxplot[
+            volatilidad_boxplot['fecha'] >= pd.Timestamp('2018-01-01')
+        ].dropna(subset=['fecha', 'volatilidad_diaria'])
+        medianas_anuales = volatilidad_boxplot.groupby(
+            volatilidad_boxplot['fecha'].dt.year
+        )['volatilidad_diaria'].median()
+        año_mayor_mediana = int(medianas_anuales.idxmax())
+        mayor_mediana = medianas_anuales.loc[año_mayor_mediana]
+        ultima_fecha = volatilidad_boxplot['fecha'].max()
+        aviso_año_incompleto = ''
+        if ultima_fecha < pd.Timestamp(ultima_fecha.year, 12, 31):
+            aviso_año_incompleto = (
+                f' **{ultima_fecha.year} está incompleto**, por lo que su '
+                'distribución todavía no es directamente comparable con '
+                'la de los años cerrados.'
+            )
+        st.info(
+            '**Cómo leer la distribución:** la línea dentro de cada caja es '
+            'la mediana; la caja contiene el 50 % central de los días; los '
+            'bigotes muestran el rango habitual y los puntos son jornadas '
+            'excepcionalmente volátiles. En los datos disponibles, '
+            f'**{año_mayor_mediana} presenta la mediana diaria más alta** '
+            f'({formato_numero_es(mayor_mediana, 2)} €/MWh).'
+            f'{aviso_año_incompleto}'
+        )
+        st.plotly_chart(
+            graf_distribucion_volatilidad, use_container_width=True
+        )
 
 
 with tab_mapa:

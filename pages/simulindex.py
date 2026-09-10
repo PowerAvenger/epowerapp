@@ -64,7 +64,7 @@ if not st.session_state.get('usuario_autenticado', False) and not st.session_sta
 generar_menu()
 init_app()
 
-st.sidebar.header('⚡ Simulación de indexados ⚡')
+st.sidebar.header('⚡ Simulindex: Futuros de indexados ⚡')
 zona_mensajes = st.sidebar.empty()
 if 'df_sheets' not in st.session_state:
     zona_mensajes.warning('Cargando históricos de indexado. Espera a que estén disponibles...', icon = '⚠️')

@@ -360,7 +360,7 @@ def render_resumen_grafico_curva(df_curva, clave="curva_comun", contenedor=st):
 
 def render_origen_curva(
     contenedor, acciones, clave="curva_comun", titulo_compacto=False,
-    resumen=None,
+    resumen=None, mostrar_resumen=True,
 ):
     """Renderiza los tres orígenes y publica una sola curva para toda la app."""
     with contenedor:
@@ -579,7 +579,7 @@ def render_origen_curva(
             st.rerun()
 
     curva_resumen = obtener_curva_sesion(st.session_state)
-    if curva_resumen is not None:
+    if mostrar_resumen and curva_resumen is not None:
         render_resumen_grafico_curva(
             curva_resumen.get("df_norm"),
             clave=clave,
