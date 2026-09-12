@@ -8,6 +8,7 @@ import pandas as pd
 from backend_contractual import (
     aplicar_condiciones_contractuales,
     aplicar_costes_extra_mensuales,
+    cargar_condiciones_cups,
     cargar_costes_extra_cups,
     guardar_costes_extra_cups,
     preparar_indexado_contractual,
@@ -163,6 +164,13 @@ class CalculoContractualTest(unittest.TestCase):
             self.assertEqual(guardadas, 2)
             self.assertEqual(len(recuperadas), 2)
             self.assertAlmostEqual(recuperadas["Importe_EUR"].sum(), 3038.83)
+
+    def test_base_contractual_ausente_no_crea_sqlite_vacio(self):
+        with tempfile.TemporaryDirectory() as temporal:
+            db_path = Path(temporal) / "ausente.sqlite3"
+            with self.assertRaisesRegex(ValueError, "no está disponible"):
+                cargar_condiciones_cups("ES0022000009064699LH", db_path)
+            self.assertFalse(db_path.exists())
 
 
 if __name__ == "__main__":

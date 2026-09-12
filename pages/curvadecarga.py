@@ -2057,9 +2057,16 @@ if st.session_state.get("df_norm") is not None:
                 cf_pct=float(parametros_ref.get("cf_pct", 0.0)),
             )
 
+        if error_condiciones_ahorro and origen_referencia != "Condición anterior del contrato":
+            col_resumen.warning(
+                f"La oferta manual necesita el coste contractual actual como "
+                f"escenario base. {error_condiciones_ahorro}"
+            )
+
         calcular_ahorro = col_resumen.button(
             "Calcular ahorro / sobrecoste", type="primary",
             use_container_width=True, key="calcular_ahorro_contractual",
+            disabled=bool(error_condiciones_ahorro),
         )
         if calcular_ahorro:
             try:

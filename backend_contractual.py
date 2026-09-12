@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +15,36 @@ from data_beta.db import DEFAULT_DB_PATH, connect, initialize_database
 
 
 POSICIONES_LEGACY = {"1": "perdidas", "2": "tm", "3": "neto"}
+TABLAS_CONTRACTUALES = {
+    "suministros", "filas_contrato_origen", "contratos", "legacy_records",
+}
+
+
+def validar_base_contractual(db_path: str | Path = DEFAULT_DB_PATH):
+    """Comprueba la base privada sin crear un SQLite vacío por accidente."""
+    ruta = Path(db_path)
+    if not ruta.is_file():
+        raise ValueError(
+            "La base contractual local no está disponible en este entorno. "
+            "Por seguridad no se publica en la versión web."
+        )
+    try:
+        with sqlite3.connect(f"{ruta.resolve().as_uri()}?mode=ro", uri=True) as conexion:
+            tablas = {
+                fila[0]
+                for fila in conexion.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+    except sqlite3.Error as exc:
+        raise ValueError(
+            "No se ha podido abrir la base contractual local."
+        ) from exc
+    if not TABLAS_CONTRACTUALES.issubset(tablas):
+        raise ValueError(
+            "La base contractual local no está disponible en este entorno. "
+            "Por seguridad no se publica en la versión web."
+        )
 
 
 def cargar_datos_suministro(cups, fecha=None, db_path: str | Path = DEFAULT_DB_PATH):
@@ -77,6 +108,7 @@ def _numero_es(valor, default=0.0):
 
 def cargar_condiciones_cups(cups, db_path: str | Path = DEFAULT_DB_PATH):
     """Carga las versiones de condiciones enlazadas al CUPS indicado."""
+    validar_base_contractual(db_path)
     cups20 = re.sub(r"[^A-Z0-9]", "", str(cups or "").upper())[:20]
     if len(cups20) != 20:
         raise ValueError("El CUPS debe contener al menos 20 caracteres validos.")
