@@ -10,6 +10,10 @@ from dateutil.relativedelta import relativedelta
 from datetime import timedelta
 import plotly.express as px
 from utilidades import generar_menu
+from componentes_comparativa_index_pvpc import (
+    preparar_comparativa_index_pvpc,
+    render_comparativa_index_pvpc,
+)
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
@@ -384,10 +388,14 @@ with st.sidebar.form('form2'):
     tab_principal,
     tab_factura,
     tab_comparativa,
+    tab_index_pvpc,
     tab_pvpc_te,
     tab_optimizacion,
 ) = st.tabs(
-    ['Principal', 'Factura', 'Comparativa', 'PVPC Te', 'Optimización']
+    [
+        'Principal', 'Factura', 'Comparativa', 'Index 2.0 vs PVPC',
+        'PVPC Te', 'Optimización',
+    ]
 )
 col1, col2, col3 = tab_principal.columns([.3, .4, .4])
 factura_col1, factura_col2, factura_col3 = tab_factura.columns(3)
@@ -396,6 +404,40 @@ pvpc_te_col1, pvpc_te_col2, pvpc_te_col3 = tab_pvpc_te.columns(3)
 optimizacion_col1, optimizacion_col2, optimizacion_col3 = (
     tab_optimizacion.columns(3)
 )
+
+with tab_index_pvpc:
+    st.caption(
+        "Reutiliza el histórico PVPC ya cargado en este módulo y los datos "
+        "indexados disponibles en la sesión."
+    )
+    df_index_sesion = st.session_state.get("df_sheets")
+    if df_index_sesion is None or df_index_sesion.empty:
+        st.info(
+            "No hay históricos indexados en la sesión. Entra primero en "
+            "Telemindex para cargarlos y vuelve a esta pestaña."
+        )
+    else:
+        clave_resultado = "comparativa_index_pvpc_resultado"
+        if st.button(
+            "Preparar comparativa Index 2.0 vs PVPC",
+            key="preparar_comparativa_index_pvpc",
+            type="primary",
+        ):
+            with st.spinner("Preparando la comparativa..."):
+                try:
+                    st.session_state[clave_resultado] = (
+                        preparar_comparativa_index_pvpc(
+                            df_index_sesion,
+                            df_datos_horarios_combo,
+                        )
+                    )
+                except Exception as exc:
+                    st.session_state.pop(clave_resultado, None)
+                    st.error(f"No se puede preparar la comparativa: {exc}")
+        if clave_resultado in st.session_state:
+            render_comparativa_index_pvpc(
+                st.session_state[clave_resultado]
+            )
 with col1:
     st.header('Zona de interacción', divider = 'gray')
     #with st.form('form1'):

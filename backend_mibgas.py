@@ -1573,6 +1573,7 @@ def graficar_da_comparado_old(df):
     return fig
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
 def descargar_sendeco(año):
     url = f'https://www.sendeco2.com/site_sendeco/service/download-csv.php?year={año}'
     ruta_local = Path('local_bbdd/sendeco_files') / f'sendeco_{año}.csv'
@@ -1601,6 +1602,7 @@ def descargar_sendeco(año):
 
     return ruta_local
 
+@st.cache_data(ttl=86400, show_spinner=False)
 def obtener_sendeco():
     #OBTENEMOS UN DATAFRAME CON TODOS LOS HISTÓRICOS DE SENDECO
     ruta_sendeco='local_bbdd/sendeco_files/*.csv'

@@ -31,6 +31,22 @@ def _redondear_barras(fig, radio=12):
         marker_cornerradius=radio,
         selector=dict(type="bar"),
     )
+    return _aplicar_patron_apocalipsis(fig)
+
+
+def _aplicar_patron_apocalipsis(fig):
+    """Distingue el nivel extremo sobre fondos claros y oscuros."""
+    for traza in fig.data:
+        if getattr(traza, 'type', None) == 'bar' and traza.name == 'apocalipsis zombie':
+            traza.update(
+                marker_pattern=dict(
+                    shape='/',
+                    fgcolor='#FFD700',
+                    bgcolor='#171717',
+                    solidity=0.22,
+                ),
+                marker_line=dict(color='#FFD700', width=0.6),
+            )
     return fig
 
 
@@ -278,7 +294,12 @@ def graficar_volatilidad_historica(volatilidad, fecha_inicio='2018-01-01'):
                 color=datos['volatilidad_diaria'],
                 colorscale='Viridis',
                 showscale=True,
-                colorbar=dict(title='€/MWh'),
+                colorbar=dict(
+                    title=dict(text='€/MWh', side='top'),
+                    x=1.02,
+                    y=0.43,
+                    len=0.72,
+                ),
                 line_width=0,
             ),
             hovertemplate=(
@@ -344,7 +365,20 @@ def graficar_volatilidad_historica(volatilidad, fecha_inicio='2018-01-01'):
         ),
     )
     figura.update_xaxes(tickformat='%Y', showgrid=True)
-    return aplicar_estilo(figura)
+    figura = aplicar_estilo(figura)
+    figura.update_xaxes(title_font=dict(size=18), tickfont=dict(size=15))
+    figura.update_yaxes(title_font=dict(size=18), tickfont=dict(size=15))
+    figura.update_layout(
+        legend=dict(
+            x=1.02,
+            xanchor='left',
+            y=1,
+            yanchor='top',
+            font=dict(size=16),
+        ),
+        margin=dict(r=185),
+    )
+    return figura
 
 
 def graficar_distribucion_volatilidad(volatilidad, fecha_inicio='2018-01-01'):
@@ -374,6 +408,7 @@ def graficar_distribucion_volatilidad(volatilidad, fecha_inicio='2018-01-01'):
             'volatilidad_diaria': 'Desviación estándar diaria (€/MWh)',
         },
         title='Distribución anual de la volatilidad diaria del SPOT',
+        color_discrete_map=_colores_anuales_volatilidad(datos),
     )
     figura.update_layout(showlegend=False)
     figura.update_traces(
@@ -383,7 +418,87 @@ def graficar_distribucion_volatilidad(volatilidad, fecha_inicio='2018-01-01'):
         )
     )
     figura.update_yaxes(rangemode='tozero', showgrid=True)
-    return aplicar_estilo(figura)
+    figura = aplicar_estilo(figura)
+    figura.update_xaxes(title_font=dict(size=18), tickfont=dict(size=15))
+    figura.update_yaxes(title_font=dict(size=18), tickfont=dict(size=15))
+    return figura
+
+
+def _colores_anuales_volatilidad(datos):
+    """Asigna un color estable a cada año en los gráficos de volatilidad."""
+    años = sorted(datos['año'].astype(str).unique())
+    paleta = px.colors.qualitative.Plotly
+    return {
+        año: paleta[indice % len(paleta)]
+        for indice, año in enumerate(años)
+    }
+
+
+def graficar_dispersion_volatilidad_diaria(
+    volatilidad, años=None, fecha_inicio='2018-01-01'
+):
+    """Superpone la volatilidad diaria de varios años sobre el calendario."""
+    if not isinstance(volatilidad, pd.DataFrame) or volatilidad.empty:
+        return None
+
+    datos = volatilidad.copy()
+    datos['fecha'] = pd.to_datetime(datos['fecha'], errors='coerce')
+    datos['volatilidad_diaria'] = pd.to_numeric(
+        datos['volatilidad_diaria'], errors='coerce'
+    )
+    datos = datos.dropna(subset=['fecha', 'volatilidad_diaria'])
+    datos = datos[datos['fecha'] >= pd.Timestamp(fecha_inicio)]
+    if datos.empty:
+        return None
+
+    datos['año'] = datos['fecha'].dt.year.astype(str)
+    if años is None:
+        años = [2026]
+    años = [str(año) for año in años]
+    if not años:
+        return None
+    seleccion = datos[datos['año'].isin(años)].copy()
+    if seleccion.empty:
+        return None
+
+    seleccion['fecha_eje'] = pd.to_datetime({
+        'year': 2000,
+        'month': seleccion['fecha'].dt.month,
+        'day': seleccion['fecha'].dt.day,
+    })
+    colores_año = _colores_anuales_volatilidad(datos)
+    figura = go.Figure()
+    for año in años:
+        datos_año = seleccion[seleccion['año'] == año]
+        if datos_año.empty:
+            continue
+        figura.add_trace(go.Scatter(
+            x=datos_año['fecha_eje'],
+            y=datos_año['volatilidad_diaria'],
+            customdata=datos_año['fecha'],
+            mode='markers',
+            name=año,
+            marker=dict(size=8, opacity=0.72, color=colores_año[año]),
+            hovertemplate=(
+                '<b>Fecha:</b> %{customdata|%d-%m-%Y}<br>'
+                '<b>Volatilidad:</b> %{y:.2f} €/MWh<extra>%{fullData.name}</extra>'
+            ),
+        ))
+
+    figura.update_layout(
+        title='Dispersión diaria de la volatilidad',
+        xaxis=dict(title='Día del año', tickformat='%d %b', dtick='M1'),
+        yaxis=dict(
+            title='Desviación estándar diaria (€/MWh)',
+            rangemode='tozero',
+            showgrid=True,
+        ),
+    )
+    figura = aplicar_estilo(figura)
+    figura.update_xaxes(title_font=dict(size=18), tickfont=dict(size=15))
+    figura.update_yaxes(title_font=dict(size=18), tickfont=dict(size=15))
+    figura.update_layout(legend=dict(font=dict(size=16)))
+    return figura
 
 from backend_comun import rango_componentes
 
@@ -393,6 +508,10 @@ def get_limites_componentes(componente=None):
 
     rangos = datos_limites['rango']
     etiquetas = datos_limites['valor_asignado']
+    if len(rangos) != len(etiquetas) + 1:
+        raise ValueError(
+            'La Escala CV debe tener exactamente un límite más que etiquetas.'
+        )
 
     df_limites = pd.DataFrame({
         'rango': rangos
@@ -415,7 +534,9 @@ colores = {
     'chungo': '#B04E5A',  # Naranja oscuro (advertencia sin ser agresivo)
     'xtrem': '#A31E1E',  # Rojo anaranjado (peligro intermedio)
     'defcon3': 'darkred',  # Rojo fuerte (nivel crítico)
-    'defcon2': '#800000',  # Rojo oscuro intenso (máximo riesgo)
+    'defcon2': '#800000',  # Rojo oscuro intenso
+    'defcon1': '#A6A6A6',  # Gris metálico visible sobre fondos oscuros
+    'apocalipsis zombie': '#D4A017',  # Ámbar; barras con trama amarilla y negra
 #    'Desconocido': 'gray'  # Neutralidad
 }
 
@@ -842,6 +963,15 @@ def diarios_totales(datos, fecha_ini, fecha_fin, componente=None):
                 showlegend = bool(año == datos_dia['año'].unique()[0])
             )
         )
+        fecha_centro = fecha_inicio + (fecha_final - fecha_inicio) / 2
+        graf_ecv_diario.add_annotation(
+            x=fecha_centro,
+            y=media_valor,
+            text=f'<b>{media_valor:.2f}</b>',
+            showarrow=False,
+            yshift=14,
+            font=dict(color='yellow', size=15, family='Arial'),
+        )
 
     graf_ecv_diario.update_xaxes(
         tickformat = "%Y",  # Mostrar sólo el mes abreviado (Ej: Jan, Feb)
@@ -927,6 +1057,7 @@ def diarios_totales(datos, fecha_ini, fecha_fin, componente=None):
         ]
     )
     
+    graf_ecv_diario = _aplicar_patron_apocalipsis(graf_ecv_diario)
     graf_ecv_diario = aplicar_estilo(graf_ecv_diario)
 
     
@@ -1151,6 +1282,7 @@ def diarios(datos, fecha_ini, fecha_fin, datos_comparar):
 
     )
     
+    graf_ecv_diario = _aplicar_patron_apocalipsis(graf_ecv_diario)
     graf_ecv_diario = aplicar_estilo(graf_ecv_diario)
     graf_ecv_diario.update_layout(height= 600)
 
@@ -1721,10 +1853,7 @@ def horarios(datos):
     lista_escala = datos_horarios['escala'].unique()
     datos_horarios['color'] = datos_horarios['escala'].map(colores)
 
-    escala_horaria = [
-        '≤0', 'muy bajo', 'bajo', 'medio', 'alto',
-        'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2'
-    ]
+    escala_horaria = list(etiquetas)
 
     escala_ordenada_hora = sorted(
         escala_horaria,
@@ -1948,7 +2077,7 @@ def horarios_old(datos):
 
     
     #escala_horaria=['muy bajo', 'bajo', 'medio', 'alto', 'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2']
-    escala_horaria = ['≤0', 'muy bajo', 'bajo', 'medio', 'alto', 'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2']
+    escala_horaria = list(etiquetas)
     escala_ordenada_hora = sorted(escala_horaria, key=lambda x: valor_asignado_a_rango[x], reverse=True)
     datos_horarios['escala']=pd.Categorical(datos_horarios['escala'],categories=escala_ordenada_hora, ordered=True)
 
@@ -2073,10 +2202,7 @@ def medias_horarias(datos, mes_etiqueta=None):
 
     datos_horarios['color'] = datos_horarios['escala'].map(colores)
 
-    escala_horaria = [
-        'muy bajo', 'bajo', 'medio', 'alto', 'muy alto',
-        'chungo', 'xtrem', 'defcon3', 'defcon2'
-    ]
+    escala_horaria = list(etiquetas)
 
     escala_ordenada_hora = sorted(
         escala_horaria,
@@ -2304,7 +2430,7 @@ def medias_horarias_old(datos):
     
 
     
-    escala_horaria=['muy bajo', 'bajo', 'medio', 'alto', 'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2']
+    escala_horaria = list(etiquetas)
     escala_ordenada_hora = sorted(escala_horaria, key=lambda x: valor_asignado_a_rango[x], reverse=True)
     datos_horarios['escala']=pd.Categorical(datos_horarios['escala'],categories=escala_ordenada_hora, ordered=True)
 

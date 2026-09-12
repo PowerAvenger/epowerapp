@@ -64,6 +64,8 @@ ultima_fecha_mibgas = df_mibgas_base['Trading day'].max()
 st.sidebar.info(f'Última fecha disponible: {ultima_fecha_mibgas.strftime("%d.%m.%Y")}')
 if st.sidebar.button('Actualizar datos', use_container_width=True):
     carga_mibgas.clear()
+    st.session_state.pop("gas_analisis_omie_mibgas", None)
+    st.session_state.pop("gas_grafico_co2", None)
     st.rerun()
 
 # FUTUROS M MESES
@@ -106,31 +108,6 @@ df_media_acumulada_prevista_2026 = construir_media_acumulada_prevista(
     col_valor_real="precio_gas",
 )
 precio_medio_mibgas_2026 = round(df_curva_mibgas_2026["precio"].mean(), 2)
-graf_mibgas_2026 = graficar_curva_mibgas_2026(df_curva_mibgas_2026, precio_medio_mibgas_2026)
-df_media_mibgas_2026 = construir_media_prevista_mibgas_2026_diaria(df_mg_da, df_mg_m, df_mg_q)
-graf_media_mibgas_2026 = graficar_media_prevista_mibgas_2026(df_media_mibgas_2026)
-
-df_mibgas_año_movil = construir_curva_mibgas_mensual_12m(df_mg_m, df_mg_q)
-num_meses_mibgas_año_movil = df_mibgas_año_movil["precio"].notna().sum()
-precio_medio_mibgas_año_movil = round(df_mibgas_año_movil["precio"].mean(), 2)
-graf_mibgas_año_movil = graficar_curva_mibgas_mensual_12m(df_mibgas_año_movil, precio_medio_mibgas_año_movil)
-df_evol_media_mibgas_forward = construir_evolucion_media_mibgas_forward_12m(
-    df_mg_m=df_mg_m,
-    df_mg_q=df_mg_q,
-    fecha_inicio="01.01.2024"
-)
-df_evol_media_mibgas_forward = añadir_mibgas_real_12m_alineado_forward(
-    df_evol=df_evol_media_mibgas_forward,
-    df_mg_da=df_mg_da,
-    col_fecha_evol="Fecha",
-    col_fecha_real="fecha_entrega",
-    col_real="precio_gas",
-    meses=12,
-    exigir_ventana_completa=True
-)
-graf_evol_media_mibgas_forward = graficar_evolucion_media_mibgas_forward(
-    df_evol_media_mibgas_forward
-)
 
 df_medias = df_mg_da.groupby("año_entrega", as_index=False)["precio_gas"].mean()
 df_medias["precio_gas"] = df_medias["precio_gas"].round(2)
@@ -148,35 +125,12 @@ graf_da_comparado = graficar_da_comparado(df_mg_da)
 
 
 
-# SENDECO========================================================================
-año_actual=datetime.now().year
-descargar_sendeco(año_actual)
-df_sendeco = obtener_sendeco()
-
-df_sendeco_anual = (
-    df_sendeco
-    .groupby('año', as_index=False)['co2_€ton']
-    .mean()
-    .rename(columns={'co2_€ton': 'co2_medio_€ton'})
-)
-
-
-df_total_data_gas_co2=pd.merge(df_mg_da,df_sendeco, on='fecha_entrega',how='left')
-df_total_data_gas_co2['co2_€ton']=df_total_data_gas_co2['co2_€ton'].fillna(method='ffill')
-df_total_data_gas_co2['co2_€ton']=df_total_data_gas_co2['co2_€ton'].fillna(method='bfill')
-
-ratio_precio_co2=0.35
-
-df_total_data_gas_co2['co2']=round(df_total_data_gas_co2['co2_€ton']*ratio_precio_co2,2)
-df_total_data_gas_co2['año'] = df_total_data_gas_co2['fecha_entrega'].dt.year
-df_total_data_gas_co2['día_del_año'] = df_total_data_gas_co2['fecha_entrega'].dt.dayofyear
-graf_co2_gas = graficar_gas_co2(df_total_data_gas_co2)
-
-
 df_spot_mensual = obtener_spot_mensual(st.session_state.df_sheets)
 print (df_spot_mensual)
 
-df_total_data = df_total_data_gas_co2.merge(df_spot_mensual, on = 'fecha_entrega', how = 'left')
+df_total_data = df_mg_da.merge(
+    df_spot_mensual, on='fecha_entrega', how='left'
+)
 
 df_mensual = construir_df_mensual(df_total_data)
 
@@ -186,10 +140,6 @@ df_spot_diario = obtener_spot_diario(st.session_state.df_sheets)
 print (df_spot_diario)
 omie_media_2026 = round(df_spot_diario.loc[df_spot_diario["fecha"].dt.year == 2026, "spot"].mean(),2)
 print(omie_media_2026)
-df_comparativa_diaria_mibgas_omie = construir_comparativa_diaria_mibgas_omie(
-    df_mg_da,
-    df_spot_diario,
-)
 df_comparativa_diaria_historica = construir_comparativa_diaria_mibgas_omie(
     df_mg_da,
     df_spot_diario,
@@ -198,31 +148,6 @@ df_comparativa_diaria_historica = construir_comparativa_diaria_mibgas_omie(
 df_resumen_mensual_omie_mibgas = construir_resumen_mensual_omie_mibgas(
     df_comparativa_diaria_historica
 )
-graf_comparativa_diaria_mibgas_omie = graficar_comparativa_diaria_mibgas_omie(
-    df_comparativa_diaria_mibgas_omie
-)
-df_relacion_horaria_omie_mibgas = construir_relacion_horaria_omie_mibgas(
-    df_mg_da,
-    st.session_state.df_sheets,
-)
-graf_mapa_calor_omie_mibgas = graficar_mapa_calor_relacion_omie_mibgas(
-    df_relacion_horaria_omie_mibgas
-)
-graf_relacion_por_mes, df_relacion_por_mes = (
-    graficar_relacion_omie_mibgas_por_mes(
-        df_relacion_horaria_omie_mibgas
-    )
-)
-graf_relacion_por_hora, df_relacion_por_hora = (
-    graficar_relacion_omie_mibgas_por_hora(
-        df_relacion_horaria_omie_mibgas
-    )
-)
-df_ratios_maximos_horarios_mes = construir_ratios_maximos_horarios_por_mes(
-    df_relacion_horaria_omie_mibgas
-)
-
-
 df_validacion = pd.DataFrame({
     'año': [2024, 2025, 2021, 2019, 2018],
     'precio_gas': [35.95,34.72, 47.3, 15.27, 28.95],   # MIBGAS real
@@ -254,8 +179,9 @@ graf_hist, simul_spot, simul_gas = graf_simul_spot(
 
 zona_mensajes.empty()
 
-tab1, tab_comparador, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab_omie_mibgas, tab_comparador, tab2, tab3, tab4, tab5 = st.tabs([
     'Históricos',
+    'OMIE vs MIBGAS',
     'Comparador',
     'Futuros',
     'CO2',
@@ -283,122 +209,121 @@ with tab1:
             st.write(graf_mibgas_mensual_historico)
             st.write(graf_da_2026_acumulado)
 
-        st.plotly_chart(
-            graf_comparativa_diaria_mibgas_omie,
-            use_container_width=True,
-        )
+
+with tab_omie_mibgas:
+    clave_analisis = "gas_analisis_omie_mibgas"
+    if st.button(
+        "Cargar análisis OMIE vs MIBGAS",
+        key="gas_cargar_analisis_omie_mibgas",
+        type="primary",
+    ):
+        with st.spinner("Preparando análisis OMIE vs MIBGAS..."):
+            try:
+                comparativa_diaria = construir_comparativa_diaria_mibgas_omie(
+                    df_mg_da, df_spot_diario
+                )
+                relacion_horaria = construir_relacion_horaria_omie_mibgas(
+                    df_mg_da, st.session_state.df_sheets
+                )
+                graf_relacion_mes, relacion_mes = (
+                    graficar_relacion_omie_mibgas_por_mes(relacion_horaria)
+                )
+                graf_relacion_hora, relacion_hora = (
+                    graficar_relacion_omie_mibgas_por_hora(relacion_horaria)
+                )
+                st.session_state[clave_analisis] = {
+                    "comparativa_diaria": comparativa_diaria,
+                    "graf_comparativa": graficar_comparativa_diaria_mibgas_omie(
+                        comparativa_diaria
+                    ),
+                    "relacion_horaria": relacion_horaria,
+                    "graf_mapa": graficar_mapa_calor_relacion_omie_mibgas(
+                        relacion_horaria
+                    ),
+                    "graf_mes": graf_relacion_mes,
+                    "relacion_mes": relacion_mes,
+                    "graf_hora": graf_relacion_hora,
+                    "relacion_hora": relacion_hora,
+                    "ratios_maximos": construir_ratios_maximos_horarios_por_mes(
+                        relacion_horaria
+                    ),
+                }
+            except Exception as exc:
+                st.session_state.pop(clave_analisis, None)
+                st.error(f"No se pudo preparar el análisis: {exc}")
+
+    analisis = st.session_state.get(clave_analisis)
+    if analisis is None:
+        st.caption("Los cruces diarios y horarios se calculan únicamente al solicitarlos.")
+    else:
+        st.plotly_chart(analisis["graf_comparativa"], use_container_width=True)
         with st.expander("Ver tabla diaria MIBGAS D+1 vs OMIE"):
             st.dataframe(
-                df_comparativa_diaria_mibgas_omie,
+                analisis["comparativa_diaria"],
                 use_container_width=True,
                 hide_index=True,
                 column_config={
-                    "fecha": st.column_config.DateColumn(
-                        "Fecha", format="DD/MM/YYYY"
-                    ),
+                    "fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY"),
                     "mibgas_d1": st.column_config.NumberColumn(
                         "MIBGAS D+1 (€/MWh)", format="%.2f"
                     ),
-                    "omie": st.column_config.NumberColumn(
-                        "OMIE (€/MWh)", format="%.2f"
-                    ),
+                    "omie": st.column_config.NumberColumn("OMIE (€/MWh)", format="%.2f"),
                     "rel_omie_gas": st.column_config.NumberColumn(
                         "Rel. OMIE/Gas", format="%.4f"
                     ),
                 },
             )
 
-    col_mapa, col_metricas = st.columns([.85, .15])
-    with col_mapa:
-        st.plotly_chart(
-            graf_mapa_calor_omie_mibgas,
-            use_container_width=True,
-        )
-    with col_metricas:
-        if not df_relacion_horaria_omie_mibgas.empty:
-            fila_max = df_relacion_horaria_omie_mibgas.loc[
-                df_relacion_horaria_omie_mibgas["rel_omie_gas"].idxmax()
-            ]
-            st.metric(
-                "Máx. OMIE/Gas",
-                f"{fila_max['rel_omie_gas']:.2f}",
-            )
-            st.metric(
-                "Fecha del máximo",
-                fila_max["fecha"].strftime("%d/%m/%Y"),
-            )
-            st.metric(
-                "Hora",
-                f"{int(fila_max['hora']):02d}:00",
-            )
-            st.metric(
-                "OMIE",
-                f"{fila_max['omie']:.2f} €/MWh",
-            )
-            st.metric(
-                "MIBGAS D+1",
-                f"{fila_max['mibgas_d1']:.2f} €/MWh",
-            )
+        col_mapa, col_metricas = st.columns([.85, .15])
+        with col_mapa:
+            st.plotly_chart(analisis["graf_mapa"], use_container_width=True)
+        with col_metricas:
+            relacion_horaria = analisis["relacion_horaria"]
+            if not relacion_horaria.empty:
+                fila_max = relacion_horaria.loc[
+                    relacion_horaria["rel_omie_gas"].idxmax()
+                ]
+                st.metric("Máx. OMIE/Gas", f"{fila_max['rel_omie_gas']:.2f}")
+                st.metric("Fecha del máximo", fila_max["fecha"].strftime("%d/%m/%Y"))
+                st.metric("Hora", f"{int(fila_max['hora']):02d}:00")
+                st.metric("OMIE", f"{fila_max['omie']:.2f} €/MWh")
+                st.metric("MIBGAS D+1", f"{fila_max['mibgas_d1']:.2f} €/MWh")
+            else:
+                st.info("No hay datos horarios coincidentes para 2026.")
+
+        col_rel_mes, col_rel_hora = st.columns(2)
+        col_rel_mes.plotly_chart(analisis["graf_mes"], use_container_width=True)
+        col_rel_hora.plotly_chart(analisis["graf_hora"], use_container_width=True)
+
+        st.subheader("Ratios máximos horarios OMIE/MIBGAS por mes")
+        st.caption("Máximo ratio observado en cada hora dentro de cada mes · año 2026")
+        ratios = analisis["ratios_maximos"]
+        if ratios.empty:
+            st.info("No hay datos horarios coincidentes para calcular los máximos.")
         else:
-            st.info("No hay datos horarios coincidentes para 2026.")
+            columnas_horarias = [col for col in ratios.columns if col != "Mes"]
 
-    col_rel_mes, col_rel_hora = st.columns(2)
-    with col_rel_mes:
-        st.plotly_chart(
-            graf_relacion_por_mes,
-            use_container_width=True,
-        )
-    with col_rel_hora:
-        st.plotly_chart(
-            graf_relacion_por_hora,
-            use_container_width=True,
-        )
-    st.subheader("Ratios máximos horarios OMIE/MIBGAS por mes")
-    st.caption(
-        "Máximo ratio observado en cada hora dentro de cada mes · año 2026"
-    )
-    if df_ratios_maximos_horarios_mes.empty:
-        st.info("No hay datos horarios coincidentes para calcular los máximos.")
-    else:
-        columnas_horarias = [
-            columna
-            for columna in df_ratios_maximos_horarios_mes.columns
-            if columna != "Mes"
-        ]
-
-        def resaltar_maximos_horarios(fila):
-            estilos = pd.Series("", index=fila.index)
-            valores = pd.to_numeric(
-                fila[columnas_horarias], errors="coerce"
-            )
-            if valores.notna().any():
-                maximo = valores.max()
-                estilos.loc[
-                    columnas_horarias
-                ] = valores.eq(maximo).map(
-                    lambda es_maximo: (
-                        "background-color: #FFD700; color: #111111; "
-                        "font-weight: 700"
-                        if es_maximo else ""
+            def resaltar_maximos_horarios(fila):
+                estilos = pd.Series("", index=fila.index)
+                valores = pd.to_numeric(fila[columnas_horarias], errors="coerce")
+                if valores.notna().any():
+                    maximo = valores.max()
+                    estilos.loc[columnas_horarias] = valores.eq(maximo).map(
+                        lambda es_maximo: (
+                            "background-color: #FFD700; color: #111111; font-weight: 700"
+                            if es_maximo else ""
+                        )
                     )
-                )
-            return estilos
+                return estilos
 
-        st.dataframe(
-            df_ratios_maximos_horarios_mes.style.apply(
-                resaltar_maximos_horarios,
-                axis=1,
-            ).format({
-                columna: "{:.2f}" for columna in columnas_horarias
-            }, na_rep=""),
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                columna: st.column_config.NumberColumn(format="%.2f")
-                for columna in df_ratios_maximos_horarios_mes.columns
-                if columna != "Mes"
-            },
-        )
+            st.dataframe(
+                ratios.style.apply(resaltar_maximos_horarios, axis=1).format(
+                    {col: "{:.2f}" for col in columnas_horarias}, na_rep=""
+                ),
+                hide_index=True,
+                use_container_width=True,
+            )
+
 
 with tab_comparador:
     col_graf_comparador, col_selector_comparador, col_ranking = st.columns(
@@ -464,7 +389,42 @@ with tab2:
 
 
 with tab3:
-    st.write(graf_co2_gas)
+    clave_co2 = "gas_grafico_co2"
+    if st.button(
+        "Cargar datos SENDECO y gráfico CO2",
+        key="gas_cargar_sendeco",
+        type="primary",
+    ):
+        with st.spinner("Cargando datos SENDECO..."):
+            try:
+                año_actual = datetime.now().year
+                descargar_sendeco(año_actual)
+                df_sendeco = obtener_sendeco()
+                df_total_data_gas_co2 = df_mg_da.merge(
+                    df_sendeco, on="fecha_entrega", how="left"
+                )
+                df_total_data_gas_co2["co2_€ton"] = (
+                    df_total_data_gas_co2["co2_€ton"].ffill().bfill()
+                )
+                df_total_data_gas_co2["co2"] = (
+                    df_total_data_gas_co2["co2_€ton"] * .35
+                ).round(2)
+                df_total_data_gas_co2["año"] = (
+                    df_total_data_gas_co2["fecha_entrega"].dt.year
+                )
+                df_total_data_gas_co2["día_del_año"] = (
+                    df_total_data_gas_co2["fecha_entrega"].dt.dayofyear
+                )
+                st.session_state[clave_co2] = graficar_gas_co2(
+                    df_total_data_gas_co2
+                )
+            except Exception as exc:
+                st.session_state.pop(clave_co2, None)
+                st.error(f"No se pudieron cargar los datos de CO2: {exc}")
+    if clave_co2 in st.session_state:
+        st.write(st.session_state[clave_co2])
+    else:
+        st.caption("Los datos SENDECO se cargan únicamente al solicitarlos.")
 
 
 
@@ -765,6 +725,42 @@ with tab4:
 
 
 with tab5:
+    graf_mibgas_2026 = graficar_curva_mibgas_2026(
+        df_curva_mibgas_2026, precio_medio_mibgas_2026
+    )
+    df_media_mibgas_2026 = construir_media_prevista_mibgas_2026_diaria(
+        df_mg_da, df_mg_m, df_mg_q
+    )
+    graf_media_mibgas_2026 = graficar_media_prevista_mibgas_2026(
+        df_media_mibgas_2026
+    )
+    df_mibgas_año_movil = construir_curva_mibgas_mensual_12m(
+        df_mg_m, df_mg_q
+    )
+    num_meses_mibgas_año_movil = df_mibgas_año_movil["precio"].notna().sum()
+    precio_medio_mibgas_año_movil = round(
+        df_mibgas_año_movil["precio"].mean(), 2
+    )
+    graf_mibgas_año_movil = graficar_curva_mibgas_mensual_12m(
+        df_mibgas_año_movil, precio_medio_mibgas_año_movil
+    )
+    df_evol_media_mibgas_forward = construir_evolucion_media_mibgas_forward_12m(
+        df_mg_m=df_mg_m,
+        df_mg_q=df_mg_q,
+        fecha_inicio="01.01.2024",
+    )
+    df_evol_media_mibgas_forward = añadir_mibgas_real_12m_alineado_forward(
+        df_evol=df_evol_media_mibgas_forward,
+        df_mg_da=df_mg_da,
+        col_fecha_evol="Fecha",
+        col_fecha_real="fecha_entrega",
+        col_real="precio_gas",
+        meses=12,
+        exigir_ventana_completa=True,
+    )
+    graf_evol_media_mibgas_forward = graficar_evolucion_media_mibgas_forward(
+        df_evol_media_mibgas_forward
+    )
     col1, col2 = st.columns(2)
     with col1:
         st.info('Previsión MIBGAS 2026 combinando medias mensuales D+1 y futuros mensuales/trimestrales.', icon="ℹ️")

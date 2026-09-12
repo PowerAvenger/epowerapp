@@ -301,13 +301,13 @@ def rango_componentes(componente=None):
 
     if componente in ['SPOT', 'SPOT+SSAA']:
         return {
-            'rango': [-50, 0, 20.01, 40.01, 60.01, 80.01, 100.01, 120.01, 140.01, 160.01, 100000000],
-            'valor_asignado': ['≤0', 'muy bajo', 'bajo', 'medio', 'alto', 'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2']
+            'rango': [-50, 0, 20.01, 40.01, 60.01, 80.01, 100.01, 120.01, 140.01, 160.01, 180.01, 200.01, 100000000],
+            'valor_asignado': ['≤0', 'muy bajo', 'bajo', 'medio', 'alto', 'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2', 'defcon1', 'apocalipsis zombie']
         }
     else:
         return {
-            'rango': [-5000000, 0, 4.01, 8.01, 12.01, 16.01, 20.01, 24.01, 28.01, 32.01, 100000000],
-            'valor_asignado': ['≤0', 'muy bajo', 'bajo', 'medio', 'alto', 'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2']
+            'rango': [-5000000, 0, 4.01, 8.01, 12.01, 16.01, 20.01, 24.01, 28.01, 32.01, 36.01, 40.01, 100000000],
+            'valor_asignado': ['≤0', 'muy bajo', 'bajo', 'medio', 'alto', 'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2', 'defcon1', 'apocalipsis zombie']
         }
     
 ESTILO_GRAF = dict(

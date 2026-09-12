@@ -3627,8 +3627,11 @@ def calcular_verificacion_ssaa(
 ):
     """Compara la regularización SSAA mensual y la aplicada hora a hora.
 
-    Solo devuelve meses naturales completos. Un mes se considera completo si la
-    curva contiene todos sus días y no hay valores nulos de SSAA o consumo.
+    Devuelve también los meses naturales parciales como estimaciones. En esos
+    meses, la media de SSAA disponible se aplica únicamente al consumo cargado;
+    no se extrapolan ni el consumo ni el importe hasta el final del mes.
+
+    Los periodos con valores nulos de SSAA, consumo o pérdidas se excluyen.
     """
     columnas = ["fecha", "ssaa", "consumo_neto_kWh"]
     if columna_perdidas_horarias:
@@ -3654,13 +3657,11 @@ def calcular_verificacion_ssaa(
     for periodo, grupo in df.groupby("periodo", sort=True):
         dias_presentes = grupo["fecha"].dt.normalize().nunique()
         dias_esperados = periodo.days_in_month
-        mes_completo = (
-            dias_presentes == dias_esperados
-            and grupo[columnas[1:]].notna().all().all()
-        )
-        if not mes_completo:
+        datos_completos = grupo[columnas[1:]].notna().all().all()
+        if not datos_completos:
             meses_excluidos.append(str(periodo))
             continue
+        mes_completo = dias_presentes == dias_esperados
 
         ssaa_medio = grupo["ssaa"].mean()
         diferencia_mensual = (
@@ -3691,6 +3692,8 @@ def calcular_verificacion_ssaa(
 
         filas.append({
             "Periodo": str(periodo),
+            "Estado": "Completo" if mes_completo else "Parcial (estimación)",
+            "Cobertura": f"{dias_presentes}/{dias_esperados} días",
             "Año": periodo.year,
             "Trimestre": f"{periodo.year}-T{periodo.quarter}",
             "SSAA medio (€/MWh)": ssaa_medio,

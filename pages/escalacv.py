@@ -17,7 +17,9 @@ from backend_escalacv import (
     mapa_calor_mes, mapa_calor_mes_gradual, graficar_media_acumulada_periodo,
     calcular_spreads_diarios, graficar_spreads_historicos,
     calcular_volatilidad_diaria, graficar_volatilidad_historica,
-    graficar_distribucion_volatilidad
+    graficar_distribucion_volatilidad,
+    graficar_dispersion_volatilidad_diaria,
+    get_limites_componentes, colores
 )
 from backend_comun import aplicar_estilo, construir_media_acumulada_prevista
 from formato_es import formato_numero_es
@@ -38,6 +40,28 @@ mes_actual = meses_español[num_mes_actual]
 if 'año_seleccionado_esc' not in st.session_state:
     st.session_state.año_seleccionado_esc = 2026
     st.session_state.año_anterior_esc = 2026
+if '_año_visual_mensual' not in st.session_state:
+    st.session_state._año_visual_mensual = st.session_state.año_seleccionado_esc
+if '_año_visual_anual' not in st.session_state:
+    st.session_state._año_visual_anual = st.session_state.año_seleccionado_esc
+
+
+def _sincronizar_año_desde_mensual():
+    año = st.session_state._año_visual_mensual
+    st.session_state.año_seleccionado_esc = año
+    st.session_state._año_visual_anual = año
+    if st.session_state.get('año_seleccionado_comp') == año:
+        st.session_state.año_seleccionado_comp = año - 1 if año > 2018 else 2019
+
+
+def _sincronizar_año_desde_anual():
+    año = st.session_state._año_visual_anual
+    st.session_state.año_seleccionado_esc = año
+    st.session_state._año_visual_mensual = año
+    if st.session_state.get('año_seleccionado_comp') == año:
+        st.session_state.año_seleccionado_comp = año - 1 if año > 2018 else 2019
+
+
 if 'año_seleccionado_comp' not in st.session_state:
     st.session_state.año_seleccionado_comp = 2025
     st.session_state.año_anterior_comp = 2025
@@ -223,6 +247,73 @@ fecha_min_horario = datos_horarios.loc[datos_horarios['value'].idxmin(), 'fecha'
 fecha_max_horario = datos_horarios.loc[datos_horarios['value'].idxmax(), 'fecha']
 
 meses_lista = ['todos', 'ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']
+
+
+def _leyenda_escala_cv(titulo, componente):
+    """Muestra los niveles de la Escala CV en una columna estrecha."""
+    df_limites, etiquetas, _ = get_limites_componentes(componente)
+    limites = df_limites['rango'].tolist()
+    filas = []
+    for indice, etiqueta in enumerate(etiquetas):
+        if indice == 0:
+            rango = '≤ 0'
+        elif indice == len(etiquetas) - 1:
+            rango = f'&gt; {round(limites[indice])}'
+        else:
+            rango = (
+                f'{round(limites[indice])}–'
+                f'{round(limites[indice + 1])}'
+            )
+        fondo = colores[etiqueta]
+        if etiqueta == 'apocalipsis zombie':
+            fondo = (
+                'repeating-linear-gradient(135deg, #171717 0, #171717 3px, '
+                '#FFD700 3px, #FFD700 5px)'
+            )
+        filas.append(
+            '<div class="escala-cv-fila">'
+            f'<span class="escala-cv-color" style="background:{fondo}"></span>'
+            f'<span>{rango}</span>'
+            f'<span class="escala-cv-nivel">{etiqueta}</span>'
+            '</div>'
+        )
+    st.markdown(
+        f'<div class="escala-cv-bloque">'
+        f'<div class="escala-cv-titulo">{titulo} <small>€/MWh</small></div>'
+        f'{"".join(filas)}'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _marcar_apagon_28a(figura):
+    """Señala el apagón peninsular del 28 de abril de 2025."""
+    fecha_apagon = pd.Timestamp('2025-04-28')
+    figura.add_shape(
+        type='line',
+        x0=fecha_apagon,
+        x1=fecha_apagon,
+        y0=0,
+        y1=1,
+        xref='x',
+        yref='paper',
+        line=dict(color='yellow', width=2, dash='dash'),
+        layer='above',
+    )
+    figura.add_annotation(
+        x=fecha_apagon,
+        y=1,
+        xref='x',
+        yref='paper',
+        text='<b>28A</b>',
+        showarrow=False,
+        xshift=5,
+        yshift=12,
+        xanchor='left',
+        font=dict(color='yellow', size=15, family='Arial'),
+    )
+
+
 mes_sel = st.session_state.get("mes_seleccionado_esc", "todos")
 if mes_sel == "todos":
     datos_mes_filtrado = datos_año_filtrado.copy()
@@ -243,6 +334,9 @@ mes_num_acumulada = None if mes_sel == "todos" else meses_lista.index(mes_sel)
 df_media_acumulada_periodo, graf_media_acumulada_periodo = graficar_media_acumulada_periodo(
     datos_año_filtrado,
     mes_num=mes_num_acumulada,
+)
+graf_media_acumulada_periodo.update_yaxes(
+    dtick=4 if st.session_state.componente == 'SSAA' else 20
 )
 
 #st.write(ultimo_registro) 
@@ -266,16 +360,6 @@ if st.sidebar.button('Actualizar datos', use_container_width=True):
     with st.spinner('Actualizando SPOT y SSAA desde Drive...'):
         actualizar_datos_mercado()
     st.rerun()
-
-st.sidebar.selectbox('Selecciona el año a visualizar', options = años_lista, key = 'año_seleccionado_esc')
-st.sidebar.selectbox('Selecciona el año a comparar la media anual', options = años_comp, key = 'año_seleccionado_comp')
-st.sidebar.selectbox('Selecciona el mes', options = meses_lista, key = 'mes_seleccionado_esc')
-st.sidebar.radio('Selecciona el componente de mercado', options=['SPOT', 'SSAA', 'SPOT+SSAA'], key = 'componente')
-
-if st.session_state.componente == 'SPOT+SSAA':
-    st.sidebar.toggle('Predator Mode', key = 'dos_colores')
-if 'dos_colores' in st.session_state and st.session_state.dos_colores:
-    st.sidebar.toggle('Peso componentes', key = 'peso_comp')
 
 # VISUALIZACIÓN ÁREA PRINCIPAL---------------------------------------------------------------------------------------------------------
 
@@ -443,6 +527,17 @@ with tab_anual:
     with col1:
         st.plotly_chart(graf_ecv_diario)
     with col2:
+        st.selectbox(
+            'Año a visualizar',
+            options=años_lista,
+            key='_año_visual_anual',
+            on_change=_sincronizar_año_desde_anual,
+        )
+        st.selectbox(
+            'Año a comparar',
+            options=años_comp,
+            key='año_seleccionado_comp',
+        )
         st.subheader('Datos en €/MWh',divider='rainbow')
         st.metric(f'Precio medio diario {st.session_state.año_seleccionado_esc}', value=formato_numero_es(valor_medio_diario, 2))
         st.metric(
@@ -492,8 +587,78 @@ with tab_anual:
             )
 
 with tab_mensual:
+    col_filtros, col_contenido_mensual = st.columns([.12, .88])
+    with col_filtros:
+        st.subheader('Opciones', divider='rainbow')
+        st.selectbox(
+            'Año a visualizar',
+            options=años_lista,
+            key='_año_visual_mensual',
+            on_change=_sincronizar_año_desde_mensual,
+        )
+        st.selectbox(
+            'Mes',
+            options=meses_lista,
+            key='mes_seleccionado_esc',
+        )
+        st.radio(
+            'Componente de mercado',
+            options=['SPOT', 'SSAA', 'SPOT+SSAA'],
+            key='componente',
+        )
+        if st.session_state.componente == 'SPOT+SSAA':
+            st.toggle('Predator Mode', key='dos_colores')
+        if st.session_state.get('dos_colores', False):
+            st.toggle('Peso componentes', key='peso_comp')
+        st.markdown(
+            """
+            <style>
+            .escala-cv-bloque {
+                margin-top: .65rem;
+                padding: .45rem .4rem;
+                border: 1px solid rgba(128, 128, 128, .28);
+                border-radius: .45rem;
+            }
+            .escala-cv-titulo {
+                margin-bottom: .28rem;
+                font-size: 1rem;
+                font-weight: 700;
+            }
+            .escala-cv-titulo small { font-size: .78rem; font-weight: 400; }
+            .escala-cv-fila {
+                display: grid;
+                grid-template-columns: .68rem 2.9rem minmax(0, 1fr);
+                align-items: center;
+                gap: .2rem;
+                min-height: 1.3rem;
+                font-size: .8rem;
+                line-height: 1.1;
+                white-space: nowrap;
+            }
+            .escala-cv-color {
+                width: .62rem;
+                height: .62rem;
+                border: 1px solid rgba(80, 80, 80, .55);
+                border-radius: 2px;
+            }
+            .escala-cv-nivel {
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        _leyenda_escala_cv('SPOT', 'SPOT')
+        _leyenda_escala_cv('SSAA', 'SSAA')
+
+    col_evol, col_evol_met, col_perfil, col_perfil_met = (
+        col_contenido_mensual.columns([.36, .14, .36, .14])
+    )
+
     if mes_sel == 'todos':
-        st.info('Selecciona un mes en la barra lateral para ver el análisis mensual.')
+        with col_evol:
+            st.info('Selecciona un mes para ver el análisis mensual.')
     else:
         perfil_horario_mes = (
             datos_mes_filtrado.groupby('hora', as_index=False)['value'].mean()
@@ -540,9 +705,6 @@ with tab_mensual:
             )
             graf_spreads_mes = aplicar_estilo(graf_spreads_mes)
 
-        col_evol, col_evol_met, col_perfil, col_perfil_met = st.columns(
-            [.36, .14, .36, .14]
-        )
         with col_evol:
             if df_media_acumulada_periodo.empty:
                 st.info(
@@ -623,7 +785,7 @@ with tab_mensual:
             col_comparativa_met,
             col_spread,
             col_spread_met,
-        ) = st.columns([.36, .14, .36, .14])
+        ) = col_contenido_mensual.columns([.36, .14, .36, .14])
         with col_comparativa:
             st.plotly_chart(
                 graf_ecv_evol_mes_años, use_container_width=True
@@ -664,6 +826,33 @@ with tab_mensual:
         
 
 with tab_historica:
+    graf_historico_spot.update_layout(height=620)
+    graf_historico_ssaa.update_layout(height=620)
+    if not any(
+        traza.name == 'apocalipsis zombie'
+        for traza in graf_historico_ssaa.data
+    ):
+        graf_historico_ssaa.add_trace(
+            go.Bar(
+                x=[None],
+                y=[None],
+                name='apocalipsis zombie',
+                visible='legendonly',
+                hoverinfo='skip',
+                marker=dict(
+                    color='#171717',
+                    pattern=dict(
+                        shape='/',
+                        fgcolor='#FFD700',
+                        bgcolor='#171717',
+                        solidity=0.22,
+                    ),
+                    line=dict(color='#FFD700', width=0.6),
+                ),
+            )
+        )
+    _marcar_apagon_28a(graf_historico_spot)
+    _marcar_apagon_28a(graf_historico_ssaa)
     st.plotly_chart(graf_historico_spot, use_container_width=True)
     st.plotly_chart(graf_historico_ssaa, use_container_width=True)
 
@@ -678,10 +867,12 @@ with tab_spread:
     if graf_historico_spread is None:
         st.info('No hay datos de SPOT para calcular el spread desde 2018.')
     else:
+        graf_historico_spread.update_layout(height=620)
         st.plotly_chart(graf_historico_spread, use_container_width=True)
     if graf_historico_spread_ssaa is None:
         st.info('No hay datos de SSAA para calcular el spread desde 2018.')
     else:
+        graf_historico_spread_ssaa.update_layout(height=620)
         st.plotly_chart(graf_historico_spread_ssaa, use_container_width=True)
 
 
@@ -695,6 +886,7 @@ with tab_volatilidad:
     if graf_volatilidad_historica is None:
         st.info('No hay datos para calcular la volatilidad desde 2018.')
     else:
+        graf_volatilidad_historica.update_layout(height=620)
         st.plotly_chart(graf_volatilidad_historica, use_container_width=True)
         volatilidad_boxplot = volatilidad_spot.copy()
         volatilidad_boxplot['fecha'] = pd.to_datetime(
@@ -716,18 +908,53 @@ with tab_volatilidad:
                 'distribución todavía no es directamente comparable con '
                 'la de los años cerrados.'
             )
-        st.info(
-            '**Cómo leer la distribución:** la línea dentro de cada caja es '
-            'la mediana; la caja contiene el 50 % central de los días; los '
-            'bigotes muestran el rango habitual y los puntos son jornadas '
-            'excepcionalmente volátiles. En los datos disponibles, '
-            f'**{año_mayor_mediana} presenta la mediana diaria más alta** '
-            f'({formato_numero_es(mayor_mediana, 2)} €/MWh).'
-            f'{aviso_año_incompleto}'
+        col1_graf2, col2_graf2 = st.columns([.25, .75])
+        with col1_graf2:
+            st.info(
+                '**Cómo leer la distribución:** la línea dentro de cada '
+                'caja es la mediana; la caja contiene el 50 % central de los '
+                'días; los bigotes muestran el rango habitual y los puntos '
+                'son jornadas excepcionalmente volátiles. En los datos '
+                f'disponibles, **{año_mayor_mediana} presenta la mediana '
+                f'diaria más alta** '
+                f'({formato_numero_es(mayor_mediana, 2)} €/MWh).'
+                f'{aviso_año_incompleto}'
+            )
+        with col2_graf2:
+            if graf_distribucion_volatilidad is not None:
+                graf_distribucion_volatilidad.update_layout(height=620)
+                st.plotly_chart(
+                    graf_distribucion_volatilidad, use_container_width=True
+                )
+
+        años_disponibles = sorted(
+            volatilidad_boxplot['fecha'].dt.year.dropna().astype(int).unique(),
+            reverse=True,
         )
-        st.plotly_chart(
-            graf_distribucion_volatilidad, use_container_width=True
-        )
+        col1_graf3, col2_graf3 = st.columns([.12, .88])
+        with col1_graf3:
+            st.markdown('**Años**')
+            años_seleccionados = [
+                año
+                for año in años_disponibles
+                if st.checkbox(
+                    str(año),
+                    value=(año == 2026),
+                    key=f'volatilidad_comparador_{año}',
+                )
+            ]
+        with col2_graf3:
+            if años_seleccionados:
+                graf_dispersion_diaria = graficar_dispersion_volatilidad_diaria(
+                    volatilidad_boxplot,
+                    años=años_seleccionados,
+                )
+                graf_dispersion_diaria.update_layout(height=620)
+                st.plotly_chart(
+                    graf_dispersion_diaria, use_container_width=True
+                )
+            else:
+                st.info('Selecciona al menos un año para mostrar la dispersión.')
 
 
 with tab_mapa:

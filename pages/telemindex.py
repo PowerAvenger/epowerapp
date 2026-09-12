@@ -514,18 +514,25 @@ if hay_curva:
 
     #fig_heat = aplicar_estilo(fig_heat)
 
-#print('df curva sheets')
-#print(df_curva_sheets) 
-if st.session_state.df_curva_sheets is None:
-    df_precios_mensuales, graf_mensual = evol_mensual(st.session_state.df_sheets, colores_precios)
-    df_precios_mensuales_sin_curva = df_precios_mensuales
-    df_evol_precios_diarios, graf_evol_precios_diarios = evol_precios_diarios(st.session_state.df_sheets, colores_precios)
-else:
-    df_precios_mensuales, graf_mensual = evol_mensual(st.session_state.df_curva_sheets, colores_precios)
-    df_precios_mensuales_sin_curva, _ = evol_mensual(
-        st.session_state.df_sheets, colores_precios
-    )
-    df_evol_precios_diarios, graf_evol_precios_diarios = evol_precios_diarios(st.session_state.df_curva_sheets, colores_precios)
+# Evol es una prolongación del histórico y no depende de la curva cargada.
+df_evol_historico = st.session_state.df_sheets.copy()
+if "fecha" in df_evol_historico.columns:
+    fechas_evol = pd.to_datetime(df_evol_historico["fecha"], errors="coerce")
+    df_evol_historico = df_evol_historico.loc[
+        fechas_evol >= pd.Timestamp("2024-01-01")
+    ].copy()
+elif "año" in df_evol_historico.columns:
+    anios_evol = pd.to_numeric(df_evol_historico["año"], errors="coerce")
+    df_evol_historico = df_evol_historico.loc[anios_evol >= 2024].copy()
+
+df_precios_mensuales, graf_mensual = evol_mensual(
+    df_evol_historico, colores_precios
+)
+df_precios_mensuales_sin_curva = df_precios_mensuales
+df_evol_precios_diarios, graf_evol_precios_diarios = evol_precios_diarios(
+    df_evol_historico, colores_precios
+)
+
 
 
 df_prevision_indexados_2026 = pd.DataFrame()
@@ -556,7 +563,7 @@ except Exception as exc:
     error_prevision_indexados = str(exc)
 
 df_precios_diarios, graf_precios_diarios = evol_diario(
-    st.session_state.df_sheets,
+    df_evol_historico,
     df_prevision_2026=df_prevision_indexados_2026,
 )
 
@@ -890,10 +897,9 @@ actualizar_texto_periodo_telemindex(fecha_ultima_filtrado)
 
 # ZONA PRINCIPAL DE GRÁFICOS++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-tab1, tab_curva, tab2, tab3, tab4 = st.tabs(
+tab1, tab2, tab_curva, tab3, tab4 = st.tabs(
     [
-        'Históricos', 'Curva', 'Evol', 'Comparativa',
-        'Verificación SSAA',
+        'Históricos', 'Evol', 'Curva', 'Comparativa', 'Verificación SSAA',
     ]
 )
 
@@ -960,18 +966,41 @@ with tab_curva:
                 key="telemindex_curva_perfil_ponderado",
             )
 
-            st.subheader(
-                "Peso de los componentes",
-                divider="rainbow",
+            graf_componentes = graficar_queso_componentes_ponderados(
+                df_curva_uso,
+                atr_curva,
             )
-            st.plotly_chart(
-                graficar_queso_componentes_ponderados(
-                    df_curva_uso,
-                    atr_curva,
-                ),
-                use_container_width=True,
-                key="telemindex_curva_queso_ponderado",
+            graf_periodos, _ = graficar_queso_periodos(
+                st.session_state.df_norm_h
             )
+            for graf_queso in (graf_componentes, graf_periodos):
+                graf_queso.update_traces(hole=0.42)
+                graf_queso.update_layout(
+                    height=390,
+                    margin=dict(l=10, r=10, t=55, b=15),
+                )
+
+            componentes_col, periodos_col = st.columns(2, gap="small")
+            with componentes_col:
+                st.subheader(
+                    "Peso de los componentes",
+                    divider="rainbow",
+                )
+                st.plotly_chart(
+                    graf_componentes,
+                    use_container_width=True,
+                    key="telemindex_curva_queso_ponderado",
+                )
+            with periodos_col:
+                st.subheader(
+                    "Reparto de consumos",
+                    divider="rainbow",
+                )
+                st.plotly_chart(
+                    graf_periodos,
+                    use_container_width=True,
+                    key="telemindex_curva_consumo_periodos",
+                )
         else:
             st.subheader("Curva histórica ponderada", divider="rainbow")
             st.info(
@@ -1914,7 +1943,9 @@ with tab3:
 with tab4:
     st.subheader("Verificación de la regularización de SSAA", divider="rainbow")
     st.caption(
-        "Se incluyen exclusivamente meses naturales completos. La tabla compara "
+        "Los meses completos se muestran como regularizaciones cerradas y los "
+        "meses parciales como estimaciones sobre los días y el consumo cargados, "
+        "sin extrapolar al final del mes. La tabla compara "
         "el criterio contractual por media aritmética mensual con la aplicación "
         "de la misma horquilla a cada hora. En el cálculo horario no se aplica "
         "apuntamiento, porque el perfil ya está recogido en el consumo real horario."
@@ -1975,10 +2006,13 @@ with tab4:
             )
 
             if meses_excluidos:
-                st.info("Meses incompletos excluidos: " + ", ".join(meses_excluidos))
+                st.warning(
+                    "Periodos excluidos por contener datos nulos: "
+                    + ", ".join(meses_excluidos)
+                )
 
             if df_verificacion.empty:
-                st.warning("El periodo seleccionado no contiene ningún mes natural completo.")
+                st.warning("El periodo seleccionado no contiene datos suficientes para el cálculo.")
             else:
                 col_metodo = (
                     "Regularización media mensual (€)"
@@ -1988,6 +2022,9 @@ with tab4:
                 total_media = df_verificacion["Regularización media mensual (€)"].sum()
                 total_horas = df_verificacion["Regularización hora a hora (€)"].sum()
                 total_principal = df_verificacion[col_metodo].sum()
+                periodos_parciales = df_verificacion.loc[
+                    df_verificacion["Estado"] != "Completo", "Periodo"
+                ].tolist()
                 diferencia_total = total_horas - total_media
                 diferencia_pct = (
                     diferencia_total / abs(total_media) * 100
@@ -2007,6 +2044,13 @@ with tab4:
                     delta_color="inverse",
                     help="Hora a hora menos media mensual. El porcentaje se calcula sobre el valor absoluto de la media mensual.",
                 )
+
+                if periodos_parciales:
+                    st.info(
+                        "Estimaciones parciales incluidas: "
+                        + ", ".join(periodos_parciales)
+                        + ". Sus importes solo abarcan el consumo cargado."
+                    )
 
                 st.markdown("#### Detalle mensual")
                 columnas_euros = [
@@ -2030,6 +2074,9 @@ with tab4:
                     df_verificacion.groupby("Trimestre", as_index=False)
                     .agg(
                         Meses=("Periodo", "count"),
+                        Meses_parciales=(
+                            "Estado", lambda estados: (estados != "Completo").sum()
+                        ),
                         **{
                             "Consumo (MWh)": ("Consumo (MWh)", "sum"),
                             "Media mensual (€)": ("Regularización media mensual (€)", "sum"),
@@ -2038,8 +2085,13 @@ with tab4:
                         },
                     )
                 )
-                df_trimestral["Estado"] = df_trimestral["Meses"].map(
-                    lambda meses: "Trimestre completo" if meses == 3 else "Trimestre parcial"
+                df_trimestral["Estado"] = df_trimestral.apply(
+                    lambda fila: (
+                        "Trimestre completo"
+                        if fila["Meses"] == 3 and fila["Meses_parciales"] == 0
+                        else "Trimestre parcial/estimado"
+                    ),
+                    axis=1,
                 )
                 st.markdown("#### Resumen trimestral")
                 st.dataframe(

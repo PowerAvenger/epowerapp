@@ -166,7 +166,7 @@ def actualizar_df_index_por_zona(forzar=False):
 
 
 
-def init_app_index():
+def _init_app_index():
     # Para TELEMINDEX Y SIMULINDEX
 
     # =====================================================
@@ -323,6 +323,27 @@ def init_app_index():
             ultima_fecha = st.session_state.ultima_fecha_sheets
 
         st.session_state.texto_precios = f"Día seleccionado: {ultima_fecha}"
+
+
+def init_app_index():
+    """Inicializa los indexados mostrando progreso solo cuando hay trabajo real."""
+
+    zona = st.session_state.get("zona_periodos_index", "peninsula")
+    necesita_carga = any(
+        clave not in st.session_state
+        for clave in (
+            "ultima_fecha_sheets",
+            "df_sheets_old",
+            "df_sheets_base_index",
+            "df_sheets",
+        )
+    ) or st.session_state.get("zona_periodos_index_aplicada") != zona
+
+    if necesita_carga:
+        with st.spinner("Cargando históricos de indexados..."):
+            _init_app_index()
+    else:
+        _init_app_index()
 
 def init_app_index_old():
     # Para TELEMINDEX Y SIMULINDEX

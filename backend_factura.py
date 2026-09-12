@@ -3469,6 +3469,28 @@ def _concepto_energia_vm_indexado(
     )
 
 
+def extraer_regularizacion_ssaa_vm(texto: str) -> float:
+    """Lee la regularización de SSAA que VM agrupa como 'Ajustes diversos'."""
+    return buscar_numero(texto, [
+        # pdfplumber ordena la descripción y el importe por su posición
+        # visual: ambos quedan en la fila de "Ajustes diversos" y el intervalo
+        # de fechas aparece en la línea siguiente.
+        r"^Ajustes\s+diversos[^\n]*?Regularizaci[oó]n\s+servicios?\s+"
+        r"(?:de\s+)?ajuste[^\n]*?([-\d.,]+)\s*(?:â‚¬|€)?\s*$",
+        # Variante en la que el importe queda junto a la cabecera y la
+        # descripción se extrae a continuación.
+        r"^Ajustes\s+diversos[^\n]*?([-\d.,]+)\s*(?:â‚¬|€)?\s*$"
+        r"(?:\n[^\n]*){0,2}\n?[^\n]*Regularizaci[oó]n\s+servicios?\s+"
+        r"(?:de\s+)?ajuste",
+        # Variante de texto lineal/OCR: el importe aparece tras las fechas.
+        r"Regularizaci[oó]n\s+servicios?\s+(?:de\s+)?ajuste\s+"
+        r"conforme\s+a\s+cl[aá]usula\s+[\d.]+\s+del\s+contrato\s+"
+        r"para\s+(?:el\s+)?periodo\s+(?:\n\s*)?de\s+"
+        r"\d{2}/\d{2}/\d{4}\s+al\s+\d{2}/\d{2}/\d{4}"
+        r"[^\n]*?([-\d.,]+)\s*(?:â‚¬|€)?\s*$",
+    ])
+
+
 def _vm(texto: str) -> FacturaLeida:
     inicio, fin = buscar_periodo(texto, [
         r"Periodo\s+de\s+facturaci[oó]n\s*:\s*(\d{2}/\d{2}/\d{4})\s+a\s+(\d{2}/\d{2}/\d{4})"
@@ -3508,6 +3530,14 @@ def _vm(texto: str) -> FacturaLeida:
         r"Complemento\s+por\s+reactiva\s+Energ[ií]a\s+Reactiva\s+([-\d.,]+)"
     ])
     otros = _otros_comunes(texto)
+    regularizacion_ssaa = extraer_regularizacion_ssaa_vm(texto)
+    if regularizacion_ssaa and not any(
+        "ssaa" in item.concepto.lower() for item in otros
+    ):
+        otros.append(OtroConcepto(
+            "Regularización Servicios de Ajuste (SSAA)",
+            regularizacion_ssaa,
+        ))
     if not any("alquiler" in item.concepto.lower() for item in otros):
         alquiler_vm = buscar_numero(texto, [
             r"Alquiler\s+equipo\s+de\s+medida[^\n]*?([\d.,]+)\s*€?\s*$"

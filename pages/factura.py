@@ -95,7 +95,7 @@ with st.sidebar:
     )
 
 
-VERSION_LECTOR = 138
+VERSION_LECTOR = 139
 MOSTRAR_TABLA_MAXIMETROS = False
 
 with st.sidebar:

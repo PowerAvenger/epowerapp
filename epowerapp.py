@@ -1,6 +1,5 @@
 import streamlit as st
 import base64
-import time
 
 st.set_page_config(
     page_title="TotalPower",
@@ -82,5 +81,4 @@ with c2:
         with st.spinner('Cargando datos SPOT y SSAA...'):
             init_datos_mercado()
         #zona_predator.video('images/predator1.mp4', autoplay=True)
-        time.sleep(2)
         st.switch_page('pages/powerapps.py')
