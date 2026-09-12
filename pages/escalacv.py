@@ -19,7 +19,8 @@ from backend_escalacv import (
     calcular_volatilidad_diaria, graficar_volatilidad_historica,
     graficar_distribucion_volatilidad,
     graficar_dispersion_volatilidad_diaria,
-    get_limites_componentes, colores
+    get_limites_componentes, colores, marcador_nivel_cv,
+    FONDO_CSS_APOCALIPSIS,
 )
 from backend_comun import aplicar_estilo, construir_media_acumulada_prevista
 from formato_es import formato_numero_es
@@ -266,10 +267,7 @@ def _leyenda_escala_cv(titulo, componente):
             )
         fondo = colores[etiqueta]
         if etiqueta == 'apocalipsis zombie':
-            fondo = (
-                'repeating-linear-gradient(135deg, #171717 0, #171717 3px, '
-                '#FFD700 3px, #FFD700 5px)'
-            )
+            fondo = FONDO_CSS_APOCALIPSIS
         filas.append(
             '<div class="escala-cv-fila">'
             f'<span class="escala-cv-color" style="background:{fondo}"></span>'
@@ -387,23 +385,42 @@ with tab_diario:
             .sort_values('hora')
         )
 
-    def _grafico_diario(
-        datos, perfil_medio_anual, titulo, color_barras, color_media, año
-    ):
-        figura = go.Figure()
-        figura.add_trace(
-            go.Bar(
-                x=datos['hora'],
-                y=datos['value'],
-                name='Día seleccionado',
-                marker_color=color_barras,
-                marker_cornerradius=8,
-                hovertemplate=(
-                    '<b>Hora %{x}:00</b><br>Día: %{y:.2f} €/MWh'
-                    '<extra></extra>'
-                ),
-            )
+    def _grafico_diario(datos, perfil_medio_anual, titulo, componente, año):
+        df_limites, etiquetas, _ = get_limites_componentes(componente)
+        escala_horaria = pd.cut(
+            datos['value'],
+            bins=df_limites['rango'],
+            labels=etiquetas,
+            right=False,
         )
+        niveles_horarios = [
+            str(nivel) if pd.notna(nivel) else 'fuera de escala'
+            for nivel in escala_horaria
+        ]
+        figura = go.Figure()
+        datos_grafico = datos.copy()
+        datos_grafico['_nivel_cv'] = niveles_horarios
+        for nivel in dict.fromkeys(niveles_horarios):
+            datos_nivel = datos_grafico.loc[
+                datos_grafico['_nivel_cv'].eq(nivel)
+            ]
+            figura.add_trace(
+                go.Bar(
+                    x=datos_nivel['hora'],
+                    y=datos_nivel['value'],
+                    width=0.9,
+                    name=nivel,
+                    showlegend=False,
+                    marker=marcador_nivel_cv(nivel),
+                    marker_cornerradius=8,
+                    customdata=datos_nivel['_nivel_cv'],
+                    hovertemplate=(
+                        '<b>Hora %{x}:00</b><br>Día: %{y:.2f} €/MWh<br>'
+                        'Escala CV: %{customdata}'
+                        '<extra></extra>'
+                    ),
+                )
+            )
         if not perfil_medio_anual.empty:
             figura.add_trace(
                 go.Scatter(
@@ -411,8 +428,8 @@ with tab_diario:
                     y=perfil_medio_anual['value'],
                     name=f'Media horaria {año}',
                     mode='lines+markers',
-                    line=dict(color=color_media, width=3),
-                    marker=dict(color=color_media, size=6),
+                    line=dict(color='#FFD700', width=3),
+                    marker=dict(color='#FFD700', size=6),
                     hovertemplate=(
                         f'<b>Media {año} · hora %{{x}}:00</b><br>'
                         '%{y:.2f} €/MWh<extra></extra>'
@@ -431,6 +448,8 @@ with tab_diario:
             xaxis_title='Hora',
             yaxis_title='€/MWh',
             separators=',.',
+            barmode='overlay',
+            bargap=0.08,
             margin=dict(l=20, r=20, t=105, b=20),
             legend=dict(
                 orientation='h',
@@ -440,8 +459,12 @@ with tab_diario:
                 x=0.5,
             ),
         )
-        figura.update_xaxes(dtick=2)
-        return figura
+        figura.update_xaxes(
+            tickmode='array',
+            tickvals=list(range(24)),
+            range=[-0.5, 23.5],
+        )
+        return aplicar_estilo(figura)
 
     def _metricas_diarias(datos, spreads):
         hora_min = int(datos.loc[datos['value'].idxmin(), 'hora'])
@@ -480,8 +503,11 @@ with tab_diario:
             'Selecciona el día',
             min_value=fecha_min_select_dia,
             max_value=fecha_max_select_dia,
+            format='DD.MM.YYYY',
             key='dia_seleccionado_esc',
         )
+        _leyenda_escala_cv('SPOT', 'SPOT')
+        _leyenda_escala_cv('SSAA', 'SSAA')
     with col_spot_graf:
         if spot_dia_general.empty:
             st.info('No hay datos SPOT para la fecha seleccionada.')
@@ -491,8 +517,7 @@ with tab_diario:
                     spot_dia_general,
                     spot_perfil_medio_anual,
                     f'SPOT · {fecha_general.strftime("%d.%m.%Y")}',
-                    'green',
-                    '#7CFC00',
+                    'SPOT',
                     año_fecha_general,
                 ),
                 use_container_width=True,
@@ -510,8 +535,7 @@ with tab_diario:
                     ssaa_dia_general,
                     ssaa_perfil_medio_anual,
                     f'SSAA · {fecha_general.strftime("%d.%m.%Y")}',
-                    '#F28E2B',
-                    '#FFD166',
+                    'SSAA',
                     año_fecha_general,
                 ),
                 use_container_width=True,
@@ -621,23 +645,23 @@ with tab_mensual:
             }
             .escala-cv-titulo {
                 margin-bottom: .28rem;
-                font-size: 1rem;
+                font-size: 1.12rem;
                 font-weight: 700;
             }
-            .escala-cv-titulo small { font-size: .78rem; font-weight: 400; }
+            .escala-cv-titulo small { font-size: .88rem; font-weight: 400; }
             .escala-cv-fila {
                 display: grid;
-                grid-template-columns: .68rem 2.9rem minmax(0, 1fr);
+                grid-template-columns: .75rem 3.25rem minmax(0, 1fr);
                 align-items: center;
-                gap: .2rem;
-                min-height: 1.3rem;
-                font-size: .8rem;
+                gap: .25rem;
+                min-height: 1.5rem;
+                font-size: .92rem;
                 line-height: 1.1;
                 white-space: nowrap;
             }
             .escala-cv-color {
-                width: .62rem;
-                height: .62rem;
+                width: .7rem;
+                height: .7rem;
                 border: 1px solid rgba(80, 80, 80, .55);
                 border-radius: 2px;
             }
@@ -839,16 +863,7 @@ with tab_historica:
                 name='apocalipsis zombie',
                 visible='legendonly',
                 hoverinfo='skip',
-                marker=dict(
-                    color='#171717',
-                    pattern=dict(
-                        shape='/',
-                        fgcolor='#FFD700',
-                        bgcolor='#171717',
-                        solidity=0.22,
-                    ),
-                    line=dict(color='#FFD700', width=0.6),
-                ),
+                marker=marcador_nivel_cv('apocalipsis zombie'),
             )
         )
     _marcar_apagon_28a(graf_historico_spot)

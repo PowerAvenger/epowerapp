@@ -1,6 +1,6 @@
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go 
+import plotly.graph_objects as go
 import streamlit as st
 
 from google.oauth2.service_account import Credentials
@@ -25,6 +25,19 @@ meses_completos = pd.DataFrame({
 })
 
 
+COLOR_APOCALIPSIS_FONDO = '#171717'
+COLOR_APOCALIPSIS_TRAZO = '#FFD700'
+FORMA_APOCALIPSIS = '/'
+TAMAÑO_TRAMA_APOCALIPSIS = 6
+SOLIDEZ_TRAMA_APOCALIPSIS = 0.22
+ANCHO_BORDE_APOCALIPSIS = 0.6
+FONDO_CSS_APOCALIPSIS = (
+    'repeating-linear-gradient(135deg, '
+    f'{COLOR_APOCALIPSIS_FONDO} 0, {COLOR_APOCALIPSIS_FONDO} 4.7px, '
+    f'{COLOR_APOCALIPSIS_TRAZO} 4.7px, {COLOR_APOCALIPSIS_TRAZO} 6px)'
+)
+
+
 def _redondear_barras(fig, radio=12):
     """Aplica el acabado visual común solo a las trazas de barras."""
     fig.update_traces(
@@ -40,12 +53,16 @@ def _aplicar_patron_apocalipsis(fig):
         if getattr(traza, 'type', None) == 'bar' and traza.name == 'apocalipsis zombie':
             traza.update(
                 marker_pattern=dict(
-                    shape='/',
-                    fgcolor='#FFD700',
-                    bgcolor='#171717',
-                    solidity=0.22,
+                    shape=FORMA_APOCALIPSIS,
+                    fgcolor=COLOR_APOCALIPSIS_TRAZO,
+                    bgcolor=COLOR_APOCALIPSIS_FONDO,
+                    size=TAMAÑO_TRAMA_APOCALIPSIS,
+                    solidity=SOLIDEZ_TRAMA_APOCALIPSIS,
                 ),
-                marker_line=dict(color='#FFD700', width=0.6),
+                marker_line=dict(
+                    color=COLOR_APOCALIPSIS_TRAZO,
+                    width=ANCHO_BORDE_APOCALIPSIS,
+                ),
             )
     return fig
 
@@ -532,13 +549,35 @@ colores = {
     'alto': '#1E3A5F',  # Azul profundo (sólido pero no agresivo)
     'muy alto': '#804674',  # Morado rosado (punto de transición)
     'chungo': '#B04E5A',  # Naranja oscuro (advertencia sin ser agresivo)
-    'xtrem': '#A31E1E',  # Rojo anaranjado (peligro intermedio)
-    'defcon3': 'darkred',  # Rojo fuerte (nivel crítico)
-    'defcon2': '#800000',  # Rojo oscuro intenso
-    'defcon1': '#A6A6A6',  # Gris metálico visible sobre fondos oscuros
+    'xtrem': '#E67E22',  # Naranja intenso (entrada en niveles extremos)
+    'defcon3': '#D64541',  # Rojo vivo (nivel crítico inicial)
+    'defcon2': '#A31E1E',  # Rojo oscuro intenso
+    'defcon1': '#800000',  # Granate, máxima alerta antes del nivel final
     'apocalipsis zombie': '#D4A017',  # Ámbar; barras con trama amarilla y negra
 #    'Desconocido': 'gray'  # Neutralidad
 }
+
+
+def marcador_nivel_cv(nivel):
+    """Devuelve el marcador Plotly canónico de un nivel de la Escala CV."""
+    nivel = str(nivel)
+    if nivel != 'apocalipsis zombie':
+        return dict(color=colores.get(nivel, 'gray'), line=dict(width=0))
+    return dict(
+        color=COLOR_APOCALIPSIS_FONDO,
+        pattern=dict(
+            shape=FORMA_APOCALIPSIS,
+            fgcolor=COLOR_APOCALIPSIS_TRAZO,
+            bgcolor=COLOR_APOCALIPSIS_FONDO,
+            size=TAMAÑO_TRAMA_APOCALIPSIS,
+            solidity=SOLIDEZ_TRAMA_APOCALIPSIS,
+            fillmode='replace',
+        ),
+        line=dict(
+            color=COLOR_APOCALIPSIS_TRAZO,
+            width=ANCHO_BORDE_APOCALIPSIS,
+        ),
+    )
 
 
 
