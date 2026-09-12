@@ -25,8 +25,8 @@ numpy_financial
 streamlit_folium
 folium
 python-dateutil
-altair<5
-streamlit==1.36.0
+altair==5.3.0
+streamlit==1.40.0
 streamlit-paste-button==0.1.2
 statsmodels
 jinja2

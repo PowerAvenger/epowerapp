@@ -20,6 +20,10 @@ from backend_ofertas_fijas import (
 )
 from backend_opt2 import consumos_mensuales_desde_curva_normalizada
 from backend_simulindex import construir_curva_omip_mensual_12m, obtener_historicos_meff, obtener_meff_mensual, obtener_meff_trimestral
+from backend_previsiones import (
+    guardar_prevision_omie_en_sesion,
+    obtener_prevision_omie_anual,
+)
 from backend_sips import (
     leer_sips_completo,
     perfil_anual_meses_naturales,
@@ -233,8 +237,40 @@ with col1:
             use_container_width=True,
         )
 
-forward_actual = float(st.session_state.get('precio_omip_previsto', 50.0))
 with col2:
+    precio_omie_previsto = st.session_state.get('precio_omie_previsto')
+    if precio_omie_previsto is None:
+        st.info(
+            'Carga la previsión OMIE para sustituir el escenario provisional '
+            'de 50 €/MWh.'
+        )
+        if st.button(
+            'Cargar escenarios OMIE previstos',
+            key='comparador_luz_cargar_prevision_omie',
+            type='primary',
+            use_container_width=True,
+        ):
+            with st.spinner('Calculando la curva híbrida OMIE-OMIP...'):
+                df_spot_prevision = st.session_state.df_sheets.copy()
+                df_spot_prevision['fecha'] = pd.to_datetime(
+                    df_spot_prevision['fecha'], errors='coerce'
+                )
+                df_spot_prevision = df_spot_prevision.set_index('fecha')[[
+                    'spot'
+                ]]
+                prevision_omie = obtener_prevision_omie_anual(
+                    df_spot_prevision
+                )
+                guardar_prevision_omie_en_sesion(prevision_omie)
+                for letra in ('a', 'b', 'c'):
+                    st.session_state.pop(
+                        f'comparador_luz_escenarios_omie_{letra}', None
+                    )
+            st.rerun()
+
+    forward_actual = float(
+        st.session_state.get('precio_omie_previsto', 50.0)
+    )
     omies = render_escenarios_omie(
         forward_actual, 'comparador_luz_escenarios'
     )

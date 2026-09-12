@@ -179,17 +179,17 @@ graf_hist, simul_spot, simul_gas = graf_simul_spot(
 
 zona_mensajes.empty()
 
-tab1, tab_omie_mibgas, tab_comparador, tab2, tab3, tab4, tab5 = st.tabs([
-    'Históricos',
-    'OMIE vs MIBGAS',
-    'Comparador',
-    'Futuros',
-    'CO2',
-    'Simulador',
-    'Previsión anual',
-])
+seccion_gas = st.segmented_control(
+    "Sección",
+    [
+        'Históricos', 'OMIE vs MIBGAS', 'Comparador', 'Futuros',
+        'CO2', 'Simulador', 'Previsión anual',
+    ],
+    default='Históricos',
+    key='seccion_gas',
+)
 
-with tab1:
+if seccion_gas == 'Históricos':
     with st.container():
         col1,col2 = st.columns([.9,.1]) 
         with col2:
@@ -210,13 +210,9 @@ with tab1:
             st.write(graf_da_2026_acumulado)
 
 
-with tab_omie_mibgas:
+if seccion_gas == 'OMIE vs MIBGAS':
     clave_analisis = "gas_analisis_omie_mibgas"
-    if st.button(
-        "Cargar análisis OMIE vs MIBGAS",
-        key="gas_cargar_analisis_omie_mibgas",
-        type="primary",
-    ):
+    if clave_analisis not in st.session_state:
         with st.spinner("Preparando análisis OMIE vs MIBGAS..."):
             try:
                 comparativa_diaria = construir_comparativa_diaria_mibgas_omie(
@@ -253,9 +249,7 @@ with tab_omie_mibgas:
                 st.error(f"No se pudo preparar el análisis: {exc}")
 
     analisis = st.session_state.get(clave_analisis)
-    if analisis is None:
-        st.caption("Los cruces diarios y horarios se calculan únicamente al solicitarlos.")
-    else:
+    if analisis is not None:
         st.plotly_chart(analisis["graf_comparativa"], use_container_width=True)
         with st.expander("Ver tabla diaria MIBGAS D+1 vs OMIE"):
             st.dataframe(
@@ -325,7 +319,7 @@ with tab_omie_mibgas:
             )
 
 
-with tab_comparador:
+if seccion_gas == 'Comparador':
     col_graf_comparador, col_selector_comparador, col_ranking = st.columns(
         [.65, .06, .29]
     )
@@ -376,7 +370,7 @@ with tab_comparador:
         st.plotly_chart(graf_ranking_mibgas, use_container_width=True)
 
 
-with tab2:
+if seccion_gas == 'Futuros':
     with st.container():
         col1,col2 = st.columns([.9,.1]) 
         with col1:
@@ -388,13 +382,9 @@ with tab2:
 
 
 
-with tab3:
+if seccion_gas == 'CO2':
     clave_co2 = "gas_grafico_co2"
-    if st.button(
-        "Cargar datos SENDECO y gráfico CO2",
-        key="gas_cargar_sendeco",
-        type="primary",
-    ):
+    if clave_co2 not in st.session_state:
         with st.spinner("Cargando datos SENDECO..."):
             try:
                 año_actual = datetime.now().year
@@ -423,12 +413,10 @@ with tab3:
                 st.error(f"No se pudieron cargar los datos de CO2: {exc}")
     if clave_co2 in st.session_state:
         st.write(st.session_state[clave_co2])
-    else:
-        st.caption("Los datos SENDECO se cargan únicamente al solicitarlos.")
 
 
 
-with tab4:
+if seccion_gas == 'Simulador':
 
     col1, col2 = st.columns([.25,.75])
     with col1:
@@ -724,7 +712,7 @@ with tab4:
         )
 
 
-with tab5:
+if seccion_gas == 'Previsión anual':
     graf_mibgas_2026 = graficar_curva_mibgas_2026(
         df_curva_mibgas_2026, precio_medio_mibgas_2026
     )
