@@ -15,7 +15,7 @@ from backend_comun import (
     aplicar_texto_pie_porcentaje,
     filtrar_intervalos_inexistentes_madrid,
 )
-from formato_es import formato_numero_es
+from formato_es import formato_mes_es, formato_numero_es
 
 
 TZ = "Europe/Madrid"
@@ -2290,12 +2290,12 @@ def graficar_mensual_apilado(df_norm):
         ordered=True
     )
 
-    # Etiqueta de mes bonita
-    df_plot["Mes"] = df_plot["mes"].dt.strftime("%b %Y")
+    # Etiqueta cronológica y localizada una sola vez para el hover unificado.
+    df_plot["Mes"] = df_plot["mes"].map(formato_mes_es)
 
     fig = px.bar(
         df_plot,
-        x="mes",
+        x="Mes",
         y="consumo_neto_kWh",
         color="periodo",
         color_discrete_map=colores_periodo,
@@ -2309,6 +2309,8 @@ def graficar_mensual_apilado(df_norm):
 
     fig.update_layout(
         bargap=0.3,
+        barcornerradius=5,
+        hovermode="closest",
         legend=dict(
             orientation="h",
             yanchor="bottom",
@@ -2319,7 +2321,33 @@ def graficar_mensual_apilado(df_norm):
         )
     )
 
-    
+    totales = (
+        df_plot.groupby(["mes", "Mes"], as_index=False, observed=True)
+        ["consumo_neto_kWh"].sum().sort_values("mes")
+    )
+    textos_hover = {}
+    for (mes, etiqueta), grupo in df_plot.groupby(
+        ["mes", "Mes"], observed=True, sort=True
+    ):
+        consumos_periodo = grupo.set_index("periodo")["consumo_neto_kWh"]
+        lineas = [f"<b>{etiqueta}</b>"]
+        lineas.extend(
+            f"{periodo}: {formato_numero_es(consumos_periodo.get(periodo, 0), 0)} kWh"
+            for periodo in orden_periodos
+        )
+        lineas.append(
+            f"<b>Total: {formato_numero_es(consumos_periodo.sum(), 0)} kWh</b>"
+        )
+        textos_hover[etiqueta] = "<br>".join(lineas)
+
+    for traza in fig.data:
+        traza.customdata = [textos_hover[str(mes)] for mes in traza.x]
+        traza.hovertemplate = "%{customdata}<extra></extra>"
+
+    fig.update_xaxes(
+        categoryorder="array",
+        categoryarray=totales["Mes"].tolist(),
+    )
 
     fig = aplicar_estilo(fig)
     
@@ -6110,6 +6138,39 @@ def crear_grafico_perfil_precios_comparativa(df_actual, df_referencia):
     return aplicar_estilo(fig)
 
 
+def graficar_cascada_diferencias_mensuales(
+    meses,
+    diferencias,
+    titulo="Ahorro acumulado / sobrecoste",
+    color_positivo="#2ca02c",
+    color_negativo="#d62728",
+):
+    """Construye una cascada mensual y cierra con el diferencial total."""
+    diferencias = pd.Series(diferencias, dtype=float)
+    total = float(diferencias.sum())
+    texto_total = f"{formato_numero_es(total, 2)} €"
+    valores = [*diferencias.tolist(), total]
+    figura = go.Figure(go.Waterfall(
+        x=[*list(meses), "TOTAL"],
+        y=valores,
+        measure=[*(["relative"] * len(diferencias)), "total"],
+        text=[f"{formato_numero_es(valor, 2)} €" for valor in diferencias]
+        + [texto_total],
+        customdata=[formato_numero_es(valor, 2) for valor in valores],
+        textposition="outside",
+        connector={"line": {"color": "rgba(180,180,180,.65)"}},
+        increasing={"marker": {"color": color_positivo}},
+        decreasing={"marker": {"color": color_negativo}},
+        totals={"marker": {"color": "#1f77b4"}},
+        hovertemplate="<b>%{x}</b><br>Diferencia: %{customdata} €<extra></extra>",
+    ))
+    figura.update_layout(
+        title=titulo, xaxis_title="", yaxis_title="€", showlegend=False
+    )
+    figura.add_hline(y=0, line_color="white", line_width=1)
+    return aplicar_estilo(figura)
+
+
 def calcular_comparativa_ahorro(df_actual, df_referencia):
     """Compara dos precios sobre el mismo consumo y el mismo rango temporal."""
     requeridas = {"fecha_hora", "consumo_neto_kWh", "coste_total"}
@@ -6234,37 +6295,9 @@ def calcular_comparativa_ahorro(df_actual, df_referencia):
     # Cascada con signo intuitivo: el ahorro aumenta el acumulado y el
     # sobrecoste lo reduce. La última barra muestra el resultado completo.
     ahorro_mensual = -salida["Ahorro / sobrecoste"]
-    ahorro_total = float(ahorro_mensual.sum())
-    texto_total = (
-        f"Ahorro: {formato_numero_es(ahorro_total, 2)} €"
-        if ahorro_total > 0
-        else f"Sobrecoste: {formato_numero_es(abs(ahorro_total), 2)} €"
-        if ahorro_total < 0
-        else "Sin diferencia"
+    fig_acumulado = graficar_cascada_diferencias_mensuales(
+        salida["Mes"], ahorro_mensual
     )
-    fig_acumulado = go.Figure(go.Waterfall(
-        x=[*salida["Mes"].tolist(), "TOTAL"],
-        y=[*ahorro_mensual.tolist(), ahorro_total],
-        measure=[*["relative"] * len(salida), "total"],
-        text=[
-            f"{formato_numero_es(valor, 2)} €"
-            for valor in ahorro_mensual
-        ] + [texto_total],
-        textposition="outside",
-        connector={"line": {"color": "rgba(180,180,180,.65)"}},
-        increasing={"marker": {"color": "#2ca02c"}},
-        decreasing={"marker": {"color": "#d62728"}},
-        totals={"marker": {"color": "#1f77b4"}},
-        hovertemplate="<b>%{x}</b><br>Impacto: %{y:.2f} €<extra></extra>",
-    ))
-    fig_acumulado.update_layout(
-        title="Ahorro acumulado / sobrecoste",
-        xaxis_title="",
-        yaxis_title="€",
-        showlegend=False,
-    )
-    fig_acumulado.add_hline(y=0, line_color="white", line_width=1)
-    fig_acumulado = aplicar_estilo(fig_acumulado)
     fig_perfil_costes = crear_grafico_perfil_costes_comparativa(
         df_actual, df_referencia
     )

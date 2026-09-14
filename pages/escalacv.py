@@ -19,10 +19,15 @@ from backend_escalacv import (
     calcular_volatilidad_diaria, graficar_volatilidad_historica,
     graficar_distribucion_volatilidad,
     graficar_dispersion_volatilidad_diaria,
+    graficar_horas_mes_escala_cv,
     get_limites_componentes, colores, marcador_nivel_cv,
     FONDO_CSS_APOCALIPSIS,
 )
-from backend_comun import aplicar_estilo, construir_media_acumulada_prevista
+from backend_comun import (
+    aplicar_estilo,
+    construir_media_acumulada_prevista,
+    paso_eje_escala_cv,
+)
 from formato_es import formato_numero_es
 from backend_previsiones import (
     guardar_prevision_omie_en_sesion,
@@ -334,7 +339,7 @@ df_media_acumulada_periodo, graf_media_acumulada_periodo = graficar_media_acumul
     mes_num=mes_num_acumulada,
 )
 graf_media_acumulada_periodo.update_yaxes(
-    dtick=4 if st.session_state.componente == 'SSAA' else 20
+    dtick=paso_eje_escala_cv(st.session_state.componente)
 )
 
 #st.write(ultimo_registro) 
@@ -462,8 +467,9 @@ with tab_diario:
         figura.update_xaxes(
             tickmode='array',
             tickvals=list(range(24)),
-            range=[-0.5, 23.5],
+            range=[-0.45, 23.45],
         )
+        figura.update_yaxes(dtick=paso_eje_escala_cv(componente))
         return aplicar_estilo(figura)
 
     def _metricas_diarias(datos, spreads):
@@ -577,7 +583,11 @@ with tab_anual:
             and st.session_state.año_seleccionado_esc == 2026
             and not isinstance(prevision_omie_anual, dict)
         ):
-            if st.button('Calcular previsión OMIE 2026', use_container_width=True):
+            if st.button(
+                'Calcular previsión OMIE 2026',
+                type='primary',
+                use_container_width=True,
+            ):
                 with st.spinner('Calculando la curva híbrida OMIE-OMIP...'):
                     prevision = obtener_prevision_omie_anual(datos_total)
                     guardar_prevision_omie_en_sesion(prevision)
@@ -845,6 +855,18 @@ with tab_mensual:
                     formato_numero_es(fila_spread_max['spread_diario'], 2),
                 )
 
+        graf_horas_mes_continuo = graficar_horas_mes_escala_cv(
+            datos_mes_filtrado,
+            st.session_state.componente,
+            st.session_state.año_seleccionado_esc,
+            mes_sel,
+        )
+        with col_contenido_mensual:
+            if graf_horas_mes_continuo is not None:
+                st.plotly_chart(
+                    graf_horas_mes_continuo, use_container_width=True
+                )
+
 
     
         
@@ -863,7 +885,9 @@ with tab_historica:
                 name='apocalipsis zombie',
                 visible='legendonly',
                 hoverinfo='skip',
-                marker=marcador_nivel_cv('apocalipsis zombie'),
+                marker=marcador_nivel_cv(
+                    'apocalipsis zombie', con_trama=False
+                ),
             )
         )
     _marcar_apagon_28a(graf_historico_spot)

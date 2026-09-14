@@ -43,6 +43,7 @@ from backend_opt2 import (
 from backend_sips import leer_sips_completo, perfil_anual_meses_naturales
 from backend_ofertas_fijas import (
     cargar_catalogo_ofertas,
+    precios_energia_oferta,
 )
 from componentes_ofertas_fijas import (
     combinar_ofertas,
@@ -3271,7 +3272,8 @@ with tab6:
             # Ofertas fijas
             if not st.session_state.df_ofertas_fijas_simul_trim.empty:
                 for _, row in st.session_state.df_ofertas_fijas_simul_trim.iterrows():
-                    coste_total = (consumos_trim * row[periodos]).sum()
+                    precios_oferta = precios_energia_oferta(row)
+                    coste_total = (consumos_trim * precios_oferta).sum()
                     energia_total = consumos_trim.sum()
                     precio_medio = coste_total / energia_total
 
@@ -3445,16 +3447,21 @@ with tab6:
         for _, oferta_informe_trim in (
             st.session_state.df_ofertas_fijas_simul_trim.iterrows()
         ):
+            precios_oferta_informe = precios_energia_oferta(
+                oferta_informe_trim
+            )
             coste_oferta_informe = sum(
                 float(consumos_trim[periodo_informe_trim])
-                * float(oferta_informe_trim[periodo_informe_trim])
+                * float(precios_oferta_informe[periodo_informe_trim])
                 for periodo_informe_trim in periodos
             )
             filas_detalle_informe_trim.append({
                 "Oferta": oferta_informe_trim["oferta"],
                 "Tipo": "Fijo",
                 **{
-                    periodo_informe_trim: oferta_informe_trim[periodo_informe_trim]
+                    periodo_informe_trim: precios_oferta_informe[
+                        periodo_informe_trim
+                    ]
                     for periodo_informe_trim in periodos
                 },
                 "Precio medio (€/kWh)": (

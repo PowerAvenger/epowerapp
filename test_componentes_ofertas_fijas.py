@@ -3,6 +3,8 @@ import unittest
 import pandas as pd
 
 from componentes_ofertas_fijas import (
+    actualizar_seleccion_ofertas,
+    aplicar_seleccion_ofertas,
     campos_pendientes_tarifas,
     construir_ofertas,
     normalizar_excel_ofertas,
@@ -13,6 +15,30 @@ from componentes_ofertas_fijas import (
 
 
 class OfertasFijasComunesTest(unittest.TestCase):
+    def test_conserva_checks_al_recrear_el_selector(self):
+        ofertas = pd.DataFrame([
+            {"oferta": "Oferta A", "P1": 0.10},
+            {"oferta": "Oferta B", "P1": 0.20},
+        ])
+        primera = aplicar_seleccion_ofertas(ofertas, None)
+        primera.loc[primera["oferta"].eq("Oferta B"), "Comparar"] = False
+        estado = actualizar_seleccion_ofertas(primera)
+
+        restaurada = aplicar_seleccion_ofertas(ofertas, estado)
+
+        self.assertEqual(restaurada["Comparar"].tolist(), [True, False])
+
+    def test_oferta_nueva_se_selecciona_sin_perder_estado_anterior(self):
+        estado = {"Oferta A": False}
+        ofertas = pd.DataFrame([
+            {"oferta": "Oferta A"},
+            {"oferta": "Oferta nueva"},
+        ])
+
+        restaurada = aplicar_seleccion_ofertas(ofertas, estado)
+
+        self.assertEqual(restaurada["Comparar"].tolist(), [False, True])
+
     def test_solo_exige_periodos_con_consumo(self):
         activos, vacios = periodos_con_consumo(
             pd.Series({"P1": 0, "P2": 0, "P3": 10, "P4": 20, "P5": 0, "P6": 30}),

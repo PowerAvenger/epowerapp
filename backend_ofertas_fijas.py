@@ -18,6 +18,33 @@ ATRS_OFERTA = {"2.0", "3.0", "6.1", "6.2"}
 UNIDAD_POTENCIA_DIARIA = "€/kW/día"
 
 
+def normalizar_atr(atr: str) -> str:
+    """Devuelve el ATR en el formato canónico usado por la aplicación."""
+    return str(atr or "").upper().replace(" ", "").removesuffix("TD")
+
+
+def periodos_aplicables_atr(atr: str) -> list[str]:
+    """Una 2.0 TD solo tiene precios de energía P1, P2 y P3."""
+    return PERIODOS[:3] if normalizar_atr(atr) == "2.0" else PERIODOS.copy()
+
+
+def periodos_no_aplicables_atr(atr: str) -> list[str]:
+    """Periodos que deben mostrarse vacíos para el ATR indicado."""
+    aplicables = set(periodos_aplicables_atr(atr))
+    return [periodo for periodo in PERIODOS if periodo not in aplicables]
+
+
+def periodos_con_consumo(consumos, atr: str) -> tuple[list[str], list[str]]:
+    """Devuelve periodos exigibles y periodos aplicables sin consumo."""
+    candidatos = periodos_aplicables_atr(atr)
+    serie = pd.to_numeric(
+        pd.Series(consumos).reindex(candidatos), errors="coerce"
+    ).fillna(0)
+    activos = [periodo for periodo in candidatos if serie[periodo] > 0]
+    activos = activos or candidatos
+    return activos, [periodo for periodo in candidatos if periodo not in activos]
+
+
 def potencia_mensual_a_diaria(valor):
     """Convierte un precio de potencia mensual a su equivalente diario anual."""
     numero = pd.to_numeric(valor, errors="coerce")
@@ -116,6 +143,185 @@ def cargar_catalogo_ofertas(ruta=RUTA_CATALOGO_OFERTAS) -> list[dict]:
         for ruta_importada in sorted(ruta.parent.glob(PATRON_CATALOGOS_IMPORTADOS)):
             catalogo.extend(_leer_catalogo(ruta_importada))
     return catalogo
+
+
+def ofertas_catalogo_para_atr(catalogo: list[dict], atr: str) -> pd.DataFrame:
+    """Proyecta versiones persistidas al contrato tabular de los comparadores."""
+    atr_normalizado = str(atr or "").replace(" ", "").upper().removesuffix("TD")
+    filas = []
+    for version in catalogo:
+        for tarifa in version.get("tarifas", []):
+            atr_tarifa = (
+                str(tarifa.get("atr", "")).replace(" ", "")
+                .upper().removesuffix("TD")
+            )
+            if atr_tarifa != atr_normalizado:
+                continue
+            potencia = tarifa.get("potencia") or version.get("potencia") or {}
+            comision = tarifa.get("comision") or version.get("comision") or {}
+            filas.append({
+                "oferta": version.get("nombre", "Oferta guardada"),
+                "ID oferta": version.get("id"),
+                "Vigencia desde": version.get("vigencia_desde"),
+                "Vigencia hasta": version.get("vigencia_hasta"),
+                "Fee (€/MWh)": 0.0,
+                "Plataforma": version.get("plataforma"),
+                "Comisión tipo": comision.get("tipo"),
+                "Comisión estimada (€)": comision.get("estimada_eur"),
+                "Comisión (€/MWh)": comision.get("eur_mwh"),
+                "Comisión participación (%)": 100.0,
+                **{periodo: tarifa.get(periodo) for periodo in PERIODOS},
+                "Potencia modalidad": (
+                    "BOE" if str(potencia.get("modalidad", "BOE")).upper() == "BOE"
+                    else "CON MARGEN"
+                ),
+                **{
+                    f"Potencia {periodo}": potencia.get(periodo)
+                    for periodo in PERIODOS
+                },
+            })
+    return pd.DataFrame(filas)
+
+
+def precios_energia_oferta(oferta) -> pd.Series:
+    """Devuelve P1–P6 en €/kWh con el fee comercial aplicado una sola vez."""
+    fee = pd.to_numeric(oferta.get("Fee (€/MWh)", 0), errors="coerce")
+    fee = 0.0 if pd.isna(fee) else float(fee)
+    precios = pd.Series({
+        periodo: pd.to_numeric(oferta.get(periodo), errors="coerce")
+        for periodo in PERIODOS
+    })
+    return precios.fillna(0.0) + fee / 1000
+
+
+def perdidas_medias_ponderadas(
+    curva: pd.DataFrame,
+    columna_perdidas: str,
+) -> float:
+    """Devuelve la pérdida media de la curva ponderada por consumo, en %."""
+    requeridas = {"consumo_neto_kWh", columna_perdidas}
+    faltantes = requeridas.difference(curva.columns)
+    if faltantes:
+        raise ValueError(
+            "Faltan datos para calcular las pérdidas: "
+            + ", ".join(sorted(faltantes)) + "."
+        )
+    consumo = pd.to_numeric(curva["consumo_neto_kWh"], errors="coerce")
+    perdidas = pd.to_numeric(curva[columna_perdidas], errors="coerce")
+    if consumo.isna().any() or perdidas.isna().any():
+        raise ValueError("La curva contiene consumos o pérdidas no válidos.")
+    consumo_total = float(consumo.sum())
+    if consumo_total == 0:
+        return 0.0
+    return float((perdidas * consumo).sum() / consumo_total * 100)
+
+
+def copiar_oferta_con_horquilla_ssaa(
+    oferta,
+    nombre: str,
+    limite_superior_eur_mwh: float,
+    curva: pd.DataFrame,
+    columna_perdidas: str | None = None,
+    factor_tm: float = 1.015,
+) -> tuple[pd.DataFrame, dict]:
+    """Crea una variante temporal liquidando mensualmente la horquilla SSAA."""
+    nombre = str(nombre or "").strip()
+    if not nombre:
+        raise ValueError("Indica un nombre para la copia con horquilla SSAA.")
+    limite = pd.to_numeric(limite_superior_eur_mwh, errors="coerce")
+    if pd.isna(limite) or float(limite) < 0:
+        raise ValueError("El límite superior de SSAA no puede ser negativo.")
+    requeridas = {"fecha", "ssaa", "consumo_neto_kWh", "coste_ssaa"}
+    if columna_perdidas:
+        requeridas.add(columna_perdidas)
+    faltantes = requeridas.difference(curva.columns)
+    if faltantes:
+        raise ValueError(
+            "Faltan datos para calcular la horquilla SSAA: "
+            + ", ".join(sorted(faltantes)) + "."
+        )
+
+    datos = curva[list(requeridas)].copy()
+    datos["fecha"] = pd.to_datetime(datos["fecha"], errors="coerce")
+    for columna in ["ssaa", "consumo_neto_kWh", "coste_ssaa"]:
+        datos[columna] = pd.to_numeric(datos[columna], errors="coerce")
+    if columna_perdidas:
+        datos[columna_perdidas] = pd.to_numeric(
+            datos[columna_perdidas], errors="coerce"
+        )
+    if datos.isna().any().any():
+        raise ValueError("La curva contiene datos incompletos para calcular SSAA.")
+    datos["Mes"] = datos["fecha"].dt.to_period("M").astype(str)
+    datos["Pérdidas ponderadas"] = (
+        datos[columna_perdidas] * datos["consumo_neto_kWh"]
+        if columna_perdidas else 0.0
+    )
+    detalle_mensual = datos.groupby("Mes", as_index=False).agg(
+        **{
+            "SSAA medio (€/MWh)": ("ssaa", "mean"),
+            "Consumo (kWh)": ("consumo_neto_kWh", "sum"),
+            "Coste SSAA (€)": ("coste_ssaa", "sum"),
+            "Pérdidas ponderadas": ("Pérdidas ponderadas", "sum"),
+        }
+    )
+    consumo_mwh = detalle_mensual["Consumo (kWh)"] / 1000
+    ssaa_apuntado = detalle_mensual["Coste SSAA (€)"] / consumo_mwh
+    detalle_mensual["Apuntamiento SSAA"] = (
+        ssaa_apuntado / detalle_mensual["SSAA medio (€/MWh)"]
+    ).where(consumo_mwh.gt(0), 0.0).fillna(0.0)
+    detalle_mensual["Pérdidas (%)"] = (
+        detalle_mensual["Pérdidas ponderadas"]
+        / detalle_mensual["Consumo (kWh)"] * 100
+    ).where(detalle_mensual["Consumo (kWh)"].ne(0), 0.0).fillna(0.0)
+    detalle_mensual = detalle_mensual.drop(columns="Pérdidas ponderadas")
+    detalle_mensual["Diferencial (€/MWh)"] = (
+        detalle_mensual["SSAA medio (€/MWh)"] - float(limite)
+    ).clip(lower=0.0)
+    detalle_mensual["Ajuste apuntado (€/MWh)"] = (
+        detalle_mensual["Diferencial (€/MWh)"]
+        * detalle_mensual["Apuntamiento SSAA"]
+    )
+    detalle_mensual["Ajuste con pérdidas y TM (€/MWh)"] = (
+        detalle_mensual["Ajuste apuntado (€/MWh)"]
+        * (1 + detalle_mensual["Pérdidas (%)"] / 100)
+        * float(factor_tm)
+    )
+    detalle_mensual["Sobrecoste (€)"] = (
+        detalle_mensual["Ajuste con pérdidas y TM (€/MWh)"] * consumo_mwh
+    )
+    consumo_kwh = float(detalle_mensual["Consumo (kWh)"].sum())
+    sobrecoste = float(detalle_mensual["Sobrecoste (€)"].sum())
+    ajuste_eur_mwh = sobrecoste / (consumo_kwh / 1000) if consumo_kwh else 0.0
+
+    copia = pd.DataFrame([dict(oferta)])
+    copia.loc[0, "oferta"] = nombre
+    for periodo in PERIODOS:
+        precio = pd.to_numeric(copia.loc[0, periodo], errors="coerce")
+        copia.loc[0, periodo] = (
+            pd.NA if pd.isna(precio) else float(precio) + ajuste_eur_mwh / 1000
+        )
+    copia.loc[0, "Horquilla SSAA superior (€/MWh)"] = float(
+        limite
+    )
+    copia.loc[0, "Ajuste horquilla SSAA (€/MWh)"] = ajuste_eur_mwh
+    copia.loc[0, "Oferta origen"] = str(oferta.get("oferta", ""))
+    copia.loc[0, "ID oferta"] = pd.NA
+
+    detalle = {
+        "version_calculo": 2,
+        "nombre": nombre,
+        "oferta_origen": str(oferta.get("oferta", "")),
+        "limite_superior_eur_mwh": float(limite),
+        "ajuste_eur_mwh": ajuste_eur_mwh,
+        "consumo_kwh": consumo_kwh,
+        "sobrecoste_eur": sobrecoste,
+        "perdidas_pct": perdidas_medias_ponderadas(
+            curva, columna_perdidas
+        ) if columna_perdidas else 0.0,
+        "factor_tm": float(factor_tm),
+        "detalle_mensual": detalle_mensual,
+    }
+    return copia, detalle
 
 
 def eliminar_versiones_oferta(

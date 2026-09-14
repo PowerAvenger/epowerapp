@@ -8,13 +8,73 @@ import pandas as pd
 from backend_ofertas_fijas import (
     cargar_catalogo_ofertas,
     catalogo_a_dataframe,
+    copiar_oferta_con_horquilla_ssaa,
     eliminar_versiones_oferta,
+    ofertas_catalogo_para_atr,
     guardar_version_oferta,
     normalizar_tarifas_oferta,
+    precios_energia_oferta,
 )
 
 
 class CatalogoOfertasFijasTest(unittest.TestCase):
+    def test_copia_temporal_aplica_exceso_ssaa_apuntado(self):
+        oferta = pd.Series({
+            "oferta": "Base", "P1": .10, "P2": .20,
+            "P3": .30, "P4": pd.NA, "P5": pd.NA, "P6": pd.NA,
+        })
+
+        curva = pd.DataFrame({
+            "fecha": ["2026-01-01", "2026-02-01"],
+            "ssaa": [20.0, 10.0],
+            "consumo_neto_kWh": [10_000, 10_000],
+            "coste_ssaa": [220.0, 100.0],
+            "perd_2.0": [0.10, 0.10],
+        })
+        copia, detalle = copiar_oferta_con_horquilla_ssaa(
+            oferta, "Base con riesgo", 16.77, curva,
+            columna_perdidas="perd_2.0",
+        )
+
+        self.assertAlmostEqual(detalle["ajuste_eur_mwh"], 1.98346225)
+        self.assertAlmostEqual(detalle["sobrecoste_eur"], 39.669245)
+        self.assertAlmostEqual(copia.loc[0, "P1"], .10198346225)
+        mensual = detalle["detalle_mensual"]
+        self.assertAlmostEqual(mensual.loc[0, "Sobrecoste (€)"], 39.669245)
+        self.assertAlmostEqual(mensual.loc[1, "Sobrecoste (€)"], 0.0)
+        self.assertAlmostEqual(mensual.loc[0, "Diferencial (€/MWh)"], 3.23)
+        self.assertAlmostEqual(mensual.loc[1, "Diferencial (€/MWh)"], 0.0)
+        self.assertAlmostEqual(mensual.loc[0, "Pérdidas (%)"], 10.0)
+        self.assertTrue(pd.isna(copia.loc[0, "P4"]))
+
+    def test_aplica_fee_sin_alterar_los_precios_base(self):
+        oferta = pd.Series({
+            "P1": .10, "P2": .20, "Fee (€/MWh)": 10,
+        })
+
+        precios = precios_energia_oferta(oferta)
+
+        self.assertAlmostEqual(precios["P1"], .11)
+        self.assertAlmostEqual(precios["P2"], .21)
+        self.assertAlmostEqual(oferta["P1"], .10)
+
+    def test_proyecta_catalogo_normalizando_el_atr(self):
+        catalogo = [{
+            "id": "v1",
+            "nombre": "Oferta común",
+            "vigencia_desde": "2026-09-01",
+            "vigencia_hasta": "2026-09-30",
+            "tarifas": [{
+                "atr": "2.0", "P1": .2, "P2": .15, "P3": .1,
+                "P4": None, "P5": None, "P6": None,
+            }],
+        }]
+
+        salida = ofertas_catalogo_para_atr(catalogo, "2.0 TD")
+
+        self.assertEqual(salida.loc[0, "ID oferta"], "v1")
+        self.assertEqual(salida.loc[0, "oferta"], "Oferta común")
+
     def test_conserva_versiones_y_todos_los_atr(self):
         tarifas = pd.DataFrame([
             {'ATR': '2.0', 'P1': .25, 'P2': .17, 'P3': .14,

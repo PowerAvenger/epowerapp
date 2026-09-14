@@ -10,6 +10,7 @@ from backend_comun import (
     aplicar_texto_pie_porcentaje,
     filtrar_intervalos_inexistentes_madrid,
 )
+from formato_es import formato_numero_es
 
 
 COMPONENTES_SSAA_TOTAL = [
@@ -354,6 +355,21 @@ def tabla_precios_medios_horarios(df):
         aggfunc='mean'
     ).reset_index()
 
+
+def _construir_hover_perfil_horario(tabla, series):
+    """Prepara una tarjeta horaria común con formato numérico español."""
+    horas = tabla["hora"].map(lambda valor: f"{int(float(valor)):02d}:00")
+    columnas = [horas]
+    lineas = ["<b>Hora: %{customdata[0]}</b>"]
+    for indice, (columna, etiqueta) in enumerate(series, start=1):
+        columnas.append(
+            tabla[columna].map(lambda valor: formato_numero_es(valor, 2))
+        )
+        lineas.append(
+            f"{etiqueta}: %{{customdata[{indice}]}} €/MWh"
+        )
+    return np.column_stack(columnas), "<br>".join(lineas) + "<extra></extra>"
+
 # GRAFICO PRINCIPAL CON LAS BARRAS DE OMIE Y SSAA Y LAS LINEAS DE PRECIO FINAL. HORARIAS
 def graficar_precios_medios_horarios(
     df_filtrado,
@@ -401,40 +417,18 @@ def graficar_precios_medios_horarios(
 
         pt2 = pt2.merge(curva, on="hora", how="left")
 
-    # =========================
-    # Columnas para hover
-    # =========================
-    columnas_hover = [
-        "hora",
-        "spot",
-        "ssaa",
-        "precio_2.0",
-        "precio_3.0",
-        "precio_6.1"
+    series_hover = [
+        ("spot", "SPOT / OMIE"),
+        ("ssaa", "SSAA"),
+        ("precio_2.0", "ATR 2.0 · referencia aritmética"),
+        ("precio_3.0", "ATR 3.0 · referencia aritmética"),
+        ("precio_6.1", "ATR 6.1 · referencia aritmética"),
     ]
-
     if col_curva in pt2.columns:
-        columnas_hover.append(col_curva)
-
-    customdata = pt2[columnas_hover].to_numpy()
-    idx = {col: i for i, col in enumerate(columnas_hover)}
-
-    hovertemplate = (
-        "<b>Hora %{customdata[" + str(idx["hora"]) + "]:02.0f}:00</b><br><br>"
-        "spot: %{customdata[" + str(idx["spot"]) + "]:.2f} €/MWh<br>"
-        "ssaa: %{customdata[" + str(idx["ssaa"]) + "]:.2f} €/MWh<br>"
-        "precio_2.0: %{customdata[" + str(idx["precio_2.0"]) + "]:.2f} €/MWh<br>"
-        "precio_3.0: %{customdata[" + str(idx["precio_3.0"]) + "]:.2f} €/MWh<br>"
-        "precio_6.1: %{customdata[" + str(idx["precio_6.1"]) + "]:.2f} €/MWh"
+        series_hover.append((col_curva, f"ATR {atr} · ponderado"))
+    customdata, hovertemplate = _construir_hover_perfil_horario(
+        pt2, series_hover
     )
-
-    if col_curva in idx:
-        hovertemplate += (
-            "<br>" + col_curva + ": "
-            "%{customdata[" + str(idx[col_curva]) + "]:.2f} €/MWh"
-        )
-
-    hovertemplate += "<extra></extra>"
 
     # =========================
     # Figura base: líneas ATR
@@ -451,12 +445,16 @@ def graficar_precios_medios_horarios(
         color_discrete_map=colores_precios,
     )
 
-    # Quitamos hover de las líneas reales
     graf_pt1.update_traces(
         line=dict(width=4),
-        hoverinfo="skip",
-        hovertemplate=None
     )
+    nombres_atr = {
+        "precio_2.0": "ATR 2.0 · referencia aritmética",
+        "precio_3.0": "ATR 3.0 · referencia aritmética",
+        "precio_6.1": "ATR 6.1 · referencia aritmética",
+    }
+    for traza in graf_pt1.data:
+        traza.name = nombres_atr.get(traza.name, traza.name)
 
     # =========================
     # Layout
@@ -468,8 +466,7 @@ def graficar_precios_medios_horarios(
             tickvals=pt2["hora"]
         ),
         barmode="relative",
-        #hovermode="x unified",
-        hovermode="x",
+        hovermode="closest",
         title=""
     )
 
@@ -479,21 +476,17 @@ def graficar_precios_medios_horarios(
     graf_pt1.add_bar(
         x=pt2["hora"],
         y=pt2["spot"],
-        name="spot",
-        marker_color="green",
-        width=0.5,
-        hoverinfo="skip",
-        hovertemplate=None
+        name="SPOT / OMIE",
+        marker_color="#2EAD65",
+        width=0.42,
     )
 
     graf_pt1.add_bar(
         x=pt2["hora"],
         y=pt2["ssaa"],
-        name="ssaa",
-        marker_color="#5f259f",
-        width=0.5,
-        hoverinfo="skip",
-        hovertemplate=None
+        name="SSAA",
+        marker_color="#7C3AED",
+        width=0.42,
     )
 
     # =========================
@@ -508,34 +501,37 @@ def graficar_precios_medios_horarios(
             x=pt2["hora"],
             y=pt2[col_curva],
             mode="lines",
-            name=col_curva,
+            name=f"ATR {atr} · ponderado",
             line=dict(
                 color=color_curva,
                 width=6,
                 dash="dot"
             ),
-            hoverinfo="skip",
-            hovertemplate=None
         )
 
-    # =========================
-    # Traza invisible SOLO para hover unificado
-    # =========================
-    graf_pt1.add_scatter(
-        x=pt2["hora"],
-        y=pt2["precio_2.0"],
-        mode="markers",
-        marker=dict(
-            size=1,
-            color="rgba(0,0,0,0)"
-        ),
-        name="",
-        showlegend=False,
+    graf_pt1.update_traces(
         customdata=customdata,
-        hovertemplate=hovertemplate
+        hovertemplate=hovertemplate,
     )
 
     graf_pt1 = aplicar_estilo(graf_pt1)
+    graf_pt1.update_layout(
+        height=520,
+        margin=dict(l=20, r=15, t=55, b=25),
+        bargap=0.42,
+        barcornerradius=6,
+        font=dict(size=16),
+        legend=dict(font=dict(size=15)),
+        hoverlabel=dict(font_size=15),
+        xaxis=dict(
+            title="Hora", tickmode="array", tickvals=list(range(24)),
+            title_font=dict(size=17), tickfont=dict(size=14),
+        ),
+        yaxis=dict(
+            title="€/MWh", rangemode="tozero",
+            title_font=dict(size=17), tickfont=dict(size=14),
+        ),
+    )
 
     if leyenda_horizontal:
         graf_pt1.update_layout(
@@ -598,6 +594,15 @@ def graficar_perfil_atr_ponderado(df_mercado, df_curva, atr, color="#FF8C00"):
         filas.append(fila)
     perfil = referencia.merge(pd.DataFrame(filas), on="hora", how="outer")
     perfil = perfil.sort_values("hora")
+    customdata_hover, hover_perfil = _construir_hover_perfil_horario(
+        perfil,
+        [
+            ("SPOT / OMIE · ponderado", "SPOT ponderado"),
+            ("SSAA · ponderado", "SSAA ponderados"),
+            ("ATR · referencia aritmética", f"ATR {atr} · referencia aritmética"),
+            ("ATR · ponderado", f"ATR {atr} · ponderado"),
+        ],
+    )
 
     figura = go.Figure()
     figura.add_bar(
@@ -628,9 +633,13 @@ def graficar_perfil_atr_ponderado(df_mercado, df_curva, atr, color="#FF8C00"):
         name=f"ATR {atr} · ponderado",
         line=dict(color=color, width=6),
     )
+    figura.update_traces(
+        customdata=customdata_hover,
+        hovertemplate=hover_perfil,
+    )
     figura.update_layout(
         barmode="relative",
-        hovermode="x unified",
+        hovermode="closest",
         height=520,
         margin=dict(l=20, r=15, t=55, b=25),
         xaxis=dict(title="Hora", tickmode="array", tickvals=list(range(24))),

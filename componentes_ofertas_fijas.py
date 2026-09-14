@@ -2,28 +2,50 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 import pandas as pd
+
+from backend_ofertas_fijas import (
+    normalizar_atr,
+    periodos_aplicables_atr,
+    periodos_con_consumo,
+    periodos_no_aplicables_atr,
+)
 
 PERIODOS = [f"P{i}" for i in range(1, 7)]
 
 
-def normalizar_atr(atr: str) -> str:
-    """Devuelve el ATR en el formato canónico usado por la aplicación."""
-    return str(atr or "").upper().replace(" ", "").removesuffix("TD")
+def aplicar_seleccion_ofertas(
+    ofertas: pd.DataFrame,
+    seleccion_guardada: dict[str, bool] | None,
+) -> pd.DataFrame:
+    """Restaura los checks por nombre; las ofertas nuevas nacen seleccionadas."""
+    salida = ofertas.copy()
+    estado = seleccion_guardada or {}
+    valores = salida["oferta"].astype(str).map(
+        lambda nombre: bool(estado.get(nombre, True))
+    )
+    if "Comparar" in salida:
+        salida["Comparar"] = valores
+    else:
+        salida.insert(0, "Comparar", valores)
+    return salida
 
 
-def periodos_aplicables_atr(atr: str) -> list[str]:
-    """Una 2.0 TD sólo tiene precios de energía P1, P2 y P3."""
-    return PERIODOS[:3] if normalizar_atr(atr) == "2.0" else PERIODOS.copy()
-
-
-def periodos_con_consumo(consumos, atr: str) -> tuple[list[str], list[str]]:
-    """Devuelve periodos exigibles y periodos sin consumo."""
-    candidatos = periodos_aplicables_atr(atr)
-    serie = pd.to_numeric(pd.Series(consumos).reindex(candidatos), errors="coerce").fillna(0)
-    activos = [p for p in candidatos if serie[p] > 0]
-    activos = activos or candidatos
-    return activos, [p for p in candidatos if p not in activos]
+def actualizar_seleccion_ofertas(
+    ofertas_editadas: pd.DataFrame,
+    seleccion_guardada: dict[str, bool] | None = None,
+) -> dict[str, bool]:
+    """Actualiza el estado durable sin olvidar ofertas temporalmente ocultas."""
+    estado = dict(seleccion_guardada or {})
+    if "Comparar" not in ofertas_editadas:
+        return estado
+    estado.update({
+        str(fila["oferta"]): bool(fila["Comparar"])
+        for _, fila in ofertas_editadas.iterrows()
+    })
+    return estado
 
 
 def normalizar_excel_ofertas(tabla: pd.DataFrame) -> pd.DataFrame:
@@ -323,19 +345,203 @@ def render_oferta_manual(periodos: list[str], clave: str) -> pd.DataFrame:
     return pd.DataFrame()
 
 
+def render_selector_ofertas(
+    ofertas: pd.DataFrame,
+    clave: str,
+    columnas_bloqueadas: list[str] | None = None,
+    columnas_visibles: list[str] | None = None,
+    titulo_expander: str | None = None,
+) -> pd.DataFrame:
+    """Muestra el selector común y devuelve la tabla con la columna Comparar."""
+    import streamlit as st
+
+    clave_seleccion = f"{clave}_seleccion"
+    estado = st.session_state.get(clave_seleccion)
+    seleccion = aplicar_seleccion_ofertas(ofertas, estado)
+    contenedor = st.expander(titulo_expander) if titulo_expander else nullcontext()
+    with contenedor:
+        editadas = st.data_editor(
+            seleccion,
+            hide_index=True,
+            num_rows="fixed",
+            disabled=columnas_bloqueadas or ["oferta", *PERIODOS],
+            column_order=columnas_visibles,
+            use_container_width=True,
+            key=clave,
+            column_config={
+                "Comparar": st.column_config.CheckboxColumn(
+                    "Comparar", help="Incluye o excluye la oferta del cálculo."
+                ),
+                "Fee (€/MWh)": st.column_config.NumberColumn(
+                    "Fee (€/MWh)", min_value=0.0, max_value=100.0,
+                    step=0.1, format="%.2f",
+                ),
+            },
+        )
+    st.session_state[clave_seleccion] = actualizar_seleccion_ofertas(
+        editadas, estado
+    )
+    return editadas
+
+
+def render_simulador_horquilla_ssaa(
+    ofertas: pd.DataFrame,
+    clave_bloque: str,
+    curva: pd.DataFrame,
+    columna_perdidas: str | None = None,
+    apuntamiento_spot: float | None = None,
+) -> None:
+    """Crea copias temporales para estimar el riesgo de una horquilla SSAA."""
+    import streamlit as st
+    from backend_ofertas_fijas import (
+        copiar_oferta_con_horquilla_ssaa,
+        perdidas_medias_ponderadas,
+    )
+    from formato_es import formato_numero_es
+
+    clave_detalles = f"{clave_bloque}_horquillas_ssaa"
+    detalles_sesion = dict(st.session_state.get(clave_detalles, {}))
+    nombres_obsoletos = {
+        nombre for nombre, detalle in detalles_sesion.items()
+        if not isinstance(detalle, dict)
+        or detalle.get("version_calculo") != 2
+        or not isinstance(detalle.get("detalle_mensual"), pd.DataFrame)
+    }
+    if nombres_obsoletos:
+        clave_usuario = f"{clave_bloque}_ofertas_usuario"
+        ofertas_usuario = st.session_state.get(clave_usuario)
+        if isinstance(ofertas_usuario, pd.DataFrame) and not ofertas_usuario.empty:
+            st.session_state[clave_usuario] = ofertas_usuario.loc[
+                ~ofertas_usuario["oferta"].astype(str).isin(nombres_obsoletos)
+            ].copy()
+        st.session_state[clave_detalles] = {
+            nombre: detalle for nombre, detalle in detalles_sesion.items()
+            if nombre not in nombres_obsoletos
+        }
+        st.rerun()
+
+    perdidas_pct = (
+        perdidas_medias_ponderadas(curva, columna_perdidas)
+        if columna_perdidas else 0.0
+    )
+    with st.expander("🧮 Calcular ajuste de SSAA"):
+        if ofertas.empty:
+            st.info("Selecciona al menos una oferta fija para crear la simulación.")
+        else:
+            nombres = ofertas["oferta"].astype(str).tolist()
+            with st.form(f"{clave_bloque}_form_horquilla_ssaa"):
+                nombre_origen = st.selectbox("Oferta base", nombres)
+                nombre_copia = st.text_input(
+                    "Nombre de la copia para esta sesión",
+                    value="Oferta con horquilla SSAA",
+                )
+                c_limite, c_perdidas, c_apuntamiento = st.columns(3)
+                with c_limite:
+                    limite = st.number_input(
+                        "Horquilla superior SSAA (€/MWh)",
+                        min_value=0.0,
+                        value=16.77,
+                        step=0.01,
+                        format="%.2f",
+                    )
+                with c_perdidas:
+                    st.number_input(
+                        "Pérdidas (%)",
+                        value=float(perdidas_pct),
+                        format="%.2f",
+                        disabled=True,
+                    )
+                with c_apuntamiento:
+                    st.number_input(
+                        "Apuntamiento spot",
+                        value=float(apuntamiento_spot or 0.0),
+                        format="%.3f",
+                        disabled=True,
+                    )
+                st.caption(
+                    "Cálculo mensual: exceso sobre la horquilla × apuntamiento "
+                    "SSAA × (1 + pérdidas ponderadas) × TM 1,015. El resultado "
+                    "se multiplica por el consumo mensual; los importes de todos "
+                    "los meses se suman para obtener el ajuste del periodo. El "
+                    "apuntamiento spot se muestra como referencia informativa."
+                )
+                crear = st.form_submit_button(
+                    "Crear copia temporal", type="primary",
+                    use_container_width=True,
+                )
+            if crear:
+                try:
+                    oferta = ofertas.loc[
+                        ofertas["oferta"].astype(str).eq(nombre_origen)
+                    ].iloc[0]
+                    copia, detalle = copiar_oferta_con_horquilla_ssaa(
+                        oferta,
+                        nombre_copia,
+                        limite,
+                        curva,
+                        columna_perdidas=columna_perdidas,
+                        factor_tm=1.015,
+                    )
+                    clave_usuario = f"{clave_bloque}_ofertas_usuario"
+                    st.session_state[clave_usuario] = combinar_ofertas(
+                        st.session_state.get(clave_usuario), copia
+                    )
+                    detalles = dict(st.session_state.get(clave_detalles, {}))
+                    detalles[detalle["nombre"]] = detalle
+                    st.session_state[clave_detalles] = detalles
+                    st.rerun()
+                except (IndexError, ValueError) as error:
+                    st.error(str(error))
+
+    activas = set(ofertas.get("oferta", pd.Series(dtype=str)).astype(str))
+    for nombre, detalle in st.session_state.get(clave_detalles, {}).items():
+        if nombre not in activas:
+            continue
+        st.warning(
+            f"Riesgo SSAA · {nombre}: techo "
+            f"{formato_numero_es(detalle['limite_superior_eur_mwh'], 2)} €/MWh; "
+            f"ajuste medio equivalente {formato_numero_es(detalle['ajuste_eur_mwh'], 2)} "
+            f"€/MWh y sobrecoste mensual acumulado estimado "
+            f"{formato_numero_es(detalle['sobrecoste_eur'], 2)} €. "
+            "Es una estimación del riesgo, no una liquidación contractual."
+        )
+        with st.expander(f"Detalle mensual · {nombre}"):
+            st.dataframe(
+                detalle["detalle_mensual"],
+                hide_index=True,
+                use_container_width=True,
+            )
+
+
 def render_bloque_ofertas_fijas(
-    consumos, atr: str, clave: str, titulo: str = "Ofertas a precio fijo"
+    consumos,
+    atr: str,
+    clave: str,
+    titulo: str = "Ofertas a precio fijo",
+    periodos_afectados=None,
+    titulo_selector_expander: str | None = None,
 ) -> pd.DataFrame:
     """Renderiza el bloque completo de ofertas y devuelve las activas con fee."""
     import streamlit as st
-    from backend_ofertas_fijas import cargar_catalogo_ofertas
+    from backend_ofertas_fijas import (
+        cargar_catalogo_ofertas,
+        ofertas_catalogo_para_atr,
+    )
 
     clave_usuario = f"{clave}_ofertas_usuario"
     clave_eliminadas = f"{clave}_ofertas_eliminadas"
     clave_editor = f"{clave}_editor_ofertas"
     st.subheader(titulo)
 
-    exigibles, sin_consumo = periodos_con_consumo(consumos, atr)
+    aplicables = periodos_aplicables_atr(atr)
+    if periodos_afectados is None:
+        exigibles, sin_consumo = periodos_con_consumo(consumos, atr)
+    else:
+        afectados = {
+            str(periodo).strip().upper() for periodo in periodos_afectados
+        }
+        exigibles = [periodo for periodo in aplicables if periodo in afectados]
+        sin_consumo = []
     if sin_consumo:
         st.caption(
             "No se exige precio en periodos sin consumo: "
@@ -368,23 +574,12 @@ def render_bloque_ofertas_fijas(
             st.session_state.get(clave_usuario), nueva
         )
 
-    atr_catalogo = str(atr).replace(" ", "").upper().removesuffix("TD")
-    filas_catalogo = []
     try:
         catalogo = cargar_catalogo_ofertas()
     except ValueError as error:
         catalogo = []
         st.warning(str(error))
-    for registro in catalogo:
-        for tarifa in registro.get("tarifas", []):
-            if str(tarifa.get("atr", "")).replace(" ", "").upper().removesuffix("TD") != atr_catalogo:
-                continue
-            filas_catalogo.append({
-                "oferta": registro.get("nombre", "Oferta guardada"),
-                **{p: tarifa.get(p, 0.0) for p in PERIODOS},
-                "Fee (€/MWh)": 0.0,
-            })
-    ofertas_catalogo = pd.DataFrame(filas_catalogo)
+    ofertas_catalogo = ofertas_catalogo_para_atr(catalogo, atr)
     ofertas = combinar_ofertas(
         ofertas_catalogo, st.session_state.get(clave_usuario)
     )
@@ -407,23 +602,16 @@ def render_bloque_ofertas_fijas(
     ofertas["Fee (€/MWh)"] = pd.to_numeric(
         ofertas["Fee (€/MWh)"], errors="coerce"
     ).fillna(0.0)
-    ofertas.insert(0, "Comparar", True)
-    editadas = st.data_editor(
+    periodos_vacios = set(periodos_no_aplicables_atr(atr))
+    if periodos_afectados is not None:
+        periodos_vacios.update(set(aplicables).difference(afectados))
+    ofertas[list(periodos_vacios)] = pd.NA
+    editadas = render_selector_ofertas(
         ofertas,
-        hide_index=True,
-        num_rows="fixed",
-        disabled=["oferta", *PERIODOS],
-        use_container_width=True,
-        key=clave_editor,
-        column_config={
-            "Comparar": st.column_config.CheckboxColumn(
-                "Comparar", help="Incluye o excluye la oferta del cálculo."
-            ),
-            "Fee (€/MWh)": st.column_config.NumberColumn(
-                "Fee (€/MWh)", min_value=0.0, max_value=100.0,
-                step=0.1, format="%.2f",
-            ),
-        },
+        clave_editor,
+        ["oferta", *PERIODOS],
+        ["Comparar", "oferta", *PERIODOS, "Fee (€/MWh)"],
+        titulo_expander=titulo_selector_expander,
     )
 
     a_eliminar = st.multiselect(
@@ -448,9 +636,7 @@ def render_bloque_ofertas_fijas(
         st.session_state[clave_eliminadas] = []
         st.rerun()
 
-    activas = editadas.loc[editadas["Comparar"]].drop(columns="Comparar").copy()
-    for periodo in exigibles:
-        activas[periodo] = pd.to_numeric(
-            activas[periodo], errors="coerce"
-        ).fillna(0.0) + activas["Fee (€/MWh)"] / 1000
+    activas = editadas.loc[
+        editadas["Comparar"].fillna(False)
+    ].drop(columns="Comparar").copy()
     return activas.reset_index(drop=True)

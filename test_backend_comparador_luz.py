@@ -3,14 +3,88 @@ import pandas as pd
 from backend_comparador_luz import (
     calcular_ahorro_seleccion_vs_indexados,
     calcular_escenarios_indexados_mensuales,
+    comparar_costes_mensuales,
+    comparar_costes_mensuales_referenciados,
     comparar_ofertas_fijas,
+    construir_curva_coste_oferta_fija,
     consumos_por_periodo,
-    ofertas_catalogo_para_atr,
+    referenciar_comparativa_costes,
 )
+from backend_ofertas_fijas import ofertas_catalogo_para_atr
 from backend_indexado import FormulaIndexada
 
 
 class ComparadorLuzTest(unittest.TestCase):
+    def test_comparativa_mensual_admite_cualquier_referencia(self):
+        referencia = pd.DataFrame({
+            "fecha": ["2026-01-01", "2026-02-01"],
+            "coste_total": [100.0, 80.0],
+        })
+        seleccion = pd.DataFrame({
+            "fecha": ["2026-01-01", "2026-02-01"],
+            "coste_total": [90.0, 95.0],
+        })
+
+        salida = comparar_costes_mensuales_referenciados(
+            referencia, seleccion
+        )
+
+        self.assertEqual(
+            salida["Coste referencia (€)"].tolist(), [100.0, 80.0]
+        )
+        self.assertEqual(
+            salida["Coste selección (€)"].tolist(), [90.0, 95.0]
+        )
+
+    def test_construye_curva_de_coste_para_oferta_fija(self):
+        curva = pd.DataFrame({
+            "periodo": ["P1", "P2"],
+            "consumo_neto_kWh": [100.0, 200.0],
+        })
+        oferta = pd.Series({
+            "P1": 0.10, "P2": 0.20, "Fee (€/MWh)": 10.0,
+        })
+
+        salida = construir_curva_coste_oferta_fija(curva, oferta)
+
+        self.assertAlmostEqual(salida.loc[0, "coste_total"], 11.0)
+        self.assertAlmostEqual(salida.loc[1, "coste_total"], 42.0)
+
+    def test_referencia_comparativa_sin_alterar_orden_por_coste(self):
+        resultados = pd.DataFrame({
+            "Oferta": ["Fija A", "Indexado", "Cobertura"],
+            "Coste (€)": [900.0, 1000.0, 1100.0],
+        })
+
+        salida = referenciar_comparativa_costes(resultados, "Indexado")
+
+        self.assertEqual(
+            salida["Oferta"].tolist(), ["Fija A", "Indexado", "Cobertura"]
+        )
+        self.assertEqual(
+            salida["Δ referencia (€)"].tolist(), [-100.0, 0.0, 100.0]
+        )
+        self.assertEqual(
+            salida["Δ referencia (%)"].tolist(), [-10.0, 0.0, 10.0]
+        )
+        self.assertEqual(
+            salida["Es referencia"].tolist(), [False, True, False]
+        )
+
+    def test_compara_costes_mensuales_de_dos_curvas(self):
+        fechas = ["2026-01-01", "2026-01-02", "2026-02-01"]
+        indexado = pd.DataFrame({
+            "fecha": fechas, "coste_total": [10.0, 20.0, 30.0]
+        })
+        seleccion = pd.DataFrame({
+            "fecha": fechas, "coste_total": [8.0, 16.0, 35.0]
+        })
+
+        salida = comparar_costes_mensuales(indexado, seleccion)
+
+        self.assertEqual(salida["Coste indexado (€)"].tolist(), [30.0, 30.0])
+        self.assertEqual(salida["Coste selección (€)"].tolist(), [24.0, 35.0])
+
     def test_ahorro_seleccion_frente_a_tres_indexados(self):
         resultados = pd.DataFrame({
             'Oferta': ['Fija elegida', 'Indexado C', 'Indexado A', 'Indexado B'],

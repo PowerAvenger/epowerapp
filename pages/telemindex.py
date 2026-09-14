@@ -2,6 +2,7 @@ import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
 import io
+from html import escape
 
 import pandas as pd
 import datetime
@@ -21,15 +22,30 @@ from backend_telemindex import (
     analizar_dependencia_omie, graficar_elasticidad_lineal,
     
 ) 
-from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resumen, aplicar_estilo, NOMBRE_ZONA_PERIODOS, calcular_precios_atr, formatear_columnas_tabla
-from backend_curvadecarga import graficar_media_horaria, graficar_queso_periodos
+from backend_comun import colores_precios, obtener_df_resumen, aplicar_estilo, NOMBRE_ZONA_PERIODOS, calcular_precios_atr, formatear_columnas_tabla
+from backend_curvadecarga import (
+    graficar_cascada_diferencias_mensuales,
+    graficar_media_horaria,
+    graficar_mensual_apilado,
+    graficar_queso_periodos,
+)
+from backend_comparador_luz import (
+    comparar_costes_mensuales_referenciados,
+    comparar_ofertas_fijas,
+    construir_curva_coste_oferta_fija,
+    referenciar_comparativa_costes,
+)
+from backend_ofertas_fijas import (
+    normalizar_atr,
+    periodos_no_aplicables_atr,
+)
 from backend_previsiones import obtener_prevision_omie_anual
 from componentes_ofertas_fijas import (
-    combinar_ofertas, construir_oferta, normalizar_excel_ofertas,
-    periodos_con_consumo, render_oferta_ia, render_oferta_manual,
-    selector_origen_oferta,
+    render_bloque_ofertas_fijas,
+    render_simulador_horquilla_ssaa,
 )
 from componentes_curva import render_origen_curva
+from componentes_indexados import render_formulario_formula_indexada
 from backend_simulindex import (
     construir_prevision_indexados_2026,
     obtener_hist_mensual,
@@ -39,6 +55,7 @@ from backend_indexado import (
     calcular_precios_atr_formula,
     construir_desglose_precio_indexado,
     construir_desglose_ssaa_c2,
+    describir_formula_indexada,
 )
 from backend_telemindex import COMPONENTES_SSAA_FORMULA
 from utilidades import (
@@ -46,7 +63,6 @@ from utilidades import (
     generar_menu,
     init_app,
     init_app_index,
-    mostrar_parametros_formula_indexado,
     persist_widget,
 )
 from formato_es import (
@@ -55,8 +71,10 @@ from formato_es import (
     formato_eur_mwh,
     formato_euros,
     formato_kwh,
+    formato_mes_es,
     formato_numero_es,
     formato_pct,
+    formatear_resumen_mixto,
 )
 
 
@@ -85,6 +103,12 @@ DEFAULTS_FORMULA_HISTORICO = {
     "cfg_fnee": True,
     "cfg_fnee_pos": "perdidas",
     "cf_pct": 0.0,
+}
+
+COLORES_TIPO_CONTRATO = {
+    "Indexado": "#EF4444",
+    "Cobertura": "#8B5CF6",
+    "Fijo": "#F59E0B",
 }
 
 
@@ -157,16 +181,6 @@ if not st.session_state.get('usuario_autenticado', False) and not st.session_sta
 
 if "df_ofertas_fijas" not in st.session_state:
     st.session_state.df_ofertas_fijas = pd.DataFrame()
-
-if "df_oferta_fija_manual" not in st.session_state:
-    st.session_state.df_oferta_fija_manual = pd.DataFrame()
-
-if "df_oferta_fija_ia_telemindex" not in st.session_state:
-    st.session_state.df_oferta_fija_ia_telemindex = pd.DataFrame()
-
-
-if "margen_fijo" not in st.session_state:
-    st.session_state.margen_fijo = 0.0
 
 if 'opcion_comparativa' not in st.session_state:
     st.session_state.opcion_comparativa = 'Cobertura'
@@ -361,6 +375,9 @@ if hay_curva:
     #df_heat = st.session_state.df_curva_sheets[["fecha","hora"]].copy()
 
     opcion_comparativa = str(st.session_state.get("opcion_comparativa", "Cobertura"))
+    referencia_comparativa = str(
+        st.session_state.get("telemindex_referencia_comparativa", "Indexado")
+    )
     df_ofertas_sesion = st.session_state.get("df_ofertas_fijas")
 
     ofertas_disponibles = []
@@ -369,150 +386,23 @@ if hay_curva:
         df_ofertas_sesion["oferta"] = df_ofertas_sesion["oferta"].astype(str).str.strip()
         ofertas_disponibles = df_ofertas_sesion["oferta"].tolist()
 
-    # La selección puede quedar obsoleta al sustituir el Excel o al normalizar
-    # como texto nombres de oferta que originalmente eran numéricos.
-    if opcion_comparativa != "Cobertura" and opcion_comparativa not in ofertas_disponibles:
-        opcion_comparativa = "Cobertura"
-        st.session_state.opcion_comparativa = "Cobertura"
+    curvas_comparativa = {
+        "Indexado": df_curva_sheets.copy(),
+        "Cobertura": df_curva_cober_omip.copy(),
+    }
+    tipos_comparativa = {"Indexado": "Indexado", "Cobertura": "Cobertura"}
+    if df_ofertas_sesion is not None and not df_ofertas_sesion.empty:
+        for _, fila_oferta in df_ofertas_sesion.iterrows():
+            nombre_oferta = str(fila_oferta["oferta"]).strip()
+            curvas_comparativa[nombre_oferta] = construir_curva_coste_oferta_fija(
+                df_curva_sheets, fila_oferta
+            )
+            tipos_comparativa[nombre_oferta] = "Fijo"
 
-    if opcion_comparativa == "Cobertura":
-
-        df_curva_comp = df_curva_cober_omip.copy()
-        #df_heat["coste_comp"] = df_curva_comp["coste_total"].values
-        titulo_comp = "Comparativa INDEXADO vs COBERTURA" 
-        nombre_color = "Cobertura"
-        nombre_serie_comp = "Coste cobertura"
-        color_serie_comp = "#8B5CF6"
-
-    else:
-
-        fila_oferta = df_ofertas_sesion[
-            df_ofertas_sesion["oferta"] == opcion_comparativa
-        ].iloc[0]
-        periodos = [f"P{i}" for i in range(1, 7)]
-
-        precios_fijo = {
-            p: fila_oferta[p]
-            for p in periodos
-            if p in fila_oferta.index
-        }
-
-        df_curva_comp = df_curva_sheets.copy()
-
-        df_curva_comp["precio_fijo"] = df_curva_comp["periodo"].map(precios_fijo)
-
-        df_curva_comp["coste_total"] = (df_curva_comp["consumo_neto_kWh"] * df_curva_comp["precio_fijo"])
-
-        titulo_comp = f"Comparativa INDEXADO vs FIJO {opcion_comparativa}"
-        nombre_color = opcion_comparativa
-        nombre_serie_comp = "Coste fijo"
-        color_serie_comp = "#EF4444"
-
-    
-    # ==========================================
-    # PREPARAR DF INDEX Y DF COMP
-    # ==========================================
-    df_index = (
-        df_curva_sheets[["fecha", "hora", "coste_total"]]
-        .copy()
-        .groupby(["fecha", "hora"], as_index=False)["coste_total"]
-        .sum()
-        .rename(columns={"coste_total": "coste_index"})
-    )
-
-    df_comp = (
-        df_curva_comp[["fecha", "hora", "coste_total"]]
-        .copy()
-        .groupby(["fecha", "hora"], as_index=False)["coste_total"]
-        .sum()
-        .rename(columns={"coste_total": "coste_comp"})
-    )
-
-    df_heat = df_index.merge(
-        df_comp,
-        on=["fecha", "hora"],
-        how="inner"
-    )
-
-    df_heat["dif_coste"] = df_heat["coste_index"]- df_heat["coste_comp"]
-
-    heatmap_data = df_heat.pivot_table(
-        index="fecha",
-        columns="hora",
-        values="dif_coste"
-    )
-    heatmap_data = heatmap_data.reindex(sorted(heatmap_data.columns), axis=1)
-
-    zmax = abs(heatmap_data.values).max()
-
-    fig_heat = px.imshow(
-        heatmap_data,
-        color_continuous_scale="RdYlGn_r",
-        zmin=-zmax,
-        zmax=zmax,
-        color_continuous_midpoint=0,
-        aspect="auto",
-        labels=dict(
-            x="Hora",
-            y="Día",
-            color="Δ Coste (€)"
-        )
-    )
-
-    fig_heat.update_layout(
-
-        title=dict(
-            #text="Cobertura OMIP vs Indexado – Diferencia de coste horario",
-            text="",
-            x=0.5,              # centra el título
-            xanchor="center",
-            font=dict(size=22)
-        ),
-
-        xaxis=dict(
-            title=dict(text="Hora del día", font=dict(size=16)),
-            tickmode="array",
-            tickvals=list(range(0,24)),   # fuerza las 24 horas
-            tickfont=dict(size=12)
-        ),
-
-        yaxis=dict(
-            title=dict(text="Fecha", font=dict(size=16)),
-            tickfont=dict(size=12),
-            automargin=True
-        ),
-
-        coloraxis_colorbar=dict(
-            title=dict(text="Δ Coste (€)", font=dict(size=14)),
-            tickfont=dict(size=12)
-        ),
-
-        margin=dict(l=40, r=40, t=60, b=40),
-
-        height=700
-    )
-
-    fig_heat.update_traces(
-        zmin=-zmax,
-        zmax=zmax
-    )
-
-    fig_heat.update_traces(
-        hovertemplate=
-        "<b>Día:</b> %{y}<br>"
-        "<b>Hora:</b> %{x}<br>"
-        "<b>Diferencia coste:</b> %{z:.2f} €<extra></extra>"
-    )
-
-    fig_heat.update_xaxes(showgrid=False)
-    fig_heat.update_yaxes(showgrid=False)
-
-    fig_heat.update_traces(
-        xgap=1,
-        ygap=1
-    )
-
-    #fig_heat = aplicar_estilo(fig_heat)
+    opciones_escenario = list(curvas_comparativa)
+    if referencia_comparativa not in opciones_escenario:
+        referencia_comparativa = "Indexado"
+        st.session_state.telemindex_referencia_comparativa = referencia_comparativa
 
 # Evol es una prolongación del histórico y no depende de la curva cargada.
 df_evol_historico = st.session_state.df_sheets.copy()
@@ -681,8 +571,8 @@ def mostrar_controles_telemindex(lista_meses, fecha_ultima_filtrado):
 
     st.subheader('Parámetros de fórmula', divider='rainbow')
     with st.container(border=True):
-        mostrar_parametros_formula_indexado(
-            widget_suffix="telemindex_historico",
+        render_formulario_formula_indexada(
+            clave="telemindex_historico",
             claves_estado=CLAVES_FORMULA_HISTORICO,
         )
 
@@ -812,6 +702,23 @@ def ocultar_filas_curva(tabla):
     return tabla.loc[~indices.str.endswith("_curva")].copy()
 
 
+def estilizar_etiquetas_atr(tabla, columna):
+    """Colorea una columna de etiquetas con el color común de cada ATR."""
+    colores_atr = {
+        atr: colores_precios[f"precio_{atr}"] for atr in ("2.0", "3.0", "6.1")
+    }
+
+    def estilo(valor):
+        texto = str(valor)
+        atr = next((atr for atr in colores_atr if atr in texto), None)
+        return (
+            f"color: {colores_atr[atr]}; font-weight: 700"
+            if atr else ""
+        )
+
+    return tabla.style.applymap(estilo, subset=[columna])
+
+
 def mostrar_impacto_spot():
     """Muestra la evolución y elasticidad del SPOT dentro del tab Evol."""
 
@@ -843,8 +750,12 @@ def mostrar_impacto_spot():
 def mostrar_desgloses_precios_historicos(df, formula):
     """Muestra una justificación aritmética independiente para cada ATR."""
 
+    colores_atr_markdown = {"2.0": "orange", "3.0": "red", "6.1": "blue"}
     for atr in ("2.0", "3.0", "6.1"):
-        with st.expander(f"Desglose justificativo {atr}TD"):
+        color = colores_atr_markdown[atr]
+        with st.expander(
+            f"Desglose justificativo :{color}[{atr} TD]"
+        ):
             try:
                 tabla = construir_desglose_precio_indexado(
                     df,
@@ -873,19 +784,28 @@ def mostrar_tabla_apuntamiento(tabla):
 
     tabla_mostrar = tabla.rename_axis("Peaje").reset_index()
     columnas_valores = [f"P{i}" for i in range(1, 7)] + ["Media"]
+    tabla_mostrar["Peaje"] = (
+        tabla_mostrar["Peaje"].astype(str)
+        .str.replace(r"^Ap_", "", regex=True)
+        + " TD"
+    )
+    tabla_mostrar = formatear_columnas_tabla(
+        tabla_mostrar,
+        columnas_numero=columnas_valores,
+        decimales_numero=3,
+    )
     configuracion = {
         "Peaje": st.column_config.TextColumn("Peaje", width="small"),
         **{
-            columna: st.column_config.NumberColumn(
+            columna: st.column_config.TextColumn(
                 columna,
-                format="%.3f",
                 width="small",
             )
             for columna in columnas_valores
         },
     }
     st.dataframe(
-        tabla_mostrar,
+        estilizar_etiquetas_atr(tabla_mostrar, "Peaje"),
         column_config=configuracion,
         use_container_width=True,
         hide_index=True,
@@ -930,8 +850,8 @@ with tab_curva:
 
     with contenedor_formula_curva:
         st.markdown("#### Parámetros de fórmula")
-        mostrar_parametros_formula_indexado(
-            widget_suffix="telemindex_curva",
+        render_formulario_formula_indexada(
+            clave="telemindex_curva",
         )
 
     with curva_col2:
@@ -1027,7 +947,6 @@ with tab_curva:
                 resumen_curva_mostrar,
                 use_container_width=True,
             )
-
             with st.expander("Desglose justificativo"):
                 try:
                     desglose_curva = construir_desglose_precio_indexado(
@@ -1121,6 +1040,12 @@ with tab_curva:
                         hide_index=True,
                         height=38 + 35 * len(desglose_ssaa_curva_mostrar),
                     )
+
+            st.plotly_chart(
+                graficar_mensual_apilado(df_curva_uso),
+                use_container_width=True,
+                key="telemindex_curva_consumo_mensual",
+            )
 
             st.subheader("Perfil de consumo vs coste", divider="rainbow")
             st.plotly_chart(
@@ -1355,7 +1280,21 @@ with tab1:
                     columnas_eur_kwh=cols_precios,
                     incluir_unidades=False,
                 )
-                st.dataframe(df_tabla_precios_fmt, use_container_width=True)
+                df_tabla_precios_fmt = (
+                    df_tabla_precios_fmt.rename_axis("Precio").reset_index()
+                )
+                df_tabla_precios_fmt["Precio"] = (
+                    df_tabla_precios_fmt["Precio"].astype(str)
+                    .str.replace(r"^precio_", "Precio final ", regex=True)
+                    + " TD"
+                )
+                st.dataframe(
+                    estilizar_etiquetas_atr(
+                        df_tabla_precios_fmt, "Precio"
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
                 # Las tablas resumidas de costes, ATR y margen se mantienen en
                 # df_tabla_costes, df_tabla_pyc y df_tabla_margen para poder
@@ -1458,12 +1397,9 @@ with tab2:
 
 
 with tab3:
-    #if 'df_curva_sheets' not in st.session_state or st.session_state.df_curva_sheets is None:
-    if 'df_curva_sheets' not in st.session_state:
-        st.warning('Introduce una curva de carga')
-        st.stop()
-    elif st.session_state.df_curva_sheets is None:
-        st.warning('Asegúrate de tener seleccionado un rango de fechas')
+    df_curva_comparativa = st.session_state.get("df_curva_sheets")
+    if df_curva_comparativa is None or df_curva_comparativa.empty:
+        st.warning("Sube una curva de carga")
         st.stop()
     
     c1, c2, c3 = st.columns(3)
@@ -1474,23 +1410,18 @@ with tab3:
         df_resumen = obtener_df_resumen(
             st.session_state.df_curva_sheets, None, 0.0
         )
-        from backend_comun import formatear_resumen_mixto
-        #df_resumen_view = formatear_df_resumen(df_resumen)
-        df_resumen_fmt = df_resumen.copy()
-
-        # Transponemos porque las unidades están en el índice, no en columnas
-        df_resumen_fmt = df_resumen_fmt.T
-
-        df_resumen_fmt = formatear_columnas_tabla(
-            df_resumen_fmt,
-            columnas_kwh=["Consumo (kWh)"],
-            columnas_euros=["Coste (€)"],
-            columnas_eur_kwh=["Precio medio (€/kWh)"],
-            incluir_unidades=False,
+        periodos_en_blanco = periodos_no_aplicables_atr(
+            st.session_state.get("atr_dfnorm", "")
         )
-
-        # Volvemos al formato original
-        df_resumen_fmt = df_resumen_fmt.T
+        periodos_afectados = (
+            df_curva_sheets["periodo"].dropna().astype(str)
+            .str.strip().str.upper().unique().tolist()
+        )
+        df_resumen_fmt = formatear_resumen_mixto(
+            df_resumen,
+            columnas_en_blanco=periodos_en_blanco,
+            periodos_afectados=periodos_afectados,
+        )
 
         
         
@@ -1506,8 +1437,16 @@ with tab3:
                 f"{fecha_fin_curva.strftime('%d/%m/%Y')}"
             )
         )
-        st.subheader(f':orange[{texto_periodo_curva}]')
-        st.subheader(f'Resumen de :blue[INDEXADO]')
+        st.subheader(
+            f'Resumen de :red[INDEXADO] · :green[{texto_periodo_curva}]'
+        )
+        st.caption(
+            describir_formula_indexada(
+                obtener_formula_compartida(),
+                st.session_state.get("atr_dfnorm", ""),
+                color_atr="green",
+            )
+        )
         #st.dataframe(df_resumen_view, use_container_width=True)
         st.dataframe(df_resumen_fmt, use_container_width=True)
         from io import BytesIO
@@ -1527,7 +1466,11 @@ with tab3:
         )
         
         df_resumen_cober = obtener_df_resumen(df_curva_cober_omip, None, 0.0)
-        df_resumen_cober_view = formatear_df_resumen(df_resumen_cober)
+        df_resumen_cober_view = formatear_resumen_mixto(
+            df_resumen_cober,
+            columnas_en_blanco=periodos_en_blanco,
+            periodos_afectados=periodos_afectados,
+        )
         #st.subheader(f'Resumen de :violet[COBERTURA] para el suministro con peaje de acceso :orange[{st.session_state.atr_dfnorm}]')
         st.subheader(f'Resumen de :violet[COBERTURA]')
         ca,cb = st.columns(2)
@@ -1538,181 +1481,21 @@ with tab3:
         st.dataframe(df_resumen_cober_view, use_container_width=True)
 
 
-        # CARGAR EXCEL CON PRECIOS FIJOS
-        st.subheader(f'Tabla de precios :red[FIJOS] para comparar')
-        origen_oferta_fija = selector_origen_oferta("telemindex_fijos")
-        uploaded_file = (
-            st.file_uploader("Sube el Excel con ofertas de precio fijo", type=["xlsx", "xls"])
-            if origen_oferta_fija == "Excel" else None
-        )
-        st.caption("Los precios de las columnas P1…P6 deben indicarse en €/kWh.")
-
-        st.markdown("**Introducción manual de precios fijos (€/kWh)**")
-        es_20td_manual = (
-            str(st.session_state.get("atr_dfnorm", ""))
-            .replace(" ", "")
-            .upper()
-            .startswith("2.0")
-        )
-        periodos_manuales, periodos_sin_consumo = periodos_con_consumo(
+        st.session_state.df_ofertas_fijas = render_bloque_ofertas_fijas(
             df_resumen.loc["Consumo (kWh)"],
             st.session_state.get("atr_dfnorm", ""),
+            "telemindex_fijos",
+            titulo="Tabla de precios :orange[FIJOS] para comparar",
+            periodos_afectados=periodos_afectados,
+            titulo_selector_expander="📋 Ofertas cargadas",
         )
-        if periodos_sin_consumo:
-            st.caption(
-                "Solo se solicitan precios para los periodos con consumo en "
-                "la curva. Sin consumo: " + ", ".join(periodos_sin_consumo) + "."
-            )
-        oferta_ia_nueva = render_oferta_ia(
-            st.session_state.get("atr_dfnorm", ""), periodos_manuales,
-            "oferta_ia_telemindex",
-        ) if origen_oferta_fija == "IA" else pd.DataFrame()
-        if not oferta_ia_nueva.empty:
-            st.session_state.df_oferta_fija_ia_telemindex = oferta_ia_nueva
-        with st.form("form_oferta_fija_manual", clear_on_submit=False):
-            nombre_oferta_manual = st.text_input(
-                "Nombre de la oferta manual",
-                value="Oferta manual",
-                key="nombre_oferta_fija_manual",
-            )
-            columnas_precios_manuales = st.columns(len(periodos_manuales))
-            precios_manuales = {}
-            for columna, periodo in zip(
-                columnas_precios_manuales, periodos_manuales
-            ):
-                with columna:
-                    precios_manuales[periodo] = st.number_input(
-                        periodo,
-                        min_value=0.0,
-                        max_value=2.0,
-                        value=0.0,
-                        step=0.001,
-                        format="%.6f",
-                        key=f"precio_fijo_manual_{periodo}",
-                        help="Precio fijo en €/kWh.",
-                    )
-            guardar_oferta_manual = st.form_submit_button(
-                "Añadir o actualizar oferta manual",
-                type="primary",
-                use_container_width=True,
-            )
-
-        if guardar_oferta_manual and origen_oferta_fija == "Oferta manual":
-            nombre_limpio = nombre_oferta_manual.strip()
-            if not nombre_limpio:
-                st.error("Indica un nombre para la oferta manual.")
-            elif any(precios_manuales[p] <= 0 for p in periodos_manuales):
-                st.error("Introduce un precio mayor que cero en los periodos con consumo.")
-            else:
-                fila_manual = {"oferta": nombre_limpio}
-                fila_manual.update({f"P{i}": 0.0 for i in range(1, 7)})
-                fila_manual.update(precios_manuales)
-                st.session_state.df_oferta_fija_manual = pd.DataFrame(
-                    [fila_manual]
-                )
-                st.success(f"Oferta manual «{nombre_limpio}» actualizada.")
-
-        if uploaded_file is not None:
-            df_new = normalizar_excel_ofertas(pd.read_excel(uploaded_file))
-            df_new.columns = df_new.columns.str.strip()
-
-            # Primera columna = oferta
-            col_oferta = df_new.columns[0]
-            df_new = df_new.rename(columns={col_oferta: "oferta"})
-
-            if df_new["oferta"].isna().any():
-                st.error("Hay ofertas sin nombre en el Excel.")
-                st.stop()
-
-            # Mantener todas las categorías del eje Y como texto, incluso si
-            # los nombres de oferta introducidos en el Excel son números.
-            df_new["oferta"] = df_new["oferta"].astype(str).str.strip()
-
-            if df_new["oferta"].eq("").any():
-                st.error("Hay ofertas sin nombre en el Excel.")
-                st.stop()
-
-            periodos = [f"P{i}" for i in range(1, 7)]
-
-            faltan = set(periodos) - set(df_new.columns)
-            if faltan:
-                st.error(f"Faltan columnas de periodos: {faltan}")
-                st.stop()
-
-            for p in periodos:
-                df_new[p] = pd.to_numeric(df_new[p], errors="coerce")
-
-            if df_new[periodos].isna().any().any():
-                st.error("Hay valores no numéricos en los precios")
-                st.stop()
-
-            if (df_new[periodos] < 0).any().any():
-                st.error("Los precios P1…P6 no pueden contener valores negativos.")
-                st.stop()
-
-            precio_maximo = df_new[periodos].max().max()
-            if precio_maximo > 2:
-                st.warning(
-                    "Se han detectado precios superiores a 2 €/kWh. Es posible "
-                    "que el Excel esté expresado en c€/kWh o €/MWh. Convierte "
-                    "los valores a €/kWh antes de comparar o confirma que la "
-                    "unidad introducida es correcta."
-                )
-                confirmar_unidades = st.checkbox(
-                    "Confirmo que los precios del Excel están expresados en €/kWh",
-                    key="confirmar_unidades_ofertas_fijas",
-                )
-                if not confirmar_unidades:
-                    st.stop()
-
-            # 🔁 Añadimos margen si procede
-            df_ofertas_calc = df_new.copy()
-            if st.session_state.get("aplicar_margen_fijo", False):
-                
-                periodos = [f"P{i}" for i in range(1, 7)]
-                
-                for p in periodos:
-                    if p in df_ofertas_calc.columns:
-                        #df_ofertas_calc[p] = df_ofertas_calc[p] + margen_simul/100   
-                        df_ofertas_calc[p] = df_ofertas_calc[p] + st.session_state.margen_fijo/1000   
-                
-            oferta_manual = st.session_state.get("df_oferta_fija_manual")
-            st.session_state.df_ofertas_fijas = combinar_ofertas(
-                df_ofertas_calc, oferta_manual,
-                st.session_state.get("df_oferta_fija_ia_telemindex"),
-            )
-                
-            df_ofertas_view = formatear_df_resumen(st.session_state.df_ofertas_fijas)
-
-            st.markdown("Ofertas fijas cargadas")
-
-            if st.session_state.df_ofertas_fijas.empty:
-                st.info("Aún no hay ofertas cargadas")
-            else:
-                st.checkbox("Aplicar margen comercial también a ofertas fijas", value=False, key='aplicar_margen_fijo')
-                if st.session_state.get("aplicar_margen_fijo", False):
-                    st.number_input('Introduce el margen para las ofertas FIJO.', min_value=0.0, max_value=30.0, step=.1, key = 'margen_fijo') #€/MWh
-                st.dataframe(
-                    #st.session_state.df_ofertas_fijas_simul,
-                    df_ofertas_view,
-                    use_container_width=True,
-                    hide_index=True
-                )
-        elif (
-            not st.session_state.df_oferta_fija_manual.empty
-            or not st.session_state.df_oferta_fija_ia_telemindex.empty
-        ):
-            st.session_state.df_ofertas_fijas = combinar_ofertas(
-                st.session_state.df_oferta_fija_manual,
-                st.session_state.df_oferta_fija_ia_telemindex,
-            )
-            st.markdown("Oferta fija manual cargada")
-            st.dataframe(
-                formatear_df_resumen(st.session_state.df_ofertas_fijas),
-                use_container_width=True,
-                hide_index=True,
-            )
-
+        render_simulador_horquilla_ssaa(
+            st.session_state.df_ofertas_fijas,
+            "telemindex_fijos",
+            df_curva_uso,
+            columna_perdidas=f"perd_{st.session_state.atr_dfnorm}",
+            apuntamiento_spot=apuntamiento_spot,
+        )
 
         with c2:
 
@@ -1724,22 +1507,18 @@ with tab3:
             # Consumos por periodo
             consumos = df_resumen.loc["Consumo (kWh)", periodos]
 
-            resultados = []
-
-            # Ofertas fijas
+            # Ofertas fijas: cálculo compartido con el Comparador.
             df_ofertas_comparativa = st.session_state.get("df_ofertas_fijas")
-            if df_ofertas_comparativa is not None and not df_ofertas_comparativa.empty:
-                for _, row in df_ofertas_comparativa.iterrows():
-                    coste_total = (consumos * row[periodos]).sum()
-                    energia_total = consumos.sum()
-                    precio_medio = coste_total / energia_total
-
-                    resultados.append({
-                        "Oferta": row["oferta"],
-                        "Tipo": "Fijo",
-                        "Coste (€)": coste_total,
-                        "Precio medio (€/kWh)": precio_medio
-                    })
+            resultados_fijos = comparar_ofertas_fijas(
+                consumos,
+                df_ofertas_comparativa
+                if isinstance(df_ofertas_comparativa, pd.DataFrame)
+                else pd.DataFrame(),
+            ).rename(columns={
+                "Coste energía (€)": "Coste (€)",
+                "Precio medio energía (€/kWh)": "Precio medio (€/kWh)",
+            })
+            resultados = resultados_fijos.to_dict("records")
 
             # Indexado
             precios_index = df_resumen.loc["Precio medio (€/kWh)", periodos]
@@ -1772,20 +1551,31 @@ with tab3:
             # "1" o "2". Normalizamos de nuevo junto al punto de visualización.
             df_resultados["Oferta"] = df_resultados["Oferta"].astype(str).str.strip()
 
-            # Ordenar por coste anual (de más barato a más caro)
-            df_resultados = df_resultados.sort_values("Coste (€)").reset_index(drop=True)
-
-            coste_min = df_resultados["Coste (€)"].iloc[0]
-
-            df_resultados["% sobre la más barata"] = (
-                (df_resultados["Coste (€)"] - coste_min) / coste_min * 100
+            opciones_referencia = df_resultados["Oferta"].tolist()
+            clave_referencia = "telemindex_referencia_comparativa"
+            referencia_inicial = (
+                "Indexado" if "Indexado" in opciones_referencia
+                else opciones_referencia[0]
             )
+            if st.session_state.get(clave_referencia) not in opciones_referencia:
+                st.session_state[clave_referencia] = referencia_inicial
 
-            df_resultados["Δ vs más barata (€)"] = (
-                df_resultados["Coste (€)"] - coste_min
+            st.subheader(
+                "📊 Comparativa TOTALPOWER · "
+                f"ATR :green[{normalizar_atr(st.session_state.atr_dfnorm)} TD]"
             )
-
-            #df_resultados = df_resultados.sort_values("Coste (€)")
+            referencia_comparativa = st.selectbox(
+                "Referencia para calcular las diferencias",
+                opciones_referencia,
+                key=clave_referencia,
+                help=(
+                    "Los importes negativos son más baratos que la referencia; "
+                    "los positivos, más caros."
+                ),
+            )
+            df_resultados = referenciar_comparativa_costes(
+                df_resultados, referencia_comparativa
+            )
 
             df_view = df_resultados.copy()
 
@@ -1797,30 +1587,41 @@ with tab3:
                 lambda x: formato_eur_kwh(x, unidad=False)
             )
 
-            df_view["Δ vs más barata (€)"] = df_view["Δ vs más barata (€)"].apply(
+            columna_delta_euros = f"Δ vs {referencia_comparativa} (€)"
+            columna_delta_pct = f"Δ vs {referencia_comparativa} (%)"
+            df_view = df_view.rename(columns={
+                "Δ referencia (€)": columna_delta_euros,
+                "Δ referencia (%)": columna_delta_pct,
+            })
+            df_view[columna_delta_euros] = df_view[columna_delta_euros].apply(
                 lambda x: formato_euros(x, unidad=False)
             )
-            df_view["% sobre la más barata"] = df_view["% sobre la más barata"].apply(
+            df_view[columna_delta_pct] = df_view[columna_delta_pct].apply(
                 lambda x: formato_pct(x, 1)
             )
-
-            st.subheader(f'Peaje de acceso :orange[{st.session_state.atr_dfnorm}]')
-            st.subheader("📊 Comparativa TOTALPOWER")
-            st.dataframe(df_view, use_container_width=True, hide_index=True)
+            filas_referencia = df_view.pop("Es referencia")
+            estilo_tabla = df_view.style.apply(
+                lambda _: [
+                    (
+                        "background-color: rgba(34, 197, 94, 0.18); "
+                        "font-weight: 700"
+                    ) if es_referencia else ""
+                    for es_referencia in filas_referencia
+                ],
+                axis=0,
+            )
+            st.dataframe(
+                estilo_tabla, use_container_width=True, hide_index=True
+            )
 
             orden_ofertas = df_resultados["Oferta"].tolist()
 
-            colores_tipo = {
-                "Fijo": "#EF4444",
-                "Indexado": "#F59E0B",
-                "Cobertura": "#8B5CF6"
-            }
             fig = px.bar(
                 df_resultados,
                 y="Oferta",
                 x="Coste (€)",
                 color="Tipo",
-                color_discrete_map=colores_tipo,
+                color_discrete_map=COLORES_TIPO_CONTRATO,
                 title=f"Coste por oferta/tipo de contrato",
                 text_auto=".2f",
                 category_orders={"Oferta": orden_ofertas},
@@ -1843,6 +1644,13 @@ with tab3:
                 type="category",
                 categoryorder="array",
                 categoryarray=orden_ofertas,
+                autorange="reversed",
+                tickmode="array",
+                tickvals=orden_ofertas,
+                ticktext=[
+                    "" if oferta == referencia_comparativa else escape(oferta)
+                    for oferta in orden_ofertas
+                ],
             )
             fig.update_traces(
                 textfont_size=24,
@@ -1851,51 +1659,135 @@ with tab3:
 
             fig = aplicar_estilo(fig)
             altura_grafico_barras = max(300, 150 + len(df_resultados) * 55)
+            margen_etiquetas = max(
+                120,
+                max(len(str(oferta)) for oferta in orden_ofertas) * 9 + 28,
+            )
             fig.update_layout(
                 height=altura_grafico_barras,
                 bargap=0.4,
                 barcornerradius=4,
+                margin_l=margen_etiquetas,
             )
             fig.update_yaxes(tickfont=dict(size=16))
+            fig.add_annotation(
+                x=-0.01,
+                y=referencia_comparativa,
+                xref="paper",
+                yref="y",
+                text=f"<b>{escape(referencia_comparativa)}</b>",
+                showarrow=False,
+                xanchor="right",
+                yanchor="middle",
+                bgcolor="rgba(34, 197, 94, 0.18)",
+                bordercolor="rgba(34, 197, 94, 0.55)",
+                borderwidth=1,
+                borderpad=4,
+                font=dict(size=16),
+            )
 
             st.plotly_chart(fig, use_container_width=True)
 
         with c3:
-
-            opciones_comparativa = ["Cobertura"]
-
-            if (
-                "df_ofertas_fijas" in st.session_state
-                and st.session_state.df_ofertas_fijas is not None
-                and not st.session_state.df_ofertas_fijas.empty
-            ):
-                opciones_comparativa += (
-                    st.session_state.df_ofertas_fijas["oferta"]
-                    .astype(str)
-                    .str.strip()
-                    .tolist()
-                )
-
-            st.selectbox("Selecciona la opción a comparar contra el indexado", opciones_comparativa, index=0, key = 'opcion_comparativa')
-            
-            #st.subheader(f'Comparativa INDEXADO vs {st.session_state.opcion_comparativa}')
+            referencia_comparativa = st.session_state.get(
+                "telemindex_referencia_comparativa", "Indexado"
+            )
+            opciones_comparativa = [
+                opcion for opcion in curvas_comparativa
+                if opcion != referencia_comparativa
+            ]
+            if st.session_state.get("opcion_comparativa") not in opciones_comparativa:
+                st.session_state.opcion_comparativa = opciones_comparativa[0]
+            opcion_comparativa = st.session_state.opcion_comparativa
+            titulo_comp = (
+                f"Comparativa {referencia_comparativa} vs {opcion_comparativa}"
+            )
             st.subheader(titulo_comp)
-            st.plotly_chart(fig_heat, use_container_width=True)
+            opcion_elegida = st.selectbox(
+                f"Selecciona una opción para comparar con {referencia_comparativa}",
+                opciones_comparativa,
+                key='opcion_comparativa',
+            )
+            opcion_comparativa = opcion_elegida
 
-            df_coste_index_h = (
-                st.session_state.df_curva_sheets
+            # Las curvas se resuelven después de leer ambos selectores para
+            # que todos los gráficos representen exactamente el estado visible.
+            df_curva_referencia = curvas_comparativa[referencia_comparativa]
+            df_curva_comp = curvas_comparativa[opcion_elegida]
+            tipo_referencia = tipos_comparativa[referencia_comparativa]
+            tipo_seleccion = tipos_comparativa[opcion_elegida]
+            color_referencia = COLORES_TIPO_CONTRATO[tipo_referencia]
+            color_serie_comp = COLORES_TIPO_CONTRATO[tipo_seleccion]
+
+            df_referencia_h = (
+                df_curva_referencia[["fecha", "hora", "coste_total"]]
+                .groupby(["fecha", "hora"], as_index=False)["coste_total"]
+                .sum()
+                .rename(columns={"coste_total": "coste_referencia"})
+            )
+            df_seleccion_h = (
+                df_curva_comp[["fecha", "hora", "coste_total"]]
+                .groupby(["fecha", "hora"], as_index=False)["coste_total"]
+                .sum()
+                .rename(columns={"coste_total": "coste_seleccion"})
+            )
+            df_heat = df_referencia_h.merge(
+                df_seleccion_h, on=["fecha", "hora"], how="inner"
+            )
+            df_heat["dif_coste"] = (
+                df_heat["coste_referencia"] - df_heat["coste_seleccion"]
+            )
+            heatmap_data = df_heat.pivot_table(
+                index="fecha", columns="hora", values="dif_coste"
+            ).reindex(sorted(df_heat["hora"].unique()), axis=1)
+            zmax = float(abs(heatmap_data.to_numpy()).max())
+            fig_heat = px.imshow(
+                heatmap_data,
+                color_continuous_scale="RdYlGn_r",
+                zmin=-zmax,
+                zmax=zmax,
+                color_continuous_midpoint=0,
+                aspect="auto",
+                labels={"x": "Hora", "y": "Día", "color": "Δ Coste (€)"},
+            )
+            fig_heat.update_layout(
+                title="",
+                xaxis=dict(
+                    title="Hora del día", tickmode="array",
+                    tickvals=list(range(24)), tickfont=dict(size=12),
+                ),
+                yaxis=dict(title="Fecha", tickfont=dict(size=12), automargin=True),
+                coloraxis_colorbar=dict(title="Δ Coste (€)", tickfont=dict(size=12)),
+                margin=dict(l=40, r=40, t=60, b=40),
+                height=700,
+            )
+            fig_heat.update_traces(
+                xgap=1,
+                ygap=1,
+                hovertemplate=(
+                    "<b>Día:</b> %{y}<br><b>Hora:</b> %{x}<br>"
+                    f"<b>Diferencia {referencia_comparativa} - "
+                    f"{opcion_elegida}:</b> %{{z:.2f}} €<extra></extra>"
+                ),
+            )
+
+            with st.expander("🔥 Mapa de calor de diferencias horarias"):
+                st.plotly_chart(fig_heat, use_container_width=True)
+
+            df_coste_referencia_h = (
+                df_curva_referencia
                 .groupby("hora", as_index=False)["coste_total"]
                 .mean()
             )
             graf_medias_horarias=graficar_media_horaria('Total')
             graf_medias_horarias.add_trace(
                 go.Scatter(
-                    x=df_coste_index_h["hora"],
-                    y=df_coste_index_h["coste_total"],
+                    x=df_coste_referencia_h["hora"],
+                    y=df_coste_referencia_h["coste_total"],
                     mode="lines",
-                    name="Coste medio indexado",
+                    name=f"Coste medio {referencia_comparativa}",
                     line=dict(
-                        color="#F59E0B",
+                        color=color_referencia,
                         width=5
                     ),
                     yaxis="y2"
@@ -1927,13 +1819,177 @@ with tab3:
                     x=df_coste_comp_h["hora"],
                     y=df_coste_comp_h["coste_total"],
                     mode="lines",
-                    name=nombre_serie_comp,
+                    name=f"Coste medio {opcion_comparativa}",
                     line=dict(color=color_serie_comp, width=5),
                     yaxis="y2"
                 )
             )
 
-            st.plotly_chart(graf_medias_horarias)
+            with st.expander("🕒 Perfil medio horario de costes"):
+                st.plotly_chart(
+                    graf_medias_horarias,
+                    use_container_width=True,
+                )
+
+            costes_mensuales = comparar_costes_mensuales_referenciados(
+                df_curva_referencia,
+                df_curva_comp,
+            )
+            nombre_referencia = referencia_comparativa
+            nombre_seleccion = opcion_comparativa
+            grafico_mensual = costes_mensuales.rename(columns={
+                "Coste referencia (€)": nombre_referencia,
+                "Coste selección (€)": nombre_seleccion,
+            }).melt(
+                id_vars="Mes",
+                var_name="Alternativa",
+                value_name="Coste mensual (€)",
+            )
+            grafico_mensual["Mes"] = grafico_mensual["Mes"].map(
+                formato_mes_es
+            )
+            grafico_mensual["Coste mostrado"] = grafico_mensual[
+                "Coste mensual (€)"
+            ].map(lambda valor: formato_numero_es(valor, 0))
+            color_seleccion = color_serie_comp
+            fig_mensual = px.bar(
+                grafico_mensual,
+                x="Mes",
+                y="Coste mensual (€)",
+                color="Alternativa",
+                barmode="group",
+                title="Comparativa mensual de costes",
+                color_discrete_map={
+                    nombre_referencia: color_referencia,
+                    nombre_seleccion: color_seleccion,
+                },
+                text="Coste mostrado",
+            )
+            hover_costes_mensuales = {}
+            for _, fila_mes in costes_mensuales.iterrows():
+                etiqueta_mes = formato_mes_es(fila_mes["Mes"])
+                coste_referencia_mes = fila_mes["Coste referencia (€)"]
+                coste_seleccion_mes = fila_mes["Coste selección (€)"]
+                diferencia_mes = coste_referencia_mes - coste_seleccion_mes
+                hover_costes_mensuales[etiqueta_mes] = (
+                    f"<b>{etiqueta_mes}</b><br>"
+                    f"Coste {nombre_referencia}: "
+                    f"{formato_numero_es(coste_referencia_mes, 2)} €<br>"
+                    f"Coste {nombre_seleccion}: "
+                    f"{formato_numero_es(coste_seleccion_mes, 2)} €<br>"
+                    f"Diferencia {nombre_referencia} - {nombre_seleccion}: "
+                    f"{formato_numero_es(diferencia_mes, 2)} €"
+                )
+            for traza in fig_mensual.data:
+                traza.customdata = [
+                    hover_costes_mensuales[str(mes)] for mes in traza.x
+                ]
+                traza.hovertemplate = "%{customdata}<extra></extra>"
+            fig_mensual = aplicar_estilo(fig_mensual)
+            fig_mensual.update_traces(
+                textposition="outside",
+                textfont_size=16,
+                cliponaxis=False,
+            )
+            fig_mensual.update_layout(
+                xaxis_title="",
+                yaxis_title="Coste mensual (€)",
+                legend_title="",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                hovermode="closest",
+                bargap=0.4,
+                bargroupgap=0.32,
+                barcornerradius=5,
+            )
+            with st.expander("📊 Comparativa mensual de costes"):
+                st.plotly_chart(fig_mensual, use_container_width=True)
+
+            costes_acumulados = costes_mensuales.copy()
+            columnas_coste = [
+                "Coste referencia (€)", "Coste selección (€)"
+            ]
+            costes_acumulados[columnas_coste] = (
+                costes_acumulados[columnas_coste].cumsum()
+            )
+            grafico_acumulado = costes_acumulados.rename(columns={
+                "Coste referencia (€)": nombre_referencia,
+                "Coste selección (€)": nombre_seleccion,
+            }).melt(
+                id_vars="Mes",
+                var_name="Alternativa",
+                value_name="Coste acumulado (€)",
+            )
+            grafico_acumulado["Mes"] = grafico_acumulado["Mes"].map(
+                formato_mes_es
+            )
+            fig_acumulado = px.line(
+                grafico_acumulado,
+                x="Mes",
+                y="Coste acumulado (€)",
+                color="Alternativa",
+                markers=True,
+                title="Evolución del coste acumulado",
+                color_discrete_map={
+                    nombre_referencia: color_referencia,
+                    nombre_seleccion: color_seleccion,
+                },
+            )
+            hover_costes_acumulados = {}
+            for _, fila_mes in costes_acumulados.iterrows():
+                etiqueta_mes = formato_mes_es(fila_mes["Mes"])
+                acumulado_referencia = fila_mes["Coste referencia (€)"]
+                acumulado_seleccion = fila_mes["Coste selección (€)"]
+                diferencia_acumulada = acumulado_referencia - acumulado_seleccion
+                hover_costes_acumulados[etiqueta_mes] = (
+                    f"<b>{etiqueta_mes}</b><br>"
+                    f"Acumulado {nombre_referencia}: "
+                    f"{formato_numero_es(acumulado_referencia, 2)} €<br>"
+                    f"Acumulado {nombre_seleccion}: "
+                    f"{formato_numero_es(acumulado_seleccion, 2)} €<br>"
+                    f"Diferencia acumulada {nombre_referencia} - "
+                    f"{nombre_seleccion}: "
+                    f"{formato_numero_es(diferencia_acumulada, 2)} €"
+                )
+            for traza in fig_acumulado.data:
+                traza.customdata = [
+                    hover_costes_acumulados[str(mes)] for mes in traza.x
+                ]
+                traza.hovertemplate = "%{customdata}<extra></extra>"
+            fig_acumulado = aplicar_estilo(fig_acumulado)
+            fig_acumulado.update_traces(line=dict(width=4), marker=dict(size=9))
+            fig_acumulado.update_layout(
+                xaxis_title="",
+                yaxis_title="Coste acumulado (€)",
+                legend_title="",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            )
+            with st.expander("📈 Evolución del coste acumulado"):
+                st.plotly_chart(fig_acumulado, use_container_width=True)
+
+            diferencias_mensuales = (
+                costes_mensuales["Coste referencia (€)"]
+                - costes_mensuales["Coste selección (€)"]
+            )
+            diferencial_total = diferencias_mensuales.sum()
+            fig_cascada = graficar_cascada_diferencias_mensuales(
+                costes_mensuales["Mes"].map(formato_mes_es),
+                diferencias_mensuales,
+                titulo=(
+                    "Diferencial mensual acumulado: "
+                    f"{formato_numero_es(diferencial_total, 2)} €"
+                ),
+                color_positivo="#d62728",
+                color_negativo="#2ca02c",
+            )
+            with st.expander("🧮 Diferencial mensual acumulado"):
+                st.caption(
+                    f"Cada barra muestra el coste de {nombre_referencia} menos "
+                    f"el coste de {nombre_seleccion}. Los valores positivos "
+                    f"indican que {nombre_referencia} es más caro; los negativos, "
+                    f"que {nombre_referencia} es más barato. La última barra recoge el "
+                    "diferencial total del periodo."
+                )
+                st.plotly_chart(fig_cascada, use_container_width=True)
             
 
 

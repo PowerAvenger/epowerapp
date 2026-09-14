@@ -23,6 +23,28 @@ class FormulaIndexada:
     cf_pct: float = 0.0
 
 
+def describir_formula_indexada(
+    formula: FormulaIndexada,
+    atr: str,
+    color_atr: str | None = None,
+) -> str:
+    """Resume de forma compacta la configuración efectiva de una fórmula."""
+    atr_normalizado = str(atr or "").replace(" ", "").upper().removesuffix("TD")
+    texto_atr = f"{atr_normalizado} TD"
+    if color_atr:
+        texto_atr = f":{color_atr}[{texto_atr}]"
+    fnee = (
+        f"sí ({formula.fnee_pos})" if formula.incluir_fnee else "no"
+    )
+    return (
+        "Fórmula activa: "
+        f"desvíos {formula.desvios_apant:g} €/MWh · "
+        f"margen {formula.margen:g} €/MWh ({formula.margen_pos}) · "
+        f"FNEE {fnee} · CF {formula.cf_pct:g}% · "
+        f"peaje {texto_atr}"
+    )
+
+
 def _validar_formula_y_componentes(
     df: pd.DataFrame,
     formula: FormulaIndexada,

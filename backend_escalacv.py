@@ -25,16 +25,18 @@ meses_completos = pd.DataFrame({
 })
 
 
-COLOR_APOCALIPSIS_FONDO = '#171717'
-COLOR_APOCALIPSIS_TRAZO = '#FFD700'
+COLOR_APOCALIPSIS_FONDO = '#FFD400'
+COLOR_APOCALIPSIS_TRAZO = '#171717'
+COLOR_DEFCON1_RESPALDO = '#FF3B30'
+COLOR_DEFCON1 = '#D64541'
 FORMA_APOCALIPSIS = '/'
-TAMAÑO_TRAMA_APOCALIPSIS = 6
+TAMAÑO_TRAMA_APOCALIPSIS = 10
 SOLIDEZ_TRAMA_APOCALIPSIS = 0.22
-ANCHO_BORDE_APOCALIPSIS = 0.6
+ANCHO_BORDE_APOCALIPSIS = 0.3
 FONDO_CSS_APOCALIPSIS = (
     'repeating-linear-gradient(135deg, '
-    f'{COLOR_APOCALIPSIS_FONDO} 0, {COLOR_APOCALIPSIS_FONDO} 4.7px, '
-    f'{COLOR_APOCALIPSIS_TRAZO} 4.7px, {COLOR_APOCALIPSIS_TRAZO} 6px)'
+    f'{COLOR_APOCALIPSIS_FONDO} 0, {COLOR_APOCALIPSIS_FONDO} 7.8px, '
+    f'{COLOR_APOCALIPSIS_TRAZO} 7.8px, {COLOR_APOCALIPSIS_TRAZO} 10px)'
 )
 
 
@@ -47,17 +49,24 @@ def _redondear_barras(fig, radio=12):
     return _aplicar_patron_apocalipsis(fig)
 
 
-def _aplicar_patron_apocalipsis(fig):
+def _aplicar_patron_apocalipsis(fig, con_trama=True):
     """Distingue el nivel extremo sobre fondos claros y oscuros."""
     for traza in fig.data:
         if getattr(traza, 'type', None) == 'bar' and traza.name == 'apocalipsis zombie':
+            if not con_trama:
+                traza.update(
+                    marker_color=COLOR_APOCALIPSIS_FONDO,
+                    marker_pattern_shape='',
+                    marker_line_width=0,
+                )
+                continue
             traza.update(
                 marker_pattern=dict(
                     shape=FORMA_APOCALIPSIS,
                     fgcolor=COLOR_APOCALIPSIS_TRAZO,
-                    bgcolor=COLOR_APOCALIPSIS_FONDO,
                     size=TAMAÑO_TRAMA_APOCALIPSIS,
                     solidity=SOLIDEZ_TRAMA_APOCALIPSIS,
+                    fillmode='overlay',
                 ),
                 marker_line=dict(
                     color=COLOR_APOCALIPSIS_TRAZO,
@@ -517,7 +526,91 @@ def graficar_dispersion_volatilidad_diaria(
     figura.update_layout(legend=dict(font=dict(size=16)))
     return figura
 
-from backend_comun import rango_componentes
+from backend_comun import paso_eje_escala_cv, rango_componentes
+
+
+def graficar_horas_mes_escala_cv(datos, componente, año, mes):
+    """Representa todas las horas de un mes con los niveles de la Escala CV."""
+    if not isinstance(datos, pd.DataFrame) or datos.empty:
+        return None
+    seleccion = datos.copy()
+    seleccion['fecha'] = pd.to_datetime(seleccion['fecha'], errors='coerce')
+    seleccion['hora'] = pd.to_numeric(seleccion['hora'], errors='coerce')
+    seleccion['value'] = pd.to_numeric(seleccion['value'], errors='coerce')
+    seleccion = seleccion.dropna(subset=['fecha', 'hora', 'value'])
+    if seleccion.empty:
+        return None
+    seleccion['fecha_hora'] = (
+        seleccion['fecha'].dt.normalize()
+        + pd.to_timedelta(seleccion['hora'], unit='h')
+    )
+    seleccion = seleccion.sort_values('fecha_hora')
+    mes_numero = int(seleccion['fecha'].dt.month.mode().iloc[0])
+    inicio_mes = pd.Timestamp(int(año), mes_numero, 1)
+    fin_mes = inicio_mes + pd.offsets.MonthEnd(0) + pd.Timedelta(
+        hours=23, minutes=30
+    )
+    df_limites, etiquetas, orden_niveles = get_limites_componentes(componente)
+    indice_zombie = list(etiquetas).index('apocalipsis zombie')
+    umbral_zombie = float(df_limites['rango'].iloc[indice_zombie])
+    seleccion['escala'] = pd.cut(
+        seleccion['value'],
+        bins=df_limites['rango'],
+        labels=etiquetas,
+        right=False,
+    )
+    niveles_presentes = sorted(
+        seleccion['escala'].dropna().unique(),
+        key=lambda nivel: orden_niveles[nivel],
+    )
+    figura = px.bar(
+        seleccion,
+        x='fecha_hora',
+        y='value',
+        color='escala',
+        color_discrete_map=colores,
+        category_orders={'escala': niveles_presentes},
+        labels={'fecha_hora': 'Fecha y hora', 'value': '€/MWh', 'escala': 'Escala CV'},
+        title=f'{componente}: precios horarios · {mes} {año}',
+    )
+    figura.update_traces(
+        width=0.9 * 60 * 60 * 1000,
+        marker_line_width=0,
+        hovertemplate=(
+            '<b>%{x|%d.%m.%Y · %H:%M}</b><br>'
+            'Precio: %{y:.2f} €/MWh<br>'
+            'Escala CV: %{fullData.name}<extra></extra>'
+        ),
+    )
+    figura = _aplicar_patron_apocalipsis(figura, con_trama=False)
+    figura.add_hline(
+        y=umbral_zombie,
+        line_color=COLOR_APOCALIPSIS_FONDO,
+        line_dash='dot',
+        line_width=2,
+        annotation_text=f'Umbral zombie · {round(umbral_zombie):g} €/MWh',
+        annotation_position='top left',
+        annotation_font=dict(color=COLOR_APOCALIPSIS_FONDO, size=14),
+    )
+    figura.update_layout(
+        xaxis_title='Fecha y hora',
+        yaxis_title='€/MWh',
+        bargap=0,
+    )
+    figura.update_xaxes(
+        tickformat='%d.%m',
+        dtick=24 * 60 * 60 * 1000,
+        range=[inicio_mes - pd.Timedelta(minutes=30), fin_mes],
+        showgrid=True,
+        gridwidth=1,
+        gridcolor='rgba(255,255,255,0.18)',
+    )
+    figura.update_yaxes(
+        tickmode='linear',
+        tick0=0,
+        dtick=paso_eje_escala_cv(componente),
+    )
+    return aplicar_estilo(figura)
 
 
 def get_limites_componentes(componente=None):
@@ -542,36 +635,35 @@ def get_limites_componentes(componente=None):
 
 
 colores = {
-    '≤0': 'white',
-    'muy bajo': '#90EE90',  # Verde claro (fácil y suave a la vista)
-    'bajo': '#2E8B57',  # Verde oscuro (tono natural)
-    'medio': '#4682B4',  # Azul acero (transición a tonos fríos)
-    'alto': '#1E3A5F',  # Azul profundo (sólido pero no agresivo)
-    'muy alto': '#804674',  # Morado rosado (punto de transición)
-    'chungo': '#B04E5A',  # Naranja oscuro (advertencia sin ser agresivo)
-    'xtrem': '#E67E22',  # Naranja intenso (entrada en niveles extremos)
-    'defcon3': '#D64541',  # Rojo vivo (nivel crítico inicial)
-    'defcon2': '#A31E1E',  # Rojo oscuro intenso
-    'defcon1': '#800000',  # Granate, máxima alerta antes del nivel final
-    'apocalipsis zombie': '#D4A017',  # Ámbar; barras con trama amarilla y negra
+    '≤0': '#7F8994',
+    'muy bajo': '#244A38',
+    'bajo': '#2E6B4B',
+    'medio': '#36738A',
+    'alto': '#4169A1',
+    'muy alto': '#74539A',
+    'chungo': '#9A772F',
+    'xtrem': '#C45F13',
+    'defcon3': '#BE403A',
+    'defcon2': '#DF2E29',
+    'defcon1': COLOR_DEFCON1,
+    'apocalipsis zombie': COLOR_APOCALIPSIS_FONDO,
 #    'Desconocido': 'gray'  # Neutralidad
 }
 
 
-def marcador_nivel_cv(nivel):
+def marcador_nivel_cv(nivel, con_trama=True):
     """Devuelve el marcador Plotly canónico de un nivel de la Escala CV."""
     nivel = str(nivel)
-    if nivel != 'apocalipsis zombie':
+    if nivel != 'apocalipsis zombie' or not con_trama:
         return dict(color=colores.get(nivel, 'gray'), line=dict(width=0))
     return dict(
         color=COLOR_APOCALIPSIS_FONDO,
         pattern=dict(
             shape=FORMA_APOCALIPSIS,
             fgcolor=COLOR_APOCALIPSIS_TRAZO,
-            bgcolor=COLOR_APOCALIPSIS_FONDO,
             size=TAMAÑO_TRAMA_APOCALIPSIS,
             solidity=SOLIDEZ_TRAMA_APOCALIPSIS,
-            fillmode='replace',
+            fillmode='overlay',
         ),
         line=dict(
             color=COLOR_APOCALIPSIS_TRAZO,
@@ -957,13 +1049,13 @@ def diarios_totales(datos, fecha_ini, fecha_fin, componente=None):
     periodo_titulo = f'{año_inicio}-{año_fin}'
     if componente in ['SPOT']:
         title = f'Precios medios diarios del SPOT. {periodo_titulo}'
-        tick_y = 20
+        tick_y = paso_eje_escala_cv(componente)
     elif componente in ['SPOT+SSAA']:
         title = f'Precios medios diarios del SPOT+SSAA. {periodo_titulo}'
-        tick_y = 20
+        tick_y = paso_eje_escala_cv(componente)
     else:
         title = f'Precios medios diarios de los SSAA. {periodo_titulo}'
-        tick_y = 4
+        tick_y = paso_eje_escala_cv(componente)
 
     if componente == 'SPOT+SSAA' and dos_colores:
         graf_ecv_diario = px.bar(datos_dia, x='fecha', y='value', 
@@ -1096,7 +1188,9 @@ def diarios_totales(datos, fecha_ini, fecha_fin, componente=None):
         ]
     )
     
-    graf_ecv_diario = _aplicar_patron_apocalipsis(graf_ecv_diario)
+    graf_ecv_diario = _aplicar_patron_apocalipsis(
+        graf_ecv_diario, con_trama=False
+    )
     graf_ecv_diario = aplicar_estilo(graf_ecv_diario)
 
     
@@ -1193,13 +1287,13 @@ def diarios(datos, fecha_ini, fecha_fin, datos_comparar):
     componente = st.session_state.get('componente', 'SPOT')
     if componente in ['SPOT']:
         title = f'Precios medios diarios del SPOT. Año {st.session_state.año_seleccionado_esc}'
-        tick_y = 20
+        tick_y = paso_eje_escala_cv(componente)
     elif componente in ['SPOT+SSAA']:
         title = f'Precios medios diarios del SPOT+SSAA. Año {st.session_state.año_seleccionado_esc}'
-        tick_y = 20
+        tick_y = paso_eje_escala_cv(componente)
     else:
         title = f'Precios medios diarios de los SSAA. Año {st.session_state.año_seleccionado_esc}'
-        tick_y = 4
+        tick_y = paso_eje_escala_cv(componente)
 
     if componente in ['SPOT+SSAA'] and dos_colores:
         graf_ecv_diario = px.bar(datos_dia, x='fecha', y='value', 
@@ -1613,13 +1707,13 @@ def mensuales(datos_dia):
     componente = st.session_state.get('componente', 'SPOT')
     if componente in ['SPOT']:
         title = f'Precios medios mensuales del SPOT. Año {st.session_state.año_seleccionado_esc}'
-        tick_y = 20
+        tick_y = paso_eje_escala_cv(componente)
     elif componente in ['SPOT+SSAA']:
         title = f'Precios medios mensuales del SPOT+SSAA. Año {st.session_state.año_seleccionado_esc}'
-        tick_y = 20
+        tick_y = paso_eje_escala_cv(componente)
     else:
         title = f'Precios medios mensuales de los SSAA. Año {st.session_state.año_seleccionado_esc}'
-        tick_y = 4
+        tick_y = paso_eje_escala_cv(componente)
     
     if componente == 'SPOT+SSAA' and dos_colores and peso_comp:
         graf_ecv_mensual = px.bar(datos_mes, x = 'mes_nombre', y = 'peso_%',
@@ -1792,13 +1886,13 @@ def evolucion_mensual(df):
 
     if componente in ['SPOT']:
         title = f'Precios medios mensuales del SPOT. Mes seleccionado: {st.session_state.mes_seleccionado_esc}'
-        tick_y = 20
+        tick_y = paso_eje_escala_cv(componente)
     elif componente in ['SPOT+SSAA']:
         title = f'Precios medios mensuales del SPOT+SSAA. Mes seleccionado: {st.session_state.mes_seleccionado_esc}'
-        tick_y = 20
+        tick_y = paso_eje_escala_cv(componente)
     else:
         title = f'Precios medios mensuales de los SSAA. Mes seleccionado: {st.session_state.mes_seleccionado_esc}'
-        tick_y = 4
+        tick_y = paso_eje_escala_cv(componente)
     
     if componente == 'SPOT+SSAA' and dos_colores and peso_comp:
         graf_ecv_mensual = px.bar(datos_mes, x = 'año', y = 'peso_%',
@@ -2001,21 +2095,21 @@ def horarios(datos):
             f'Perfil horario del SPOT. Día '
             f'{st.session_state.dia_seleccionado_esc.strftime("%d/%m/%Y")}'
         )
-        tick_y = 20
+        tick_y = paso_eje_escala_cv(componente)
 
     elif componente in ['SPOT+SSAA']:
         title = (
             f'Perfil horario del SPOT+SSAA. Día '
             f'{st.session_state.dia_seleccionado_esc.strftime("%d/%m/%Y")}'
         )
-        tick_y = 20
+        tick_y = paso_eje_escala_cv(componente)
 
     else:
         title = (
             f'Perfil horario de los SSAA. Día '
             f'{st.session_state.dia_seleccionado_esc.strftime("%d/%m/%Y")}'
         )
-        tick_y = 4
+        tick_y = paso_eje_escala_cv(componente)
 
     # -----------------------------------------------------
     # GRÁFICO DE VALORES HORARIOS POR DÍA FILTRADO
@@ -2146,13 +2240,13 @@ def horarios_old(datos):
     componente = st.session_state.get('componente', 'SPOT')
     if componente in ['SPOT']:
         title = f'Perfil horario del SPOT. Día {st.session_state.dia_seleccionado_esc.strftime("%d/%m/%Y")}'
-        tick_y = 20
+        tick_y = paso_eje_escala_cv(componente)
     elif componente in ['SPOT+SSAA']:
         title = f'Perfil horario del SPOT+SSAA. Día {st.session_state.dia_seleccionado_esc.strftime("%d/%m/%Y")}'
-        tick_y = 20
+        tick_y = paso_eje_escala_cv(componente)
     else:
         title = f'Perfil horario de los SSAA. Día {st.session_state.dia_seleccionado_esc.strftime("%d/%m/%Y")}'
-        tick_y = 4
+        tick_y = paso_eje_escala_cv(componente)
 
     if componente == 'SPOT+SSAA' and dos_colores:
         graf_horaria_dia = px.bar(
@@ -2319,7 +2413,7 @@ def medias_horarias(datos, mes_etiqueta=None):
             f"Año {st.session_state.año_seleccionado_esc} - "
             f"Mes: {mes_etiqueta}"
         )
-        tick_y = 20
+        tick_y = paso_eje_escala_cv(componente)
 
     elif componente in ['SPOT+SSAA']:
         title = (
@@ -2327,7 +2421,7 @@ def medias_horarias(datos, mes_etiqueta=None):
             f"Año {st.session_state.año_seleccionado_esc} - "
             f"Mes: {mes_etiqueta}"
         )
-        tick_y = 20
+        tick_y = paso_eje_escala_cv(componente)
 
     else:
         title = (
@@ -2335,7 +2429,7 @@ def medias_horarias(datos, mes_etiqueta=None):
             f"Año {st.session_state.año_seleccionado_esc} - "
             f"Mes: {mes_etiqueta}"
         )
-        tick_y = 4
+        tick_y = paso_eje_escala_cv(componente)
 
     # --- 5. Gráfico ---
     if componente == 'SPOT+SSAA' and dos_colores:
@@ -2499,13 +2593,13 @@ def medias_horarias_old(datos):
     componente = st.session_state.get('componente', 'SPOT')
     if componente in ['SPOT']:
         title = f'Perfil horario medio del SPOT. Año {st.session_state.año_seleccionado_esc} - Mes: {st.session_state.mes_seleccionado_esc}'
-        tick_y = 20
+        tick_y = paso_eje_escala_cv(componente)
     elif componente in ['SPOT+SSAA']:
         title = f'Perfil horario medio del SPOT+SSAA. Año {st.session_state.año_seleccionado_esc} - Mes: {st.session_state.mes_seleccionado_esc}'
-        tick_y = 20
+        tick_y = paso_eje_escala_cv(componente)
     else:
         title = f'Perfil horario medio de los SSAA. Día Año {st.session_state.año_seleccionado_esc} - Mes: {st.session_state.mes_seleccionado_esc}'
-        tick_y = 4
+        tick_y = paso_eje_escala_cv(componente)
 
     if componente == 'SPOT+SSAA' and dos_colores:
         graf_horaria_dia = px.bar(
@@ -2602,7 +2696,7 @@ def diario_mes(datos_dia, escala_ordenada_dia):
             #range=[0, ymax],             # Forzar el rango del eje Y
             tickmode="linear",            # Escala lineal
             tick0=0,                      # Comenzar en 0
-            dtick=20                      # Incrementos de 20
+            dtick=paso_eje_escala_cv('SPOT')
         ),
         
     )

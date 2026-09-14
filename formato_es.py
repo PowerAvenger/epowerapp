@@ -131,6 +131,8 @@ def formato_mes_es(valor, capitalizar: bool = True, compacto: bool = False) -> s
 def formatear_columnas_tabla(
     df: pd.DataFrame,
     *,
+    columnas_en_blanco: Iterable[str] | None = None,
+    columnas_numero: Iterable[str] | None = None,
     columnas_kwh: Iterable[str] | None = None,
     columnas_mwh: Iterable[str] | None = None,
     columnas_kw: Iterable[str] | None = None,
@@ -144,6 +146,7 @@ def formatear_columnas_tabla(
     columna_mes: str | None = None,
     mes_compacto: bool = False,
     incluir_unidades: bool = False,
+    decimales_numero: int = 2,
     decimales_kwh: int = 0,
     decimales_mwh: int = 2,
     decimales_kw: int = 2,
@@ -161,6 +164,12 @@ def formatear_columnas_tabla(
         resultado[columna_mes] = resultado[columna_mes].map(
             lambda valor: formato_mes_es(valor, compacto=mes_compacto)
         )
+
+    for columna in columnas_numero or ():
+        if columna in resultado.columns:
+            resultado[columna] = resultado[columna].map(
+                lambda valor: formato_numero_es(valor, decimales_numero)
+            )
 
     grupos = (
         (columnas_kwh, formato_kwh, decimales_kwh),
@@ -182,6 +191,9 @@ def formatear_columnas_tabla(
                         valor, decimales=d, unidad=incluir_unidades
                     )
                 )
+    for columna in columnas_en_blanco or ():
+        if columna in resultado.columns:
+            resultado[columna] = ""
     return resultado
 
 
@@ -226,11 +238,27 @@ def formatear_tabla_euros(
     )
 
 
-def formatear_resumen_mixto(df_resumen: pd.DataFrame) -> pd.DataFrame:
+def formatear_resumen_mixto(
+    df_resumen: pd.DataFrame,
+    columnas_en_blanco: Iterable[str] | None = None,
+    periodos_afectados: Iterable[str] | None = None,
+) -> pd.DataFrame:
+    columnas_vacias = set(columnas_en_blanco or ())
+    if periodos_afectados is not None:
+        afectados = {str(periodo).strip().upper() for periodo in periodos_afectados}
+        columnas_vacias.update(
+            columna for columna in df_resumen.columns
+            if re.fullmatch(r"P[1-6]", str(columna))
+            and str(columna).upper() not in afectados
+        )
     transpuesto = df_resumen.T
-    return formatear_columnas_tabla(
+    resultado = formatear_columnas_tabla(
         transpuesto,
         columnas_kwh=["Consumo (kWh)"],
         columnas_euros=["Coste (€)"],
         columnas_eur_kwh=["Precio medio (€/kWh)"],
     ).T
+    for columna in columnas_vacias:
+        if columna in resultado.columns:
+            resultado[columna] = ""
+    return resultado

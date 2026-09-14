@@ -7,10 +7,123 @@ import pandas as pd
 import re
 
 from backend_indexado import FormulaIndexada, calcular_precios_atr_formula
-from backend_ofertas_fijas import resolver_potencia_tarifa
+from backend_ofertas_fijas import (
+    precios_energia_oferta,
+    resolver_potencia_tarifa,
+)
 
 
 PERIODOS = [f"P{i}" for i in range(1, 7)]
+
+
+def referenciar_comparativa_costes(
+    resultados: pd.DataFrame,
+    referencia: str,
+    columna_coste: str = "Coste (€)",
+) -> pd.DataFrame:
+    """Calcula diferencias de todas las ofertas respecto a una referencia."""
+    requeridas = {"Oferta", columna_coste}
+    faltantes = requeridas.difference(resultados.columns)
+    if faltantes:
+        raise ValueError("Faltan columnas: " + ", ".join(sorted(faltantes)))
+
+    salida = resultados.copy()
+    salida["Oferta"] = salida["Oferta"].astype(str).str.strip()
+    salida[columna_coste] = pd.to_numeric(
+        salida[columna_coste], errors="coerce"
+    )
+    if salida[columna_coste].isna().any():
+        raise ValueError("La comparativa contiene costes no válidos.")
+
+    es_referencia = salida["Oferta"].eq(str(referencia).strip())
+    if not es_referencia.any():
+        raise ValueError("La referencia seleccionada no está en la comparativa.")
+    coste_referencia = float(salida.loc[es_referencia, columna_coste].iloc[0])
+    salida["Δ referencia (€)"] = salida[columna_coste] - coste_referencia
+    salida["Δ referencia (%)"] = np.where(
+        coste_referencia != 0,
+        salida["Δ referencia (€)"] / coste_referencia * 100,
+        np.nan,
+    )
+    salida["Es referencia"] = es_referencia
+    return salida.sort_values(columna_coste, kind="stable").reset_index(drop=True)
+
+
+def comparar_costes_mensuales(
+    curva_indexado: pd.DataFrame,
+    curva_seleccion: pd.DataFrame,
+) -> pd.DataFrame:
+    """Agrega dos curvas comparables en costes mensuales alineados."""
+    requeridas = {"fecha", "coste_total"}
+    for nombre, curva in (
+        ("indexado", curva_indexado), ("selección", curva_seleccion)
+    ):
+        faltantes = requeridas.difference(curva.columns)
+        if faltantes:
+            raise ValueError(
+                f"La curva de {nombre} no contiene: "
+                + ", ".join(sorted(faltantes)) + "."
+            )
+
+    def agregar(curva, columna):
+        datos = curva[["fecha", "coste_total"]].copy()
+        datos["Mes"] = (
+            pd.to_datetime(datos["fecha"], errors="coerce")
+            .dt.to_period("M").dt.to_timestamp()
+        )
+        datos["coste_total"] = pd.to_numeric(
+            datos["coste_total"], errors="coerce"
+        )
+        if datos.isna().any().any():
+            raise ValueError("Hay fechas o costes no válidos en la comparativa.")
+        return datos.groupby("Mes", as_index=False)["coste_total"].sum().rename(
+            columns={"coste_total": columna}
+        )
+
+    return agregar(curva_indexado, "Coste indexado (€)").merge(
+        agregar(curva_seleccion, "Coste selección (€)"),
+        on="Mes",
+        how="inner",
+        validate="one_to_one",
+    )
+
+
+def comparar_costes_mensuales_referenciados(
+    curva_referencia: pd.DataFrame,
+    curva_seleccion: pd.DataFrame,
+) -> pd.DataFrame:
+    """Agrega dos escenarios mensuales sin imponer cuál es el indexado."""
+    return comparar_costes_mensuales(
+        curva_referencia, curva_seleccion
+    ).rename(columns={
+        "Coste indexado (€)": "Coste referencia (€)",
+        "Coste selección (€)": "Coste selección (€)",
+    })
+
+
+def construir_curva_coste_oferta_fija(
+    curva_base: pd.DataFrame,
+    oferta,
+) -> pd.DataFrame:
+    """Proyecta una oferta fija sobre el consumo y periodos de una curva."""
+    requeridas = {"periodo", "consumo_neto_kWh"}
+    faltantes = requeridas.difference(curva_base.columns)
+    if faltantes:
+        raise ValueError(
+            "La curva no contiene: " + ", ".join(sorted(faltantes)) + "."
+        )
+    salida = curva_base.copy()
+    precios = precios_energia_oferta(oferta)
+    salida["precio_fijo"] = salida["periodo"].map(precios)
+    if salida["precio_fijo"].isna().any():
+        raise ValueError("La oferta no tiene precio para todos los periodos usados.")
+    salida["coste_total"] = (
+        pd.to_numeric(salida["consumo_neto_kWh"], errors="coerce")
+        * salida["precio_fijo"]
+    )
+    if salida["coste_total"].isna().any():
+        raise ValueError("La curva contiene consumos no válidos.")
+    return salida
 
 
 def calcular_ahorro_seleccion_vs_indexados(
@@ -152,11 +265,7 @@ def comparar_ofertas_fijas(
     filas = []
     energia_total = float(consumos.sum())
     for _, oferta in ofertas.iterrows():
-        fee = float(pd.to_numeric(oferta.get("Fee (€/MWh)", 0), errors="coerce") or 0)
-        precios = pd.Series({
-            p: pd.to_numeric(oferta.get(p), errors="coerce") for p in PERIODOS
-        })
-        precios = precios.fillna(0.0) + fee / 1000
+        precios = precios_energia_oferta(oferta)
         coste = float((consumos * precios).sum())
         filas.append({
             "Oferta": oferta["oferta"], "Tipo": "Fijo",
@@ -320,36 +429,3 @@ def calcular_escenarios_indexados_mensuales(
         if filas_detalle else pd.DataFrame()
     )
     return resultado
-
-
-def ofertas_catalogo_para_atr(catalogo: list[dict], atr: str) -> pd.DataFrame:
-    filas = []
-    for version in catalogo:
-        for tarifa in version.get("tarifas", []):
-            if tarifa.get("atr") == atr:
-                potencia = tarifa.get("potencia") or version.get("potencia") or {}
-                comision = tarifa.get("comision") or version.get("comision") or {}
-                modalidad_potencia = (
-                    "BOE"
-                    if str(potencia.get("modalidad", "BOE")).upper() == "BOE"
-                    else "CON MARGEN"
-                )
-                filas.append({
-                    "oferta": version["nombre"],
-                    "ID oferta": version.get("id"),
-                    "Vigencia desde": version.get("vigencia_desde"),
-                    "Vigencia hasta": version.get("vigencia_hasta"),
-                    "Fee (€/MWh)": 0.0,
-                    "Plataforma": version.get("plataforma"),
-                    "Comisión tipo": comision.get("tipo"),
-                    "Comisión estimada (€)": comision.get("estimada_eur"),
-                    "Comisión (€/MWh)": comision.get("eur_mwh"),
-                    "Comisión participación (%)": 100.0,
-                    **{p: tarifa.get(p) for p in PERIODOS},
-                    "Potencia modalidad": modalidad_potencia,
-                    **{
-                        f"Potencia {p}": potencia.get(p)
-                        for p in PERIODOS
-                    },
-                })
-    return pd.DataFrame(filas)

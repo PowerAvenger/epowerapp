@@ -81,7 +81,7 @@ def _guardar_credenciales_axon(clave_usuario, clave_password):
     st.session_state.axon_password_sesion = st.session_state.get(clave_password, "")
 
 
-def render_campos_axon(clave):
+def render_campos_axon(clave, en_formulario=False):
     """Renderiza exactamente la misma configuración de Axon en cualquier página."""
     clave_usuario = f"{clave}_axon_usuario"
     clave_password = f"{clave}_axon_password"
@@ -91,18 +91,13 @@ def render_campos_axon(clave):
     st.session_state.setdefault(
         clave_password, st.session_state.get("axon_password_sesion", "")
     )
-    usuario = st.text_input(
-        "Usuario Axon",
-        key=clave_usuario,
-        on_change=_guardar_credenciales_axon,
-        args=(clave_usuario, clave_password),
-    )
+    callback = {} if en_formulario else {
+        "on_change": _guardar_credenciales_axon,
+        "args": (clave_usuario, clave_password),
+    }
+    usuario = st.text_input("Usuario Axon", key=clave_usuario, **callback)
     password = st.text_input(
-        "Contraseña Axon",
-        type="password",
-        key=clave_password,
-        on_change=_guardar_credenciales_axon,
-        args=(clave_usuario, clave_password),
+        "Contraseña Axon", type="password", key=clave_password, **callback
     )
     cups = st.text_input("CUPS", key=f"{clave}_axon_cups")
     cups_base = re.sub(r"[^A-Z0-9]", "", str(cups or "").upper())[:20]
@@ -422,96 +417,128 @@ def render_origen_curva(
         hoja_excel = None
         entrada_lista = False
         trae_periodos = False
+        consultar_datadis = False
+        with st.form(f"{clave}_form_{origen}"):
+            if origen == "Archivo CSV/Excel":
+                campos_archivo = render_campos_archivo_curva(clave)
+                archivos = campos_archivo["archivos"]
+                archivo_normalizar = archivos
+                hoja_excel = campos_archivo["hoja_excel"]
+                entrada_lista = campos_archivo["entrada_lista"]
+                trae_periodos = campos_archivo["trae_periodos"]
+                if trae_periodos:
+                    st.info(
+                        "La curva incluye periodos. Se respetarán y se "
+                        "comprobarán las zonas compatibles."
+                    )
 
-        if origen == "Archivo CSV/Excel":
-            campos_archivo = render_campos_archivo_curva(clave)
-            archivos = campos_archivo["archivos"]
-            archivo_normalizar = archivos
-            hoja_excel = campos_archivo["hoja_excel"]
-            entrada_lista = campos_archivo["entrada_lista"]
-            trae_periodos = campos_archivo["trae_periodos"]
-            if trae_periodos:
-                st.info(
-                    "La curva incluye periodos. Se respetarán y se "
-                    "comprobarán las zonas compatibles."
+            elif origen == "Axon":
+                campos_axon = render_campos_axon(clave, en_formulario=True)
+                usuario = campos_axon["usuario"]
+                password = campos_axon["password"]
+                cups = campos_axon["cups"]
+                rango = campos_axon["rango"]
+                tipo = campos_axon["tipo"]
+                entrada_lista = campos_axon["entrada_lista"]
+                trae_periodos = True
+
+            else:
+                usuario = st.text_input(
+                    "Usuario Datadis", key=f"{clave}_datadis_usuario"
+                )
+                password = st.text_input(
+                    "Contraseña Datadis", type="password",
+                    key=f"{clave}_datadis_password",
+                )
+                acceso = st.radio(
+                    "Acceso", ("Titular", "Autorizado"), horizontal=True,
+                    key=f"{clave}_datadis_acceso",
+                )
+                nif = st.text_input(
+                    "NIF del titular", key=f"{clave}_datadis_nif"
+                ) if acceso == "Autorizado" else ""
+                suministros = st.session_state.get(f"{clave}_datadis_suministros")
+                suministro = None
+                if suministros is not None and not suministros.empty:
+                    indice = st.selectbox(
+                        "Suministro", list(suministros.index),
+                        format_func=lambda i: str(suministros.loc[i].get("cups", "")),
+                        key=f"{clave}_datadis_suministro",
+                    )
+                    suministro = suministros.loc[indice].to_dict()
+                hoy = pd.Timestamp.today().date()
+                rango = st.date_input(
+                    "Periodo de la curva",
+                    value=(hoy - timedelta(days=365), hoy - timedelta(days=1)),
+                    max_value=hoy,
+                    format="DD/MM/YYYY",
+                    key=f"{clave}_datadis_rango",
+                )
+                preferir_qh = st.checkbox(
+                    "Intentar curva cuarto horaria",
+                    key=f"{clave}_datadis_qh",
+                )
+                entrada_lista = bool(
+                    usuario and password and suministro is not None
+                    and isinstance(rango, (tuple, list)) and len(rango) == 2
+                    and (acceso != "Autorizado" or nif)
+                )
+                trae_periodos = True
+
+            # Todos los orígenes mantienen el mismo orden: primero sus datos,
+            # después ATR y, solo si hace falta, la zona para calcular periodos.
+            clave_atr = f"{clave}_atr"
+            preparar_selector_atr_curva(clave_atr)
+            atr = st.selectbox(
+                "Peaje de acceso", OPCIONES_ATR_CURVA, key=clave_atr
+            )
+            if not trae_periodos:
+                zona = st.selectbox(
+                    "Zona de periodos horarios",
+                    tuple(ETIQUETAS_ZONA),
+                    format_func=ETIQUETAS_ZONA.get,
+                    key=f"{clave}_zona",
                 )
 
-        elif origen == "Axon":
-            campos_axon = render_campos_axon(clave)
-            usuario = campos_axon["usuario"]
-            password = campos_axon["password"]
-            cups = campos_axon["cups"]
-            rango = campos_axon["rango"]
-            tipo = campos_axon["tipo"]
-            entrada_lista = campos_axon["entrada_lista"]
-            trae_periodos = True
-
-        else:
-            usuario = st.text_input("Usuario Datadis", key=f"{clave}_datadis_usuario")
-            password = st.text_input(
-                "Contraseña Datadis", type="password", key=f"{clave}_datadis_password"
-            )
-            acceso = st.radio(
-                "Acceso", ("Titular", "Autorizado"), horizontal=True,
-                key=f"{clave}_datadis_acceso",
-            )
-            nif = st.text_input(
-                "NIF del titular", key=f"{clave}_datadis_nif"
-            ) if acceso == "Autorizado" else ""
-            suministros = st.session_state.get(f"{clave}_datadis_suministros")
-            suministro = None
-            if suministros is not None and not suministros.empty:
-                indice = st.selectbox(
-                    "Suministro", list(suministros.index),
-                    format_func=lambda i: str(suministros.loc[i].get("cups", "")),
-                    key=f"{clave}_datadis_suministro",
+            if origen == "Datadis":
+                consultar_datadis = st.form_submit_button(
+                    "Consultar suministros",
+                    use_container_width=True,
                 )
-                suministro = suministros.loc[indice].to_dict()
-            hoy = pd.Timestamp.today().date()
-            rango = st.date_input(
-                "Periodo de la curva",
-                value=(hoy - timedelta(days=365), hoy - timedelta(days=1)),
-                max_value=hoy,
-                format="DD/MM/YYYY",
-                key=f"{clave}_datadis_rango",
+            etiqueta = (
+                "Obtener y normalizar curva"
+                if origen in {"Axon", "Datadis"}
+                else "Normalizar curva de carga"
             )
-            preferir_qh = st.checkbox(
-                "Intentar curva cuarto horaria",
-                key=f"{clave}_datadis_qh",
-            )
-            entrada_lista = bool(
-                usuario and password and suministro is not None
-                and isinstance(rango, (tuple, list)) and len(rango) == 2
-                and (acceso != "Autorizado" or nif)
-            )
-            trae_periodos = True
-
-        # Todos los orígenes mantienen el mismo orden: primero sus datos,
-        # después ATR y, solo si hace falta, la zona para calcular periodos.
-        clave_atr = f"{clave}_atr"
-        preparar_selector_atr_curva(clave_atr)
-        atr = st.selectbox(
-            "Peaje de acceso",
-            OPCIONES_ATR_CURVA,
-            key=clave_atr,
-            on_change=guardar_selector_atr_curva,
-            args=(clave_atr,),
-        )
-        if not trae_periodos:
-            zona = st.selectbox(
-                "Zona de periodos horarios",
-                tuple(ETIQUETAS_ZONA),
-                format_func=ETIQUETAS_ZONA.get,
-                key=f"{clave}_zona",
+            obtener = st.form_submit_button(
+                etiqueta,
+                type="primary",
+                use_container_width=True,
             )
 
     with acciones:
         st.markdown("#### Acciones de curva")
-        if origen == "Datadis" and st.button(
-            "Consultar suministros", use_container_width=True,
-            key=f"{clave}_datadis_consultar",
-            disabled=not bool(usuario and password and (acceso != "Autorizado" or nif)),
-        ):
+        credenciales_datadis_listas = bool(
+            origen == "Datadis"
+            and usuario and password
+            and (acceso != "Autorizado" or nif)
+        )
+        if consultar_datadis and not credenciales_datadis_listas:
+            st.warning("Completa las credenciales de Datadis antes de consultar.")
+            consultar_datadis = False
+        if obtener and not entrada_lista:
+            st.warning(
+                "Completa los datos requeridos antes de obtener y normalizar la curva."
+            )
+            obtener = False
+        if consultar_datadis or obtener:
+            guardar_selector_atr_curva(clave_atr)
+        if origen == "Axon" and obtener:
+            _guardar_credenciales_axon(
+                f"{clave}_axon_usuario", f"{clave}_axon_password"
+            )
+
+        if origen == "Datadis" and consultar_datadis:
             try:
                 with st.spinner("Consultando suministros…"):
                     datos = obtener_suministros_datadis(
@@ -523,14 +550,6 @@ def render_origen_curva(
             except Exception as exc:
                 st.error(f"No se pudieron consultar los suministros: {exc}")
 
-        etiqueta = (
-            "Obtener y normalizar curva"
-            if origen in {"Axon", "Datadis"} else "Normalizar curva de carga"
-        )
-        obtener = st.button(
-            etiqueta, type="primary", use_container_width=True,
-            key=f"{clave}_normalizar", disabled=not entrada_lista,
-        )
         if obtener:
             try:
                 if origen == "Axon":

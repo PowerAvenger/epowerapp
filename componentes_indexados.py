@@ -3,6 +3,17 @@
 from __future__ import annotations
 
 
+def _publicar_formula_diferida(clave, claves_estado, nombres):
+    """Copia los widgets temporales antes del rerun natural del formulario."""
+    import streamlit as st
+
+    for nombre in nombres:
+        destino = claves_estado.get(nombre, nombre)
+        temporal = f"_{destino}_{clave}"
+        if temporal in st.session_state:
+            st.session_state[destino] = st.session_state[temporal]
+
+
 def render_escenarios_omie(precio_central: float, clave: str) -> dict[str, float]:
     """Muestra el selector A/B/C común y devuelve los escenarios OMIE."""
     import streamlit as st
@@ -70,3 +81,30 @@ def render_formula_indexada(clave: str) -> None:
         widget_suffix=clave,
         dos_filas_tres_columnas=True,
     )
+
+
+def render_formulario_formula_indexada(
+    clave: str,
+    claves_estado: dict[str, str] | None = None,
+    dos_filas_tres_columnas: bool = False,
+    etiqueta_boton: str = "Aplicar fórmula",
+) -> None:
+    """Edita una fórmula en diferido y la publica únicamente al confirmar."""
+    import streamlit as st
+    from utilidades import mostrar_parametros_formula_indexado
+
+    claves_estado = claves_estado or {}
+    with st.form(f"{clave}_form_formula", clear_on_submit=False):
+        valores = mostrar_parametros_formula_indexado(
+            widget_suffix=clave,
+            diferido=True,
+            dos_filas_tres_columnas=dos_filas_tres_columnas,
+            claves_estado=claves_estado,
+        )
+        st.form_submit_button(
+            etiqueta_boton,
+            type="primary",
+            use_container_width=True,
+            on_click=_publicar_formula_diferida,
+            args=(clave, claves_estado, tuple(valores)),
+        )

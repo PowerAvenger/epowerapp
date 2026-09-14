@@ -10,12 +10,12 @@ from backend_comparador_luz import (
     calcular_escenarios_indexados_mensuales,
     comparar_ofertas_fijas,
     filtrar_ofertas_elegibles,
-    ofertas_catalogo_para_atr,
 )
 from backend_indexado import FormulaIndexada
 from backend_ofertas_fijas import (
     cargar_catalogo_ofertas,
     eliminar_versiones_oferta,
+    ofertas_catalogo_para_atr,
     resolver_potencia_tarifa,
 )
 from backend_opt2 import consumos_mensuales_desde_curva_normalizada

@@ -293,7 +293,7 @@ def calcular_precios_atr(df):
     return df
 
 
-colores_precios = {'precio_2.0': 'goldenrod', 'precio_3.0': 'darkred', 'precio_6.1': '#1C83E1', 'precio_curva': 'limegreen'}
+colores_precios = {'precio_2.0': '#FBBF24', 'precio_3.0': '#EF4444', 'precio_6.1': '#60A5FA', 'precio_curva': 'limegreen'}
 
 def rango_componentes(componente=None):
     if componente is None:
@@ -309,6 +309,23 @@ def rango_componentes(componente=None):
             'rango': [-5000000, 0, 4.01, 8.01, 12.01, 16.01, 20.01, 24.01, 28.01, 32.01, 36.01, 40.01, 100000000],
             'valor_asignado': ['≤0', 'muy bajo', 'bajo', 'medio', 'alto', 'muy alto', 'chungo', 'xtrem', 'defcon3', 'defcon2', 'defcon1', 'apocalipsis zombie']
         }
+
+
+def paso_eje_escala_cv(componente=None):
+    """Deriva el intervalo del eje de los primeros tramos regulares CV."""
+    limites = rango_componentes(componente)['rango']
+    limites_regulares = [
+        float(limite) for limite in limites
+        if 0 <= float(limite) < 1_000_000
+    ]
+    pasos = [
+        siguiente - actual
+        for actual, siguiente in zip(limites_regulares, limites_regulares[1:])
+        if siguiente > actual
+    ]
+    if not pasos:
+        raise ValueError('La Escala CV no contiene intervalos regulares.')
+    return max(1, round(min(pasos)))
     
 ESTILO_GRAF = dict(
     title_size = 22,
