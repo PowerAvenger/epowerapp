@@ -1203,7 +1203,16 @@ def diarios_totales(datos, fecha_ini, fecha_fin, componente=None):
 # VALORES MEDIOS DIARIOS DEL AÑO SELECCIONADO+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-def diarios(datos, fecha_ini, fecha_fin, datos_comparar):       
+def diarios(
+    datos,
+    fecha_ini,
+    fecha_fin,
+    datos_comparar,
+    componente=None,
+    dos_colores=None,
+    año=None,
+    año_comparado=None,
+):
     datos_dia = datos.copy()
     datos_dia = datos_dia.drop(columns=['hora'])
     datos_dia['mes_nombre']=datos_dia['mes'].map(meses_español)
@@ -1214,8 +1223,13 @@ def diarios(datos, fecha_ini, fecha_fin, datos_comparar):
     print(datos_dia)
 
     
-    componente = st.session_state.get('componente', 'SPOT')
-    dos_colores = st.session_state.get('dos_colores', False)
+    componente = componente or st.session_state.get('componente', 'SPOT')
+    if dos_colores is None:
+        dos_colores = st.session_state.get('dos_colores', False)
+    año = año or st.session_state.get('año_seleccionado_esc')
+    año_comparado = año_comparado or st.session_state.get(
+        'año_seleccionado_comp'
+    )
     if componente in ['SPOT+SSAA'] and dos_colores:
         datos_dia=datos_dia.groupby('fecha').agg({
             'value_spot':'mean',
@@ -1240,7 +1254,9 @@ def diarios(datos, fecha_ini, fecha_fin, datos_comparar):
     datos_dia[['dia','mes','año']] = datos_dia[['dia','mes','año']].astype(int)
     
 
-    df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes()
+    df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes(
+        componente
+    )
     datos_dia['escala']=pd.cut(datos_dia['value'],bins=df_limites['rango'],labels=etiquetas,right=False)
     datos_dia['color']=datos_dia['escala'].map(colores)
     escala_dia=datos_dia['escala'].unique()
@@ -1267,7 +1283,7 @@ def diarios(datos, fecha_ini, fecha_fin, datos_comparar):
     print(datos_comp)
 
     # reconstruimos la fecha usando el AÑO SELECCIONADO
-    año_base = st.session_state.año_seleccionado_esc
+    año_base = año
 
     datos_comp['fecha_alineada'] = pd.to_datetime(
         dict(
@@ -1284,15 +1300,14 @@ def diarios(datos, fecha_ini, fecha_fin, datos_comparar):
 
 
     #GRÁFICO PRINCIPAL CON LOS PRECIOS MEDIOS DIARIOS DEL AÑO. ecv es escala cavero vidal------------------
-    componente = st.session_state.get('componente', 'SPOT')
     if componente in ['SPOT']:
-        title = f'Precios medios diarios del SPOT. Año {st.session_state.año_seleccionado_esc}'
+        title = f'Precios medios diarios del SPOT. Año {año}'
         tick_y = paso_eje_escala_cv(componente)
     elif componente in ['SPOT+SSAA']:
-        title = f'Precios medios diarios del SPOT+SSAA. Año {st.session_state.año_seleccionado_esc}'
+        title = f'Precios medios diarios del SPOT+SSAA. Año {año}'
         tick_y = paso_eje_escala_cv(componente)
     else:
-        title = f'Precios medios diarios de los SSAA. Año {st.session_state.año_seleccionado_esc}'
+        title = f'Precios medios diarios de los SSAA. Año {año}'
         tick_y = paso_eje_escala_cv(componente)
 
     if componente in ['SPOT+SSAA'] and dos_colores:
@@ -1335,7 +1350,7 @@ def diarios(datos, fecha_ini, fecha_fin, datos_comparar):
                 x = datos_dia['fecha'],
                 y = datos_dia['media'],
                 mode = 'lines',
-                name = f"Media acumulada {st.session_state.año_seleccionado_esc}",
+                name=f"Media acumulada {año}",
                 line = dict(color = 'yellow', width = 2)
             )
         )
@@ -1359,7 +1374,7 @@ def diarios(datos, fecha_ini, fecha_fin, datos_comparar):
             x=datos_comp['fecha_alineada'],
             y=datos_comp['media'],
             mode='lines',
-            name=f"Media acumulada {st.session_state.año_seleccionado_comp}",
+            name=f"Media acumulada {año_comparado}",
             line=dict(color="#B0BFC7", width=2),
             visible='legendonly'   # 👈 MISMO EFECTO que en demanda
         )
@@ -1597,16 +1612,25 @@ def graficar_media_acumulada_periodo(
 
 # MEDIAS MENSUALES PARA UN AÑO DETERMINADO+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-def mensuales(datos_dia):    
+def mensuales(
+    datos_dia,
+    componente=None,
+    dos_colores=None,
+    peso_comp=None,
+    año=None,
+):
     print('datos dia para tratar mes')
     print(datos_dia)
 
     datos_mes = datos_dia.copy()
     datos_mes = datos_mes.drop(columns=['fecha','dia'])
 
-    componente = st.session_state.get('componente', 'SPOT')
-    dos_colores = st.session_state.get('dos_colores', False)
-    peso_comp = st.session_state.get('peso_comp', False)
+    componente = componente or st.session_state.get('componente', 'SPOT')
+    if dos_colores is None:
+        dos_colores = st.session_state.get('dos_colores', False)
+    if peso_comp is None:
+        peso_comp = st.session_state.get('peso_comp', False)
+    año = año or st.session_state.get('año_seleccionado_esc')
     if componente in ['SPOT+SSAA'] and dos_colores:
         datos_mes = datos_mes.groupby(['mes','componente']).agg({
             'value':'mean',
@@ -1667,7 +1691,9 @@ def mensuales(datos_dia):
     datos_mes['mes_nombre'] = pd.Categorical(datos_mes['mes_nombre'], categories = orden_meses, ordered = True)
     datos_mes = datos_mes.sort_values(by='mes_nombre')
 
-    df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes()
+    df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes(
+        componente
+    )
     datos_mes['escala']=pd.cut(datos_mes['value'],bins=df_limites['rango'],labels=etiquetas,right=False)
     datos_mes['color']=datos_mes['escala'].map(colores)
     escala_mes = datos_mes['escala'].dropna().unique()
@@ -1704,15 +1730,14 @@ def mensuales(datos_dia):
 
     #print(datos_mes)
     #GRAFICO DE BARRAS CON MEDIAS MENSUALES---------------------
-    componente = st.session_state.get('componente', 'SPOT')
     if componente in ['SPOT']:
-        title = f'Precios medios mensuales del SPOT. Año {st.session_state.año_seleccionado_esc}'
+        title = f'Precios medios mensuales del SPOT. Año {año}'
         tick_y = paso_eje_escala_cv(componente)
     elif componente in ['SPOT+SSAA']:
-        title = f'Precios medios mensuales del SPOT+SSAA. Año {st.session_state.año_seleccionado_esc}'
+        title = f'Precios medios mensuales del SPOT+SSAA. Año {año}'
         tick_y = paso_eje_escala_cv(componente)
     else:
-        title = f'Precios medios mensuales de los SSAA. Año {st.session_state.año_seleccionado_esc}'
+        title = f'Precios medios mensuales de los SSAA. Año {año}'
         tick_y = paso_eje_escala_cv(componente)
     
     if componente == 'SPOT+SSAA' and dos_colores and peso_comp:
@@ -1724,7 +1749,7 @@ def mensuales(datos_dia):
             category_orders = {'mes_nombre': orden_meses},
             
             labels = {'value':'€/MWh', 'escala':'escala_cv','mes_nombre':'mes'},
-            title = f'Peso en % del SPOT y de los SSAA. Año {st.session_state.año_seleccionado_esc}',
+            title=f'Peso en % del SPOT y de los SSAA. Año {año}',
             #title=title,
             text = 'peso_%',
             #text_auto=True
@@ -1804,7 +1829,13 @@ def mensuales(datos_dia):
 
 ## MEDIAS MENSUALES DE UN MES SELECCIONADO A LO LARGO DE LOS AÑOS
 
-def evolucion_mensual(df):
+def evolucion_mensual(
+    df,
+    mes=None,
+    componente=None,
+    dos_colores=None,
+    peso_comp=None,
+):
     """
     Calcula la evolución del precio medio mensual de un mes concreto
     a lo largo de todos los años.
@@ -1818,13 +1849,16 @@ def evolucion_mensual(df):
     gráfico con el valor medio mensual seleccionado de todos los años disponibles
     """
 
-    componente = st.session_state.get('componente', 'SPOT')
-    dos_colores = st.session_state.get('dos_colores', False)
-    peso_comp = st.session_state.get('peso_comp', False)
+    componente = componente or st.session_state.get('componente', 'SPOT')
+    mes = mes or st.session_state.get('mes_seleccionado_esc')
+    if dos_colores is None:
+        dos_colores = st.session_state.get('dos_colores', False)
+    if peso_comp is None:
+        peso_comp = st.session_state.get('peso_comp', False)
     # Agrupar por año y mes
     
     if componente in ['SPOT+SSAA'] and dos_colores:
-        if st.session_state.mes_seleccionado_esc != 'todos':
+        if mes != 'todos':
             df_mensual = df.groupby(['año','mes','componente']).agg({
                 'value':'mean',
                 'mes_nombre':'first'
@@ -1847,7 +1881,7 @@ def evolucion_mensual(df):
         #    .groupby(['año', 'mes'])['value'].transform('sum')
         df_mensual['peso_%'] = (df_mensual['value'] / totales_mes * 100).round(2) 
     else:
-        if st.session_state.mes_seleccionado_esc != 'todos':
+        if mes != 'todos':
             df_mensual = df.groupby(['año','mes']).agg({
                 'value':'mean',
                 'mes_nombre':'first'
@@ -1865,8 +1899,8 @@ def evolucion_mensual(df):
     print(df_mensual)
 
     # Filtrar solo el mes elegido
-    if st.session_state.mes_seleccionado_esc != 'todos':
-        datos_mes = df_mensual[df_mensual['mes_nombre'] == st.session_state.mes_seleccionado_esc]
+    if mes != 'todos':
+        datos_mes = df_mensual[df_mensual['mes_nombre'] == mes].copy()
     else:
         datos_mes = df_mensual
 
@@ -1875,7 +1909,9 @@ def evolucion_mensual(df):
     print('medias mensuales del mes seleccionado')
     print(datos_mes)
 
-    df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes()
+    df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes(
+        componente
+    )
     datos_mes['escala']=pd.cut(datos_mes['value'],bins=df_limites['rango'],labels=etiquetas,right=False)
     datos_mes['color']=datos_mes['escala'].map(colores)
     escala_mes = datos_mes['escala'].dropna().unique()
@@ -1885,13 +1921,13 @@ def evolucion_mensual(df):
     
 
     if componente in ['SPOT']:
-        title = f'Precios medios mensuales del SPOT. Mes seleccionado: {st.session_state.mes_seleccionado_esc}'
+        title = f'Precios medios mensuales del SPOT. Mes seleccionado: {mes}'
         tick_y = paso_eje_escala_cv(componente)
     elif componente in ['SPOT+SSAA']:
-        title = f'Precios medios mensuales del SPOT+SSAA. Mes seleccionado: {st.session_state.mes_seleccionado_esc}'
+        title = f'Precios medios mensuales del SPOT+SSAA. Mes seleccionado: {mes}'
         tick_y = paso_eje_escala_cv(componente)
     else:
-        title = f'Precios medios mensuales de los SSAA. Mes seleccionado: {st.session_state.mes_seleccionado_esc}'
+        title = f'Precios medios mensuales de los SSAA. Mes seleccionado: {mes}'
         tick_y = paso_eje_escala_cv(componente)
     
     if componente == 'SPOT+SSAA' and dos_colores and peso_comp:
@@ -1903,7 +1939,7 @@ def evolucion_mensual(df):
             #category_orders = {'mes_nombre': orden_meses},
             
             labels = {'value':'€/MWh', 'escala':'escala_cv','mes_nombre':'mes'},
-            title = f'Peso en % del SPOT y de los SSAA.Mes {st.session_state.mes_seleccionado_esc}',
+            title=f'Peso en % del SPOT y de los SSAA. Mes {mes}',
             #title=title,
             text = 'peso_%',
             #text_auto=True
@@ -2300,14 +2336,22 @@ def horarios_old(datos):
     
 # DATOS HORARIOS PARA UN MES SELECCIONADO+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-def medias_horarias(datos, mes_etiqueta=None):
+def medias_horarias(
+    datos,
+    mes_etiqueta=None,
+    componente=None,
+    dos_colores=None,
+    año=None,
+):
     # datos_horarios = datos[datos['año'] == st.session_state.get('año_seleccionado_esc', 2025)]
     datos_horarios = datos.copy()
     if mes_etiqueta is None:
         mes_etiqueta = st.session_state.get('mes_seleccionado_esc', '')
 
-    componente = st.session_state.get('componente', 'SPOT')
-    dos_colores = st.session_state.get('dos_colores', False)
+    componente = componente or st.session_state.get('componente', 'SPOT')
+    if dos_colores is None:
+        dos_colores = st.session_state.get('dos_colores', False)
+    año = año or st.session_state.get('año_seleccionado_esc', '')
 
     # --- 1. Calcular medias horarias ---
     if componente in ['SPOT+SSAA'] and dos_colores:
@@ -2324,7 +2368,9 @@ def medias_horarias(datos, mes_etiqueta=None):
         )
 
     # --- 2. Escalas de color ---
-    df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes()
+    df_limites, etiquetas, valor_asignado_a_rango = get_limites_componentes(
+        componente
+    )
 
     datos_horarios['escala'] = pd.cut(
         datos_horarios['value'],
@@ -2397,20 +2443,15 @@ def medias_horarias(datos, mes_etiqueta=None):
         )
 
     # --- 3. Columnas auxiliares para hover ---
-    datos_horarios_filtrado['año_hover'] = st.session_state.get(
-        'año_seleccionado_esc',
-        ''
-    )
+    datos_horarios_filtrado['año_hover'] = año
 
     datos_horarios_filtrado['mes_hover'] = mes_etiqueta
 
     # --- 4. Título y escala Y ---
-    componente = st.session_state.get('componente', 'SPOT')
-
     if componente in ['SPOT']:
         title = (
             f"Perfil horario medio del SPOT. "
-            f"Año {st.session_state.año_seleccionado_esc} - "
+            f"Año {año} - "
             f"Mes: {mes_etiqueta}"
         )
         tick_y = paso_eje_escala_cv(componente)
@@ -2418,7 +2459,7 @@ def medias_horarias(datos, mes_etiqueta=None):
     elif componente in ['SPOT+SSAA']:
         title = (
             f"Perfil horario medio del SPOT+SSAA. "
-            f"Año {st.session_state.año_seleccionado_esc} - "
+            f"Año {año} - "
             f"Mes: {mes_etiqueta}"
         )
         tick_y = paso_eje_escala_cv(componente)
@@ -2426,7 +2467,7 @@ def medias_horarias(datos, mes_etiqueta=None):
     else:
         title = (
             f"Perfil horario medio de los SSAA. "
-            f"Año {st.session_state.año_seleccionado_esc} - "
+            f"Año {año} - "
             f"Mes: {mes_etiqueta}"
         )
         tick_y = paso_eje_escala_cv(componente)

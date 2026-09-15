@@ -1,6 +1,8 @@
 import streamlit as st
 import datetime
 from datetime import datetime
+from pathlib import Path
+import re
 import pandas as pd
 import plotly.graph_objects as go
 
@@ -8,7 +10,8 @@ import plotly.graph_objects as go
 from utilidades import (
     generar_menu,
     actualizar_datos_mercado,
-    init_app_json_escalacv, init_app, init_app_index
+    init_app_json_escalacv, init_app, init_app_index,
+    obtener_datos_mercado,
 )
 
 from backend_escalacv import (
@@ -52,25 +55,18 @@ if '_año_visual_anual' not in st.session_state:
     st.session_state._año_visual_anual = st.session_state.año_seleccionado_esc
 
 
-def _sincronizar_año_desde_mensual():
-    año = st.session_state._año_visual_mensual
-    st.session_state.año_seleccionado_esc = año
-    st.session_state._año_visual_anual = año
-    if st.session_state.get('año_seleccionado_comp') == año:
-        st.session_state.año_seleccionado_comp = año - 1 if año > 2018 else 2019
-
-
-def _sincronizar_año_desde_anual():
-    año = st.session_state._año_visual_anual
-    st.session_state.año_seleccionado_esc = año
-    st.session_state._año_visual_mensual = año
-    if st.session_state.get('año_seleccionado_comp') == año:
-        st.session_state.año_seleccionado_comp = año - 1 if año > 2018 else 2019
-
-
 if 'año_seleccionado_comp' not in st.session_state:
     st.session_state.año_seleccionado_comp = 2025
     st.session_state.año_anterior_comp = 2025
+
+
+def _ajustar_comparacion_anual():
+    """Evita comparar el año anual consigo mismo sin tocar Mensual."""
+    año = st.session_state._año_visual_anual
+    if st.session_state.get('año_seleccionado_comp') == año:
+        st.session_state.año_seleccionado_comp = (
+            año - 1 if año > 2018 else 2019
+        )
 
 if 'mes_seleccionado_esc' not in st.session_state:
     st.session_state.mes_seleccionado_esc = mes_actual
@@ -78,6 +74,17 @@ if 'mes_seleccionado_esc' not in st.session_state:
 
 if 'componente' not in st.session_state:
     st.session_state.componente = 'SPOT'
+
+for nombre_opcion, valor_defecto in (
+    ('componente', 'SPOT'),
+    ('dos_colores', False),
+    ('peso_comp', False),
+):
+    valor_actual = st.session_state.get(nombre_opcion, valor_defecto)
+    for vista in ('anual', 'mensual'):
+        st.session_state.setdefault(
+            f'{nombre_opcion}_{vista}', valor_actual
+        )
 
 init_app_json_escalacv()
 
@@ -89,6 +96,15 @@ fecha_fin = st.session_state.fecha_fin_escalacv
 # Ambas series ya llegan precargadas para toda ePowerApp.
 datos_spot_general = st.session_state._escalacv_datos_spot_general
 datos_ssaa_general = st.session_state._escalacv_datos_ssaa_general
+
+componente_anual = st.session_state.componente_anual
+dos_colores_anual = st.session_state.dos_colores_anual
+peso_comp_anual = st.session_state.peso_comp_anual
+año_anual = st.session_state._año_visual_anual
+año_mensual = st.session_state._año_visual_mensual
+datos_total_anual, fecha_ini_anual, fecha_fin_anual = obtener_datos_mercado(
+    componente_anual
+)
 
 if '_escalacv_spreads_spot' not in st.session_state:
     st.session_state._escalacv_spreads_spot = calcular_spreads_diarios(
@@ -129,7 +145,12 @@ control_mes = (
 
 
 #DATOS DIARIOS DESDE 2018
-datos_totales, _ = diarios_totales(datos_total, fecha_ini, fecha_fin)
+datos_totales, _ = diarios_totales(
+    datos_total_anual,
+    fecha_ini_anual,
+    fecha_fin_anual,
+    componente=componente_anual,
+)
 fecha_ini_spot_historico = datos_spot_general['fecha'].min()
 fecha_fin_spot_historico = datos_spot_general['fecha'].max()
 fecha_ini_ssaa_historico = datos_ssaa_general['fecha'].min()
@@ -148,19 +169,30 @@ _, graf_historico_ssaa = diarios_totales(
 )
 
 #FILTRAMOS POR EL AÑO SELECCIONADO
-datos_año_filtrado = datos_total[datos_total['año'] == st.session_state.año_seleccionado_esc]
+datos_año_filtrado = datos_total_anual[
+    datos_total_anual['año'] == año_anual
+]
 fecha_ini_año = datos_año_filtrado['fecha'].min()
-fecha_fin_año = datetime(st.session_state.año_seleccionado_esc, 12, 31) 
+fecha_fin_año = datetime(año_anual, 12, 31)
 #FILTRAMOS POR EL AÑO COMPARADO
 datos_año_comparado = datos_totales[datos_totales['año'] == st.session_state.año_seleccionado_comp]
 
 #datos diarios
-datos_dia, graf_ecv_diario = diarios(datos_año_filtrado, fecha_ini_año, fecha_fin_año, datos_año_comparado)
+datos_dia, graf_ecv_diario = diarios(
+    datos_año_filtrado,
+    fecha_ini_año,
+    fecha_fin_año,
+    datos_año_comparado,
+    componente=componente_anual,
+    dos_colores=dos_colores_anual,
+    año=año_anual,
+    año_comparado=st.session_state.año_seleccionado_comp,
+)
 prevision_omie_anual = st.session_state.get("prevision_omie_anual")
 if (
-    st.session_state.get("componente") == "SPOT"
+    componente_anual == "SPOT"
     and isinstance(prevision_omie_anual, dict)
-    and prevision_omie_anual.get("año") == st.session_state.año_seleccionado_esc
+    and prevision_omie_anual.get("año") == año_anual
     and isinstance(prevision_omie_anual.get("curva_mensual"), pd.DataFrame)
 ):
     df_media_acumulada_prevista = construir_media_acumulada_prevista(
@@ -213,8 +245,13 @@ print (f'fecha max dia select: {fecha_max_select_dia}')
 
 
 
-graf_ecv_mensual = mensuales(datos_dia)
-graf_ecv_evol_mes_años = evolucion_mensual(datos_totales)
+graf_ecv_mensual = mensuales(
+    datos_dia,
+    componente=componente_anual,
+    dos_colores=dos_colores_anual,
+    peso_comp=peso_comp_anual,
+    año=año_anual,
+)
 
 
 
@@ -252,7 +289,8 @@ valor_maximo_horario = round(datos_horarios['value'].max(),2)
 fecha_min_horario = datos_horarios.loc[datos_horarios['value'].idxmin(), 'fecha']
 fecha_max_horario = datos_horarios.loc[datos_horarios['value'].idxmax(), 'fecha']
 
-meses_lista = ['todos', 'ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']
+meses_lista = ['ene', 'feb', 'mar', 'abr', 'may', 'jun',
+               'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
 
 
 def _leyenda_escala_cv(titulo, componente):
@@ -289,6 +327,69 @@ def _leyenda_escala_cv(titulo, componente):
     )
 
 
+def _render_opciones_mercado_escala(vista, mostrar_leyendas=True):
+    """Renderiza las opciones y leyendas comunes de EscalaCV."""
+    componente = st.radio(
+        'Componente de mercado',
+        options=['SPOT', 'SSAA', 'SPOT+SSAA'],
+        key=f'componente_{vista}',
+    )
+    if componente == 'SPOT+SSAA':
+        dos_colores = st.toggle(
+            'Predator Mode',
+            key=f'dos_colores_{vista}',
+        )
+    else:
+        dos_colores = False
+    if componente == 'SPOT+SSAA' and dos_colores:
+        st.toggle(
+            'Peso componentes',
+            key=f'peso_comp_{vista}',
+        )
+    st.markdown(
+        """
+        <style>
+        .escala-cv-bloque {
+            margin-top: .65rem;
+            padding: .45rem .4rem;
+            border: 1px solid rgba(128, 128, 128, .28);
+            border-radius: .45rem;
+        }
+        .escala-cv-titulo {
+            margin-bottom: .28rem;
+            font-size: 1.12rem;
+            font-weight: 700;
+        }
+        .escala-cv-titulo small { font-size: .88rem; font-weight: 400; }
+        .escala-cv-fila {
+            display: grid;
+            grid-template-columns: .75rem 3.25rem minmax(0, 1fr);
+            align-items: center;
+            gap: .25rem;
+            min-height: 1.5rem;
+            font-size: .92rem;
+            line-height: 1.1;
+            white-space: nowrap;
+        }
+        .escala-cv-color {
+            width: .7rem;
+            height: .7rem;
+            border: 1px solid rgba(80, 80, 80, .55);
+            border-radius: 2px;
+        }
+        .escala-cv-nivel {
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    if mostrar_leyendas:
+        _leyenda_escala_cv('SPOT', 'SPOT')
+        _leyenda_escala_cv('SSAA', 'SSAA')
+
+
 def _marcar_apagon_28a(figura):
     """Señala el apagón peninsular del 28 de abril de 2025."""
     fecha_apagon = pd.Timestamp('2025-04-28')
@@ -316,31 +417,170 @@ def _marcar_apagon_28a(figura):
         font=dict(color='yellow', size=15, family='Arial'),
     )
 
+@st.cache_data(show_spinner=False)
+def _cargar_cua_ajom():
+    """Lee la CUA horaria sin alterar la serie oficial de SPOT."""
+    carpeta = (
+        Path(__file__).resolve().parents[1]
+        / 'local_bbdd'
+        / 'Coste horario AJOM'
+    )
+    archivos = sorted(carpeta.rglob('*.XLS'))
+    registros = []
+    errores = 0
+    for archivo in archivos:
+        fecha_nombre = re.search(
+            r'_(\d{2})_(\d{2})_(\d{4})_', archivo.name
+        )
+        if not fecha_nombre:
+            errores += 1
+            continue
+        dia, mes, año = map(int, fecha_nombre.groups())
+        try:
+            hoja = pd.read_excel(archivo, header=None, engine='xlrd')
+            etiquetas_fila = hoja.iloc[:, 0].astype(str).str.strip().str.casefold()
+            filas_cua = hoja.loc[
+                etiquetas_fila.str.startswith('cuantía unitaria del ajuste')
+            ]
+            if filas_cua.empty:
+                errores += 1
+                continue
+            valores_cua = filas_cua.iloc[0, 1:25].map(
+                lambda valor: pd.to_numeric(
+                    (
+                        str(valor).replace('.', '').replace(',', '.')
+                        if isinstance(valor, str) and ',' in str(valor)
+                        else valor
+                    ),
+                    errors='coerce',
+                )
+            )
+            fecha = pd.Timestamp(año, mes, dia)
+            for hora, cua in enumerate(valores_cua):
+                if pd.notna(cua):
+                    registros.append(
+                        {'fecha_cua': fecha, 'hora_cua': hora, 'cua': float(cua)}
+                    )
+        except Exception:
+            errores += 1
+    return pd.DataFrame(registros), len(archivos), errores
 
-mes_sel = st.session_state.get("mes_seleccionado_esc", "todos")
-if mes_sel == "todos":
-    datos_mes_filtrado = datos_año_filtrado.copy()
-else:
-    mes_num_sel = meses_lista.index(mes_sel)  # ene = 1, feb = 2, ..., dic = 12
-    datos_mes_filtrado = datos_año_filtrado[
-        datos_año_filtrado["mes"] == mes_num_sel
-    ].copy()
+
+def _añadir_cua_al_spot(datos, datos_cua):
+    if datos_cua.empty:
+        return datos.copy()
+    ajustados = datos.copy()
+    ajustados['_fecha_cua'] = pd.to_datetime(
+        ajustados['fecha'], errors='coerce'
+    ).dt.normalize()
+    ajustados['_hora_cua'] = pd.to_numeric(
+        ajustados['hora'], errors='coerce'
+    )
+    ajustados = ajustados.merge(
+        datos_cua,
+        how='left',
+        left_on=['_fecha_cua', '_hora_cua'],
+        right_on=['fecha_cua', 'hora_cua'],
+    )
+    ajustados['value'] = pd.to_numeric(
+        ajustados['value'], errors='coerce'
+    ) + ajustados['cua'].fillna(0)
+    return ajustados.drop(
+        columns=['_fecha_cua', '_hora_cua', 'fecha_cua', 'hora_cua', 'cua']
+    )
+
+
+mes_sel = st.session_state.get('mes_seleccionado_esc', mes_actual)
+if mes_sel not in meses_lista:
+    mes_sel = mes_actual
+    st.session_state.mes_seleccionado_esc = mes_sel
+mes_num_sel = meses_lista.index(mes_sel) + 1
+componente_mensual = st.session_state.componente_mensual
+dos_colores_mensual = st.session_state.dos_colores_mensual
+peso_comp_mensual = st.session_state.peso_comp_mensual
+datos_total_mensual, fecha_ini_mensual, fecha_fin_mensual = (
+    obtener_datos_mercado(componente_mensual)
+)
+usar_cua_mensual = (
+    componente_mensual == 'SPOT'
+    and st.session_state.get('usar_cua_mensual', False)
+)
+referencia_mensual = componente_mensual
+estado_cua_mensual = None
+if usar_cua_mensual:
+    datos_cua_mensual, archivos_cua_mensual, errores_cua_mensual = (
+        _cargar_cua_ajom()
+    )
+    if datos_cua_mensual.empty:
+        estado_cua_mensual = 'sin_datos'
+    else:
+        datos_total_mensual = _añadir_cua_al_spot(
+            datos_total_mensual, datos_cua_mensual
+        )
+        referencia_mensual = 'SPOT + CUA · estimación teórica'
+        if errores_cua_mensual:
+            estado_cua_mensual = (
+                archivos_cua_mensual,
+                errores_cua_mensual,
+            )
+datos_año_filtrado_mensual = datos_total_mensual[
+    datos_total_mensual['año'] == año_mensual
+]
+datos_mes_filtrado = datos_año_filtrado_mensual[
+    datos_año_filtrado_mensual['mes'] == mes_num_sel
+].copy()
+datos_totales_mensual, _ = diarios_totales(
+    datos_total_mensual,
+    fecha_ini_mensual,
+    fecha_fin_mensual,
+    componente=componente_mensual,
+)
+graf_ecv_evol_mes_años = evolucion_mensual(
+    datos_totales_mensual,
+    mes=mes_sel,
+    componente=componente_mensual,
+    dos_colores=dos_colores_mensual,
+    peso_comp=peso_comp_mensual,
+)
 
 # El tab anual siempre usa todo el año; el mensual respeta el mes elegido.
 medias_horarias_anual, graf_medias_horarias_anual = medias_horarias(
-    datos_año_filtrado, mes_etiqueta='todos'
+    datos_año_filtrado,
+    mes_etiqueta='todos',
+    componente=componente_anual,
+    dos_colores=dos_colores_anual,
+    año=año_anual,
 )
 medias_horarias_filtrado, graf_medias_horarias = medias_horarias(
-    datos_mes_filtrado
+    datos_mes_filtrado,
+    mes_etiqueta=mes_sel,
+    componente=componente_mensual,
+    dos_colores=dos_colores_mensual,
+    año=año_mensual,
 )
-mes_num_acumulada = None if mes_sel == "todos" else meses_lista.index(mes_sel)
 df_media_acumulada_periodo, graf_media_acumulada_periodo = graficar_media_acumulada_periodo(
-    datos_año_filtrado,
-    mes_num=mes_num_acumulada,
+    datos_año_filtrado_mensual,
+    mes_num=mes_num_sel,
+    componente=componente_mensual,
+    predator_mode=dos_colores_mensual,
+    año=año_mensual,
 )
 graf_media_acumulada_periodo.update_yaxes(
-    dtick=paso_eje_escala_cv(st.session_state.componente)
+    dtick=paso_eje_escala_cv(componente_mensual)
 )
+if usar_cua_mensual and estado_cua_mensual != 'sin_datos':
+    for figura_mensual_cua in (
+        graf_ecv_evol_mes_años,
+        graf_medias_horarias,
+        graf_media_acumulada_periodo,
+    ):
+        titulo_actual_cua = figura_mensual_cua.layout.title.text or ''
+        figura_mensual_cua.update_layout(
+            title_text=(
+                f'{titulo_actual_cua}<br>'
+                '<sup>SPOT + CUA · estimación teórica tope del gas</sup>'
+            )
+        )
 
 #st.write(ultimo_registro) 
 #   fecha_descarga=pasar_fecha()
@@ -349,7 +589,7 @@ graf_media_acumulada_periodo.update_yaxes(
 años_lista = list(range(2018, 2027)) #se pone un año más del actual
 años_comp = [
     a for a in años_lista
-    if a != st.session_state.año_seleccionado_esc
+    if a != año_anual
 ]
 
 
@@ -485,6 +725,119 @@ with tab_diario:
                 formato_numero_es(spread_dia['spread_diario'].iloc[0], 2),
             )
 
+    def _rankings_spot_anuales(datos, año, fecha_seleccionada):
+        """Prepara las horas más caras y las medias diarias del año."""
+        if not isinstance(datos, pd.DataFrame) or datos.empty:
+            return pd.DataFrame(), pd.DataFrame()
+
+        ranking = datos.copy()
+        ranking['_fecha'] = pd.to_datetime(
+            ranking['fecha'], errors='coerce'
+        ).dt.normalize()
+        ranking['hora'] = pd.to_numeric(ranking['hora'], errors='coerce')
+        ranking['value'] = pd.to_numeric(ranking['value'], errors='coerce')
+        ranking = ranking.loc[
+            ranking['_fecha'].dt.year.eq(año)
+        ].dropna(subset=['_fecha', 'hora', 'value'])
+
+        fecha_marcada = pd.Timestamp(fecha_seleccionada).normalize()
+        horas_ordenadas = ranking.sort_values(
+            ['value', '_fecha', 'hora'],
+            ascending=[False, True, True],
+        ).reset_index(drop=True)
+        horas_ordenadas.insert(0, 'Puesto', horas_ordenadas.index + 1)
+        horas = horas_ordenadas.head(10).copy()
+        horas_dia_seleccionado = horas_ordenadas.loc[
+            horas_ordenadas['_fecha'].eq(fecha_marcada)
+        ]
+        if (
+            not horas_dia_seleccionado.empty
+            and not horas['_fecha'].eq(fecha_marcada).any()
+        ):
+            # Sin selector horario, la referencia del día es su hora más cara.
+            horas = pd.concat(
+                [horas, horas_dia_seleccionado.head(1)], ignore_index=True
+            )
+        horas['Hora'] = (
+            horas['_fecha'].dt.strftime('%d.%m.%Y')
+            + ' · '
+            + horas['hora'].astype(int).astype(str).str.zfill(2)
+            + ':00'
+        )
+        horas['Precio medio (€/MWh)'] = horas['value'].map(
+            lambda valor: formato_numero_es(valor, 2)
+        )
+
+        dias_ordenados = (
+            ranking.groupby('_fecha', as_index=False)['value']
+            .mean()
+            .sort_values(['value', '_fecha'], ascending=[False, True])
+            .reset_index(drop=True)
+        )
+        dias_ordenados.insert(0, 'Puesto', dias_ordenados.index + 1)
+        dias = dias_ordenados.head(10).copy()
+        dia_seleccionado = dias_ordenados.loc[
+            dias_ordenados['_fecha'].eq(fecha_marcada)
+        ]
+        if not dia_seleccionado.empty and not dias['_fecha'].eq(fecha_marcada).any():
+            dias = pd.concat([dias, dia_seleccionado], ignore_index=True)
+        dias['Día'] = dias['_fecha'].dt.strftime('%d.%m.%Y')
+        dias['Precio medio (€/MWh)'] = dias['value'].map(
+            lambda valor: formato_numero_es(valor, 2)
+        )
+
+        mes_seleccionado = fecha_marcada.month
+        horas_top_mes = int(
+            horas_ordenadas.head(10)['_fecha'].dt.month.eq(mes_seleccionado).sum()
+        )
+        dias_top_mes = int(
+            dias_ordenados.head(10)['_fecha'].dt.month.eq(mes_seleccionado).sum()
+        )
+        horas_marcadas = horas['_fecha'].eq(fecha_marcada).tolist()
+        dias_marcados = dias['_fecha'].eq(fecha_marcada).tolist()
+        return (
+            horas[['Puesto', 'Hora', 'Precio medio (€/MWh)']],
+            dias[['Puesto', 'Día', 'Precio medio (€/MWh)']],
+            horas_marcadas,
+            dias_marcados,
+            horas_top_mes,
+            dias_top_mes,
+        )
+
+    def _resaltar_fecha(tabla, filas_marcadas, fondo):
+        estilo = f'background-color: {fondo}; font-weight: 700'
+        return tabla.style.apply(
+            lambda fila: [
+                estilo if filas_marcadas[fila.name] else ''
+            ] * len(fila),
+            axis=1,
+        )
+
+    def _tarjeta_protagonismo_mes(nombre_mes, cantidad, unidad, color):
+        porcentaje = cantidad * 10
+        st.markdown(
+            f"""
+            <div style="
+                margin-top: 10px; padding: 15px 16px; min-height: 126px;
+                border: 1px solid {color}66; border-left: 6px solid {color};
+                border-radius: 14px; background: linear-gradient(135deg, {color}20, transparent);
+                box-shadow: 0 5px 14px rgba(0,0,0,.12); text-align: center;
+            ">
+                <div style="font-size:.75rem; font-weight:700; letter-spacing:.08em; opacity:.75;">
+                    {str(nombre_mes).upper()} &nbsp;→&nbsp; TOP ANUAL
+                </div>
+                <div style="font-size:2rem; line-height:1.15; font-weight:800; color:{color};">
+                    {cantidad}<span style="font-size:1rem; opacity:.75;"> / 10</span>
+                </div>
+                <div style="font-size:.88rem; line-height:1.25;">
+                    {unidad} más caras del año<br>
+                    <strong>{porcentaje} % del protagonismo</strong>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
     spot_dia_general = _datos_del_dia(datos_spot_general)
     ssaa_dia_general = _datos_del_dia(datos_ssaa_general)
     año_fecha_general = fecha_general.year
@@ -501,7 +854,7 @@ with tab_diario:
         col_ssaa_graf,
         col_ssaa_met,
     ) = st.columns(
-        [.12, .34, .10, .34, .10]
+        [.10, .35, .10, .35, .10]
     )
     with col_fecha:
         st.subheader('Fecha', divider='rainbow')
@@ -528,6 +881,56 @@ with tab_diario:
                 ),
                 use_container_width=True,
             )
+        rankings_spot = _rankings_spot_anuales(
+            datos_spot_general, año_fecha_general, fecha_general
+        )
+        if rankings_spot[0].empty:
+            st.info(f'No hay datos SPOT para elaborar los rankings de {año_fecha_general}.')
+        else:
+            (
+                horas_caras,
+                medias_diarias,
+                horas_marcadas,
+                dias_marcados,
+                horas_top_mes,
+                dias_top_mes,
+            ) = rankings_spot
+            nombres_meses_completos = (
+                '', 'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+                'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre',
+                'Diciembre',
+            )
+            nombre_mes_ranking = nombres_meses_completos[fecha_general.month]
+            col_ranking_horas, col_ranking_dias = st.columns(2)
+            with col_ranking_horas:
+                st.markdown(f'**10 horas más caras de {año_fecha_general}**')
+                st.dataframe(
+                    _resaltar_fecha(
+                        horas_caras, horas_marcadas, 'rgba(245, 158, 11, 0.55)'
+                    ),
+                    hide_index=True,
+                    use_container_width=True,
+                    height=35 * (len(horas_caras) + 1) + 3,
+                )
+            with col_ranking_dias:
+                st.markdown(f'**10 días más caros de {año_fecha_general}**')
+                st.dataframe(
+                    _resaltar_fecha(
+                        medias_diarias, dias_marcados, 'rgba(239, 68, 68, 0.55)'
+                    ),
+                    hide_index=True,
+                    use_container_width=True,
+                    height=35 * (len(medias_diarias) + 1) + 3,
+                )
+            col_resumen_horas, col_resumen_dias = st.columns(2)
+            with col_resumen_horas:
+                _tarjeta_protagonismo_mes(
+                    nombre_mes_ranking, horas_top_mes, 'horas', '#f59e0b'
+                )
+            with col_resumen_dias:
+                _tarjeta_protagonismo_mes(
+                    nombre_mes_ranking, dias_top_mes, 'días', '#ef4444'
+                )
     with col_spot_met:
         st.subheader('SPOT', divider='rainbow')
         if not spot_dia_general.empty:
@@ -552,24 +955,32 @@ with tab_diario:
             _metricas_diarias(ssaa_dia_general, spreads_ssaa)
 
 with tab_anual:
-    # 2. Precios diarios del año seleccionado.
-    col1,col2=st.columns([0.8,0.2])
-    with col1:
-        st.plotly_chart(graf_ecv_diario)
-    with col2:
+    col_filtros_anual, col_contenido_anual = st.columns([.10, .90])
+    with col_filtros_anual:
+        st.subheader('Opciones', divider='rainbow')
         st.selectbox(
             'Año a visualizar',
             options=años_lista,
             key='_año_visual_anual',
-            on_change=_sincronizar_año_desde_anual,
+            on_change=_ajustar_comparacion_anual,
         )
         st.selectbox(
             'Año a comparar',
             options=años_comp,
             key='año_seleccionado_comp',
         )
+        _render_opciones_mercado_escala('anual')
+
+    # 2. Precios diarios del año seleccionado.
+    col1, col2 = col_contenido_anual.columns([0.88, 0.12])
+    with col1:
+        st.plotly_chart(graf_ecv_diario, use_container_width=True)
+    with col2:
         st.subheader('Datos en €/MWh',divider='rainbow')
-        st.metric(f'Precio medio diario {st.session_state.año_seleccionado_esc}', value=formato_numero_es(valor_medio_diario, 2))
+        st.metric(
+            f'Precio medio diario {año_anual}',
+            value=formato_numero_es(valor_medio_diario, 2),
+        )
         st.metric(
             f'Precio mínimo diario ({pd.Timestamp(fecha_min_diario).strftime("%d.%m.%Y")})',
             value=formato_numero_es(valor_minimo_diario, 2),
@@ -579,8 +990,8 @@ with tab_anual:
             value=formato_numero_es(valor_maximo_diario, 2),
         )
         if (
-            st.session_state.componente == "SPOT"
-            and st.session_state.año_seleccionado_esc == 2026
+            componente_anual == "SPOT"
+            and año_anual == 2026
             and not isinstance(prevision_omie_anual, dict)
         ):
             if st.button(
@@ -589,111 +1000,191 @@ with tab_anual:
                 use_container_width=True,
             ):
                 with st.spinner('Calculando la curva híbrida OMIE-OMIP...'):
-                    prevision = obtener_prevision_omie_anual(datos_total)
+                    prevision = obtener_prevision_omie_anual(
+                        datos_total_anual
+                    )
                     guardar_prevision_omie_en_sesion(prevision)
                 st.rerun()
 
     # 3 y 4. Medias mensuales y perfil horario medio de todo el año.
-    col5,col6,col7=st.columns([.45,.35,.2])
+    col5, col6, col7 = col_contenido_anual.columns([.50, .38, .12])
     with col5:
-        st.plotly_chart(graf_ecv_mensual)
+        st.plotly_chart(graf_ecv_mensual, use_container_width=True)
     with col6:
-        st.plotly_chart(graf_medias_horarias_anual)
+        st.plotly_chart(graf_medias_horarias_anual, use_container_width=True)
     with col7:
         st.subheader('Datos en €/MWh',divider='rainbow')
         spreads_año = calcular_spreads_diarios(datos_año_filtrado)
-        sub1, sub2 = st.columns([.7,.3])
-        with sub1:
-            st.metric(f'Precio mínimo horario ({fecha_min_horario})', value=formato_numero_es(valor_minimo_horario, 2))
-            st.metric(f'Precio máximo horario ({fecha_max_horario})', value=formato_numero_es(valor_maximo_horario, 2))
-        with sub2:
-            def mod_min():
-                st.session_state.dia_seleccionado_esc = fecha_min_horario
-            def mod_max():
-                st.session_state.dia_seleccionado_esc = fecha_max_horario
+        def mod_min():
+            st.session_state.dia_seleccionado_esc = fecha_min_horario
 
-            st.button('Seleccionar día', on_click=mod_min, key='mod_min')
-            st.button('Seleccionar día', on_click=mod_max)
+        def mod_max():
+            st.session_state.dia_seleccionado_esc = fecha_max_horario
+
+        st.metric(
+            f'Precio mínimo horario ({fecha_min_horario})',
+            value=formato_numero_es(valor_minimo_horario, 2),
+        )
+        st.button(
+            'Seleccionar día mínimo',
+            on_click=mod_min,
+            key='mod_min',
+            use_container_width=True,
+        )
+        st.metric(
+            f'Precio máximo horario ({fecha_max_horario})',
+            value=formato_numero_es(valor_maximo_horario, 2),
+        )
+        st.button(
+            'Seleccionar día máximo',
+            on_click=mod_max,
+            key='mod_max',
+            use_container_width=True,
+        )
         if not spreads_año.empty:
             st.metric(
                 'Spread medio anual',
                 formato_numero_es(spreads_año['spread_diario'].mean(), 2),
             )
 
+def _distribucion_horaria_cv_mes(
+    datos, mes_num, mes_nombre, componente, referencia='SPOT OMIE'
+):
+    """Compara el peso de cada nivel CV en el mismo mes de todos los años."""
+    if not isinstance(datos, pd.DataFrame) or datos.empty:
+        return None, pd.DataFrame()
+
+    base = datos[['fecha', 'value']].copy()
+    base['fecha'] = pd.to_datetime(base['fecha'], errors='coerce')
+    base['value'] = pd.to_numeric(base['value'], errors='coerce')
+    base = base.dropna(subset=['fecha', 'value'])
+    base = base.loc[base['fecha'].dt.month.eq(mes_num)]
+    if base.empty:
+        return None, pd.DataFrame()
+
+    base['año'] = base['fecha'].dt.year
+    df_limites, etiquetas, _ = get_limites_componentes(componente)
+    etiquetas = list(etiquetas)
+    base['nivel'] = pd.cut(
+        base['value'],
+        bins=df_limites['rango'],
+        labels=etiquetas,
+        right=False,
+    )
+    años = sorted(base['año'].unique())
+    conteos = (
+        base.groupby(['año', 'nivel'], observed=False)
+        .size()
+        .reindex(
+            pd.MultiIndex.from_product(
+                [años, etiquetas], names=['año', 'nivel']
+            ),
+            fill_value=0,
+        )
+        .rename('horas')
+        .reset_index()
+    )
+    conteos['porcentaje'] = (
+        conteos['horas']
+        / conteos.groupby('año')['horas'].transform('sum')
+        * 100
+    )
+
+    figura = go.Figure()
+    for nivel in etiquetas:
+        serie = conteos.loc[conteos['nivel'].eq(nivel)]
+        if not serie['horas'].sum():
+            continue
+        textos = serie['porcentaje'].map(
+            lambda valor: f'{valor:.0f}%' if valor >= 5 else ''
+        )
+        figura.add_trace(
+            go.Bar(
+                x=serie['año'],
+                y=serie['porcentaje'],
+                name=str(nivel),
+                marker_color=colores.get(str(nivel), '#808080'),
+                customdata=serie['horas'],
+                text=textos,
+                textposition='inside',
+                hovertemplate=(
+                    '<b>%{x} · ' + str(nivel) + '</b><br>'
+                    '%{y:.1f}% · %{customdata} horas<extra></extra>'
+                ),
+            )
+        )
+    año_actual = max(años)
+    nombres_meses = (
+        '', 'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+        'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
+    )
+    ultima_fecha_mes = base.loc[base['año'].eq(año_actual), 'fecha'].max()
+    mes_incompleto = ultima_fecha_mes < ultima_fecha_mes + pd.offsets.MonthEnd(0)
+    nota_ultimo_año = f'<sup>{año_actual} provisional</sup>' if mes_incompleto else ''
+    figura.update_layout(
+        title=dict(
+            text=(
+                'Distribución de horas por nivel CV · '
+                f'{nombres_meses[mes_num].upper()} {nota_ultimo_año}'
+                f'<br><sup>{referencia}</sup>'
+            ),
+            x=0.5,
+            xanchor='center',
+        ),
+        barmode='stack',
+        height=560,
+        xaxis_title='Año',
+        yaxis_title='% de horas del mes',
+        legend_title='Escala CV',
+        separators=',.',
+        margin=dict(l=20, r=20, t=90, b=25),
+    )
+    figura.update_xaxes(tickmode='array', tickvals=años)
+    figura.update_yaxes(range=[0, 100], ticksuffix=' %', dtick=10)
+    return aplicar_estilo(figura), base
+
+
 with tab_mensual:
-    col_filtros, col_contenido_mensual = st.columns([.12, .88])
+    col_filtros, col_contenido_mensual = st.columns([.10, .90])
     with col_filtros:
         st.subheader('Opciones', divider='rainbow')
         st.selectbox(
             'Año a visualizar',
             options=años_lista,
             key='_año_visual_mensual',
-            on_change=_sincronizar_año_desde_mensual,
         )
         st.selectbox(
             'Mes',
             options=meses_lista,
             key='mes_seleccionado_esc',
         )
-        st.radio(
-            'Componente de mercado',
-            options=['SPOT', 'SSAA', 'SPOT+SSAA'],
-            key='componente',
-        )
-        if st.session_state.componente == 'SPOT+SSAA':
-            st.toggle('Predator Mode', key='dos_colores')
-        if st.session_state.get('dos_colores', False):
-            st.toggle('Peso componentes', key='peso_comp')
-        st.markdown(
-            """
-            <style>
-            .escala-cv-bloque {
-                margin-top: .65rem;
-                padding: .45rem .4rem;
-                border: 1px solid rgba(128, 128, 128, .28);
-                border-radius: .45rem;
-            }
-            .escala-cv-titulo {
-                margin-bottom: .28rem;
-                font-size: 1.12rem;
-                font-weight: 700;
-            }
-            .escala-cv-titulo small { font-size: .88rem; font-weight: 400; }
-            .escala-cv-fila {
-                display: grid;
-                grid-template-columns: .75rem 3.25rem minmax(0, 1fr);
-                align-items: center;
-                gap: .25rem;
-                min-height: 1.5rem;
-                font-size: .92rem;
-                line-height: 1.1;
-                white-space: nowrap;
-            }
-            .escala-cv-color {
-                width: .7rem;
-                height: .7rem;
-                border: 1px solid rgba(80, 80, 80, .55);
-                border-radius: 2px;
-            }
-            .escala-cv-nivel {
-                overflow: hidden;
-                text-overflow: ellipsis;
-            }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
+        _render_opciones_mercado_escala('mensual', mostrar_leyendas=False)
+        if componente_mensual == 'SPOT':
+            st.toggle(
+                'Precio teórico tope del gas (SPOT + CUA)',
+                value=False,
+                key='usar_cua_mensual',
+                help=(
+                    'Añade al SPOT la Cuantía Unitaria del Ajuste de los '
+                    'ficheros AJOM disponibles. No modifica la serie oficial.'
+                ),
+            )
+            if estado_cua_mensual == 'sin_datos':
+                st.warning('No se ha podido leer la CUA; se usa el SPOT oficial.')
+            elif isinstance(estado_cua_mensual, tuple):
+                total_cua, errores_cua = estado_cua_mensual
+                st.warning(
+                    f'Leídos {total_cua - errores_cua} de {total_cua} '
+                    'ficheros AJOM.'
+                )
         _leyenda_escala_cv('SPOT', 'SPOT')
         _leyenda_escala_cv('SSAA', 'SSAA')
 
     col_evol, col_evol_met, col_perfil, col_perfil_met = (
-        col_contenido_mensual.columns([.36, .14, .36, .14])
+        col_contenido_mensual.columns([.38, .12, .38, .12])
     )
 
-    if mes_sel == 'todos':
-        with col_evol:
-            st.info('Selecciona un mes para ver el análisis mensual.')
-    else:
+    if mes_sel in meses_lista:
         perfil_horario_mes = (
             datos_mes_filtrado.groupby('hora', as_index=False)['value'].mean()
         )
@@ -714,16 +1205,20 @@ with tab_mensual:
             )
             graf_spreads_mes.update_layout(
                 title=(
-                    f'{st.session_state.componente}: spread diario '
+                    f'{componente_mensual}: spread diario '
                     f'· {mes_sel} '
-                    f'{st.session_state.año_seleccionado_esc}'
+                    f'{año_mensual}'
+                    + (
+                        '<br><sup>SPOT + CUA · estimación teórica</sup>'
+                        if usar_cua_mensual else ''
+                    )
                 ),
                 xaxis_title='Día',
                 yaxis_title='€/MWh',
                 separators=',.',
             )
             inicio_mes_spread = pd.Timestamp(
-                st.session_state.año_seleccionado_esc,
+                año_mensual,
                 mes_num_sel,
                 1,
             )
@@ -819,7 +1314,7 @@ with tab_mensual:
             col_comparativa_met,
             col_spread,
             col_spread_met,
-        ) = col_contenido_mensual.columns([.36, .14, .36, .14])
+        ) = col_contenido_mensual.columns([.38, .12, .38, .12])
         with col_comparativa:
             st.plotly_chart(
                 graf_ecv_evol_mes_años, use_container_width=True
@@ -857,19 +1352,182 @@ with tab_mensual:
 
         graf_horas_mes_continuo = graficar_horas_mes_escala_cv(
             datos_mes_filtrado,
-            st.session_state.componente,
-            st.session_state.año_seleccionado_esc,
+            componente_mensual,
+            año_mensual,
             mes_sel,
         )
+        if graf_horas_mes_continuo is not None and usar_cua_mensual:
+            titulo_horas_cua = graf_horas_mes_continuo.layout.title.text or ''
+            graf_horas_mes_continuo.update_layout(
+                title_text=(
+                    f'{titulo_horas_cua}<br>'
+                    '<sup>SPOT + CUA · estimación teórica</sup>'
+                )
+            )
         with col_contenido_mensual:
             if graf_horas_mes_continuo is not None:
                 st.plotly_chart(
                     graf_horas_mes_continuo, use_container_width=True
                 )
 
+        graf_distribucion_cv_mes, datos_distribucion_cv_mes = (
+            _distribucion_horaria_cv_mes(
+                datos_total_mensual,
+                mes_num_sel,
+                mes_sel,
+                componente_mensual,
+                referencia_mensual,
+            )
+        )
+        with col_contenido_mensual:
+            if graf_distribucion_cv_mes is None:
+                st.info(
+                    'No hay datos para comparar la distribución horaria '
+                    'del mes seleccionado.'
+                )
+            else:
+                st.plotly_chart(
+                    graf_distribucion_cv_mes,
+                    use_container_width=True,
+                    key='distribucion_horaria_cv_mes',
+                )
+                año_reciente_cv = int(datos_distribucion_cv_mes['año'].max())
+                datos_mes_reciente_cv = datos_distribucion_cv_mes.loc[
+                    datos_distribucion_cv_mes['año'].eq(año_reciente_cv)
+                ]
+                total_horas_cv = len(datos_mes_reciente_cv)
+                col_140, col_180, col_200 = st.columns(3)
+                for columna, umbral in zip(
+                    (col_140, col_180, col_200), (140, 180, 200)
+                ):
+                    horas_umbral = int(
+                        datos_mes_reciente_cv['value'].ge(umbral).sum()
+                    )
+                    porcentaje_umbral = (
+                        horas_umbral / total_horas_cv * 100
+                        if total_horas_cv else 0
+                    )
+                    columna.metric(
+                        f'Horas ≥ {umbral} €/MWh · {año_reciente_cv}',
+                        f'{horas_umbral} ({formato_numero_es(porcentaje_umbral, 1)} %)',
+                    )
 
-    
-        
+@st.cache_data(show_spinner=False)
+def _crear_mapa_calor_spot_historico(datos, modo_escala):
+    """Crea una matriz horaria histórica con escala CV o precio absoluto."""
+    if not isinstance(datos, pd.DataFrame) or datos.empty:
+        return None
+
+    base = datos[['fecha', 'hora', 'value']].copy()
+    base['fecha'] = pd.to_datetime(base['fecha'], errors='coerce').dt.normalize()
+    base['hora'] = pd.to_numeric(base['hora'], errors='coerce')
+    base['value'] = pd.to_numeric(base['value'], errors='coerce')
+    base = base.dropna(subset=['fecha', 'hora', 'value'])
+    base = base.loc[base['fecha'] >= pd.Timestamp('2018-01-01')]
+    if base.empty:
+        return None
+
+    base = (
+        base.groupby(['hora', 'fecha'], as_index=False)['value']
+        .mean()
+        .sort_values(['fecha', 'hora'])
+    )
+    df_limites, etiquetas, _ = get_limites_componentes('SPOT')
+    etiquetas = list(etiquetas)
+    base['_nivel'] = pd.cut(
+        base['value'],
+        bins=df_limites['rango'],
+        labels=False,
+        right=False,
+    )
+    matriz_nivel = base.pivot(index='hora', columns='fecha', values='_nivel')
+    matriz_precio = base.pivot(index='hora', columns='fecha', values='value')
+
+    numero_niveles = len(etiquetas)
+    escala_colores = []
+    for indice, etiqueta in enumerate(etiquetas):
+        inicio = indice / numero_niveles
+        fin = (indice + 1) / numero_niveles
+        color = colores.get(str(etiqueta), '#808080')
+        escala_colores.extend([(inicio, color), (fin, color)])
+
+    if modo_escala == 'Precio absoluto':
+        valores_mapa = matriz_precio.to_numpy()
+        minimo_color = -50
+        maximo_color = 500
+        escala_mapa = [
+            [0.00, '#334155'],
+            [0.09, '#166534'],
+            [0.18, '#22c55e'],
+            [0.27, '#fde047'],
+            [0.45, '#f97316'],
+            [0.64, '#dc2626'],
+            [0.82, '#991b1b'],
+            [1.00, '#3f0713'],
+        ]
+        barra_color = dict(title='€/MWh', len=0.92)
+        titulo_escala = 'precio absoluto'
+        plantilla_hover = (
+            '<b>%{x|%d.%m.%Y} · %{y}:00</b><br>'
+            'SPOT: %{z:.2f} €/MWh<extra></extra>'
+        )
+    else:
+        valores_mapa = matriz_nivel.to_numpy()
+        minimo_color = -0.5
+        maximo_color = numero_niveles - 0.5
+        escala_mapa = escala_colores
+        barra_color = dict(
+            title='Escala CV',
+            tickmode='array',
+            tickvals=list(range(numero_niveles)),
+            ticktext=[str(etiqueta) for etiqueta in etiquetas],
+            len=0.92,
+        )
+        titulo_escala = 'Escala CV'
+        plantilla_hover = (
+            '<b>%{x|%d.%m.%Y} · %{y}:00</b><br>'
+            'SPOT: %{customdata:.2f} €/MWh<extra></extra>'
+        )
+
+    figura = go.Figure(
+        go.Heatmap(
+            x=matriz_nivel.columns,
+            y=matriz_nivel.index,
+            z=valores_mapa,
+            customdata=matriz_precio.to_numpy(),
+            zmin=minimo_color,
+            zmax=maximo_color,
+            colorscale=escala_mapa,
+            hoverongaps=False,
+            colorbar=barra_color,
+            hovertemplate=plantilla_hover,
+        )
+    )
+    fecha_inicio = base['fecha'].min()
+    fecha_fin = base['fecha'].max()
+    figura.update_layout(
+        title=dict(
+            text=(
+                'Mapa de calor horario histórico SPOT · '
+                f'{fecha_inicio:%Y}–{fecha_fin:%Y} · {titulo_escala}'
+            ),
+            x=0.5,
+            xanchor='center',
+        ),
+        height=650,
+        xaxis_title='Fecha',
+        yaxis_title='Hora',
+        margin=dict(l=20, r=35, t=80, b=35),
+    )
+    figura.update_xaxes(dtick='M12', tickformat='%Y', showgrid=False)
+    figura.update_yaxes(
+        tickmode='array',
+        tickvals=list(range(24)),
+        ticktext=[f'{hora:02d}:00' for hora in range(24)],
+        showgrid=False,
+    )
+    return aplicar_estilo(figura)
+
 
 with tab_historica:
     graf_historico_spot.update_layout(height=620)
@@ -894,6 +1552,23 @@ with tab_historica:
     _marcar_apagon_28a(graf_historico_ssaa)
     st.plotly_chart(graf_historico_spot, use_container_width=True)
     st.plotly_chart(graf_historico_ssaa, use_container_width=True)
+    modo_mapa_historico = st.radio(
+        'Lectura del mapa de calor',
+        options=['Precio absoluto', 'Escala CV'],
+        horizontal=True,
+        key='modo_mapa_calor_spot_historico',
+    )
+    mapa_calor_spot_historico = _crear_mapa_calor_spot_historico(
+        datos_spot_general, modo_mapa_historico
+    )
+    if mapa_calor_spot_historico is None:
+        st.info('No hay datos SPOT para construir el mapa de calor histórico.')
+    else:
+        st.plotly_chart(
+            mapa_calor_spot_historico,
+            use_container_width=True,
+            key='mapa_calor_spot_historico',
+        )
 
 
 with tab_spread:

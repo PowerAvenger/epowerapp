@@ -13,11 +13,19 @@ from backend_ofertas_fijas import (
     ofertas_catalogo_para_atr,
     guardar_version_oferta,
     normalizar_tarifas_oferta,
+    periodos_aplicables_atr,
+    periodos_potencia_atr,
     precios_energia_oferta,
 )
 
 
 class CatalogoOfertasFijasTest(unittest.TestCase):
+    def test_periodos_energia_y_potencia_20_son_distintos(self):
+        self.assertEqual(
+            periodos_aplicables_atr('2.0TD'), ['P1', 'P2', 'P3']
+        )
+        self.assertEqual(periodos_potencia_atr('2.0TD'), ['P1', 'P2'])
+
     def test_copia_temporal_aplica_exceso_ssaa_apuntado(self):
         oferta = pd.Series({
             "oferta": "Base", "P1": .10, "P2": .20,

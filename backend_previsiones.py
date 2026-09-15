@@ -3,10 +3,36 @@ import streamlit as st
 
 from backend_simulindex import (
     construir_curva_2026,
+    construir_curva_omip_mensual_12m,
     obtener_historicos_meff,
     obtener_meff_mensual,
     obtener_meff_trimestral,
 )
+
+
+@st.cache_data(show_spinner=False)
+def obtener_prevision_omip_12m(fecha_ref=None):
+    """Devuelve la curva y la media OMIP de los 12 meses móviles siguientes."""
+    fecha_ref = pd.Timestamp(fecha_ref or pd.Timestamp.today()).normalize()
+    historicos, _ = obtener_historicos_meff()
+    trimestral = obtener_meff_trimestral(historicos)[0]
+    mensual = obtener_meff_mensual(historicos)[0]
+    curva = construir_curva_omip_mensual_12m(
+        mensual,
+        trimestral,
+        fecha_ref,
+    )
+    return {
+        "fecha_referencia": fecha_ref,
+        "media_12m": round(curva["precio"].mean(), 2),
+        "curva_mensual": curva,
+    }
+
+
+def guardar_prevision_omip_12m_en_sesion(prevision):
+    """Publica una única previsión móvil para todos los comparadores."""
+    st.session_state.prevision_omip_12m = prevision
+    st.session_state.precio_omip_previsto = prevision["media_12m"]
 
 
 def _normalizar_spot_mensual(df_spot):

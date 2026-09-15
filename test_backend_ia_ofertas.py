@@ -17,6 +17,44 @@ def oferta_30(unidad, valores):
 
 
 class OfertasImagenTest(unittest.TestCase):
+    def test_separa_energia_y_potencia_anual_de_una_tabla_galp(self):
+        resultado = {
+            "nombre": "Galp 12 meses",
+            "unidad_original": "€/kWh",
+            "unidad_potencia_original": "€/kW año",
+            "tarifas": [{
+                "nombre": "6.1TD",
+                "atr": "6.1",
+                "P1": 0.249956,
+                "P2": 0.224649,
+                "P3": 0.165810,
+                "P4": 0.131820,
+                "P5": 0.133731,
+                "P6": 0.184630,
+                "potencia_P1": 29.59537,
+                "potencia_P2": 15.51471,
+                "potencia_P3": 6.80188,
+                "potencia_P4": 5.39383,
+                "potencia_P5": 2.12511,
+                "potencia_P6": 1.00418,
+            }],
+        }
+
+        energia, _ = validar_oferta_extraida(resultado)
+        potencia = energia.attrs["potencia_tarifas"]
+
+        self.assertAlmostEqual(energia.loc[0, "P1"], 0.249956)
+        self.assertEqual(potencia.loc[0, "ATR"], "6.1")
+        self.assertEqual(potencia.loc[0, "Modalidad"], "BOE")
+        self.assertAlmostEqual(potencia.loc[0, "P1"], 29.59537 / 365)
+
+    def test_tabla_unica_sigue_siendo_energia_sin_potencia(self):
+        energia, _ = validar_oferta_extraida(
+            oferta_30("EUR/kWh", [0.2] * 6)
+        )
+
+        self.assertTrue(energia.attrs["potencia_tarifas"].empty)
+
     def test_infiere_eur_kwh_si_la_captura_omite_unidad(self):
         valores = [0.236937, 0.189129, 0.143711, 0.118314, 0.099016, 0.130487]
 

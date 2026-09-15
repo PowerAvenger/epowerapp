@@ -9,7 +9,7 @@ from backend_simulindex import (obtener_historicos_meff, obtener_meff_anual, obt
                                 calcular_cobertura_trimestral_horaria,
                                 construir_forward_mensual_trimestre,
                                 graficar_2026,
-                                construir_curva_omip_mensual_12m, graficar_curva_omip_mensual_12m,
+                                graficar_curva_omip_mensual_12m,
                                 construir_media_prevista_2026_diaria, graficar_media_prevista_2026,
                                 construir_evolucion_media_omip, añadir_omie_real_12m_posterior, graficar_evolucion_media_omip, añadir_omie_real_12m_alineado_omip,
                                 añadir_suavizado_omip_y_diferencial, graficar_omip_suavizado_vs_omie_real, graficar_omip_vs_omie_previsto_ajustado_1y)
@@ -17,6 +17,10 @@ from backend_comun import colores_precios, obtener_df_resumen, formatear_df_resu
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from backend_previsiones import (
+    guardar_prevision_omip_12m_en_sesion,
+    obtener_prevision_omip_12m,
+)
 from utilidades import (
     generar_menu,
     init_app,
@@ -45,6 +49,7 @@ from backend_ofertas_fijas import (
     cargar_catalogo_ofertas,
     precios_energia_oferta,
 )
+from backend_ofertas_pass_pool import obtener_oferta_pass_pool
 from componentes_ofertas_fijas import (
     combinar_ofertas,
     normalizar_excel_ofertas,
@@ -57,6 +62,7 @@ from componentes_indexados import (
     render_formula_indexada,
     render_otros_escenarios,
 )
+from componentes_curva import render_origen_curva
 from informe_simulindex import mostrar_informe_comparador_trimestral
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
@@ -364,15 +370,12 @@ df_2026 = prevision_omie_anual["curva_mensual"]
 precio_medio_2026 = prevision_omie_anual["media_anual"]
 graf_2026 = graficar_2026(df_2026, precio_medio_2026)
 
-fecha_ref_prevision_anual = pd.Timestamp.today().normalize()
-df_año_movil = construir_curva_omip_mensual_12m(
-    df_FTB_mensual,
-    df_FTB_trimestral,
-    fecha_ref_prevision_anual,
-)
-precio_medio_omip = round(df_año_movil["precio"].mean(),2)
+prevision_omip_12m = obtener_prevision_omip_12m()
+guardar_prevision_omip_12m_en_sesion(prevision_omip_12m)
+fecha_ref_prevision_12m = prevision_omip_12m["fecha_referencia"]
+df_año_movil = prevision_omip_12m["curva_mensual"]
+precio_medio_omip = prevision_omip_12m["media_12m"]
 graf_año_movil = graficar_curva_omip_mensual_12m(df_año_movil, precio_medio_omip)
-st.session_state.precio_omip_previsto = precio_medio_omip
 
 df_spot_diario = obtener_spot_diario()
 df_media_2026 = construir_media_prevista_2026_diaria(
@@ -390,7 +393,7 @@ fig_media_2026 = graficar_media_prevista_2026(df_media_2026)
 df_evol_media_forward = construir_evolucion_media_omip(
     df_ftb_m=df_FTB_mensual,
     df_ftb_q=df_FTB_trimestral,
-    fecha_ref=fecha_ref_prevision_anual,
+    fecha_ref=fecha_ref_prevision_12m,
     fecha_inicio="01.01.2024"
 )
 
@@ -2055,30 +2058,69 @@ with tab5:
             if pricing_comparador_disponible and not curva_comparador_disponible
             else 'Curva de carga'
         )
-    origen_comparador_seleccionado = st.radio(
-        'Origen de consumos para la comparación',
-        opciones_origen_comparador,
-        horizontal=True,
-        key='origen_consumos_comparador_simulindex',
-    )
     c1, c2, c3 = st.columns(3)
+
+    with c1:
+        with st.expander(
+            '📈 Curva de carga y origen de consumos',
+            expanded=not curva_comparador_disponible,
+        ):
+            origen_comparador_seleccionado = st.radio(
+                'Origen de consumos para la comparación',
+                opciones_origen_comparador,
+                horizontal=True,
+                key='origen_consumos_comparador_simulindex',
+            )
+            if origen_comparador_seleccionado == 'Curva de carga':
+                contenedor_origen_curva_comparador = st.container(
+                    border=True
+                )
+                contenedor_acciones_curva_comparador = st.container(
+                    border=True
+                )
+
+            if (
+                origen_comparador_seleccionado
+                == 'Consumos mensuales / SIPS'
+                and not pricing_comparador_disponible
+            ):
+                archivo_consumos_comparador = st.file_uploader(
+                    'Sube un Excel de consumos mensuales o un CSV SIPS',
+                    type=['xlsx', 'xls', 'csv'],
+                    key='upload_consumos_comparador_simulindex',
+                )
+
+    if origen_comparador_seleccionado == 'Curva de carga':
+        render_origen_curva(
+            contenedor_origen_curva_comparador,
+            contenedor_acciones_curva_comparador,
+            clave='simulindex_comparador_curva',
+            titulo_compacto=True,
+            mostrar_resumen=False,
+        )
+        curva_publicada_comparador = st.session_state.get('df_norm_h')
+        atr_publicado_comparador = str(
+            st.session_state.get('atr_dfnorm', '')
+        ).upper().removesuffix('TD')
+        curva_comparador_disponible_ahora = (
+            isinstance(curva_publicada_comparador, pd.DataFrame)
+            and not curva_publicada_comparador.empty
+            and atr_publicado_comparador in {'2.0', '3.0', '6.1', '6.2'}
+        )
+        if curva_comparador_disponible_ahora and not curva_comparador_disponible:
+            st.session_state._pendiente_origen_consumos_comparador = (
+                'Curva de carga'
+            )
+            st.rerun()
 
     if (
         origen_comparador_seleccionado == 'Curva de carga'
         and not curva_comparador_disponible
     ):
-        with c1:
-            st.info(
-                'La curva se importa y normaliza con el mismo flujo del '
-                'módulo Curva de carga. Al terminar, vuelve a Simulindex: '
-                'la curva quedará disponible en este selector.'
-            )
-            st.page_link(
-                'pages/curvadecarga.py',
-                label='Ir a cargar y normalizar la curva',
-                icon='📈',
-            )
-        c2.warning('No hay una curva de carga disponible.')
+        c2.info(
+            'Sube y normaliza una curva para habilitar los escenarios del '
+            'comparador.'
+        )
         c3.info(
             'La comparación anterior se ha descartado al cambiar el origen '
             'de consumos.'
@@ -2089,12 +2131,6 @@ with tab5:
         origen_comparador_seleccionado == 'Consumos mensuales / SIPS'
         and not pricing_comparador_disponible
     ):
-        with c1:
-            archivo_consumos_comparador = st.file_uploader(
-                'Sube un Excel de consumos mensuales o un CSV SIPS',
-                type=['xlsx', 'xls', 'csv'],
-                key='upload_consumos_comparador_simulindex',
-            )
         if archivo_consumos_comparador is not None:
             try:
                 if archivo_consumos_comparador.name.lower().endswith('.csv'):
@@ -2211,17 +2247,21 @@ with tab5:
         # ----------------------------
         # 6. MOSTRAR TABLA
         # ----------------------------
-        escenarios_omie_comparador = render_escenarios_omie(
-            st.session_state.precio_omip_previsto,
-            'simulindex_escenarios',
-        )
-        lista_simul = list(escenarios_omie_comparador.values())
+        with st.expander('Escenarios OMIE y otros escenarios'):
+            escenarios_omie_comparador = render_escenarios_omie(
+                st.session_state.precio_omip_previsto,
+                'simulindex_escenarios',
+            )
+            lista_simul = list(escenarios_omie_comparador.values())
 
-        render_otros_escenarios('simulindex_comparador')
+            render_otros_escenarios('simulindex_comparador')
 
-        render_formula_indexada('simulindex_comparador')
+        with st.expander('Fórmula indexada'):
+            render_formula_indexada('simulindex_comparador')
 
         # Entradas de ofertas fijas propias de Simulindex.
+        expander_ofertas_fijas = st.expander('Ofertas a precio fijo')
+        expander_ofertas_fijas.__enter__()
         if "df_ofertas_fijas_excel_simulindex" not in st.session_state:
             st.session_state.df_ofertas_fijas_excel_simulindex = pd.DataFrame()
         if "df_oferta_fija_manual_simulindex" not in st.session_state:
@@ -2229,7 +2269,6 @@ with tab5:
         if "df_ofertas_fijas_ia_simulindex" not in st.session_state:
             st.session_state.df_ofertas_fijas_ia_simulindex = pd.DataFrame()
 
-        st.subheader("Ofertas a precio fijo")
         uploaded_file = st.file_uploader(
             "Sube el Excel con ofertas de precio fijo",
             type=["xlsx", "xls"],
@@ -2292,9 +2331,10 @@ with tab5:
             catalogo_ofertas_local = []
             st.warning(str(error_catalogo_ofertas))
 
-        with st.expander(
-            f"Ofertas guardadas en local ({len(catalogo_ofertas_local)})"
-        ):
+        with st.container(border=True):
+            st.markdown(
+                f"**Ofertas guardadas en local ({len(catalogo_ofertas_local)})**"
+            )
             if not catalogo_ofertas_local:
                 st.info('Todavía no hay ofertas guardadas.')
             else:
@@ -2391,6 +2431,7 @@ with tab5:
         oferta_ia_nueva = render_oferta_ia(
             atr_comparador, periodos_manuales,
             "oferta_ia_simulindex",
+            en_expander=False,
         )
         if not oferta_ia_nueva.empty:
             oferta_ia_nueva = oferta_ia_nueva.copy()
@@ -2513,6 +2554,8 @@ with tab5:
                 st.success(
                     f"Oferta manual «{nombre_manual_limpio}» actualizada."
                 )
+
+        expander_ofertas_fijas.__exit__(None, None, None)
 
     with c2:
         origen_comparador = (
@@ -2653,6 +2696,79 @@ with tab5:
                 "df_resumen": df_resumen_simul
             })
 
+        # Oferta PP Pass Pool: OMIE mensual rolling por apuntamiento mensual
+        # y periodo, más el término B de la oferta (en €/kWh).
+        oferta_pass_pool = obtener_oferta_pass_pool('pp-pass-pool-001')
+        terminos_b_pass_pool = oferta_pass_pool['terminos_b']
+        apuntamientos_pass_pool = (
+            tabla_apuntamientos_spot_3p
+            if atr_calculo_comparador == '2.0'
+            else tabla_apuntamientos
+        )[periodos_comparador_pricing].copy()
+        fechas_apuntamientos_pp = pd.to_datetime(
+            apuntamientos_pass_pool.index.astype(str),
+            format='%Y-%m',
+            errors='coerce',
+        )
+        apuntamientos_pass_pool['numero_mes'] = fechas_apuntamientos_pp.month
+        apuntamientos_pass_pool = (
+            apuntamientos_pass_pool.dropna(subset=['numero_mes'])
+            .drop_duplicates('numero_mes', keep='last')
+            .set_index('numero_mes')
+        )
+
+        curva_omie_pass_pool = prevision_omip_12m['curva_mensual'][
+            ['fecha', 'precio']
+        ].copy()
+        curva_omie_pass_pool['fecha'] = pd.to_datetime(
+            curva_omie_pass_pool['fecha'], errors='coerce'
+        )
+        curva_omie_pass_pool['precio'] = pd.to_numeric(
+            curva_omie_pass_pool['precio'], errors='coerce'
+        )
+        curva_omie_pass_pool = curva_omie_pass_pool.dropna(
+            subset=['fecha', 'precio']
+        )
+        consumos_mensuales_pass_pool = consumos_fuente_comparador.set_index(
+            'mes'
+        )
+        filas_pass_pool = []
+        for fila_omie_pp in curva_omie_pass_pool.itertuples(index=False):
+            numero_mes_pp = fila_omie_pp.fecha.month
+            if (
+                numero_mes_pp not in apuntamientos_pass_pool.index
+                or numero_mes_pp not in consumos_mensuales_pass_pool.index
+            ):
+                continue
+            consumo_mes_pp = consumos_mensuales_pass_pool.loc[numero_mes_pp]
+            for periodo_pp in periodos_comparador_pricing:
+                apuntamiento_pp = float(
+                    apuntamientos_pass_pool.loc[numero_mes_pp, periodo_pp]
+                )
+                consumo_pp = float(consumo_mes_pp[periodo_pp])
+                precio_pp = (
+                    float(fila_omie_pp.precio) * apuntamiento_pp / 1000
+                    + terminos_b_pass_pool[periodo_pp]
+                )
+                filas_pass_pool.append({
+                    'Mes': fila_omie_pp.fecha,
+                    'Periodo': periodo_pp,
+                    'Consumo': consumo_pp,
+                    'OMIE (€/MWh)': float(fila_omie_pp.precio),
+                    'Apuntamiento': apuntamiento_pp,
+                    'B (€/kWh)': terminos_b_pass_pool[periodo_pp],
+                    'Precio (€/kWh)': precio_pp,
+                    'Coste (€)': consumo_pp * precio_pp,
+                })
+
+        detalle_pass_pool = pd.DataFrame(filas_pass_pool)
+        coste_pass_pool = detalle_pass_pool['Coste (€)'].sum()
+        consumo_pass_pool = detalle_pass_pool['Consumo'].sum()
+        precio_medio_pass_pool = (
+            coste_pass_pool / consumo_pass_pool
+            if consumo_pass_pool else 0.0
+        )
+
         st.subheader('Resultado indexados según escenario')
         for esc in escenarios:
             st.markdown(esc["label"])
@@ -2665,6 +2781,23 @@ with tab5:
                 formatear_df_resumen(df_vista),
                 use_container_width=True
             )    
+
+        st.markdown(
+            f"**{oferta_pass_pool['nombre']} · OMIE rolling 12 meses**"
+        )
+        st.dataframe(
+            pd.DataFrame([{
+                'Coste anual (€)': coste_pass_pool,
+                'Precio medio (€/kWh)': precio_medio_pass_pool,
+            }]).style.format({
+                'Coste anual (€)': lambda valor: formato_numero_es(valor, 2),
+                'Precio medio (€/kWh)': (
+                    lambda valor: formato_numero_es(valor, 6)
+                ),
+            }),
+            hide_index=True,
+            use_container_width=True,
+        )
 
 
         ofertas_base_simulindex = []
@@ -2859,10 +2992,17 @@ with tab5:
 
                 resultados.append({
                     "Oferta": esc["label"],
-                    "Tipo": "Indexado",
+                    "Tipo": "Indexado PT",
                     "Coste anual (€)": coste_index,
                     "Precio medio (€/kWh)": precio_medio_index
                 })
+
+            resultados.append({
+                "Oferta": oferta_pass_pool["nombre"],
+                "Tipo": "Pass Pool",
+                "Coste anual (€)": coste_pass_pool,
+                "Precio medio (€/kWh)": precio_medio_pass_pool,
+            })
 
             df_resultados = pd.DataFrame(resultados)
             # Ordenar por coste anual (de más barato a más caro)
@@ -2929,14 +3069,21 @@ with tab5:
                     'muestra perfil horario porque no existe curva de carga.'
                 )
             else:
-                st.subheader("Perfil horario")
-                graf_medias_horarias = graficar_media_horaria('Total')
-                st.plotly_chart(graf_medias_horarias, use_container_width=True)
-                st.subheader("Consumo por periodos")
-                graf_periodos, df_periodos=graficar_queso_periodos(
-                    st.session_state.df_norm_h
-                )
-                st.plotly_chart(graf_periodos, use_container_width=True)
+                with st.expander('Gráficos de consumo'):
+                    st.subheader("Perfil horario")
+                    graf_medias_horarias = graficar_media_horaria('Total')
+                    st.plotly_chart(
+                        graf_medias_horarias,
+                        use_container_width=True,
+                    )
+                    st.subheader("Consumo por periodos")
+                    graf_periodos, df_periodos = graficar_queso_periodos(
+                        st.session_state.df_norm_h
+                    )
+                    st.plotly_chart(
+                        graf_periodos,
+                        use_container_width=True,
+                    )
 
 
 

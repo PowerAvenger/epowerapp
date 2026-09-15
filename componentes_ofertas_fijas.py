@@ -11,6 +11,7 @@ from backend_ofertas_fijas import (
     periodos_aplicables_atr,
     periodos_con_consumo,
     periodos_no_aplicables_atr,
+    periodos_potencia_atr,
 )
 
 PERIODOS = [f"P{i}" for i in range(1, 7)]
@@ -162,7 +163,12 @@ def combinar_ofertas(*tablas) -> pd.DataFrame:
     return pd.concat(validas, ignore_index=True).drop_duplicates("oferta", keep="last")
 
 
-def render_oferta_ia(atr: str, periodos: list[str], clave: str) -> pd.DataFrame:
+def render_oferta_ia(
+    atr: str,
+    periodos: list[str],
+    clave: str,
+    en_expander: bool = True,
+) -> pd.DataFrame:
     """Revisa, guarda todos los ATR y devuelve el ATR activo al comparador."""
     import io
     import streamlit as st
@@ -175,7 +181,14 @@ def render_oferta_ia(atr: str, periodos: list[str], clave: str) -> pd.DataFrame:
     periodos = [periodo for periodo in periodos if periodo in aplicables]
     periodos = periodos or aplicables
 
-    with st.expander("Importar nueva oferta desde imagen con IA"):
+    contenedor_ia = (
+        st.expander("Importar nueva oferta desde imagen con IA")
+        if en_expander
+        else st.container(border=True)
+    )
+    with contenedor_ia:
+        if not en_expander:
+            st.markdown("**Importar nueva oferta desde imagen con IA**")
         st.caption(
             "La IA transcribe la tabla. Revisa siempre los precios antes de "
             "incorporarlos a la comparación."
@@ -205,6 +218,10 @@ def render_oferta_ia(atr: str, periodos: list[str], clave: str) -> pd.DataFrame:
                     atr_contexto=atr,
                 )
                 st.session_state[f"{clave}_tabla"] = tabla
+                st.session_state[f"{clave}_potencia_tabla"] = (
+                    tabla.attrs.get("potencia_tarifas", pd.DataFrame()).copy()
+                )
+                st.session_state[f"{clave}_potencia_version"] = 2
                 st.session_state[f"{clave}_nombre"] = nombre or "Oferta desde imagen"
                 st.session_state[f"{clave}_nombre_editor"] = (
                     nombre or "Oferta desde imagen"
@@ -236,24 +253,75 @@ def render_oferta_ia(atr: str, periodos: list[str], clave: str) -> pd.DataFrame:
                     key=f"{clave}_vigencia_desde",
                 )
             with columnas_fechas[1]:
-                con_fecha_fin = st.checkbox(
-                    "Indicar fecha fin", value=True,
-                    key=f"{clave}_con_fecha_fin",
+                vigencia_hasta = st.date_input(
+                    "Vigencia hasta",
+                    value=(
+                        pd.Timestamp(vigencia_desde)
+                        + pd.Timedelta(days=7)
+                    ).date(),
+                    key=f"{clave}_vigencia_hasta",
                 )
-                vigencia_hasta = None
-                if con_fecha_fin:
-                    vigencia_hasta = st.date_input(
-                        "Vigencia hasta",
-                        value=(
-                            pd.Timestamp(vigencia_desde)
-                            + pd.Timedelta(days=7)
-                        ).date(),
-                        key=f"{clave}_vigencia_hasta",
-                    )
 
+            potencia_extraida = st.session_state.get(
+                f"{clave}_potencia_tabla", pd.DataFrame()
+            )
+            if (
+                isinstance(potencia_extraida, pd.DataFrame)
+                and not potencia_extraida.empty
+                and st.session_state.get(f"{clave}_potencia_version") != 2
+            ):
+                potencia_extraida = potencia_extraida.copy()
+                potencia_extraida["Modalidad"] = "BOE"
+                st.session_state[f"{clave}_potencia_tabla"] = potencia_extraida
+                st.session_state[f"{clave}_potencia_version"] = 2
+            potencia_editada = pd.DataFrame()
+            if (
+                isinstance(potencia_extraida, pd.DataFrame)
+                and not potencia_extraida.empty
+            ):
+                unidad_potencia = tabla.attrs.get(
+                    "unidad_potencia_original", ""
+                )
+                st.caption(
+                    "Potencia detectada"
+                    + (f" · origen: {unidad_potencia}" if unidad_potencia else "")
+                    + " · normalizada a €/kW/día."
+                )
+                potencia_editada = st.data_editor(
+                    potencia_extraida,
+                    hide_index=True,
+                    disabled=["ATR"],
+                    num_rows="fixed",
+                    key=f"{clave}_editor_potencia",
+                    column_config={
+                        "ATR": st.column_config.TextColumn(
+                            "Tarifa", width="small"
+                        ),
+                        "Modalidad": st.column_config.SelectboxColumn(
+                            "Modalidad",
+                            options=["BOE", "CON MARGEN"],
+                            required=True,
+                            width="small",
+                        ),
+                        **{
+                            periodo: st.column_config.NumberColumn(
+                                periodo,
+                                min_value=0.0,
+                                format="%.6f",
+                                width="small",
+                            )
+                            for periodo in PERIODOS
+                        },
+                    },
+                )
+            else:
+                st.info(
+                    "No se ha detectado una tabla de potencia; la oferta "
+                    "utilizará la referencia BOE."
+                )
             st.caption(
-                f"Se han detectado {len(tarifas)} peajes. Revisa todos los "
-                "precios antes de cargarlos al sistema."
+                f"Energía detectada · {len(tarifas)} peajes en €/kWh. "
+                "Revisa los precios antes de cargarlos al sistema."
             )
             editada = st.data_editor(
                 tarifas,
@@ -294,8 +362,25 @@ def render_oferta_ia(atr: str, periodos: list[str], clave: str) -> pd.DataFrame:
                         vigencia_desde, vigencia_hasta,
                     )
                     registro_guardado = guardar_version_oferta(
-                        nombre, vigencia_desde, vigencia_hasta, editada
+                        nombre,
+                        vigencia_desde,
+                        vigencia_hasta,
+                        editada,
+                        potencia_tarifas=potencia_editada,
                     )
+                    if not potencia_editada.empty:
+                        potencia_atr = potencia_editada.loc[
+                            potencia_editada["ATR"].astype(str).eq(atr)
+                        ]
+                        if not potencia_atr.empty:
+                            fila_potencia = potencia_atr.iloc[0]
+                            oferta_actual["Potencia modalidad"] = (
+                                fila_potencia.get("Modalidad", "CON MARGEN")
+                            )
+                            for periodo in PERIODOS:
+                                oferta_actual[f"Potencia {periodo}"] = (
+                                    fila_potencia.get(periodo)
+                                )
                     oferta_actual.attrs["id_oferta"] = registro_guardado["id"]
                     st.success(
                         f"Oferta «{nombre.strip()}» guardada con {len(editada)} "
@@ -320,26 +405,94 @@ def selector_origen_oferta(clave: str) -> str:
     )
 
 
-def render_oferta_manual(periodos: list[str], clave: str) -> pd.DataFrame:
-    """Formulario manual limitado a los periodos realmente necesarios."""
+def render_oferta_manual(
+    periodos: list[str],
+    clave: str,
+    atr: str | None = None,
+    incluir_potencia: bool = False,
+) -> pd.DataFrame:
+    """Formulario común de energía y, opcionalmente, potencia."""
     import streamlit as st
+    from backend_ofertas_fijas import resolver_potencia_tarifa
+
+    atr = normalizar_atr(atr) if atr is not None else None
+    periodos_energia = (
+        periodos_aplicables_atr(atr) if incluir_potencia else periodos
+    )
+    modalidad_potencia = "BOE"
+    if incluir_potencia:
+        modalidad_potencia = st.radio(
+            "Precio del término de potencia",
+            ("BOE", "CON MARGEN"),
+            horizontal=True,
+            key=f"{clave}_potencia_modalidad",
+            help=(
+                "BOE aplica automáticamente los precios regulados. "
+                "CON MARGEN permite introducir los precios de la oferta."
+            ),
+        )
     with st.form(f"{clave}_form"):
         nombre = st.text_input("Nombre de la oferta", value="Oferta manual")
-        columnas = st.columns(len(periodos))
+        st.markdown("##### Energía (€/kWh)")
+        columnas = st.columns(len(periodos_energia))
         precios = {}
-        for columna, periodo in zip(columnas, periodos):
+        for columna, periodo in zip(columnas, periodos_energia):
             with columna:
                 precios[periodo] = st.number_input(
                     periodo, min_value=0.0, max_value=2.0, step=0.001,
-                    format="%.6f", help="Precio fijo en €/kWh."
+                    format="%.6f", help="Precio fijo de energía en €/kWh.",
+                    key=f"{clave}_energia_{periodo}",
                 )
+
+        precios_potencia = {}
+        if incluir_potencia:
+            st.markdown("##### Potencia (€/kW/día)")
+            periodos_potencia = periodos_potencia_atr(atr)
+            if modalidad_potencia == "BOE":
+                potencia_resuelta = resolver_potencia_tarifa(
+                    {"atr": atr, "potencia": {"modalidad": "BOE"}},
+                    pd.Timestamp.today().normalize(),
+                )
+                precios_potencia = {
+                    periodo: float(potencia_resuelta.get(periodo, 0.0))
+                    for periodo in periodos_potencia
+                }
+            columnas_potencia = st.columns(len(periodos_potencia))
+            for columna, periodo in zip(columnas_potencia, periodos_potencia):
+                with columna:
+                    precios_potencia[periodo] = st.number_input(
+                        periodo,
+                        min_value=0.0,
+                        step=0.000001,
+                        format="%.6f",
+                        value=float(precios_potencia.get(periodo, 0.0)),
+                        disabled=modalidad_potencia == "BOE",
+                        key=f"{clave}_potencia_{periodo}_{modalidad_potencia}",
+                    )
         guardar = st.form_submit_button(
             "Añadir o actualizar oferta", type="primary",
             use_container_width=True,
         )
     if guardar:
         try:
-            return construir_oferta(nombre, precios, periodos)
+            oferta = construir_oferta(nombre, precios, periodos_energia)
+            if incluir_potencia:
+                if modalidad_potencia == "CON MARGEN":
+                    invalidos_potencia = [
+                        periodo for periodo in periodos_potencia_atr(atr)
+                        if float(precios_potencia.get(periodo, 0.0)) <= 0
+                    ]
+                    if invalidos_potencia:
+                        raise ValueError(
+                            "Introduce un precio de potencia mayor que cero "
+                            "en: " + ", ".join(invalidos_potencia) + "."
+                        )
+                oferta["Potencia modalidad"] = modalidad_potencia
+                for periodo in PERIODOS:
+                    oferta[f"Potencia {periodo}"] = precios_potencia.get(
+                        periodo, pd.NA
+                    )
+            return oferta
         except ValueError as error:
             st.error(str(error))
     return pd.DataFrame()

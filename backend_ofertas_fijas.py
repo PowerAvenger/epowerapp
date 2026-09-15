@@ -28,6 +28,11 @@ def periodos_aplicables_atr(atr: str) -> list[str]:
     return PERIODOS[:3] if normalizar_atr(atr) == "2.0" else PERIODOS.copy()
 
 
+def periodos_potencia_atr(atr: str) -> list[str]:
+    """Devuelve los periodos del término de potencia del peaje."""
+    return PERIODOS[:2] if normalizar_atr(atr) == "2.0" else PERIODOS.copy()
+
+
 def periodos_no_aplicables_atr(atr: str) -> list[str]:
     """Periodos que deben mostrarse vacíos para el ATR indicado."""
     aplicables = set(periodos_aplicables_atr(atr))

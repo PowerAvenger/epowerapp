@@ -28,6 +28,7 @@ ESQUEMA_OFERTA_IMAGEN = {
     "properties": {
         "nombre": {"type": ["string", "null"]},
         "unidad_original": {"type": "string"},
+        "unidad_potencia_original": {"type": ["string", "null"]},
         "tarifas": {
             "type": "array",
             "items": {
@@ -41,13 +42,23 @@ ESQUEMA_OFERTA_IMAGEN = {
                     "P4": {"type": ["number", "null"]},
                     "P5": {"type": ["number", "null"]},
                     "P6": {"type": ["number", "null"]},
+                    **{
+                        f"potencia_P{i}": {"type": ["number", "null"]}
+                        for i in range(1, 7)
+                    },
                 },
-                "required": ["nombre", "atr", "P1", "P2", "P3", "P4", "P5", "P6"],
+                "required": [
+                    "nombre", "atr", "P1", "P2", "P3", "P4", "P5", "P6",
+                    "potencia_P1", "potencia_P2", "potencia_P3",
+                    "potencia_P4", "potencia_P5", "potencia_P6",
+                ],
                 "additionalProperties": False,
             },
         },
     },
-    "required": ["nombre", "unidad_original", "tarifas"],
+    "required": [
+        "nombre", "unidad_original", "unidad_potencia_original", "tarifas"
+    ],
     "additionalProperties": False,
 }
 
@@ -111,6 +122,23 @@ def _factor_a_eur_kwh(unidad, tarifas=None):
     return 1 / 1000, True         # precios como 236,937: EUR/MWh
 
 
+def _factor_potencia_a_diaria(unidad):
+    """Convierte una unidad explícita de potencia a €/kW/día."""
+    texto = (
+        str(unidad or "").lower().replace(" ", "")
+        .replace("eur", "€").replace("año", "ano")
+    )
+    if "€/kw/d" in texto or "€/kwdia" in texto or "€/kw/dia" in texto:
+        return 1.0
+    if "€/kw/ano" in texto or "€/kwano" in texto:
+        return 1 / 365
+    if "€/kw/mes" in texto or "€/kwmes" in texto:
+        return 12 / 365
+    raise ValueError(
+        "Se han detectado precios de potencia, pero no se reconoce su unidad."
+    )
+
+
 def validar_oferta_extraida(resultado, atr_contexto=None):
     """Valida y convierte la extracción a una tabla canónica en €/kWh."""
     if not isinstance(resultado, dict) or not resultado.get("tarifas"):
@@ -119,6 +147,7 @@ def validar_oferta_extraida(resultado, atr_contexto=None):
         resultado.get("unidad_original"), resultado.get("tarifas")
     )
     filas = []
+    filas_potencia = []
     campos_revisar = []
     nombres_usados = {}
     numero_tarifas = len(resultado["tarifas"])
@@ -158,11 +187,44 @@ def validar_oferta_extraida(resultado, atr_contexto=None):
                     "valor_extraido": tarifa.get(periodo),
                 })
         filas.append(fila)
+        valores_potencia = {
+            periodo: _numero_extraido(tarifa.get(f"potencia_{periodo}"))
+            for periodo in [f"P{i}" for i in range(1, 7)]
+        }
+        if any(valor is not None for valor in valores_potencia.values()):
+            factor_potencia = _factor_potencia_a_diaria(
+                resultado.get("unidad_potencia_original")
+            )
+            periodos_potencia = (
+                ["P1", "P2"] if atr == "2.0"
+                else [f"P{i}" for i in range(1, 7)]
+            )
+            fila_potencia = {"ATR": atr, "Modalidad": "BOE"}
+            for periodo in [f"P{i}" for i in range(1, 7)]:
+                valor = valores_potencia[periodo]
+                fila_potencia[periodo] = (
+                    None if valor is None else valor * factor_potencia
+                )
+            faltantes_potencia = [
+                periodo for periodo in periodos_potencia
+                if fila_potencia[periodo] is None
+                or fila_potencia[periodo] <= 0
+            ]
+            if faltantes_potencia:
+                raise ValueError(
+                    f"Faltan precios de potencia para {atr}TD: "
+                    + ", ".join(faltantes_potencia) + "."
+                )
+            filas_potencia.append(fila_potencia)
     if not filas:
         raise ValueError("No se ha detectado un ATR compatible.")
     tabla = pd.DataFrame(filas)
     tabla.attrs["unidad_inferida"] = unidad_inferida
     tabla.attrs["campos_revisar"] = campos_revisar
+    tabla.attrs["potencia_tarifas"] = pd.DataFrame(filas_potencia)
+    tabla.attrs["unidad_potencia_original"] = resultado.get(
+        "unidad_potencia_original"
+    )
     return tabla, resultado.get("nombre")
 
 
@@ -200,7 +262,15 @@ def extraer_oferta_imagen(
             "Cada fila de precios es una oferta independiente: conserva en el "
             "campo nombre su etiqueta comercial completa. Si dos filas tienen "
             "la misma etiqueta, incorpora otro dato visible de la fila, como "
-            "el valor OMIE, para que sus nombres sean inequívocos."
+            "el valor OMIE, para que sus nombres sean inequívocos. "
+            "Los campos P1-P6 representan siempre ENERGÍA. Si también hay una "
+            "tabla de potencia, transcríbela en potencia_P1-potencia_P6 y copia "
+            "su unidad exacta en unidad_potencia_original. Si solo hay una "
+            "tabla P1-P6 sin indicación de potencia, trátala como energía y "
+            "deja todos los campos potencia_P en null. Cuando la captura "
+            "contenga dos tablas, la tabla de potencia aparece primero y la "
+            "tabla de energía después; confirma igualmente sus encabezados y "
+            "unidades visibles antes de asignar los valores."
         ),
         input=[{
             "role": "user",
@@ -208,7 +278,8 @@ def extraer_oferta_imagen(
                 {
                     "type": "input_text",
                     "text": (
-                        "Extrae todas las filas de ofertas y sus precios P1-P6, "
+                        "Extrae todas las filas de ofertas y sus precios de "
+                        "energía P1-P6, y también la potencia si aparece, "
                         "incluido el nombre de cada fila. Si la tabla no muestra "
                         "ATR, deja atr vacío: se aplicará el ATR del contexto. "
                         "Usa null para periodos que no aparezcan."

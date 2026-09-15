@@ -1,0 +1,18 @@
+[
+  {
+    "id": "pp-pass-pool-001",
+    "nombre": "PP Pass Pool",
+    "tipo": "pass_pool",
+    "formula": "OMIE_MENSUAL * APUNTAMIENTO_MES_PERIODO + B_PERIODO",
+    "unidad_b": "€/kWh",
+    "fuente": "Imagen aportada por el usuario",
+    "terminos_b": {
+      "P1": 0.110857,
+      "P2": 0.085371,
+      "P3": 0.062831,
+      "P4": 0.050098,
+      "P5": 0.042326,
+      "P6": 0.046333
+    }
+  }
+]

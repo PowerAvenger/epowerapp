@@ -22,6 +22,10 @@ def generar_menu():
         st.markdown(f"Deja tus impresiones y valoraciones en [Linkedin]({url_linkedin}).")
 
         st.page_link('epowerapp.py', label = 'Bienvenida', icon = "🙌")
+        st.page_link('pages/escalacv.py', label = 'Mercados OMIE', icon = "📊")
+        st.page_link('pages/mibgas.py', label = 'Mercados GAS & Furious', icon = "🔥")
+        st.page_link('pages/indicadores_mensuales.py', label = 'Indicadores mensuales', icon = "📋")
+        st.page_link('pages/indicadores_anuales.py', label = 'Indicadores anuales', icon = "📅")
         st.page_link('pages/curvadecarga.py', label = 'Curvas de carga', icon = "🕒")
         st.page_link('pages/factura.py', label = 'Análisis de facturas', icon = "🧾")
         st.page_link('pages/opt2.py', label = 'Término de Potencia', icon = "🎯")
@@ -39,15 +43,11 @@ def generar_menu():
             # acaba de crear durante una sesión, el enlace nativo no estará
             # disponible hasta reiniciar, pero el resto de módulos debe seguir.
             st.markdown('⚖️ [Comparador luz](/comparador_luz)')
-        st.page_link('pages/indicadores_mensuales.py', label = 'Indicadores mensuales', icon = "📋")
-        st.page_link('pages/indicadores_anuales.py', label = 'Indicadores anuales', icon = "📅")
         st.page_link('pages/fijovspvpc.py', label = 'FijovsPVPC', icon = "⚖️")
         st.page_link('pages/balkoning_solar.py', label = 'Balkoning Solar', icon = "🏊‍♂️")
-        st.page_link('pages/escalacv.py', label = 'Escala CV: Mercados OMIE', icon = "📊")
         st.page_link('pages/excedentes.py', label = 'Excedentes', icon = "💰")
         st.page_link('pages/demanda.py', label = 'Demanda', icon = "🏭")
         st.page_link('pages/redata_potgen.py', label = 'Tecnologías de generación', icon = "⚡️")
-        st.page_link('pages/mibgas.py', label = 'Gas & Furious', icon = "🔥")
         st.page_link('pages/marginales.py', label = 'Marginales', icon = "🔀")
         raiz_app = Path(__file__).resolve().parent
         if (

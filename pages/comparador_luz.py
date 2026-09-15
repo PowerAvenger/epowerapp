@@ -19,10 +19,10 @@ from backend_ofertas_fijas import (
     resolver_potencia_tarifa,
 )
 from backend_opt2 import consumos_mensuales_desde_curva_normalizada
-from backend_simulindex import construir_curva_omip_mensual_12m, obtener_historicos_meff, obtener_meff_mensual, obtener_meff_trimestral
+from backend_simulindex import graficar_curva_omip_mensual_12m
 from backend_previsiones import (
-    guardar_prevision_omie_en_sesion,
-    obtener_prevision_omie_anual,
+    guardar_prevision_omip_12m_en_sesion,
+    obtener_prevision_omip_12m,
 )
 from backend_sips import (
     leer_sips_completo,
@@ -238,10 +238,10 @@ with col1:
         )
 
 with col2:
-    precio_omie_previsto = st.session_state.get('precio_omie_previsto')
-    if precio_omie_previsto is None:
+    precio_omip_previsto = st.session_state.get('precio_omip_previsto')
+    if precio_omip_previsto is None:
         st.info(
-            'Carga la previsión OMIE para sustituir el escenario provisional '
+            'Carga la previsión OMIP de los próximos 12 meses para sustituir el escenario provisional '
             'de 50 €/MWh.'
         )
         if st.button(
@@ -250,30 +250,41 @@ with col2:
             type='primary',
             use_container_width=True,
         ):
-            with st.spinner('Calculando la curva híbrida OMIE-OMIP...'):
-                df_spot_prevision = st.session_state.df_sheets.copy()
-                df_spot_prevision['fecha'] = pd.to_datetime(
-                    df_spot_prevision['fecha'], errors='coerce'
-                )
-                df_spot_prevision = df_spot_prevision.set_index('fecha')[[
-                    'spot'
-                ]]
-                prevision_omie = obtener_prevision_omie_anual(
-                    df_spot_prevision
-                )
-                guardar_prevision_omie_en_sesion(prevision_omie)
+            with st.spinner('Calculando la curva OMIP de 12 meses móviles...'):
+                prevision_omip = obtener_prevision_omip_12m()
+                guardar_prevision_omip_12m_en_sesion(prevision_omip)
                 for letra in ('a', 'b', 'c'):
                     st.session_state.pop(
                         f'comparador_luz_escenarios_omie_{letra}', None
                     )
             st.rerun()
 
+    if st.session_state.get('comparador_luz_fuente_omie') != 'omip_12m':
+        for letra in ('a', 'b', 'c'):
+            st.session_state.pop(
+                f'comparador_luz_escenarios_omie_{letra}', None
+            )
+        st.session_state.comparador_luz_fuente_omie = 'omip_12m'
+
     forward_actual = float(
-        st.session_state.get('precio_omie_previsto', 50.0)
+        st.session_state.get('precio_omip_previsto', 50.0)
     )
     omies = render_escenarios_omie(
         forward_actual, 'comparador_luz_escenarios'
     )
+    with st.expander('Futuros OMIP rolling 12 meses', expanded=True):
+        prevision_omip_12m = st.session_state.get('prevision_omip_12m')
+        if prevision_omip_12m is None:
+            st.caption('Carga los escenarios OMIE previstos para ver la curva.')
+        else:
+            st.plotly_chart(
+                graficar_curva_omip_mensual_12m(
+                    prevision_omip_12m['curva_mensual'],
+                    prevision_omip_12m['media_12m'],
+                ),
+                use_container_width=True,
+                key='comparador_luz_grafico_omip_12m',
+            )
     otros_escenarios = render_otros_escenarios(
         'comparador_luz_escenarios'
     )
@@ -357,7 +368,10 @@ with col2:
     oferta_nueva = pd.DataFrame()
     if origen_oferta == 'Oferta manual':
         oferta_nueva = render_oferta_manual(
-            periodos_oferta, 'comparador_luz_oferta_manual'
+            periodos_oferta,
+            'comparador_luz_oferta_manual',
+            atr=atr,
+            incluir_potencia=True,
         )
     elif origen_oferta == 'Excel':
         archivo_ofertas = st.file_uploader(
