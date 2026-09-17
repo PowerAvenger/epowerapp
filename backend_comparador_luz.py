@@ -1,4 +1,4 @@
-"""Motor independiente del Comparador luz, sin dependencias de Streamlit."""
+"""Cálculos del Comparador luz con Pricing compartido para indexados."""
 
 from __future__ import annotations
 
@@ -7,6 +7,9 @@ import pandas as pd
 import re
 
 from backend_indexado import FormulaIndexada, calcular_precios_atr_formula
+from backend_pricing_indexados import (
+    calcular_escenarios_pricing_mensuales,
+)
 from backend_ofertas_fijas import (
     precios_energia_oferta,
     resolver_potencia_tarifa,
@@ -355,77 +358,8 @@ def calcular_escenarios_indexados_mensuales(
     fnee_previsto: float,
     srad_previsto: float,
 ) -> pd.DataFrame:
-    """Converge curva/SIPS en mes-periodo y pondera con el mismo flujo."""
-    datos = referencia.copy()
-    datos["fecha"] = pd.to_datetime(datos["fecha"], errors="coerce")
-    datos = datos.dropna(subset=["fecha", "spot"])
-    datos["mes"] = datos["fecha"].dt.month
-    datos["periodo"] = periodo_atr(datos, atr)
-    datos["ssaa_sin_srad"] = (
-        pd.to_numeric(datos["ssaa"], errors="coerce")
-        - pd.to_numeric(datos.get("rad3", 0), errors="coerce")
+    """Compatibilidad con el Comparador luz; usa el motor de Pricing."""
+    return calcular_escenarios_pricing_mensuales(
+        referencia, consumos_mensuales, atr, formula, escenarios,
+        ssaa_previsto, fnee_previsto, srad_previsto,
     )
-    grupo = datos.groupby(["mes", "periodo"], as_index=False).agg(
-        spot=("spot", "mean"), ssaa=("ssaa_sin_srad", "mean"),
-        osom=("osom", "mean"), perd=(f"perd_{atr}", "mean"),
-        ppcc=(f"ppcc_{atr}", "mean"), pyc=(f"pyc_{atr}", "mean"),
-    )
-    media_spot_mes = datos.groupby("mes")["spot"].mean()
-    media_ssaa_mes = datos.groupby("mes")["ssaa_sin_srad"].mean().replace(0, np.nan)
-    grupo["ap_spot"] = grupo["spot"] / grupo["mes"].map(media_spot_mes)
-    grupo["ap_ssaa"] = grupo["ssaa"] / grupo["mes"].map(media_ssaa_mes)
-    grupo["ap_ssaa"] = grupo["ap_ssaa"].fillna(1.0)
-
-    consumos = consumos_mensuales.copy()
-    if "mes" not in consumos:
-        raise ValueError("Los consumos mensuales no contienen la columna mes.")
-    detalle_consumo = consumos.melt(
-        id_vars=["mes"], value_vars=PERIODOS,
-        var_name="periodo", value_name="consumo",
-    )
-    filas_resultado = []
-    filas_detalle = []
-    for nombre, omie in escenarios.items():
-        componentes = grupo.copy()
-        componentes["spot"] = componentes["ap_spot"] * float(omie)
-        componentes["ssaa"] = (
-            componentes["ap_ssaa"] * float(ssaa_previsto) + float(srad_previsto)
-        )
-        componentes["fnee"] = float(fnee_previsto)
-        for tarifa in ("2.0", "3.0", "6.1", "6.2"):
-            componentes[f"ppcc_{tarifa}"] = 0.0
-            componentes[f"perd_{tarifa}"] = 0.0
-            componentes[f"pyc_{tarifa}"] = 0.0
-        componentes[f"ppcc_{atr}"] = componentes["ppcc"]
-        componentes[f"perd_{atr}"] = componentes["perd"]
-        componentes[f"pyc_{atr}"] = componentes["pyc"]
-        calculado = calcular_precios_atr_formula(componentes, formula)
-        ponderacion = detalle_consumo.merge(
-            calculado[["mes", "periodo", f"precio_{atr}"]],
-            on=["mes", "periodo"], how="inner",
-        )
-        ponderacion["coste"] = (
-            ponderacion["consumo"] * ponderacion[f"precio_{atr}"] / 1000
-        )
-        detalle_escenario = ponderacion[
-            ["mes", "periodo", "consumo", f"precio_{atr}", "coste"]
-        ].copy()
-        detalle_escenario["Oferta"] = nombre
-        detalle_escenario = detalle_escenario.rename(columns={
-            "mes": "Mes", "periodo": "Periodo", "consumo": "Consumo (kWh)",
-            f"precio_{atr}": "Precio (€/MWh)", "coste": "Coste (€)",
-        })
-        filas_detalle.append(detalle_escenario)
-        coste = ponderacion["coste"].sum()
-        energia = ponderacion["consumo"].sum()
-        filas_resultado.append({
-            "Oferta": nombre, "Tipo": "Indexado",
-            "Coste energía (€)": coste,
-            "Precio medio energía (€/kWh)": coste / energia if energia else np.nan,
-        })
-    resultado = pd.DataFrame(filas_resultado)
-    resultado.attrs["detalle"] = (
-        pd.concat(filas_detalle, ignore_index=True)
-        if filas_detalle else pd.DataFrame()
-    )
-    return resultado

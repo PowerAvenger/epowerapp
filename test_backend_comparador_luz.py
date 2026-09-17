@@ -12,6 +12,7 @@ from backend_comparador_luz import (
 )
 from backend_ofertas_fijas import ofertas_catalogo_para_atr
 from backend_indexado import FormulaIndexada
+from backend_pricing_indexados import calcular_escenarios_pricing_mensuales
 
 
 class ComparadorLuzTest(unittest.TestCase):
@@ -125,7 +126,67 @@ class ComparadorLuzTest(unittest.TestCase):
             {'A': 40.0}, 0.0, 0.0, 0.0,
         )
         self.assertAlmostEqual(
-            resultado.iloc[0]['Precio medio energía (€/kWh)'], 0.0406
+            resultado.iloc[0]['Precio medio energía (€/kWh)'], 0.103952
+        )
+
+    def test_comparadores_comparten_pricing_y_conservan_seis_periodos(self):
+        fechas = pd.date_range('2025-01-01', periods=12, freq='MS')
+        referencia = pd.DataFrame({
+            'fecha': fechas.repeat(6),
+            'dh_6p': [f'P{i}' for _ in fechas for i in range(1, 7)],
+            'spot': 50.0, 'ssaa': 10.0, 'rad3': 0.0,
+            'osom': 1.0, 'perd_3.0': 0.0,
+            'ppcc_3.0': 2.0, 'pyc_3.0': 0.0,
+        })
+        consumos = pd.DataFrame({
+            'mes': range(1, 13),
+            **{f'P{i}': 100.0 for i in range(1, 7)},
+        })
+        argumentos = (
+            referencia, consumos, '3.0', FormulaIndexada(),
+            {'Indexado A': 40.0}, 20.0, 0.0, 1.0,
+        )
+        pricing = calcular_escenarios_pricing_mensuales(*argumentos)
+        comparador_luz = calcular_escenarios_indexados_mensuales(*argumentos)
+
+        self.assertAlmostEqual(
+            pricing.iloc[0]['Precio medio energía (€/kWh)'],
+            comparador_luz.iloc[0]['Precio medio energía (€/kWh)'],
+        )
+        self.assertEqual(
+            set(pricing.attrs['detalle']['Periodo']),
+            {f'P{i}' for i in range(1, 7)},
+        )
+
+    def test_pricing_usa_apuntamientos_y_componentes_vigentes(self):
+        fechas = pd.date_range('2025-01-01', periods=12, freq='MS')
+        referencia = pd.DataFrame({
+            'fecha': fechas.repeat(2),
+            'dh_6p': ['P1', 'P2'] * 12,
+            'spot': [50.0, 100.0] * 12,
+            'ssaa': [10.0, 30.0] * 12,
+            'rad3': 0.0,
+            'osom': [2.0, 4.0] * 12,
+            'perd_3.0': 0.0,
+            'ppcc_3.0': [3.0, 9.0] * 12,
+            'pyc_3.0': 999.0,  # Pricing usa la tabla prevista, no este histórico.
+        })
+        consumos = pd.DataFrame({
+            'mes': range(1, 13),
+            'P1': 100.0, 'P2': 100.0,
+            **{f'P{i}': 0.0 for i in range(3, 7)},
+        })
+        resultado = calcular_escenarios_pricing_mensuales(
+            referencia, consumos, '3.0', FormulaIndexada(),
+            {'A': 75.0}, 20.0, 0.0, 1.0,
+        )
+        detalle = resultado.attrs['detalle'].groupby('Periodo').first()
+
+        self.assertAlmostEqual(detalle.loc['P1', 'Precio (€/MWh)'], 131.357)
+        self.assertAlmostEqual(detalle.loc['P2', 'Precio (€/MWh)'], 184.059)
+        self.assertAlmostEqual(
+            resultado.loc[0, 'Precio medio energía (€/kWh)'],
+            (131.357 + 184.059) / 2000,
         )
 
     def test_oferta_de_catalogo_conserva_id_para_gestionarla(self):

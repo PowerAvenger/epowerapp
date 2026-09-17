@@ -48,6 +48,10 @@ from backend_opt2 import (
 from backend_sips import (
     es_sips_excel, leer_sips_completo, perfil_anual_meses_naturales,
 )
+from backend_pricing_indexados import (
+    calcular_escenarios_pricing_mensuales,
+    preparar_referencia_pricing,
+)
 from backend_ofertas_fijas import (
     cargar_catalogo_ofertas,
     precios_energia_oferta,
@@ -552,7 +556,7 @@ for clave_pricing, clave_principal in {
 
 
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+seccion_simulindex = st.segmented_control('Sección', [
     'Principal',
     'Futuros',
     'Previsión anual',
@@ -562,14 +566,15 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     'Pricing',
     'Combo index-fijo',
     'Informes',
-])
+], default='Principal', key='seccion_simulindex')
 
 # =======================================================================================================================================================================
 # PRICING
-# Se renderiza antes que los tabs que requieren una curva y pueden detener la
-# ejecución completa de Streamlit.
+# Prepara las tablas que utiliza Comparador; solo se muestra su interfaz al
+# seleccionar Pricing.
 # =======================================================================================================================================================================
-with tab7:
+contenedor_pricing = st.empty()
+with contenedor_pricing.container():
     col_pricing1, col_pricing2, col_pricing3 = st.columns(3)
 
     with col_pricing1:
@@ -822,38 +827,10 @@ with tab7:
                 height=460,
             )
 
-        df_spot_periodos = st.session_state.df_sheets.copy()
-        df_spot_periodos['fecha'] = pd.to_datetime(
-            df_spot_periodos['fecha'], errors='coerce'
+        df_spot_periodos = preparar_referencia_pricing(
+            st.session_state.df_sheets
         )
-        df_spot_periodos['spot'] = pd.to_numeric(
-            df_spot_periodos['spot'], errors='coerce'
-        )
-        df_spot_periodos = df_spot_periodos.dropna(subset=['fecha', 'spot'])
         df_spot_periodos['mes_pricing'] = df_spot_periodos['fecha'].dt.to_period('M')
-
-        def mes_horario_completo(periodo, grupo):
-            inicio = periodo.start_time.tz_localize('Europe/Madrid')
-            fin = (periodo + 1).start_time.tz_localize('Europe/Madrid')
-            horas_esperadas = len(
-                pd.date_range(inicio, fin, freq='h', inclusive='left')
-            )
-            fechas = grupo['fecha']
-            return (
-                len(grupo) == horas_esperadas
-                and fechas.min().date() == periodo.start_time.date()
-                and fechas.max().date() == periodo.end_time.date()
-            )
-
-        meses_completos = [
-            periodo
-            for periodo, grupo in df_spot_periodos.groupby('mes_pricing')
-            if mes_horario_completo(periodo, grupo)
-        ]
-        meses_disponibles = sorted(meses_completos)[-12:]
-        df_spot_periodos = df_spot_periodos[
-            df_spot_periodos['mes_pricing'].isin(meses_disponibles)
-        ].copy()
 
         # Compatibilidad con tablas horarias conservadas en sesión antes de
         # incorporar 6.2TD. Ambas pérdidas comparten el mismo coeficiente K,
@@ -1520,36 +1497,40 @@ with tab7:
                 icon='ℹ️',
             )
         else:
-            tabla_precio_seleccionado = tablas_fijas_pricing[
-                atr_pricing_seleccionado
-            ]
             periodos_atr_seleccionado = (
                 ['P1', 'P2', 'P3']
                 if atr_pricing_seleccionado == '2.0'
                 else [f'P{i}' for i in range(1, 7)]
             )
-            consumos_por_mes_natural = df_consumos_pricing.set_index('mes')
-            filas_ponderacion_pricing = []
-            for mes_precio_pricing in tabla_precio_seleccionado.index:
-                numero_mes_pricing = pd.Period(mes_precio_pricing, freq='M').month
-                consumo_mes_pricing = consumos_por_mes_natural.loc[numero_mes_pricing]
-                for periodo_pricing in periodos_atr_seleccionado:
-                    precio_periodo_pricing = tabla_precio_seleccionado.loc[
-                        mes_precio_pricing, periodo_pricing
-                    ]
-                    consumo_periodo_pricing = pd.to_numeric(
-                        consumo_mes_pricing[periodo_pricing], errors='coerce'
-                    )
-                    if pd.isna(precio_periodo_pricing) or pd.isna(consumo_periodo_pricing):
-                        continue
-                    filas_ponderacion_pricing.append({
-                        'Mes': mes_precio_pricing,
-                        'Periodo': periodo_pricing,
-                        'Precio': precio_periodo_pricing,
-                        'Consumo': float(consumo_periodo_pricing),
-                    })
-
-            df_ponderacion_pricing = pd.DataFrame(filas_ponderacion_pricing)
+            resultado_pricing_ponderado = calcular_escenarios_pricing_mensuales(
+                st.session_state.df_sheets,
+                df_consumos_pricing,
+                atr_pricing_seleccionado,
+                formula_pricing,
+                {'Pricing': spot_forward_pricing},
+                ssaa_forward_pricing,
+                fnee_pricing,
+                srad_pricing,
+            )
+            precios_pricing = resultado_pricing_ponderado.attrs['precios']
+            tabla_precio_seleccionado = precios_pricing.pivot(
+                index='Mes', columns='Periodo', values='Precio (€/kWh)'
+            ).reindex(columns=periodos_atr_seleccionado)
+            nombres_mes_pricing = {
+                pd.Period(mes, freq='M').month: mes
+                for mes in tabla_precio_seleccionado.index
+            }
+            detalle_pricing = resultado_pricing_ponderado.attrs['detalle']
+            df_ponderacion_pricing = detalle_pricing.rename(columns={
+                'Periodo': 'Periodo',
+                'Consumo (kWh)': 'Consumo',
+                'Precio (€/MWh)': 'Precio',
+                'Coste (€)': 'Coste',
+            })[['Mes', 'Periodo', 'Precio', 'Consumo', 'Coste']].copy()
+            df_ponderacion_pricing['Mes'] = (
+                df_ponderacion_pricing['Mes'].map(nombres_mes_pricing)
+            )
+            df_ponderacion_pricing['Precio'] /= 1000
             df_ponderacion_pricing['Coste'] = (
                 df_ponderacion_pricing['Precio']
                 * df_ponderacion_pricing['Consumo']
@@ -1701,7 +1682,10 @@ with tab7:
 # ========================================================================================================================================================================
 #PANTALLA PRINCIPAL CON LAS RECTAS DE SIMULACIÓN Y DATOS PARA UN SOLO ESCENARIO OMIE
 # ========================================================================================================================================================================
-with tab8:
+if seccion_simulindex != 'Pricing':
+    contenedor_pricing.empty()
+
+if seccion_simulindex == 'Combo index-fijo':
     st.subheader('Combo index-fijo · precio del volumen fijo', divider='rainbow')
     ruta_cuadrante_combo = (
         Path(__file__).resolve().parent.parent
@@ -1962,7 +1946,7 @@ with tab8:
             st.error(f'No se ha podido calcular el bloque fijo: {error_combo}')
 
 
-with tab1:
+if seccion_simulindex == 'Principal':
  
     col1, col2 = st.columns([0.2, 0.8])
     with col1:
@@ -2040,7 +2024,7 @@ with tab1:
 
           
 #PANTALLA DE FUTUROS--------------------------------------------------
-with tab2:
+if seccion_simulindex == 'Futuros':
     
     col3, col4 = st.columns([0.18, 0.82])
     with col3:
@@ -2077,7 +2061,7 @@ with tab2:
 # =======================================================================================================================================================================
 # SECCIÓN PREVISIÓN ANUAL
 # =======================================================================================================================================================================    
-with tab3:
+if seccion_simulindex == 'Previsión anual':
     c1, c2 = st.columns(2)
     with c1:
         st.info(f'Aquí tienes la previsión OMIE 2026 en base a los valores medios mensuales :green[OMIE] y los valores medios de :orange[OMIP] a fecha {fecha_ultimo_omip_mensual}.', icon = "ℹ️")
@@ -2096,7 +2080,7 @@ with tab3:
 # =======================================================================================================================================================================
 # OMIP VS OMIE
 # =======================================================================================================================================================================
-with tab4:
+if seccion_simulindex == 'OMIP vs OMIE':
     with st.container():
         col5, col6 = st.columns([0.2, 0.8])
         with col5:
@@ -2117,7 +2101,7 @@ with tab4:
 # =======================================================================================================================================================================
 # SECCIÓN COMPARADOR
 # =======================================================================================================================================================================
-with tab5:
+if seccion_simulindex == 'Comparador':
 
     curva_comparador_disponible = (
         isinstance(df_curva_pricing_actual, pd.DataFrame)
@@ -2775,119 +2759,61 @@ with tab5:
             unsafe_allow_html=True,
         )
 
+        # Ambos comparadores calculan A/B/C con el mismo motor mensual.
+        resultado_indexados = calcular_escenarios_pricing_mensuales(
+            st.session_state.df_sheets,
+            consumos_fuente_comparador,
+            atr_calculo_comparador,
+            formula_pricing,
+            escenarios_omie_comparador,
+            ssaa_forward_pricing,
+            fnee_pricing,
+            srad_pricing,
+        )
+        detalle_indexados = resultado_indexados.attrs['detalle']
         escenarios = []
-        
-        #print(f'margen_simul: {margen_simul}')
-
-        # El comparador usa el motor de Pricing para ambos orígenes. La
-        # metodología histórica/regresión se conserva íntegra en Principal.
-        for etiqueta, omie_value in zip(["A", "B", "C"], lista_simul):
-            if True:
-                apuntamientos_escenario = (
-                    tabla_apuntamientos_spot_3p
-                    if atr_calculo_comparador == '2.0'
-                    else tabla_apuntamientos
-                )
-                config_escenario = configuracion_fijos_pricing[
-                    atr_calculo_comparador
+        for nombre_escenario, omie_escenario in escenarios_omie_comparador.items():
+            detalle_periodo = (
+                detalle_indexados.loc[
+                    detalle_indexados['Oferta'].eq(nombre_escenario)
                 ]
-                spot_escenario = (
-                    apuntamientos_escenario[periodos_comparador_pricing]
-                    * omie_value
+                .groupby('Periodo')
+                .agg(
+                    consumo=('Consumo (kWh)', 'sum'),
+                    coste=('Coste (€)', 'sum'),
                 )
-                perdidas_escenario = df_spot_periodos.groupby(
-                    ['mes_pricing', config_escenario['col_periodo']]
-                )[f'perd_{atr_calculo_comparador}'].mean()
-                horas_escenario = df_spot_periodos.groupby(
-                    ['mes_pricing', config_escenario['col_periodo']]
-                ).size()
-                filas_formula_escenario = []
-                for mes_escenario in spot_escenario.index:
-                    periodo_mes_escenario = pd.Period(mes_escenario, freq='M')
-                    for periodo_escenario in periodos_comparador_pricing:
-                        clave_escenario = (
-                            periodo_mes_escenario, periodo_escenario
-                        )
-                        if clave_escenario not in perdidas_escenario.index:
-                            continue
-                        fila_formula_escenario = {
-                            'Mes': mes_escenario,
-                            'Periodo': periodo_escenario,
-                            'Horas': horas_escenario.loc[clave_escenario],
-                            'spot': spot_escenario.loc[
-                                mes_escenario, periodo_escenario
-                            ],
-                            'ssaa': config_escenario['ssaa'].loc[
-                                mes_escenario, periodo_escenario
-                            ] + srad_pricing,
-                            'osom': osom_12m_pricing,
-                            'fnee': fnee_pricing,
-                            **{f'ppcc_{atr}': 0.0 for atr in ['2.0', '3.0', '6.1', '6.2']},
-                            **{f'perd_{atr}': 0.0 for atr in ['2.0', '3.0', '6.1', '6.2']},
-                            **{f'pyc_{atr}': 0.0 for atr in ['2.0', '3.0', '6.1', '6.2']},
-                        }
-                        fila_formula_escenario[
-                            f'ppcc_{atr_calculo_comparador}'
-                        ] = tabla_ppc_pricing.loc[
-                            config_escenario['etiqueta'], periodo_escenario
-                        ]
-                        fila_formula_escenario[
-                            f'perd_{atr_calculo_comparador}'
-                        ] = perdidas_escenario.loc[clave_escenario]
-                        fila_formula_escenario[
-                            f'pyc_{atr_calculo_comparador}'
-                        ] = tabla_pyc_pricing.loc[
-                            config_escenario['etiqueta'], periodo_escenario
-                        ]
-                        filas_formula_escenario.append(fila_formula_escenario)
-                df_formula_escenario = calcular_precios_atr_formula(
-                    pd.DataFrame(filas_formula_escenario), formula_pricing
+                .reindex([f'P{i}' for i in range(1, 7)], fill_value=0.0)
+            )
+            detalle_periodo['precio'] = (
+                detalle_periodo['coste']
+                / detalle_periodo['consumo'].where(
+                    detalle_periodo['consumo'].ne(0)
                 )
-                tabla_escenario_pricing = df_formula_escenario.pivot(
-                    index='Mes',
-                    columns='Periodo',
-                    values=f'precio_{atr_calculo_comparador}',
-                ).div(1000)
-                filas_escenario = []
-                consumos_por_mes = consumos_fuente_comparador.set_index('mes')
-                for mes_escenario in tabla_escenario_pricing.index:
-                    numero_mes = pd.Period(mes_escenario, freq='M').month
-                    consumo_mes = consumos_por_mes.loc[numero_mes]
-                    for periodo_escenario in periodos_comparador_pricing:
-                        filas_escenario.append({
-                            'Periodo': periodo_escenario,
-                            'Consumo': float(consumo_mes[periodo_escenario]),
-                            'Precio': float(tabla_escenario_pricing.loc[
-                                mes_escenario, periodo_escenario
-                            ]),
-                        })
-                detalle_escenario = pd.DataFrame(filas_escenario)
-                resumen_escenario = detalle_escenario.assign(
-                    Coste=lambda x: x['Consumo'] * x['Precio']
-                ).groupby('Periodo').agg(
-                    **{'Consumo (kWh)': ('Consumo', 'sum'), 'Coste (€)': ('Coste', 'sum')}
-                )
-                resumen_escenario['Precio medio (€/kWh)'] = (
-                    resumen_escenario['Coste (€)']
-                    / resumen_escenario['Consumo (kWh)'].where(
-                        resumen_escenario['Consumo (kWh)'].ne(0)
-                    )
-                )
-                df_resumen_simul = resumen_escenario.T.reindex(
-                    columns=[f'P{i}' for i in range(1, 7)], fill_value=0.0
-                )
-                simul_curva = (
-                    detalle_escenario['Consumo'].mul(detalle_escenario['Precio']).sum()
-                    / detalle_escenario['Consumo'].sum()
-                    * 100
-                )
-
+            )
+            resumen_escenario = pd.DataFrame(
+                [
+                    detalle_periodo['consumo'],
+                    detalle_periodo['coste'],
+                    detalle_periodo['precio'],
+                ],
+                index=[
+                    'Consumo (kWh)', 'Coste (€)',
+                    'Precio medio (€/kWh)',
+                ],
+            )
+            consumo_escenario = detalle_periodo['consumo'].sum()
+            coste_escenario = detalle_periodo['coste'].sum()
             escenarios.append({
-                "label": f"Indexado simulado {etiqueta} ({omie_value:.1f} €/MWh)",
-                "simul_curva": simul_curva,
-                "df_resumen": df_resumen_simul
+                'label': (
+                    f'Indexado simulado {nombre_escenario.removeprefix("Indexado ")} '
+                    f'({omie_escenario:.1f} €/MWh)'
+                ),
+                'simul_curva': (
+                    coste_escenario / consumo_escenario * 100
+                    if consumo_escenario else 0.0
+                ),
+                'df_resumen': resumen_escenario,
             })
-
         # Oferta PP Pass Pool: OMIE mensual rolling por apuntamiento mensual
         # y periodo, más el término B de la oferta (en €/kWh).
         oferta_pass_pool = obtener_oferta_pass_pool('pp-pass-pool-001')
@@ -3282,7 +3208,7 @@ with tab5:
 # =======================================================================================================================================================================
 # SECCIÓN COBERTURA TRIMESTRAL
 # =======================================================================================================================================================================
-with tab6:
+if seccion_simulindex == 'Cobertura trimestral':
 
     df_curva_trim = st.session_state.get('df_curva_sheets')
     if not isinstance(df_curva_trim, pd.DataFrame) or df_curva_trim.empty:
@@ -3835,7 +3761,7 @@ with tab6:
         }
 
 
-with tab9:
+if seccion_simulindex == 'Informes':
     st.subheader("Informes", divider="rainbow")
     datos_informe_trimestral = st.session_state.get(
         "simulindex_informe_trimestral_datos"

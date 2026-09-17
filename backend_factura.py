@@ -2967,6 +2967,7 @@ def _extraer_fecha_factura_visalia(texto: str) -> str | None:
 def _extraer_fecha_vencimiento_contrato(texto: str) -> str | None:
     """Extrae la fecha de vencimiento del contrato, no el plazo de pago."""
     fecha = buscar_texto(texto, [
+        r"Fecha\s+de\s+renovaci[oó]n\s+anual\s+autom[aá]tica\s*:\s*(\d{1,2}/\d{1,2}/\d{4})",
         r"Vto\.?\s+del\s+contrato\s*[:.]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
         r"Fecha\s+(?:de\s+)?vencimiento\s+del\s+contrato\s*[:.]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
         r"Vencimiento\s+(?:del\s+)?contrato\s*[:.]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
@@ -3026,6 +3027,7 @@ def _extraer_fecha_vencimiento_contrato(texto: str) -> str | None:
 def _extraer_numero_contrato(texto: str) -> str | None:
     """Extrae el contrato comercial sin confundirlo con el contrato ATR."""
     valor = buscar_texto(texto, [
+        r"N[uú]mero\s+de\s+contrato\s+con\s+Bonpreu\s+Esclat\s+Energ[ií]a\s*:\s*(\d+)",
         r"N[uú]mero\s+(?:de\s+)?contrato\s+FORMA\s+(?:DE\s+)?PAGO[^\n]*\n\s*([A-Z0-9][A-Z0-9./_-]{2,})",
         r"(?:N[.\s]*[º°o]\.?|N[uú]mero)\s+(?:de\s+)?contrato\s*[:.]\s*([A-Z0-9][A-Z0-9./_-]{2,})",
         r"C[oó]digo\s+(?:de\s+)?contrato\s*[:.]\s*([A-Z0-9][A-Z0-9./_-]{2,})",
@@ -7375,6 +7377,124 @@ def _endesa(texto: str) -> FacturaLeida:
     return factura
 
 
+def _bonpreu(texto: str) -> FacturaLeida:
+    """Lee el desglose narrativo de Bonpreu Esclat Energía."""
+    inicio, fin = buscar_periodo(texto, [
+        r"Per[ií]odo\s+de\s+facturaci[oó]n:\s*del\s+"
+        r"(\d{2}/\d{2}/\d{4})\s+al\s+(\d{2}/\d{2}/\d{4})",
+    ])
+    potencias = []
+    contratadas = re.search(
+        r"Potencia\s+contratada\s*\(kW\):\s*"
+        r"([\d.,]+)\s*kW\s*[-–]\s*([\d.,]+)\s*kW",
+        texto, re.IGNORECASE,
+    )
+    if contratadas:
+        potencias = [
+            PotenciaContratadaPeriodo(f"P{i}", numero_es(valor))
+            for i, valor in enumerate(contratadas.groups(), 1)
+        ]
+
+    potencia_periodos = []
+    bloque_potencia = re.search(
+        r"^Por\s+la\s+potencia\s+contratada\s*$([\s\S]*?)"
+        r"^Por\s+la\s+electricidad\s+que\s+has\s+consumido\s*$",
+        texto, re.IGNORECASE | re.MULTILINE,
+    )
+    if bloque_potencia:
+        for periodo, kw, dias, precio in re.findall(
+            r"Per[ií]odo\s+([12])\s*\n"
+            r"La\s+potencia\s+que\s+tienes\s+contratada\s+([\d.,]+)\s*kW\s*\n"
+            r"Los\s+d[ií]as\s+que\s+comprende\s+esta\s+factura\s+(\d+)\s+d[ií]as\s*\n"
+            r"El\s+precio\s+del\s+peaje\s+de\s+acceso\s+por\s+d[ií]a\s+"
+            r"([\d.,]+)\s*€/kW/d[ií]a",
+            bloque_potencia.group(1), re.IGNORECASE,
+        ):
+            potencia_kw = numero_es(kw)
+            precio_diario = numero_es(precio)
+            dias_int = int(dias)
+            coste = round(potencia_kw * dias_int * precio_diario, 2)
+            potencia_periodos.append(PotenciaFacturadaPeriodo(
+                periodo=f"P{periodo}", potencia_kw=potencia_kw,
+                dias=dias_int, precio_facturado_eur_kw_dia=precio_diario,
+                coste_facturado_eur=coste, coste_calculado_eur=coste,
+            ))
+
+    energia_periodos = []
+    bloque_energia = re.search(
+        r"^Por\s+la\s+electricidad\s+que\s+has\s+consumido\s*$"
+        r"([\s\S]*?)^Subtotal\s+1:",
+        texto, re.IGNORECASE | re.MULTILINE,
+    )
+    if bloque_energia:
+        for periodo, precio, consumo in re.findall(
+            r"Per[ií]odo\s+([123])\s*\n"
+            r"El\s+precio\s+que\s+tiene\s+la\s+electricidad\s+"
+            r"([\d.,]+)\s*€/kWh\s*\n"
+            r"Lo\s+que\s+has\s+consumido\s+este\s+mes\s+"
+            r"([\d.,]+)\s*kWh",
+            bloque_energia.group(1), re.IGNORECASE,
+        ):
+            kwh = consumo_es(consumo)
+            precio_kwh = numero_es(precio)
+            coste = round(kwh * precio_kwh, 2)
+            energia_periodos.append(EnergiaPeriodo(
+                f"P{periodo}", kwh, precio_kwh, coste, coste,
+            ))
+
+    factura = FacturaLeida(
+        formato="bonpreu", comercializadora="Bonpreu Esclat Energía",
+        numero_factura=buscar_texto(texto, [
+            r"N[uú]mero\s+de\s+la\s+factura:\s*(F\d+)",
+        ]),
+        cups=buscar_texto(texto, [
+            r"punto\s+de\s+suministro\s*\(CUPS\):[^\n]*\n"
+            r"[^\n]{0,80}?(ES\d{16}[A-Z0-9]{2,4})",
+        ]),
+        atr=extraer_atr(texto),
+        fecha_factura=buscar_texto(texto, [
+            r"Fecha\s+de\s+emisi[oó]n:\s*(\d{2}/\d{2}/\d{4})",
+        ]),
+        periodo_inicio=inicio, periodo_fin=fin,
+        potencia=buscar_numero(texto, [
+            r"^Lo\s+que\s+te\s+cuesta\s+este\s+mes\s+la\s+potencia\s+contratada\s*\(Total\s*€\)\s*([\d.,]+)\s*€",
+        ]),
+        energia=buscar_numero(texto, [
+            r"^Lo\s+que\s+te\s+cuesta\s+este\s+mes\s+la\s+energ[ií]a\s+consumida\s*\(Total\s*€\)\s*([\d.,]+)\s*€",
+        ]),
+        iee=buscar_numero(texto, [
+            r"^El\s+impuesto\s+por\s+la\s+electricidad\s+que\s+pagas\s+al\s+Estado\s+([\d.,]+)\s*€",
+        ]),
+        iva=buscar_numero(texto, [r"^IVA\s+\d+%\s+([\d.,]+)\s*€\s*$"]),
+        total=buscar_numero(texto, [
+            r"^Importe\s+total\s+de\s+la\s+factura\s+([\d.,]+)\s*€",
+            r"^Importe\s+total\s+de\s+la\s+factura\s*\n\s*([\d.,]+)\s*€",
+        ]),
+        energia_periodos=energia_periodos,
+        potencias_contratadas=potencias,
+        potencia_periodos=potencia_periodos,
+        otros=[
+            OtroConcepto("Alquiler del contador", buscar_numero(texto, [
+                r"^Alquiler\s+del\s+contador\s+([\d.,]+)\s*€",
+            ])),
+            OtroConcepto("Repercusión bono social", buscar_numero(texto, [
+                r"^Repercusi[oó]n\s+bono\s+social\s+([\d.,]+)\s*€",
+            ])),
+        ],
+    )
+    base_iva = buscar_texto(texto, [
+        r"^Subtotal\s+2:\s*Base\s+Imponible\s+del\s+IVA\s+([\d.,]+)\s*€",
+    ])
+    tipo_iva = buscar_texto(texto, [
+        r"^IVA\s+(\d+(?:[.,]\d+)?)%\s+[\d.,]+\s*€\s*$",
+    ])
+    if base_iva and tipo_iva:
+        factura.verificacion_iva = _crear_verificacion_iva(
+            factura, base_iva, tipo_iva, str(factura.iva),
+        )
+    return _completar_advertencias(factura)
+
+
 def _iberdrola(texto: str) -> FacturaLeida:
     """Extrae el formato general de Iberdrola Clientes."""
     factura = _generico(texto)
@@ -7384,6 +7504,11 @@ def _iberdrola(texto: str) -> FacturaLeida:
 
 
 EXTRACTORES: list[tuple[str, Callable[[str], FacturaLeida], Callable[[str], bool]]] = [
+    (
+        "bonpreu", _bonpreu,
+        lambda t: "bon preu, sau" in t.lower()
+        and "bonpreuesclat" in t.lower(),
+    ),
     (
         "endesa",
         _endesa,
