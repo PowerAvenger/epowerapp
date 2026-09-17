@@ -13,11 +13,13 @@ import streamlit as st
 from backend_comun import aplicar_estilo
 from backend_curvadecarga import (
     colores_periodo,
+    clave_cache_consumo_datadis,
     dataframe_como_archivo_curva,
     detectar_hojas_curva_excel,
     obtener_consumo_datadis_cacheado,
     obtener_datos_contador,
     obtener_suministros_datadis,
+    guardar_cache_datadis_local,
 )
 from servicio_curva import (
     aviso_resolucion_curva,
@@ -76,21 +78,94 @@ def ultimos_doce_meses_completos(fecha_referencia=None):
     return inicio.date(), fin.date()
 
 
+def anio_anterior_y_actual(fecha_referencia=None):
+    """Periodo desde enero del año anterior hasta la fecha indicada."""
+    hoy = pd.Timestamp(
+        fecha_referencia if fecha_referencia is not None else pd.Timestamp.today()
+    ).date()
+    return hoy.replace(year=hoy.year - 1, month=1, day=1), hoy
+
+
+def excluir_periodo_automatico(clave_activa, clave_otra):
+    """Hace excluyentes los dos periodos automáticos de un origen."""
+    if st.session_state.get(clave_activa):
+        st.session_state[clave_otra] = False
+
+
 def _guardar_credenciales_axon(clave_usuario, clave_password):
     st.session_state.axon_usuario_sesion = st.session_state.get(clave_usuario, "")
     st.session_state.axon_password_sesion = st.session_state.get(clave_password, "")
+    st.session_state[f"{clave_usuario}__compartido"] = (
+        st.session_state.axon_usuario_sesion
+    )
+    st.session_state[f"{clave_password}__compartido"] = (
+        st.session_state.axon_password_sesion
+    )
+
+
+def _guardar_cups_axon(clave_cups):
+    st.session_state.axon_cups_sesion = st.session_state.get(clave_cups, "")
+    st.session_state[f"{clave_cups}__compartido"] = (
+        st.session_state.axon_cups_sesion
+    )
+
+
+def _preparar_credenciales_datadis(clave_usuario, clave_password):
+    for clave_widget, clave_sesion in (
+        (clave_usuario, "datadis_usuario_sesion"),
+        (clave_password, "datadis_password_sesion"),
+    ):
+        if clave_sesion not in st.session_state:
+            st.session_state[clave_sesion] = st.session_state.get(clave_widget, "")
+        valor_sesion = st.session_state[clave_sesion]
+        clave_compartida = f"{clave_widget}__compartido"
+        if (
+            clave_widget not in st.session_state
+            or st.session_state.get(clave_compartida) != valor_sesion
+        ):
+            st.session_state[clave_widget] = valor_sesion
+            st.session_state[clave_compartida] = valor_sesion
+
+
+def _guardar_credenciales_datadis(clave_usuario, clave_password):
+    for clave_widget, clave_sesion in (
+        (clave_usuario, "datadis_usuario_sesion"),
+        (clave_password, "datadis_password_sesion"),
+    ):
+        valor = st.session_state.get(clave_widget, "")
+        st.session_state[clave_sesion] = valor
+        st.session_state[f"{clave_widget}__compartido"] = valor
 
 
 def render_campos_axon(clave, en_formulario=False):
     """Renderiza exactamente la misma configuración de Axon en cualquier página."""
     clave_usuario = f"{clave}_axon_usuario"
     clave_password = f"{clave}_axon_password"
-    st.session_state.setdefault(
-        clave_usuario, st.session_state.get("axon_usuario_sesion", "")
-    )
-    st.session_state.setdefault(
-        clave_password, st.session_state.get("axon_password_sesion", "")
-    )
+    clave_cups = f"{clave}_axon_cups"
+    usuario_compartido = st.session_state.get("axon_usuario_sesion", "")
+    password_compartido = st.session_state.get("axon_password_sesion", "")
+    clave_usuario_compartido = f"{clave_usuario}__compartido"
+    clave_password_compartido = f"{clave_password}__compartido"
+    if (
+        clave_usuario not in st.session_state
+        or st.session_state.get(clave_usuario_compartido) != usuario_compartido
+    ):
+        st.session_state[clave_usuario] = usuario_compartido
+        st.session_state[clave_usuario_compartido] = usuario_compartido
+    if (
+        clave_password not in st.session_state
+        or st.session_state.get(clave_password_compartido) != password_compartido
+    ):
+        st.session_state[clave_password] = password_compartido
+        st.session_state[clave_password_compartido] = password_compartido
+    cups_compartido = st.session_state.get("axon_cups_sesion", "")
+    clave_cups_compartido = f"{clave_cups}__compartido"
+    if (
+        clave_cups not in st.session_state
+        or st.session_state.get(clave_cups_compartido) != cups_compartido
+    ):
+        st.session_state[clave_cups] = cups_compartido
+        st.session_state[clave_cups_compartido] = cups_compartido
     callback = {} if en_formulario else {
         "on_change": _guardar_credenciales_axon,
         "args": (clave_usuario, clave_password),
@@ -99,7 +174,15 @@ def render_campos_axon(clave, en_formulario=False):
     password = st.text_input(
         "Contraseña Axon", type="password", key=clave_password, **callback
     )
-    cups = st.text_input("CUPS", key=f"{clave}_axon_cups")
+    cups = st.text_input(
+        "CUPS", key=clave_cups,
+        **({} if en_formulario else {
+            "on_change": _guardar_cups_axon,
+            "args": (clave_cups,),
+        }),
+    )
+    if en_formulario:
+        _guardar_cups_axon(clave_cups)
     cups_base = re.sub(r"[^A-Z0-9]", "", str(cups or "").upper())[:20]
     if cups:
         st.caption(f"CUPS base enviado a Axon: `{cups_base}`")
@@ -111,6 +194,16 @@ def render_campos_axon(clave, en_formulario=False):
         "Seleccionar automáticamente los últimos 12 meses completos",
         key=clave_automatico,
         help="Excluye el mes actual.",
+        on_change=excluir_periodo_automatico,
+        args=(clave_automatico, f"{clave}_axon_dos_anios"),
+    )
+    clave_dos_anios = f"{clave}_axon_dos_anios"
+    dos_anios = st.checkbox(
+        "Seleccionar el año anterior completo y el año actual",
+        key=clave_dos_anios,
+        help="Desde el 1 de enero del año anterior hasta hoy.",
+        on_change=excluir_periodo_automatico,
+        args=(clave_dos_anios, clave_automatico),
     )
     clave_rango = f"{clave}_axon_rango"
     st.session_state.setdefault(
@@ -118,12 +211,14 @@ def render_campos_axon(clave, en_formulario=False):
     )
     if automatico:
         st.session_state[clave_rango] = (inicio_12m, fin_12m)
+    elif dos_anios:
+        st.session_state[clave_rango] = anio_anterior_y_actual(hoy)
     rango = st.date_input(
         "Periodo de la curva",
         max_value=hoy,
         format="DD/MM/YYYY",
         key=clave_rango,
-        disabled=automatico,
+        disabled=automatico or dos_anios,
     )
     tipo = st.selectbox(
         "Tipo de curva",
@@ -245,7 +340,7 @@ def render_aviso_resolucion_curva(frecuencia, contenedor=st):
     getattr(contenedor, nivel)(mensaje)
 
 
-def render_resumen_grafico_curva(df_curva, clave="curva_comun", contenedor=st):
+def render_resumen_grafico_curva(df_curva, clave="curva_comun", contenedor=None):
     """Renderiza el resumen visual común de una curva normalizada."""
     if not isinstance(df_curva, pd.DataFrame) or df_curva.empty:
         return
@@ -335,7 +430,7 @@ def render_resumen_grafico_curva(df_curva, clave="curva_comun", contenedor=st):
     )
     figuras_inferiores.append((fig_calor, "calor"))
 
-    with contenedor:
+    with (contenedor if contenedor is not None else st.container()):
         izquierda, derecha = st.columns(2, gap="small")
         izquierda.plotly_chart(
             estilizar(fig_diario), use_container_width=True,
@@ -355,9 +450,11 @@ def render_resumen_grafico_curva(df_curva, clave="curva_comun", contenedor=st):
 
 def render_origen_curva(
     contenedor, acciones, clave="curva_comun", titulo_compacto=False,
-    resumen=None, mostrar_resumen=True,
+    resumen=None, mostrar_resumen=True, atr_fijo=None, permitir_qh=True,
 ):
     """Renderiza los tres orígenes y publica una sola curva para toda la app."""
+    if atr_fijo is not None and atr_fijo not in OPCIONES_ATR_CURVA:
+        raise ValueError(f"Peaje de acceso no válido: {atr_fijo}")
     with contenedor:
         if titulo_compacto:
             st.markdown("#### Origen de curva")
@@ -370,10 +467,16 @@ def render_origen_curva(
                 f" · {rango[0]:%d/%m/%Y}–{rango[1]:%d/%m/%Y}"
                 if rango and rango[0] is not None and rango[1] is not None else ""
             )
-            st.success(
+            mensaje_curva = (
                 f"Curva activa: {actual.get('frecuencia', '—')} · "
                 f"ATR {actual.get('atr', '—')}{texto_rango}"
             )
+            if atr_fijo is not None and actual.get("atr") != atr_fijo:
+                st.warning(
+                    f"{mensaje_curva}. Este módulo requiere ATR {atr_fijo}."
+                )
+            else:
+                st.success(mensaje_curva)
             render_aviso_resolucion_curva(actual.get("frecuencia"), st)
             zonas_actuales = actual.get("zonas_compatibles") or []
             if len(zonas_actuales) == 1:
@@ -418,7 +521,38 @@ def render_origen_curva(
         entrada_lista = False
         trae_periodos = False
         consultar_datadis = False
-        with st.form(f"{clave}_form_{origen}"):
+        if origen == "Datadis":
+            clave_usuario_datadis = f"{clave}_datadis_usuario"
+            clave_password_datadis = f"{clave}_datadis_password"
+            _preparar_credenciales_datadis(
+                clave_usuario_datadis, clave_password_datadis
+            )
+            usuario = st.text_input(
+                "Usuario Datadis", key=clave_usuario_datadis,
+                on_change=_guardar_credenciales_datadis,
+                args=(clave_usuario_datadis, clave_password_datadis),
+            )
+            password = st.text_input(
+                "Contraseña Datadis", type="password",
+                key=clave_password_datadis,
+                on_change=_guardar_credenciales_datadis,
+                args=(clave_usuario_datadis, clave_password_datadis),
+            )
+            ultimos_12m_datadis = st.checkbox(
+                "Seleccionar automáticamente los últimos 12 meses completos",
+                key=f"{clave}_datadis_12m_completos",
+                help="Termina el último día del mes anterior al actual.",
+            )
+        # Axon necesita rerun inmediato para que el selector de 12 meses pueda
+        # deshabilitar el periodo manual. Los widgets dentro de st.form no
+        # notifican cambios hasta enviar el formulario.
+        formulario_reactivo = origen == "Axon"
+        contexto_entrada = (
+            st.container()
+            if formulario_reactivo
+            else st.form(f"{clave}_form_{origen}")
+        )
+        with contexto_entrada:
             if origen == "Archivo CSV/Excel":
                 campos_archivo = render_campos_archivo_curva(clave)
                 archivos = campos_archivo["archivos"]
@@ -433,7 +567,9 @@ def render_origen_curva(
                     )
 
             elif origen == "Axon":
-                campos_axon = render_campos_axon(clave, en_formulario=True)
+                campos_axon = render_campos_axon(
+                    clave, en_formulario=not formulario_reactivo
+                )
                 usuario = campos_axon["usuario"]
                 password = campos_axon["password"]
                 cups = campos_axon["cups"]
@@ -443,13 +579,6 @@ def render_origen_curva(
                 trae_periodos = True
 
             else:
-                usuario = st.text_input(
-                    "Usuario Datadis", key=f"{clave}_datadis_usuario"
-                )
-                password = st.text_input(
-                    "Contraseña Datadis", type="password",
-                    key=f"{clave}_datadis_password",
-                )
                 acceso = st.radio(
                     "Acceso", ("Titular", "Autorizado"), horizontal=True,
                     key=f"{clave}_datadis_acceso",
@@ -467,16 +596,29 @@ def render_origen_curva(
                     )
                     suministro = suministros.loc[indice].to_dict()
                 hoy = pd.Timestamp.today().date()
+                clave_rango_datadis = f"{clave}_datadis_rango"
+                if ultimos_12m_datadis:
+                    st.session_state[clave_rango_datadis] = (
+                        ultimos_doce_meses_completos(hoy)
+                    )
+                else:
+                    st.session_state.setdefault(
+                        clave_rango_datadis,
+                        (hoy - timedelta(days=365), hoy - timedelta(days=1)),
+                    )
                 rango = st.date_input(
                     "Periodo de la curva",
-                    value=(hoy - timedelta(days=365), hoy - timedelta(days=1)),
                     max_value=hoy,
                     format="DD/MM/YYYY",
-                    key=f"{clave}_datadis_rango",
+                    key=clave_rango_datadis,
+                    disabled=ultimos_12m_datadis,
                 )
+                clave_qh_datadis = f"{clave}_datadis_qh"
+                if not permitir_qh:
+                    st.session_state[clave_qh_datadis] = False
                 preferir_qh = st.checkbox(
                     "Intentar curva cuarto horaria",
-                    key=f"{clave}_datadis_qh",
+                    key=clave_qh_datadis, disabled=not permitir_qh,
                 )
                 entrada_lista = bool(
                     usuario and password and suministro is not None
@@ -488,10 +630,17 @@ def render_origen_curva(
             # Todos los orígenes mantienen el mismo orden: primero sus datos,
             # después ATR y, solo si hace falta, la zona para calcular periodos.
             clave_atr = f"{clave}_atr"
-            preparar_selector_atr_curva(clave_atr)
-            atr = st.selectbox(
-                "Peaje de acceso", OPCIONES_ATR_CURVA, key=clave_atr
-            )
+            if atr_fijo is None:
+                preparar_selector_atr_curva(clave_atr)
+                atr = st.selectbox(
+                    "Peaje de acceso", OPCIONES_ATR_CURVA, key=clave_atr
+                )
+            else:
+                st.session_state[clave_atr] = atr_fijo
+                atr = st.selectbox(
+                    "Peaje de acceso", (atr_fijo,), key=clave_atr,
+                    disabled=True,
+                )
             if not trae_periodos:
                 zona = st.selectbox(
                     "Zona de periodos horarios",
@@ -510,14 +659,32 @@ def render_origen_curva(
                 if origen in {"Axon", "Datadis"}
                 else "Normalizar curva de carga"
             )
-            obtener = st.form_submit_button(
-                etiqueta,
-                type="primary",
-                use_container_width=True,
+            obtener = (
+                st.button(
+                    etiqueta,
+                    type="primary",
+                    use_container_width=True,
+                    key=f"{clave}_obtener_axon",
+                )
+                if formulario_reactivo
+                else st.form_submit_button(
+                    etiqueta,
+                    type="primary",
+                    use_container_width=True,
+                )
             )
 
     with acciones:
         st.markdown("#### Acciones de curva")
+        if origen == "Datadis" and entrada_lista:
+            clave_cache = clave_cache_consumo_datadis(
+                usuario, nif, suministro, rango[0], rango[1], preferir_qh,
+            )
+            resultado_guardado = st.session_state.get("datadis_curvas_cache", {}).get(
+                clave_cache
+            )
+            if resultado_guardado is not None:
+                guardar_cache_datadis_local(clave_cache, password, resultado_guardado)
         credenciales_datadis_listas = bool(
             origen == "Datadis"
             and usuario and password
@@ -531,7 +698,7 @@ def render_origen_curva(
                 "Completa los datos requeridos antes de obtener y normalizar la curva."
             )
             obtener = False
-        if consultar_datadis or obtener:
+        if (consultar_datadis or obtener) and atr_fijo is None:
             guardar_selector_atr_curva(clave_atr)
         if origen == "Axon" and obtener:
             _guardar_credenciales_axon(
@@ -580,11 +747,21 @@ def render_origen_curva(
                     if aviso:
                         st.warning("Datadis no ha proporcionado resolución QH; se usa H.")
                     elif reutilizado:
-                        st.info("Se reutiliza la descarga Datadis de esta sesión.")
+                        st.info("Se reutiliza la curva Datadis guardada.")
                 resultado = normalizar_fuentes_curva(
                     archivo_normalizar, atr=atr, zona_periodos=zona,
                     excel_sheet=hoja_excel,
                 )
+                if atr_fijo == "2.0" and resultado.periodos_en_origen:
+                    periodos = pd.to_numeric(
+                        resultado.df_norm["periodo"].astype("string")
+                        .str.extract(r"P?(\d+)", expand=False),
+                        errors="coerce",
+                    )
+                    if periodos.gt(3).any():
+                        raise ValueError(
+                            "La curva contiene periodos ajenos a la tarifa 2.0."
+                        )
                 _publicar(resultado, st)
             except Exception as exc:
                 st.error(f"No se pudo obtener y normalizar la curva: {exc}")

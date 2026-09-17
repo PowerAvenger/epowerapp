@@ -36,6 +36,7 @@ from backend_previsiones import (
     guardar_prevision_omie_en_sesion,
     obtener_prevision_omie_anual,
 )
+from backend_github_actions import lanzar_workflows_mercado
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
@@ -599,7 +600,36 @@ st.sidebar.header('⚡ Escala CV: Mercados OMIE ⚡')
 st.sidebar.markdown(f':blue-background[Sección dedicada a **Roberto Cavero García**]')
 ultima_fecha_spot = pd.Timestamp(datos_spot_general['fecha'].max())
 st.sidebar.info(f'Última fecha SPOT disponible: {ultima_fecha_spot.strftime("%d.%m.%Y")}')
-if st.sidebar.button('Actualizar datos', use_container_width=True):
+if (
+    st.session_state.get('es_admin', False)
+    and st.sidebar.button(
+        'Ejecutar actualización SPOT y SSAA', use_container_width=True
+    )
+):
+    with st.spinner('Solicitando las actualizaciones a GitHub...'):
+        try:
+            resultados_workflows = lanzar_workflows_mercado(
+                st.secrets.get('GITHUB_TOKEN_IDS_REE')
+            )
+        except ValueError as exc:
+            st.sidebar.error(str(exc))
+        else:
+            for resultado in resultados_workflows:
+                if resultado.lanzado:
+                    st.sidebar.success(f'{resultado.nombre}: ejecución solicitada.')
+                else:
+                    st.sidebar.error(f'{resultado.nombre}: {resultado.detalle}')
+                st.sidebar.link_button(
+                    f'Ver Action {resultado.nombre}',
+                    resultado.url,
+                    use_container_width=True,
+                )
+            if all(resultado.lanzado for resultado in resultados_workflows):
+                st.sidebar.info(
+                    'Espera a que ambas Actions terminen antes de recargar Drive.'
+                )
+
+if st.sidebar.button('Recargar datos desde Drive', use_container_width=True):
     with st.spinner('Actualizando SPOT y SSAA desde Drive...'):
         actualizar_datos_mercado()
     st.rerun()

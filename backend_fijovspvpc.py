@@ -268,6 +268,114 @@ def obtener_tabla_filtrada(df_datos_horarios_combo, fecha_ini, fecha_fin, consum
     return df_datos_horarios_combo_filtrado_consumo, pt_horario_filtrado, media_precio_perfilado,coste_pvpc_perfilado
 
 
+def obtener_tabla_curva_real(df_pvpc, df_curva_h, fecha_ini, fecha_fin):
+    """Cruza el consumo horario real con el PVPC sin alterar los kWh medidos."""
+    inicio = pd.Timestamp(fecha_ini).normalize()
+    fin = pd.Timestamp(fecha_fin).normalize()
+    precios = df_pvpc.copy()
+    precios["fecha"] = pd.to_datetime(precios["fecha"], errors="coerce")
+    precios = precios[precios["fecha"].between(inicio, fin)].copy()
+    precios["datetime"] = pd.to_datetime(precios["datetime"], errors="coerce")
+    precios["pvpc"] = pd.to_numeric(precios["pvpc"], errors="coerce")
+    if (
+        precios.empty or precios[["datetime", "pvpc"]].isna().any().any()
+        or not np.isfinite(precios["pvpc"]).all()
+    ):
+        raise ValueError("No hay precios PVPC horarios completos en el periodo.")
+
+    columnas_curva = ["fecha_hora", "consumo_neto_kWh"]
+    if "periodo" in df_curva_h.columns:
+        columnas_curva.append("periodo")
+    curva = df_curva_h[columnas_curva].copy()
+    curva["fecha_hora"] = pd.to_datetime(curva["fecha_hora"], errors="coerce")
+    curva["consumo_neto_kWh"] = pd.to_numeric(
+        curva["consumo_neto_kWh"], errors="coerce"
+    )
+    curva = curva[curva["fecha_hora"].dt.normalize().between(inicio, fin)]
+    if (
+        curva.empty or curva[["fecha_hora", "consumo_neto_kWh"]].isna().any().any()
+        or not np.isfinite(curva["consumo_neto_kWh"]).all()
+    ):
+        raise ValueError("La curva no contiene consumos horarios válidos en el periodo.")
+    if (curva["consumo_neto_kWh"] < 0).any():
+        raise ValueError("La curva contiene consumos negativos.")
+    agregacion_curva = {"consumo_neto_kWh": "sum"}
+    if "periodo" in curva.columns:
+        agregacion_curva["periodo"] = "first"
+    curva = curva.groupby("fecha_hora", as_index=False).agg(agregacion_curva)
+
+    horas_pvpc = set(precios["datetime"])
+    horas_curva = set(curva["fecha_hora"])
+    if horas_pvpc != horas_curva:
+        raise ValueError(
+            "La curva y el PVPC no cubren las mismas horas del periodo "
+            f"({len(horas_pvpc - horas_curva)} sin consumo y "
+            f"{len(horas_curva - horas_pvpc)} sin precio)."
+        )
+
+    datos = precios.merge(
+        curva, left_on="datetime", right_on="fecha_hora",
+        how="left", validate="many_to_one",
+    )
+    if "periodo" in datos.columns:
+        datos["dh_3p"] = datos["periodo"].combine_first(datos["dh_3p"])
+    # En el cambio de hora de otoño el PVPC puede tener dos precios para una
+    # misma hora local. La curva horaria común agrupa esa hora: repartimos sus
+    # kWh entre ambos precios para conservar exactamente el consumo total.
+    repeticiones = datos.groupby("datetime")["datetime"].transform("size")
+    datos["consumo"] = datos["consumo_neto_kWh"] / repeticiones
+    datos["precio"] = datos["pvpc"] / 1000  # €/kWh
+    datos["coste"] = datos["consumo"] * datos["precio"]
+    consumo_total = float(datos["consumo"].sum())
+    if consumo_total <= 0:
+        raise ValueError("La curva no tiene consumo positivo en el periodo.")
+    coste_total = float(datos["coste"].sum())
+
+    por_hora = (
+        datos.pivot_table(
+            index="hora", values=["consumo", "coste", "precio"],
+            aggfunc="mean",
+        ).reset_index()
+    )
+    por_hora["color"] = por_hora["precio"].apply(
+        lambda precio: "barato" if precio <= 0.1 else (
+            "soportable" if precio <= 0.15 else "caro"
+        )
+    )
+    return datos, por_hora, coste_total / consumo_total, coste_total
+
+
+def costes_energia_fija_horarios(df_horario, precio_unico, precios_por_periodo=None):
+    """Calcula el término de energía fijo de cada hora en euros."""
+    consumo = pd.to_numeric(df_horario["consumo"], errors="raise")
+    if precios_por_periodo is None:
+        precios = float(precio_unico)
+    else:
+        if len(precios_por_periodo) != 3:
+            raise ValueError("Se requieren precios P1, P2 y P3.")
+        periodos = (
+            df_horario["dh_3p"].astype("string").str.strip().str.upper()
+            .str.extract(r"^P?([123])(?:\.0)?$", expand=False)
+        )
+        if periodos.isna().any():
+            raise ValueError("Hay horas sin periodo tarifario 2.0 válido.")
+        precios = periodos.astype(int).map(
+            dict(enumerate(precios_por_periodo, start=1))
+        )
+    return consumo * precios / 100
+
+
+def calcular_energia_fija(df_horario, precio_unico, precios_por_periodo=None):
+    """Devuelve coste y precio medio fijo usando los kWh de cada hora."""
+    consumo_total = float(pd.to_numeric(df_horario["consumo"], errors="raise").sum())
+    if consumo_total <= 0:
+        raise ValueError("El periodo no tiene consumo positivo.")
+    coste = float(costes_energia_fija_horarios(
+        df_horario, precio_unico, precios_por_periodo,
+    ).sum())
+    return coste, coste * 100 / consumo_total
+
+
 # 
 def optimizar_consumo_media_horaria(df: pd.DataFrame):
     """
@@ -524,9 +632,9 @@ def obtener_datos_por_periodo(df_datos_horarios_combo_filtrado_consumo):
     )
     print(pt_periodos_filtrado)
     
-    pt_periodos_filtrado['consumo'] = pt_periodos_filtrado['consumo'].astype(int)
+    pt_periodos_filtrado['consumo'] = pt_periodos_filtrado['consumo'].round(2)
     pt_periodos_filtrado["coste"] = pt_periodos_filtrado["coste"].round(2)  # Formato con 2 decimales
-    pt_periodos_filtrado["precio"] = pt_periodos_filtrado["precio"].round(2)  # Formato con 2 decimales
+    pt_periodos_filtrado["precio"] = pt_periodos_filtrado["precio"].round(6)
     pt_periodos_filtrado.reset_index(inplace=True)
     pt_periodos_filtrado.rename(columns = {'dh_3p': 'periodo'}, inplace=True)
     totales_periodo = pt_periodos_filtrado[['consumo', 'coste']].sum()
@@ -597,39 +705,53 @@ def graf_costes_queso(pt_periodos_filtrado_porc):
     return graf_costes_queso
 
 
-def mapa_diferencias(te_pvpc, tp_pvpc):
+def mapa_diferencias(
+    te_pvpc, tp_pvpc, consumo_anual=None, precio_fijo_energia=None,
+    tipo_iee=0.051127, tipo_iva=0.21,
+):
 
     # --- Parámetros fijos ---
 
     potencia_contratada = st.session_state.pot_con      # kW
-    consumo = st.session_state.consumo_anual               # kWh/año
+    consumo = (
+        st.session_state.consumo_anual if consumo_anual is None
+        else float(consumo_anual)
+    )  # kWh/año
+    precio_fijo_energia = (
+        st.session_state.precio_ene if precio_fijo_energia is None
+        else float(precio_fijo_energia)
+    )  # c€/kWh
     precios_potencia = np.arange(27, 80, 1)     # €/kW·año
     precios_energia = np.arange(8, 20.5, 0.5)   # c€/kWh
 
     # --- Malla de precios ---
     X, Y = np.meshgrid(precios_energia, precios_potencia)
     precio_energia_eur = X / 100
+    factor_impuestos = (1 + tipo_iee) * (1 + tipo_iva)
 
     # --- Coste medio total en c€/kWh ---
-    coste_total = ((Y * potencia_contratada) + (precio_energia_eur * consumo)) / consumo * 100
+    coste_anual = ((Y * potencia_contratada) + (precio_energia_eur * consumo)) * factor_impuestos
+    coste_total = coste_anual / consumo * 100
 
     # --- PVPC ---
     tp_pvpc = tp_pvpc    # €/kW·año
     te_pvpc = te_pvpc * 100   # c€/kWh
     coste_pvpc = ((tp_pvpc * potencia_contratada) + (te_pvpc / 100) * consumo) / consumo  # €/kWh
-    coste_pvpc_cents = coste_pvpc * 100  # c€/kWh
-    coste_pvpc_euros = (tp_pvpc * potencia_contratada) + (te_pvpc / 100) * consumo  # € anuales
+    coste_pvpc_euros = (
+        (tp_pvpc * potencia_contratada) + (te_pvpc / 100) * consumo
+    ) * factor_impuestos  # € anuales con IEE e IVA
+    coste_pvpc_cents = coste_pvpc_euros / consumo * 100
 
 
 
     # --- Diferencia respecto al PVPC (c€/kWh y €) ---
-    coste_norm = coste_total - coste_pvpc_cents
-    coste_anual = (Y * potencia_contratada) + (precio_energia_eur * consumo)
     diferencia_euros = coste_anual - coste_pvpc_euros  # € de sobrecoste o ahorro
 
-    coste_fijo = ((st.session_state.tp_fijo * potencia_contratada) + (st.session_state.precio_ene / 100) * consumo) / consumo  # €/kWh
-    coste_fijo_cents = coste_fijo * 100  # c€/kWh
-    coste_fijo_euros = (st.session_state.tp_fijo * potencia_contratada) + (st.session_state.precio_ene / 100) * consumo  # € anuales
+    coste_fijo_euros = (
+        (st.session_state.tp_fijo * potencia_contratada)
+        + (precio_fijo_energia / 100) * consumo
+    ) * factor_impuestos  # € anuales con IEE e IVA
+    coste_fijo_cents = coste_fijo_euros / consumo * 100
 
 
     # --- Escala de colores ---
@@ -659,7 +781,7 @@ def mapa_diferencias(te_pvpc, tp_pvpc):
             end=np.ceil(diferencia_euros.max() / 50) * 50,
             size=50
         ),
-        colorbar=dict(title='Diferencia<br> FIJO vs PVPC (€)')
+        colorbar=dict(title='Diferencia anual<br>con IEE e IVA (€)')
     ))
 
     # --- Capa transparente para mostrar etiquetas (en €) ---
@@ -703,8 +825,8 @@ def mapa_diferencias(te_pvpc, tp_pvpc):
         hoverinfo='text',
         text=[
             f"Te={x:.1f} c€/kWh<br>Tp={y:.0f} €/kW·año"
-            f"<br>Precio medio={z:.2f} c€/kWh"
-            f"<br>Δ coste anual={d:.0f} €"
+            f"<br>Precio factura con IEE e IVA={z:.2f} c€/kWh"
+            f"<br>Δ factura anual con IEE e IVA={d:.0f} €"
             for x, y, z, d in zip(X.flatten(), Y.flatten(), coste_total.flatten(), diferencia_euros.flatten())
         ],
         showlegend=False
@@ -726,21 +848,23 @@ def mapa_diferencias(te_pvpc, tp_pvpc):
 
     # --- Punto FIJO ---
     fig.add_trace(go.Scatter(
-        x=[st.session_state.precio_ene],
+        x=[precio_fijo_energia],
         y=[st.session_state.tp_fijo],
         mode='markers+text',
-        text=[f"FIJO<br>{st.session_state.precio_ene:.1f} c€/kWh · {st.session_state.tp_fijo:.2f} €/kW·año"
+        text=[f"FIJO<br>{precio_fijo_energia:.1f} c€/kWh · {st.session_state.tp_fijo:.2f} €/kW·año"
             f"<br><b>{coste_fijo_cents:.2f} c€/kWh</b><br>{coste_fijo_euros:.0f} €"],
         textposition='top right',
         textfont=dict(size=13, color='black'),
         marker=dict(color='white', size=12, line=dict(width=4, color='black')),
-        name='PVPC',
+        name='FIJO',
         showlegend=False
     ))
 
     # --- Layout ---
+    potencia_texto = f'{potencia_contratada:,.1f}'.replace(',', 'X').replace('.', ',').replace('X', '.')
+    consumo_texto = f'{consumo:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.')
     fig.update_layout(
-        title=f"Mapa comparativo FIJO vs PVPC — Potencia {potencia_contratada} kW | Consumo {consumo} kWh",
+        title=f"Mapa comparativo FIJO vs PVPC — Potencia {potencia_texto} kW | Consumo {consumo_texto} kWh",
         xaxis_title='Precio FIJO energía (c€/kWh)',
         yaxis_title='Precio FIJO potencia (€/kW·año)',
         template='simple_white',

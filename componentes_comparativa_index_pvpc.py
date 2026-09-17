@@ -103,13 +103,18 @@ def preparar_comparativa_index_pvpc(df_index, df_pvpc):
     index["fecha"] = pd.to_datetime(index["fecha"], errors="coerce").dt.normalize()
     index["hora"] = pd.to_numeric(index["hora"], errors="coerce")
     index["precio_2.0"] = pd.to_numeric(index["precio_2.0"], errors="coerce")
-    index = index[index["fecha"] >= pd.Timestamp("2024-01-01")]
+    index = index[index["fecha"] >= pd.Timestamp("2024-01-01")].copy()
+    # Los indexados del CSV usan 0–23; el histórico PVPC usa 1–24.
+    # Se detecta por día para admitir también tramos antiguos ya en 1–24.
+    index["hora"] += index.groupby("fecha")["hora"].transform(
+        lambda horas: horas.eq(0).any()
+    ).astype(int)
 
     pvpc = df_pvpc[["fecha", "hora", "pvpc", "perfil_20"]].copy()
     pvpc["fecha"] = pd.to_datetime(pvpc["fecha"], errors="coerce").dt.normalize()
     for columna in ("hora", "pvpc", "perfil_20"):
         pvpc[columna] = pd.to_numeric(pvpc[columna], errors="coerce")
-    pvpc = pvpc[pvpc["fecha"] >= pd.Timestamp("2024-01-01")]
+    pvpc = pvpc[pvpc["fecha"] >= pd.Timestamp("2024-01-01")].copy()
 
     index_mensual = (
         index.assign(fecha=lambda df: df["fecha"].dt.to_period("M").dt.to_timestamp())
@@ -136,7 +141,14 @@ def preparar_comparativa_index_pvpc(df_index, df_pvpc):
     anual = anual_index.merge(anual_pvpc, on="anio", how="inner")
     anual["diferencial"] = anual["index_20"] - anual["pvpc"]
 
-    perfilada = index.merge(pvpc, on=["fecha", "hora"], how="inner").dropna(
+    # La hora repetida del cambio de horario se empareja por ocurrencia.
+    claves_hora = ["fecha", "hora"]
+    index["ocurrencia_hora"] = index.groupby(claves_hora).cumcount()
+    pvpc["ocurrencia_hora"] = pvpc.groupby(claves_hora).cumcount()
+    perfilada = index.merge(
+        pvpc, on=[*claves_hora, "ocurrencia_hora"], how="inner",
+        validate="one_to_one",
+    ).dropna(
         subset=["fecha", "precio_2.0", "pvpc", "perfil_20"]
     )
     perfilada = perfilada[perfilada["perfil_20"] > 0].copy()
@@ -161,58 +173,88 @@ def _diferencial(valor):
     return f"+{texto}" if valor > 0 else texto
 
 
-def render_comparativa_index_pvpc(resultado):
+def render_comparativa_index_pvpc(resultado, mostrar_sin_ponderar=False):
     grafico, anual, grafico_perfilado, anual_perfilado = resultado
-    st.subheader("Comparativa mensual Index 2.0 vs PVPC", divider="rainbow")
-    anual = anual.sort_values("anio")
-    if not anual.empty:
-        for columna, fila in zip(st.columns(len(anual), gap="small"), anual.itertuples(index=False)):
-            with columna:
-                st.markdown(f"#### {int(fila.anio)} (c€/kWh)")
-                st.metric("Media Index 2.0", formato_cent_eur_kwh(fila.index_20, 2, False))
-                st.metric("Media PVPC", formato_cent_eur_kwh(fila.pvpc, 2, False))
-                st.metric("Index − PVPC", _diferencial(fila.diferencial))
-    st.plotly_chart(grafico, use_container_width=True)
+    if mostrar_sin_ponderar:
+        st.subheader("Comparativa mensual Index 2.0 vs PVPC", divider="rainbow")
+        anual = anual.sort_values("anio")
+        if not anual.empty:
+            for columna, fila in zip(st.columns(len(anual), gap="small"), anual.itertuples(index=False)):
+                with columna:
+                    st.markdown(f"#### {int(fila.anio)} (c€/kWh)")
+                    st.metric("Media Index 2.0", formato_cent_eur_kwh(fila.index_20, 2, False))
+                    st.metric("Media PVPC", formato_cent_eur_kwh(fila.pvpc, 2, False))
+                    st.metric("Index − PVPC", _diferencial(fila.diferencial))
+        st.plotly_chart(grafico, use_container_width=True)
 
     st.subheader("Comparativa Index 2.0 vs PVPC perfilada", divider="rainbow")
     anual_perfilado = anual_perfilado.sort_values("anio")
-    consumo = st.number_input(
-        "Consumo (kWh/año)", min_value=0.0, value=3000.0, step=100.0,
-        format="%.0f", key="consumo_index_vs_pvpc",
+    columna_info, columna_precios, columna_importes = st.columns(
+        [1, 2.2, 2.2], gap="large"
     )
-    if not anual_perfilado.empty:
-        columnas = st.columns(len(anual_perfilado) + 1, gap="small")
-        for columna, fila in zip(columnas[:-1], anual_perfilado.itertuples(index=False)):
-            coste_index = fila.index_20 * consumo / 100
-            coste_pvpc = fila.pvpc * consumo / 100
-            impacto = coste_index - coste_pvpc
-            porcentaje = impacto / coste_pvpc * 100 if coste_pvpc else 0.0
-            with columna:
-                st.markdown(f"#### {int(fila.anio)} (c€/kWh)")
-                st.metric("Index 2.0 perfilado", formato_cent_eur_kwh(fila.index_20, 2, False))
-                st.metric("PVPC perfilado", formato_cent_eur_kwh(fila.pvpc, 2, False))
-                st.metric("Index − PVPC", _diferencial(fila.diferencial))
-                st.metric("Coste Index", formato_euros(coste_index, 2, False))
-                st.metric("Coste PVPC", formato_euros(coste_pvpc, 2, False))
-                st.metric(
-                    "Sobrecoste Index" if impacto > 0 else "Ahorro Index",
-                    formato_euros(abs(impacto), 2, False),
-                    delta=("+" if porcentaje > 0 else "") + formato_pct(porcentaje, 2),
-                    delta_color="inverse",
-                )
-        coste_total_index = anual_perfilado["index_20"].sum() * consumo / 100
-        coste_total_pvpc = anual_perfilado["pvpc"].sum() * consumo / 100
-        impacto_total = coste_total_index - coste_total_pvpc
-        porcentaje_total = (
-            impacto_total / coste_total_pvpc * 100 if coste_total_pvpc else 0.0
+    with columna_info:
+        st.info(
+            "Precios horarios ponderados con el perfil REE 2.0TD en las "
+            "horas comunes de Index y PVPC. Los costes aplican el consumo "
+            "anual indicado a cada precio medio; incluyen solo energía, "
+            "sin potencia ni impuestos. El año en curso llega hasta el "
+            "último dato disponible."
         )
-        with columnas[-1]:
+        consumo = st.number_input(
+            "Consumo (kWh/año)", min_value=0.0, value=3000.0, step=100.0,
+            format="%.0f", key="consumo_index_vs_pvpc",
+        )
+    with columna_precios:
+        st.markdown("#### Precios medios perfilados (c€/kWh)")
+        if not anual_perfilado.empty:
+            columnas_anuales = st.columns(len(anual_perfilado), gap="small")
+            for columna, fila in zip(
+                columnas_anuales, anual_perfilado.itertuples(index=False)
+            ):
+                with columna:
+                    st.markdown(f"#### {int(fila.anio)}")
+                    st.metric("Index 2.0 perfilado", formato_cent_eur_kwh(fila.index_20, 2, False))
+                    st.metric("PVPC perfilado", formato_cent_eur_kwh(fila.pvpc, 2, False))
+                    st.metric("Index − PVPC", _diferencial(fila.diferencial))
+
+    with columna_importes:
+        st.markdown("#### Costes estimados (€)")
+        if not anual_perfilado.empty:
+            columnas_anuales = st.columns(len(anual_perfilado), gap="small")
+            for columna, fila in zip(
+                columnas_anuales, anual_perfilado.itertuples(index=False)
+            ):
+                coste_index = fila.index_20 * consumo / 100
+                coste_pvpc = fila.pvpc * consumo / 100
+                impacto = coste_index - coste_pvpc
+                porcentaje = impacto / coste_pvpc * 100 if coste_pvpc else 0.0
+                with columna:
+                    st.markdown(f"#### {int(fila.anio)}")
+                    st.metric("Coste Index", formato_euros(coste_index, 2, False))
+                    st.metric("Coste PVPC", formato_euros(coste_pvpc, 2, False))
+                    st.metric(
+                        "Sobrecoste Index" if impacto > 0 else "Ahorro Index",
+                        formato_euros(abs(impacto), 2, False),
+                        delta=("+" if porcentaje > 0 else "") + formato_pct(porcentaje, 2),
+                        delta_color="inverse",
+                    )
+            coste_total_index = anual_perfilado["index_20"].sum() * consumo / 100
+            coste_total_pvpc = anual_perfilado["pvpc"].sum() * consumo / 100
+            impacto_total = coste_total_index - coste_total_pvpc
+            porcentaje_total = (
+                impacto_total / coste_total_pvpc * 100 if coste_total_pvpc else 0.0
+            )
             anio_inicial = int(anual_perfilado["anio"].min())
             anio_final = int(anual_perfilado["anio"].max())
             st.markdown(f"#### Total {anio_inicial}–{anio_final}")
-            st.metric("Coste total Index", formato_euros(coste_total_index, 2, False))
-            st.metric("Coste total PVPC", formato_euros(coste_total_pvpc, 2, False))
-            st.metric(
+            total_index, total_pvpc, total_impacto = st.columns(3, gap="small")
+            total_index.metric(
+                "Coste total Index", formato_euros(coste_total_index, 2, False)
+            )
+            total_pvpc.metric(
+                "Coste total PVPC", formato_euros(coste_total_pvpc, 2, False)
+            )
+            total_impacto.metric(
                 "Sobrecoste Index" if impacto_total > 0 else "Ahorro Index",
                 formato_euros(abs(impacto_total), 2, False),
                 delta=("+" if porcentaje_total > 0 else "") + formato_pct(porcentaje_total, 2),

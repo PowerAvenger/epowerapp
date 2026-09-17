@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>Informe de comparativa de ahorro</title>
+{% include "_estilos_informe_epower.html" %}
+<style>
+:root{--azul:#17365d;--verde:#15803d;--rojo:#dc2626;--texto:#263547;--claro:#eef4f8}
+*{box-sizing:border-box}body{margin:0;background:#eef1f4;color:var(--texto);font:14px Arial,sans-serif;line-height:1.45}
+main{max-width:1120px;margin:24px auto;background:#fff;padding:42px;box-shadow:0 3px 18px #0002}
+header{display:flex;justify-content:space-between;gap:24px;border-bottom:4px solid var(--azul);padding-bottom:18px}.logo{max-width:190px;max-height:80px}
+h1{color:var(--azul);margin:0;font-size:30px}.firma{margin:9px 0 0;color:#536579;font-weight:600}
+.meta{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:20px 0}.meta div{background:var(--claro);padding:10px;border-radius:6px}.meta span{display:block;color:#607286;font-size:11px;text-transform:uppercase}.meta strong{overflow-wrap:anywhere}
+.nivel>h2{background:#ffedd5;color:#9a3412;border-left:6px solid #f97316;border-radius:6px;padding:11px 14px;margin:34px 0 18px;font-size:24px}
+.objeto{border-left:5px solid #2563eb;background:#eff6ff;padding:13px 17px;margin:18px 0;color:#1e3a8a}
+.nivel1-superior{display:grid;grid-template-columns:minmax(0,1.12fr) minmax(310px,.88fr);gap:18px;align-items:stretch}.hero{border:2px solid {{ '#86efac' if es_ahorro else '#fca5a5' }};background:{{ '#f0fdf4' if es_ahorro else '#fef2f2' }};border-radius:16px;padding:24px;text-align:center;display:flex;flex-direction:column;justify-content:center}
+.hero h2{margin:0;color:{{ '#15803d' if es_ahorro else '#dc2626' }};font-size:28px}.hero .ciclo{color:#64748b;font-size:12px;margin-top:5px}.hero .valor{color:{{ '#15803d' if es_ahorro else '#dc2626' }};font-size:46px;font-weight:900;margin:8px 0}.hero .sin-iva{font-size:17px}.hero .nota{color:#64748b;font-size:12px;margin-top:5px}
+.gauge{display:flex;align-items:center;justify-content:center;border:1px solid #d9e2ea;border-radius:16px;padding:7px;background:#fff}.gauge img{display:block;width:100%;height:auto}
+.totales,.impactos{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:17px 0}.kpi,.impacto{border:1px solid #d9e2ea;border-radius:10px;padding:15px;background:#fff}.kpi span,.impacto span{display:block;color:#65758b;font-size:11px;text-transform:uppercase}.kpi strong,.impacto strong{display:block;color:var(--azul);font-size:22px;margin-top:4px}.mensaje{border-left:5px solid #f59e0b;background:#fff7e6;padding:14px 18px;font-size:17px;font-weight:700}
+table{width:100%;border-collapse:collapse;margin:10px 0 18px;font-size:12px}th{background:var(--azul);color:#fff;text-align:left}th,td{border:1px solid #d9e1e8;padding:7px}th:not(:first-child),td:not(:first-child){text-align:right}tbody tr:nth-child(even){background:#f7f9fb}.favorable{color:var(--verde);font-weight:800}.unfavorable{color:var(--rojo);font-weight:800}.neutral{color:#64748b}
+.detalle{break-inside:avoid}.detalle h3{color:var(--azul);border-left:5px solid #2563eb;padding:8px 0 8px 11px;margin:28px 0 8px;background:#eff6ff}.detalle h4{color:#334155;border-left:3px solid #94a3b8;padding-left:9px;margin:22px 0 7px;font-size:15px}.detalle.subnivel{margin-left:14px}.detalle p{color:#536579}.pie{margin-top:36px;border-top:1px solid #ccd7e0;padding-top:12px;color:#65758b;font-size:11px}
+@media(max-width:800px){main{padding:20px}.meta,.totales,.impactos,.nivel1-superior{grid-template-columns:1fr}}
+@media print{body{background:#fff}main{margin:0;box-shadow:none;max-width:none}.nivel{break-before:page}.nivel:first-of-type{break-before:auto}}
+</style></head><body><main>
+<header><div><h1>Informe de comparativa de ahorro</h1><p class="firma">Realizado por {{ realizado_por or '—' }} · Fecha de realización: {{ fecha_realizacion or '—' }}</p></div>{% if logo %}<img class="logo" src="{{ logo }}">{% endif %}</header>
+<div class="meta">
+<div><span>Cliente</span><strong>{{ cliente or '—' }}</strong></div><div><span>NIF / CIF</span><strong>{{ nif or '—' }}</strong></div>
+<div><span>CUPS</span><strong>{{ cups or '—' }}</strong></div><div><span>ATR</span><strong>{{ atr or '—' }}</strong></div>
+<div><span>Comercializadora</span><strong>{{ comercializadora or '—' }}</strong></div><div><span>Factura</span><strong>{{ numero_factura or '—' }}</strong></div>
+<div><span>Fecha factura</span><strong>{{ fecha_factura or '—' }}</strong></div><div><span>Periodo</span><strong>{{ ciclo or '—' }}</strong></div>
+</div><div class="objeto"><strong>Objeto:</strong> {{ objeto }}</div>
+<section class="nivel"><h2>Resultado de la comparativa</h2>
+<div class="nivel1-superior"><div class="hero"><h2>{{ resultado }}</h2><div class="ciclo">{{ ciclo or '—' }}</div><div class="valor">{{ importe_con_iva }}</div><div>Importe final con IVA</div><div class="sin-iva">Importe total sin IVA: <strong>{{ importe_sin_iva }}</strong></div><div class="nota">El importe sin IVA incluye el efecto del IEE.</div></div>{% if gauge %}<div class="gauge"><img src="{{ gauge }}" alt="Gauge del impacto total"></div>{% endif %}</div>
+<div class="totales"><div class="kpi"><span>Total factura</span><strong>{{ total_factura }}</strong></div><div class="kpi"><span>Total referencia</span><strong>{{ total_referencia }}</strong></div></div>
+<div class="mensaje">{{ origen_ahorro }}</div>
+</section>
+<section class="nivel"><h2>Resumen por componentes</h2>
+<p>Esta tabla explica de dónde procede el resultado. Una diferencia negativa representa ahorro; una diferencia positiva representa sobrecoste.</p>
+<div class="impactos"><div class="impacto"><span>Impacto del término de potencia</span><strong>{{ impacto_tp }}</strong></div><div class="impacto"><span>Impacto del término de energía</span><strong>{{ impacto_te }}</strong></div></div>
+<table><thead><tr><th>Componente</th><th>Facturado</th><th>Referencia</th><th>Diferencia</th><th>Diferencia (%)</th></tr></thead><tbody>
+{% for fila in componentes %}<tr><td>{{ fila.componente }}</td><td>{{ fila.facturado }}</td><td>{{ fila.referencia }}</td><td class="{{ fila.clase }}">{{ fila.diferencia }}</td><td class="{{ fila.clase }}">{{ fila.porcentaje }}</td></tr>{% endfor %}
+</tbody></table></section>
+<section class="nivel"><h2>Detalles justificativos</h2>
+<p>Este nivel documenta los datos y cálculos utilizados para que el resultado pueda revisarse periodo a periodo.</p>
+{% for seccion in secciones %}<div class="detalle{% if seccion.subnivel %} subnivel{% endif %}">{% if seccion.subnivel %}<h4>{{ seccion.titulo }}</h4>{% else %}<h3>{{ seccion.titulo }}</h3>{% endif %}<p>{{ seccion.texto }}</p>{{ seccion.tabla|safe }}</div>{% endfor %}
+</section><div class="pie">Documento beta generado con los datos de la factura, la curva verificada y las referencias registradas en ePowerApp. Los importes deben revisarse antes de entregar el informe al cliente.</div>
+</main></body></html>

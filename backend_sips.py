@@ -6,6 +6,7 @@ import csv
 import io
 import re
 import unicodedata
+from html.parser import HTMLParser
 from pathlib import Path
 
 import pandas as pd
@@ -77,19 +78,60 @@ def _es_excel_sips(origen, contenido):
     )
 
 
+def es_sips_excel_html(origen):
+    """Reconoce las exportaciones HTML que Excel guarda con extensión .xls."""
+    contenido = _leer_bytes(origen)
+    inicio = contenido.lstrip()[:32].lower()
+    return inicio.startswith((b"<html", b"<!doctype html"))
+
+
+class _LectorTablaHTML(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.filas = []
+        self.fila = None
+        self.celda = None
+
+    def handle_starttag(self, etiqueta, atributos):
+        if etiqueta == "tr":
+            self.fila = []
+        elif etiqueta in {"td", "th"} and self.fila is not None:
+            self.celda = []
+
+    def handle_data(self, dato):
+        if self.celda is not None:
+            self.celda.append(dato)
+
+    def handle_endtag(self, etiqueta):
+        if etiqueta in {"td", "th"} and self.celda is not None:
+            self.fila.append("".join(self.celda).strip())
+            self.celda = None
+        elif etiqueta == "tr" and self.fila is not None:
+            self.filas.append(self.fila)
+            self.fila = None
+
+
 def _filas_excel_sips(contenido):
     """Localiza la hoja de medidas de un SIPS Excel y la convierte en filas."""
-    try:
-        hojas = pd.read_excel(
-            io.BytesIO(contenido), sheet_name=None, header=None, dtype=object
-        )
-    except (ImportError, OSError, ValueError) as exc:
-        raise ValueError(f"No se ha podido leer el Excel SIPS: {exc}") from exc
-    for tabla in hojas.values():
-        filas = [
-            ["" if pd.isna(valor) else str(valor).strip() for valor in fila]
-            for fila in tabla.itertuples(index=False, name=None)
+    if es_sips_excel_html(contenido):
+        lector = _LectorTablaHTML()
+        lector.feed(_decodificar(contenido))
+        grupos_filas = [lector.filas]
+    else:
+        try:
+            hojas = pd.read_excel(
+                io.BytesIO(contenido), sheet_name=None, header=None, dtype=object
+            )
+        except (ImportError, OSError, ValueError) as exc:
+            raise ValueError(f"No se ha podido leer el Excel SIPS: {exc}") from exc
+        grupos_filas = [
+            [
+                ["" if pd.isna(valor) else str(valor).strip() for valor in fila]
+                for fila in tabla.itertuples(index=False, name=None)
+            ]
+            for tabla in hojas.values()
         ]
+    for filas in grupos_filas:
         for fila in filas:
             nombres = {_nombre_columna(celda) for celda in fila}
             if {
@@ -98,6 +140,19 @@ def _filas_excel_sips(contenido):
             }.issubset(nombres):
                 return filas
     raise ValueError("No encuentro una hoja de medidas SIPS reconocida.")
+
+
+def es_sips_excel(origen):
+    """Distingue una tabla SIPS de un Excel de consumos genérico."""
+    if es_sips_excel_html(origen):
+        return True
+    if not str(getattr(origen, "name", origen) or "").lower().endswith((".xls", ".xlsx")):
+        return False
+    try:
+        _filas_excel_sips(_leer_bytes(origen))
+    except ValueError:
+        return False
+    return True
 
 
 def _tabla_magnitud(lecturas, prefijo, agregacion):

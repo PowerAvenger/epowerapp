@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from backend_curvadecarga import filtrar_intervalos_comparacion
 from backend_contractual import (
     aplicar_condiciones_contractuales,
     aplicar_costes_extra_mensuales,
@@ -12,6 +13,8 @@ from backend_contractual import (
     cargar_costes_extra_cups,
     guardar_costes_extra_cups,
     preparar_indexado_contractual,
+    referencias_del_mismo_registro,
+    ultimo_dia_cubierto_desde,
     resumir_calculo_contractual,
 )
 from data_beta.db import connect, initialize_database
@@ -61,6 +64,126 @@ def _condiciones_prueba():
 
 
 class CalculoContractualTest(unittest.TestCase):
+    def test_comparativa_limita_fin_al_primer_hueco_contractual(self):
+        condiciones = pd.DataFrame([
+            {
+                "inicio_condicion": pd.Timestamp("2025-10-01"),
+                "fin_condicion": pd.Timestamp("2025-12-31"),
+            },
+            {
+                "inicio_condicion": pd.Timestamp("2026-01-01"),
+                "fin_condicion": pd.Timestamp("2026-07-31"),
+            },
+        ])
+        self.assertEqual(
+            ultimo_dia_cubierto_desde(
+                condiciones, "2025-10-01", "2026-09-16"
+            ),
+            pd.Timestamp("2026-07-31"),
+        )
+        self.assertEqual(
+            ultimo_dia_cubierto_desde(
+                condiciones, "2025-10-01", "2026-06-30"
+            ),
+            pd.Timestamp("2026-06-30"),
+        )
+        with self.assertRaisesRegex(ValueError, "inicio"):
+            ultimo_dia_cubierto_desde(
+                condiciones, "2025-09-01", "2026-09-16"
+            )
+
+    def test_referencia_del_mismo_registro_usa_formula_y_precio_del_tramo(self):
+        anterior = {
+            "INDEX CG": "1,300", "CG F": "2",
+        }
+        fijo = {
+            **{f"TE P{i}": "0,156013" for i in range(1, 7)},
+            "INDEX CG": "0,400", "CG F": "2",
+        }
+        indexado = {
+            "INDEX CG": "0,700", "CG F": "2",
+            **{f"TE REF{i}": "0,120000" for i in range(1, 7)},
+        }
+        condiciones = pd.DataFrame([
+            {
+                "condicion_id": 55,
+                "inicio_condicion": pd.Timestamp("2025-01-01"),
+                "fin_condicion": pd.Timestamp("2025-09-30"),
+                "tipo_precio": "INDEX PT", "payload_json": json.dumps(anterior),
+            },
+            {
+                "condicion_id": 44,
+                "inicio_condicion": pd.Timestamp("2025-10-01"),
+                "fin_condicion": pd.Timestamp("2025-12-31"),
+                "tipo_precio": "FIJO", "payload_json": json.dumps(fijo),
+            },
+            {
+                "condicion_id": 45,
+                "inicio_condicion": pd.Timestamp("2026-01-01"),
+                "fin_condicion": pd.Timestamp("2026-12-31"),
+                "tipo_precio": "INDEX PT", "payload_json": json.dumps(indexado),
+            },
+        ])
+        referencias = referencias_del_mismo_registro(
+            condiciones, "6.1", "2025-10-01", "2026-01-31"
+        )
+        self.assertEqual(referencias["condicion_id"].tolist(), [44, 45])
+        self.assertEqual(referencias["tipo_precio"].tolist(), ["INDEX PT", "FIJO"])
+        self.assertEqual(
+            json.loads(referencias.iloc[0]["payload_json"])["INDEX CG"],
+            "0,400",
+        )
+        self.assertEqual(
+            json.loads(referencias.iloc[1]["payload_json"])["TE P6"],
+            0.12,
+        )
+        self.assertEqual(condiciones.iloc[1]["tipo_precio"], "FIJO")
+
+    def test_referencia_del_mismo_registro_exige_precio_alternativo(self):
+        condiciones = pd.DataFrame([{
+            "condicion_id": 82,
+            "inicio_condicion": pd.Timestamp("2025-01-01"),
+            "fin_condicion": pd.Timestamp("2025-12-31"),
+            "tipo_precio": "INDEX PT",
+            "payload_json": json.dumps({"TE REF1": "0,10"}),
+        }])
+        with self.assertRaisesRegex(ValueError, "P2"):
+            referencias_del_mismo_registro(
+                condiciones, "2.0", "2025-01-01", "2025-12-31"
+            )
+
+    def test_comparacion_no_exige_contrato_fuera_de_los_dos_periodos(self):
+        curva = pd.concat([_curva_prueba().iloc[[0]]] * 3, ignore_index=True)
+        curva["fecha_hora"] = pd.to_datetime([
+            "2025-01-01 00:00", "2026-01-01 00:00", "2026-08-01 00:00",
+        ])
+        curva["fecha"] = curva["fecha_hora"].dt.date
+        precios_fijos = json.dumps({
+            f"TE P{i}": "0,200000" for i in range(1, 7)
+        })
+        condiciones = pd.DataFrame([
+            {
+                "condicion_id": 1,
+                "inicio_condicion": pd.Timestamp("2025-01-01"),
+                "fin_condicion": pd.Timestamp("2025-06-30"),
+                "tipo_precio": "FIJO", "payload_json": precios_fijos,
+            },
+            {
+                "condicion_id": 2,
+                "inicio_condicion": pd.Timestamp("2026-01-01"),
+                "fin_condicion": pd.Timestamp("2026-06-30"),
+                "tipo_precio": "FIJO", "payload_json": precios_fijos,
+            },
+        ])
+        curva_comparada = filtrar_intervalos_comparacion(
+            curva, ("2025-01-01", "2025-06-30")
+        )
+        resultado = aplicar_condiciones_contractuales(
+            curva_comparada, condiciones, "6.1"
+        )
+        self.assertEqual(len(resultado), 2)
+        self.assertEqual(resultado["condicion_id"].tolist(), [1, 2])
+
     def _calcular(self, curva=None, condiciones=None):
         curva = _curva_prueba() if curva is None else curva
         condiciones = _condiciones_prueba() if condiciones is None else condiciones

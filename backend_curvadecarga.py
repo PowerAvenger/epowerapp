@@ -3,6 +3,11 @@ import plotly.express as px
 import pandas as pd
 import numpy as np
 import io, re
+import hashlib
+import json
+import os
+import tempfile
+import zipfile
 from functools import lru_cache
 import requests
 from requests.adapters import HTTPAdapter
@@ -23,6 +28,7 @@ AXON_API_BASE = "https://api.twinmeter.es"
 DATADIS_API_BASE = "https://datadis.es"
 DATADIS_SUMINISTROS_TIMEOUT = 120
 BASE_DIR = Path(__file__).resolve().parent
+DATADIS_CACHE_DIR = BASE_DIR / ".local_data" / "datadis_curvas"
 
 
 class DatadisLimiteConsultas(RuntimeError):
@@ -1067,6 +1073,65 @@ def clave_cache_consumo_datadis(
     )
 
 
+def _ruta_cache_datadis(clave, password):
+    """Usa un nombre opaco ligado a la cuenta, sin guardar credenciales."""
+    identificador = json.dumps(
+        [*clave, str(password)], ensure_ascii=False, separators=(",", ":")
+    )
+    huella = hashlib.sha256(identificador.encode("utf-8")).hexdigest()
+    return DATADIS_CACHE_DIR / f"{huella}.zip"
+
+
+def _leer_cache_datadis_local(clave, password):
+    ruta = _ruta_cache_datadis(clave, password)
+    if not ruta.is_file():
+        return None
+    try:
+        with zipfile.ZipFile(ruta) as archivo:
+            metadatos = json.loads(archivo.read("meta.json"))
+            curva = pd.read_csv(
+                io.BytesIO(archivo.read("curva.csv")),
+                dtype={"Fecha": str, "Hora": str},
+            )
+        if curva.empty or not {"Fecha", "Hora", "Consumo (kWh)"}.issubset(curva.columns):
+            return None
+        curva["Consumo (kWh)"] = pd.to_numeric(curva["Consumo (kWh)"], errors="raise")
+        return curva, metadatos["frecuencia"], metadatos.get("aviso_fallback")
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile, pd.errors.ParserError):
+        return None
+
+
+def guardar_cache_datadis_local(clave, password, resultado):
+    """Guarda una descarga Datadis en la carpeta privada ignorada por Git."""
+    ruta = _ruta_cache_datadis(clave, password)
+    if ruta.is_file():
+        return True
+    curva, frecuencia, aviso_fallback = resultado
+    temporal = None
+    try:
+        ruta.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            dir=ruta.parent, suffix=".tmp", delete=False
+        ) as archivo_temporal:
+            temporal = Path(archivo_temporal.name)
+        with zipfile.ZipFile(temporal, "w", compression=zipfile.ZIP_DEFLATED) as archivo:
+            archivo.writestr(
+                "meta.json",
+                json.dumps({"frecuencia": frecuencia, "aviso_fallback": aviso_fallback}),
+            )
+            archivo.writestr("curva.csv", curva.to_csv(index=False))
+        os.replace(temporal, ruta)
+        return True
+    except OSError:
+        return False
+    finally:
+        if temporal is not None:
+            try:
+                temporal.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 def obtener_consumo_datadis_cacheado(
     cache,
     usuario,
@@ -1078,7 +1143,7 @@ def obtener_consumo_datadis_cacheado(
     preferir_qh=False,
     **kwargs,
 ):
-    """Descarga meses completos una sola vez y reutiliza copias desde ``cache``."""
+    """Reutiliza primero la sesión y el archivo local antes de llamar a Datadis."""
     inicio_mes, fin_mes = rango_meses_datadis(fecha_inicio, fecha_fin)
     clave = clave_cache_consumo_datadis(
         usuario,
@@ -1089,6 +1154,8 @@ def obtener_consumo_datadis_cacheado(
         preferir_qh,
     )
     resultado = cache.get(clave)
+    if resultado is None:
+        resultado = _leer_cache_datadis_local(clave, password)
     reutilizado = resultado is not None
     if resultado is None:
         resultado = obtener_consumo_datadis(
@@ -1101,9 +1168,11 @@ def obtener_consumo_datadis_cacheado(
             preferir_qh=preferir_qh,
             **kwargs,
         )
-        curva, frecuencia, aviso_fallback = resultado
-        cache[clave] = (curva.copy(), frecuencia, aviso_fallback)
-    curva, frecuencia, aviso_fallback = cache[clave]
+        guardar_cache_datadis_local(clave, password, resultado)
+    else:
+        guardar_cache_datadis_local(clave, password, resultado)
+    curva, frecuencia, aviso_fallback = resultado
+    cache[clave] = (curva.copy(), frecuencia, aviso_fallback)
     return curva.copy(), frecuencia, aviso_fallback, clave, reutilizado
 
 
@@ -5233,13 +5302,30 @@ def calcular_comparacion():
 
     return resultado
 
-def preparar_costes_mensuales_rango(df_horario, rango_base):
-    """Agrega costes horarios solo para el rango base y su réplica +1 año."""
+def filtrar_intervalos_comparacion(df_horario, rango_base):
+    """Conserva los intervalos del rango base y su réplica +1 año."""
     if df_horario is None or df_horario.empty or rango_base is None:
         return pd.DataFrame()
     if not isinstance(rango_base, (tuple, list)) or len(rango_base) != 2:
         return pd.DataFrame()
 
+    inicio = pd.to_datetime(rango_base[0]).normalize()
+    fin = pd.to_datetime(rango_base[1]).normalize()
+    inicio_1y = inicio + relativedelta(years=1)
+    fin_1y = fin + relativedelta(years=1)
+    fechas = pd.to_datetime(df_horario["fecha_hora"], errors="coerce")
+    mascara = (
+        ((fechas >= inicio) & (fechas < fin + pd.Timedelta(days=1)))
+        | ((fechas >= inicio_1y) & (fechas < fin_1y + pd.Timedelta(days=1)))
+    )
+    return df_horario.loc[mascara].copy()
+
+
+def preparar_costes_mensuales_rango(df_horario, rango_base):
+    """Agrega costes horarios solo para el rango base y su réplica +1 año."""
+    df = filtrar_intervalos_comparacion(df_horario, rango_base)
+    if df.empty:
+        return pd.DataFrame()
     inicio = pd.to_datetime(rango_base[0]).normalize()
     fin = pd.to_datetime(rango_base[1]).normalize()
     inicio_1y = inicio + relativedelta(years=1)
@@ -5252,16 +5338,7 @@ def preparar_costes_mensuales_rango(df_horario, rango_base):
         str(inicio_1y.year) if inicio_1y.year == fin_1y.year
         else f"{inicio_1y.year}–{fin_1y.year}"
     )
-    df = df_horario.copy()
-    fechas = pd.to_datetime(df["fecha_hora"], errors="coerce")
-    mascara = (
-        ((fechas >= inicio) & (fechas < fin + pd.Timedelta(days=1)))
-        | ((fechas >= inicio_1y) & (fechas < fin_1y + pd.Timedelta(days=1)))
-    )
-    df = df.loc[mascara].copy()
-    df["fecha_hora"] = fechas.loc[mascara]
-    if df.empty:
-        return pd.DataFrame()
+    df["fecha_hora"] = pd.to_datetime(df["fecha_hora"], errors="coerce")
     df["año"] = df["fecha_hora"].dt.year
     df["mes_num"] = df["fecha_hora"].dt.month
     nombres_meses = {

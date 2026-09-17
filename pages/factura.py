@@ -1,6 +1,8 @@
 ﻿import hashlib
 
 import base64
+import calendar
+import json
 import re
 
 from html import escape
@@ -13,6 +15,9 @@ import streamlit as st
 from jinja2 import Environment, FileSystemLoader
 
 from backend_comun import aplicar_estilo
+from backend_contractual import cargar_acceso_medida_cups, cargar_condiciones_cups
+from data_beta.contract_editor import numero_contractual
+from data_beta.analysis_history import guardar_analisis
 from backend_curvadecarga import (
     DatadisLimiteConsultas,
     colores_periodo,
@@ -133,6 +138,215 @@ def _atr_indexado(atr_factura):
 def _fecha_factura(valor):
     fecha = pd.to_datetime(valor, dayfirst=True, errors="coerce")
     return None if pd.isna(fecha) else fecha.date()
+
+
+def _fecha_iso_historial(valor):
+    fecha = pd.to_datetime(valor, dayfirst=True, errors="coerce")
+    return None if pd.isna(fecha) else fecha.date().isoformat()
+
+
+def _snapshot_medida_historial(resultado_medida, sesion_medida=None):
+    if resultado_medida is None:
+        return None
+    return {
+        "origen": (sesion_medida or {}).get("origen"),
+        "frecuencia": resultado_medida.frecuencia,
+        "cobertura": resultado_medida.cobertura,
+        "consumos_periodos": resultado_medida.consumos_periodos,
+        "curva_periodo": resultado_medida.curva_periodo,
+    }
+
+
+def _referencias_historial(contexto):
+    if not contexto or not contexto.get("disponible"):
+        return []
+    referencias = []
+    for _, fila in contexto["condiciones"].iterrows():
+        condicion_id = fila.get("condicion_id")
+        referencias.append({
+            "rol": "condiciones_contractuales",
+            "condicion_id": (
+                int(condicion_id) if condicion_id is not None
+                and not pd.isna(condicion_id) else None
+            ),
+            "inicio": fila.get("inicio_condicion"),
+            "fin": fila.get("fin_condicion"),
+            "tipo_precio": fila.get("tipo_precio"),
+            "payload": fila.get("payload", {}),
+        })
+    return referencias
+
+
+def _componentes_historial(
+    tabla, *, columna_referencia, columna_diferencia, columna_pct,
+):
+    componentes = []
+    for _, fila in tabla.iterrows():
+        componentes.append({
+            "componente": str(fila["Componente"]),
+            "facturado_eur": fila.get("Factura (€)", fila.get("Facturado (€)")),
+            "referencia_eur": fila.get(columna_referencia),
+            "diferencia_eur": fila.get(columna_diferencia),
+            "diferencia_pct": fila.get(columna_pct),
+            "estado": fila.get("Estado"),
+        })
+    return componentes
+
+
+def _contexto_contractual_factura(factura):
+    """Resuelve condiciones locales sin convertir la BBDD en dependencia web."""
+    cups = str(getattr(factura, "cups", "") or "").strip().upper()[:20]
+    inicio = pd.to_datetime(
+        getattr(factura, "periodo_inicio", None), dayfirst=True, errors="coerce"
+    )
+    fin = pd.to_datetime(
+        getattr(factura, "periodo_fin", None), dayfirst=True, errors="coerce"
+    )
+    if len(cups) != 20 or pd.isna(inicio) or pd.isna(fin):
+        return {"disponible": False, "mensaje": "CUPS o periodo incompleto."}
+    try:
+        condiciones = cargar_condiciones_cups(cups)
+    except Exception as exc:
+        return {"disponible": False, "mensaje": str(exc)}
+    mascara = condiciones["inicio_condicion"].dt.normalize().le(fin.normalize()) & (
+        condiciones["fin_condicion"].isna()
+        | condiciones["fin_condicion"].dt.normalize().ge(inicio.normalize())
+    )
+    aplicables = condiciones.loc[mascara].copy()
+    if aplicables.empty:
+        return {
+            "disponible": False,
+            "mensaje": "La BBDD no contiene condiciones vigentes durante esta factura.",
+        }
+    aplicables["payload"] = aplicables["payload_json"].map(
+        lambda valor: json.loads(valor or "{}")
+    )
+    return {
+        "disponible": True, "cups": cups, "inicio": inicio, "fin": fin,
+        "condiciones": aplicables,
+    }
+
+
+def _condicion_para_fecha(contexto, fecha):
+    if not contexto.get("disponible"):
+        return None
+    fecha = pd.to_datetime(fecha, dayfirst=True, errors="coerce")
+    if pd.isna(fecha):
+        return None
+    condiciones = contexto["condiciones"]
+    mascara = condiciones["inicio_condicion"].dt.normalize().le(fecha.normalize()) & (
+        condiciones["fin_condicion"].isna()
+        | condiciones["fin_condicion"].dt.normalize().ge(fecha.normalize())
+    )
+    candidatas = condiciones.loc[mascara]
+    return None if len(candidatas) != 1 else candidatas.iloc[0]
+
+
+def _comparativa_referencia_potencia(
+    factura, resultado_medida, contexto_contractual, atr
+):
+    """Valora P REF con el TP vigente y recalcula excesos sobre la medida."""
+    if not contexto_contractual.get("disponible"):
+        raise ValueError(contexto_contractual.get("mensaje") or "BBDD no disponible.")
+    if resultado_medida is None:
+        raise ValueError(
+            "Obtén primero la curva en Verificación para recalcular los excesos."
+        )
+    items = [
+        item for item in factura.potencia_periodos
+        if item.periodo in {f"P{i}" for i in range(1, 7)}
+    ]
+    if not items:
+        raise ValueError("La factura no contiene detalle de potencia utilizable.")
+    referencia_items = []
+    filas_potencia = []
+    grupos = {}
+    for item in items:
+        inicio = item.periodo_inicio or factura.periodo_inicio
+        fin = item.periodo_fin or factura.periodo_fin
+        condicion = _condicion_para_fecha(contexto_contractual, inicio)
+        if condicion is None:
+            raise ValueError(
+                f"No hay una condición BBDD unívoca para el tramo {inicio}–{fin}."
+            )
+        payload = condicion["payload"]
+        clave_ref = f"{item.periodo} REF"
+        if payload.get(clave_ref) in (None, ""):
+            raise ValueError(
+                f"La condición {int(condicion['condicion_id'])} no contiene {clave_ref}."
+            )
+        potencia_ref = numero_contractual(payload[clave_ref])
+        tp_anual = payload.get(f"TP {item.periodo}")
+        if tp_anual in (None, ""):
+            precio_dia = float(item.precio_facturado_eur_kw_dia)
+            origen_tp = "Factura"
+        else:
+            ejercicio = pd.to_datetime(inicio, dayfirst=True).year
+            precio_dia = numero_contractual(tp_anual) / (
+                366 if calendar.isleap(ejercicio) else 365
+            )
+            origen_tp = "BBDD"
+        fila_ref = {
+            "periodo": item.periodo,
+            "potencia_kw": potencia_ref,
+            "dias": item.dias,
+            "precio_eur_kw_dia": precio_dia,
+            "periodo_inicio": inicio,
+            "periodo_fin": fin,
+        }
+        referencia_items.append(fila_ref)
+        grupos.setdefault((inicio, fin), []).append(fila_ref)
+        coste_facturado = (
+            float(item.potencia_kw) * int(item.dias)
+            * float(item.precio_facturado_eur_kw_dia)
+        )
+        coste_referencia = potencia_ref * int(item.dias) * precio_dia
+        filas_potencia.append({
+            "Tramo": f"{inicio}–{fin}",
+            "Periodo": item.periodo,
+            "Potencia facturada (kW)": float(item.potencia_kw),
+            "Potencia referencia (kW)": potencia_ref,
+            "Días": int(item.dias),
+            "TP referencia (€/kW día)": precio_dia,
+            "Origen TP": origen_tp,
+            "Coste facturado (€)": coste_facturado,
+            "Coste referencia (€)": coste_referencia,
+            "Facturado − referencia (€)": coste_facturado - coste_referencia,
+        })
+    _, coste_potencia_ref = calcular_potencia_confirmada(referencia_items)
+
+    detalles_excesos = []
+    coste_excesos_ref = 0.0
+    fechas_curva = pd.to_datetime(
+        resultado_medida.curva_periodo["fecha_hora"], errors="coerce"
+    )
+    for (inicio, fin), items_tramo in sorted(grupos.items()):
+        inicio_dt = pd.to_datetime(inicio, dayfirst=True).normalize()
+        fin_inclusivo = pd.to_datetime(fin, dayfirst=True).normalize()
+        curva_tramo = resultado_medida.curva_periodo.loc[
+            (fechas_curva >= inicio_dt)
+            & (fechas_curva < fin_inclusivo + pd.Timedelta(days=1))
+        ].copy()
+        potencias_ref = {
+            item["periodo"]: item["potencia_kw"] for item in items_tramo
+        }
+        detalle, coste = calcular_excesos_desde_curva(
+            curva_tramo, resultado_medida.frecuencia, atr, inicio_dt.year,
+            potencias_ref,
+            prorratear=debe_prorratear_excesos_tramo(
+                inicio_dt, fin_inclusivo, len(grupos), factura.tipo_suministro,
+                tarifa=atr,
+            ),
+        )
+        detalle.insert(0, "Tramo", f"{inicio}–{fin}")
+        detalles_excesos.append(detalle)
+        coste_excesos_ref += coste
+    return {
+        "potencia_referencia": round(float(coste_potencia_ref), 2),
+        "excesos_referencia": round(float(coste_excesos_ref), 2),
+        "detalle_potencia": pd.DataFrame(filas_potencia),
+        "detalle_excesos": pd.concat(detalles_excesos, ignore_index=True),
+    }
 
 
 def _semaforo_energia_real_sesion(factura, huella):
@@ -944,8 +1158,11 @@ def _estilar_diferencias_comparativa(tabla_numerica):
     return tabla_formateada.style.apply(lambda _: estilos, axis=None)
 
 
-tab_analisis, tab_verificacion, tab_comparativa, tab_informe = st.tabs(
-    ["Análisis", "Verificación", "Propuesta", "Informes"]
+(
+    tab_analisis, tab_verificacion, tab_ahorro_factura,
+    tab_comparativa, tab_informe,
+) = st.tabs(
+    ["Análisis", "Verificación", "Comparativa de ahorro", "Propuesta", "Informes"]
 )
 
 with tab_analisis:
@@ -2371,23 +2588,145 @@ with tab_verificacion:
                 "complementos_datadis"
             )
 
+        # Reaplica el origen por defecto al cambiar de factura o de acceso;
+        # después respeta la selección manual para esa factura.
+        error_acceso_medida = None
+        try:
+            acceso_medida_bbdd = cargar_acceso_medida_cups(factura.cups)
+        except Exception as exc:
+            acceso_medida_bbdd = {}
+            error_acceso_medida = str(exc)
+        if (
+            not st.session_state.get("es_admin", False)
+            and st.session_state.pop("_factura_axon_credencial_precargada_ref", None)
+        ):
+            for clave in (
+                "factura_axon_usuario", "factura_axon_password",
+                "axon_usuario_sesion", "axon_password_sesion",
+            ):
+                st.session_state.pop(clave, None)
+        credencial_axon = {}
+        if (
+            st.session_state.get("es_admin", False)
+            and acceso_medida_bbdd.get("proveedor") == "AXON"
+        ):
+            referencia = acceso_medida_bbdd.get("credencial_ref")
+            credenciales = st.secrets.get("MEASURE_CREDENTIALS", {})
+            credencial_axon = credenciales.get(referencia, {}) if referencia else {}
+        firma_acceso_medida = (
+            huella,
+            str(factura.cups or "").strip().upper()[:20],
+            acceso_medida_bbdd.get("proveedor", ""),
+            acceso_medida_bbdd.get("credencial_ref", ""),
+            bool(st.session_state.get("es_admin", False)),
+        )
+        if (
+            st.session_state.get("_factura_acceso_medida_contexto")
+            != firma_acceso_medida
+        ):
+            if (
+                st.session_state.get("es_admin", False)
+                and acceso_medida_bbdd.get("proveedor") == "AXON"
+            ):
+                if str(credencial_axon.get("proveedor", "")).upper() == "AXON":
+                    st.session_state.axon_usuario_sesion = str(
+                        credencial_axon.get("usuario", "")
+                    )
+                    st.session_state.axon_password_sesion = str(
+                        credencial_axon.get("password", "")
+                    )
+                    st.session_state.factura_axon_usuario = (
+                        st.session_state.axon_usuario_sesion
+                    )
+                    st.session_state.factura_axon_password = (
+                        st.session_state.axon_password_sesion
+                    )
+                    st.session_state._factura_axon_credencial_precargada_ref = (
+                        acceso_medida_bbdd.get("credencial_ref")
+                    )
+                    st.session_state.factura_axon_tipo = "TM2 · Cuartohoraria"
+            st.session_state["_factura_acceso_medida_contexto"] = (
+                firma_acceso_medida
+            )
+        firma_origen_medida = (
+            huella,
+            str(factura.cups or "").strip().upper()[:20],
+            acceso_medida_bbdd.get("proveedor", ""),
+        )
+        cambio_factura_medida = (
+            st.session_state.get("_factura_origen_medida_factura")
+            != firma_origen_medida
+        )
+        if cambio_factura_medida:
+            st.session_state["_factura_origen_medida_factura"] = (
+                firma_origen_medida
+            )
+            st.session_state.pop("_factura_origen_medida_manual", None)
+        if acceso_medida_bbdd.get("proveedor") == "AXON":
+            if (
+                st.session_state.get("_factura_origen_medida_manual")
+                != firma_origen_medida
+            ):
+                st.session_state.factura_origen_medida = "Axon"
+        elif cambio_factura_medida:
+            st.session_state.factura_origen_medida = "Datadis"
+
+        def registrar_origen_medida_manual():
+            st.session_state["_factura_origen_medida_manual"] = (
+                firma_origen_medida
+            )
+
         with tab_medida:
             st.subheader("1 · Datos de medida", divider="rainbow")
+            if error_acceso_medida:
+                st.warning(
+                    "No se ha podido consultar la vinculación de medida del "
+                    f"CUPS: {error_acceso_medida}"
+                )
+            elif acceso_medida_bbdd.get("proveedor") == "AXON":
+                if not st.session_state.get("es_admin", False):
+                    st.info(
+                        "Este CUPS está vinculado a Axon. La precarga de "
+                        "credenciales requiere una sesión de administrador."
+                    )
+                elif str(credencial_axon.get("proveedor", "")).upper() != "AXON":
+                    st.warning(
+                        "Este CUPS está vinculado a Axon, pero su referencia "
+                        "de credenciales no está disponible en la configuración."
+                    )
+                else:
+                    st.caption("Acceso Axon vinculado al CUPS y precargado.")
+            elif factura.cups:
+                st.caption(
+                    f"No hay un acceso de medida vinculado al CUPS "
+                    f"{str(factura.cups).strip().upper()[:20]}."
+                )
             origen_medida_factura = st.selectbox(
                 "Origen de datos",
                 ("Datadis", "Axon", "Archivo CSV/Excel"),
                 key="factura_origen_medida",
+                on_change=registrar_origen_medida_manual,
+            )
+            st.caption(
+                f"CUPS leído: {str(factura.cups or '').strip().upper()[:20] or 'ninguno'}"
+                f" · Acceso vinculado: {acceso_medida_bbdd.get('proveedor') or 'ninguno'}"
             )
             if origen_medida_factura == "Axon":
                 with st.expander("Acceso y descarga Axon", expanded=True):
+                    st.session_state.setdefault(
+                        "factura_axon_usuario",
+                        st.session_state.get("axon_usuario_sesion", ""),
+                    )
+                    st.session_state.setdefault(
+                        "factura_axon_password",
+                        st.session_state.get("axon_password_sesion", ""),
+                    )
                     usuario_axon_factura = st.text_input(
                         "Usuario Axon",
-                        value=st.session_state.get("axon_usuario_sesion", ""),
                         key="factura_axon_usuario",
                     )
                     password_axon_factura = st.text_input(
                         "Contraseña Axon",
-                        value=st.session_state.get("axon_password_sesion", ""),
                         type="password",
                         key="factura_axon_password",
                     )
@@ -2400,7 +2739,7 @@ with tab_verificacion:
                     )
                     tipo_axon_factura = st.selectbox(
                         "Resolución solicitada",
-                        ("TM1 · Horaria", "TM2 · Cuartohoraria"),
+                        ("TM2 · Cuartohoraria", "TM1 · Horaria"),
                         key="factura_axon_tipo",
                         help=(
                             "TM2 solo está disponible para determinados equipos "
@@ -3015,19 +3354,67 @@ with tab_verificacion:
         clave_tipo_energia_verificacion = (
             f"factura_verificacion_tipo_energia_{huella[:8]}"
         )
+        contexto_contractual = _contexto_contractual_factura(factura)
         with tab_condiciones:
             st.subheader("2 · Datos de factura", divider="rainbow")
             st.caption(
                 f"Fechas según factura: {factura.periodo_inicio} – "
                 f"{factura.periodo_fin}"
             )
+            condicion_energia_bbdd = None
+            if contexto_contractual.get("disponible"):
+                condiciones_bbdd = contexto_contractual["condiciones"]
+                with st.expander("Condiciones detectadas en BBDD", expanded=True):
+                    filas_bbdd = []
+                    for _, condicion_bbdd in condiciones_bbdd.iterrows():
+                        payload_bbdd = condicion_bbdd["payload"]
+                        filas_bbdd.append({
+                            "ID": int(condicion_bbdd["condicion_id"]),
+                            "Desde": condicion_bbdd["inicio_condicion"].date(),
+                            "Hasta": (
+                                condicion_bbdd["fin_condicion"].date()
+                                if pd.notna(condicion_bbdd["fin_condicion"]) else None
+                            ),
+                            "Tipo energía": condicion_bbdd["tipo_precio"],
+                            **{
+                                f"P{i} (kW)": numero_contractual(
+                                    payload_bbdd.get(f"P{i}")
+                                ) for i in range(1, len(periodos_medida) + 1)
+                            },
+                        })
+                    st.dataframe(
+                        pd.DataFrame(filas_bbdd), hide_index=True,
+                        use_container_width=True,
+                    )
+                    st.caption(
+                        "Los valores de BBDD se proponen en los formularios. "
+                        "Puedes revisarlos y modificarlos manualmente."
+                    )
+                if len(condiciones_bbdd) == 1:
+                    condicion_energia_bbdd = condiciones_bbdd.iloc[0]
+                else:
+                    st.warning(
+                        "El ciclo contiene varias condiciones contractuales. "
+                        "La energía queda en modo manual hasta habilitar el "
+                        "cálculo energético por tramos."
+                    )
+            else:
+                st.info(
+                    "Verificación manual: no se han podido aplicar condiciones "
+                    f"de BBDD. {contexto_contractual.get('mensaje', '')}"
+                )
             if resultado_medida is None:
                 st.info("Obtén primero la curva de medida en la pestaña anterior.")
             else:
                 if clave_tipo_energia_verificacion not in st.session_state:
+                    tipo_bbdd = (
+                        str(condicion_energia_bbdd["tipo_precio"] or "").upper()
+                        if condicion_energia_bbdd is not None else ""
+                    )
                     st.session_state[clave_tipo_energia_verificacion] = (
-                        "Indexado"
-                        if _factura_parece_indexada(factura, texto)
+                        "Fijo" if tipo_bbdd.startswith("FIJO")
+                        else "Indexado" if tipo_bbdd
+                        else "Indexado" if _factura_parece_indexada(factura, texto)
                         else "Fijo"
                     )
                 tipo_energia_verificacion = st.radio(
@@ -3051,26 +3438,182 @@ with tab_verificacion:
                         for item in factura.energia_periodos
                         if item.periodo in periodos_medida
                     }
+                    payload_energia_bbdd = (
+                        condicion_energia_bbdd["payload"]
+                        if condicion_energia_bbdd is not None else {}
+                    )
+                    marca_energia_bbdd = (
+                        huella,
+                        int(condicion_energia_bbdd["condicion_id"])
+                        if condicion_energia_bbdd is not None else None,
+                    )
+                    if st.session_state.get(
+                        "factura_energia_bbdd_precargada"
+                    ) != marca_energia_bbdd:
+                        for periodo in periodos_medida:
+                            precio_bbdd = payload_energia_bbdd.get(f"TE {periodo}")
+                            if precio_bbdd not in (None, ""):
+                                st.session_state[
+                                    f"factura_medida_precio_{periodo}_{huella[:8]}"
+                                ] = numero_contractual(precio_bbdd)
+                        st.session_state.factura_energia_bbdd_precargada = (
+                            marca_energia_bbdd
+                        )
                     columnas_precio = st.columns(3)
                     for indice, periodo in enumerate(periodos_medida):
+                        precio_bbdd = payload_energia_bbdd.get(f"TE {periodo}")
+                        valor_precio = (
+                            numero_contractual(precio_bbdd)
+                            if precio_bbdd not in (None, "")
+                            else float(precios_factura.get(periodo, 0.0))
+                        )
                         with columnas_precio[indice % 3]:
                             precios_confirmados[periodo] = st.number_input(
                                 f"{periodo} (€/kWh)",
                                 min_value=0.0,
                                 max_value=2.0,
-                                value=float(precios_factura.get(periodo, 0.0)),
+                                value=valor_precio,
                                 step=0.001,
                                 format="%.6f",
                                 key=(
                                     f"factura_medida_precio_{periodo}_{huella[:8]}"
                                 ),
                             )
+                    if condicion_energia_bbdd is not None:
+                        filas_contraste_energia = []
+                        for periodo in periodos_medida:
+                            precio_factura = precios_factura.get(periodo)
+                            precio_bbdd_raw = payload_energia_bbdd.get(
+                                f"TE {periodo}"
+                            )
+                            referencia_raw = payload_energia_bbdd.get(
+                                f"TE REF{periodo.removeprefix('P')}"
+                            )
+                            precio_bbdd = (
+                                numero_contractual(precio_bbdd_raw)
+                                if precio_bbdd_raw not in (None, "") else None
+                            )
+                            precio_referencia = (
+                                numero_contractual(referencia_raw)
+                                if referencia_raw not in (None, "") else None
+                            )
+                            consumo_medida = float(
+                                resultado_medida.consumos_periodos.get(periodo, 0.0)
+                            )
+                            filas_contraste_energia.append({
+                                "Periodo": periodo,
+                                "Consumo medida (kWh)": consumo_medida,
+                                "TE factura (€/kWh)": precio_factura,
+                                "TE BBDD (€/kWh)": precio_bbdd,
+                                "Δ TE factura-BBDD": (
+                                    float(precio_factura) - precio_bbdd
+                                    if precio_factura is not None
+                                    and precio_bbdd is not None else None
+                                ),
+                                "Coste s/factura (€)": (
+                                    consumo_medida * float(precio_factura)
+                                    if precio_factura is not None else None
+                                ),
+                                "Coste s/BBDD (€)": (
+                                    consumo_medida * precio_bbdd
+                                    if precio_bbdd is not None else None
+                                ),
+                                "TE referencia (€/kWh)": precio_referencia,
+                            })
+                        st.markdown("#### Energía: factura vs BBDD")
+                        st.dataframe(
+                            pd.DataFrame(filas_contraste_energia),
+                            hide_index=True, use_container_width=True,
+                        )
+                        st.caption(
+                            "Los TE de BBDD son la propuesta inicial editable. "
+                            "TE REF se muestra solo como referencia contractual y "
+                            "no interviene en esta verificación."
+                        )
+                    else:
+                        st.caption(
+                            "Origen inicial: factura/manual. No se aplica ningún "
+                            "precio contractual sin una condición BBDD unívoca."
+                        )
                 else:
                     st.markdown("#### Confirma la fórmula indexada de energía")
                     st.caption(
                         "Configuración común con Telemindex. Se aplicará a los "
                         "consumos reales de la curva para el periodo de la factura."
                     )
+                    if condicion_energia_bbdd is not None:
+                        payload_formula = condicion_energia_bbdd["payload"]
+                        marca_formula = (
+                            huella, int(condicion_energia_bbdd["condicion_id"])
+                        )
+                        if st.session_state.get(
+                            "factura_formula_bbdd_precargada"
+                        ) != marca_formula:
+                            posiciones = {"1": "perdidas", "2": "tm", "3": "neto"}
+                            valores_formula = {
+                                "desvios_apant": numero_contractual(
+                                    payload_formula.get("INDEX DESVIOS")
+                                ),
+                                "margen_telemindex": numero_contractual(
+                                    payload_formula.get("INDEX CG")
+                                ),
+                                "cfg_margen_pos": posiciones.get(
+                                    str(payload_formula.get("CG F")), "tm"
+                                ),
+                                "cfg_fnee": str(payload_formula.get("FNEE F"))
+                                in posiciones,
+                                "cfg_fnee_pos": posiciones.get(
+                                    str(payload_formula.get("FNEE F")), "perdidas"
+                                ),
+                                "cf_pct": numero_contractual(
+                                    payload_formula.get("C FINAN %")
+                                ),
+                            }
+                            for clave_formula, valor_formula in valores_formula.items():
+                                st.session_state[clave_formula] = valor_formula
+                                st.session_state[
+                                    f"_{clave_formula}_factura_verificacion"
+                                ] = valor_formula
+                            st.session_state.factura_formula_bbdd_precargada = (
+                                marca_formula
+                            )
+                        st.markdown("#### Fórmula contractual detectada")
+                        st.dataframe(
+                            pd.DataFrame([
+                                {
+                                    "Parámetro": "Margen",
+                                    "Valor BBDD": payload_formula.get("INDEX CG"),
+                                    "Posición": payload_formula.get("CG F"),
+                                },
+                                {
+                                    "Parámetro": "Desvíos",
+                                    "Valor BBDD": payload_formula.get(
+                                        "INDEX DESVIOS"
+                                    ),
+                                    "Posición": payload_formula.get("DESV F"),
+                                },
+                                {
+                                    "Parámetro": "FNEE",
+                                    "Valor BBDD": payload_formula.get("INDEX FNEE"),
+                                    "Posición": payload_formula.get("FNEE F"),
+                                },
+                                {
+                                    "Parámetro": "Coste financiero",
+                                    "Valor BBDD": payload_formula.get("C FINAN %"),
+                                    "Posición": None,
+                                },
+                            ]),
+                            hide_index=True, use_container_width=True,
+                        )
+                        st.caption(
+                            "Posiciones legacy: 1 pérdidas · 2 término de mercado "
+                            "· 3 neto · 4 fuera de fórmula."
+                        )
+                    else:
+                        st.caption(
+                            "Origen inicial: factura/manual. Confirma todos los "
+                            "parámetros antes de aplicar la fórmula."
+                        )
                     parametros_indexados_verificacion = mostrar_parametros_formula_indexado(
                         widget_suffix="factura_verificacion",
                         diferido=True,
@@ -3122,6 +3665,85 @@ with tab_verificacion:
                     sufijo_tramo = re.sub(
                         r"\D", "", f"{inicio_tramo}_{fin_tramo}"
                     )
+                    condicion_tramo_bbdd = _condicion_para_fecha(
+                        contexto_contractual, inicio_tramo
+                    )
+                    payload_tramo_bbdd = (
+                        condicion_tramo_bbdd["payload"]
+                        if condicion_tramo_bbdd is not None else {}
+                    )
+                    marca_tramo = (
+                        huella,
+                        int(condicion_tramo_bbdd["condicion_id"])
+                        if condicion_tramo_bbdd is not None else None,
+                        sufijo_tramo,
+                    )
+                    clave_marca_tramo = f"factura_bbdd_tramo_{sufijo_tramo}"
+                    ejercicio_tramo = pd.to_datetime(
+                        inicio_tramo, dayfirst=True
+                    ).year
+                    dias_ejercicio = (
+                        366 if calendar.isleap(ejercicio_tramo) else 365
+                    )
+                    if st.session_state.get(clave_marca_tramo) != marca_tramo:
+                        for item in items_tramo:
+                            potencia_bbdd = payload_tramo_bbdd.get(item.periodo)
+                            tp_anual_bbdd = payload_tramo_bbdd.get(
+                                f"TP {item.periodo}"
+                            )
+                            if potencia_bbdd not in (None, ""):
+                                st.session_state[
+                                    f"factura_medida_potencia_kw_{item.periodo}_"
+                                    f"{sufijo_tramo}_{huella[:8]}"
+                                ] = numero_contractual(potencia_bbdd)
+                            if tp_anual_bbdd not in (None, ""):
+                                st.session_state[
+                                    f"factura_medida_precio_potencia_{item.periodo}_"
+                                    f"{sufijo_tramo}_{huella[:8]}"
+                                ] = numero_contractual(tp_anual_bbdd) / dias_ejercicio
+                        st.session_state[clave_marca_tramo] = marca_tramo
+                    if condicion_tramo_bbdd is not None:
+                        st.caption(
+                            "Valores propuestos desde BBDD · condición "
+                            f"{int(condicion_tramo_bbdd['condicion_id'])}. "
+                            "TP convertido de €/kW año a €/kW día."
+                        )
+                        contraste_tramo = []
+                        for item in items_tramo:
+                            potencia_bbdd = numero_contractual(
+                                payload_tramo_bbdd.get(item.periodo)
+                            )
+                            tp_bbdd = numero_contractual(
+                                payload_tramo_bbdd.get(f"TP {item.periodo}")
+                            ) / dias_ejercicio
+                            contraste_tramo.append({
+                                "Periodo": item.periodo,
+                                "Potencia factura (kW)": float(item.potencia_kw),
+                                "Potencia BBDD (kW)": potencia_bbdd,
+                                "Δ potencia (kW)": (
+                                    float(item.potencia_kw) - potencia_bbdd
+                                ),
+                                "TP factura (€/kW día)": float(
+                                    item.precio_facturado_eur_kw_dia
+                                ),
+                                "TP BBDD (€/kW día)": tp_bbdd,
+                                "Δ TP (€/kW día)": float(
+                                    item.precio_facturado_eur_kw_dia
+                                ) - tp_bbdd,
+                            })
+                        with st.expander(
+                            f"Factura vs BBDD · tramo {numero_tramo}",
+                            expanded=False,
+                        ):
+                            st.dataframe(
+                                pd.DataFrame(contraste_tramo),
+                                hide_index=True, use_container_width=True,
+                            )
+                    else:
+                        st.caption(
+                            "Sin condición BBDD unívoca para este tramo: valores "
+                            "extraídos de factura y revisión manual."
+                        )
                     st.caption("Potencias contratadas (kW)")
                     columnas_potencia_kw = st.columns(3)
                     potencias_tramo = {}
@@ -3680,6 +4302,28 @@ with tab_verificacion:
                     hide_index=True,
                     use_container_width=True,
                 )
+                origen_energia_calculo = (
+                    f"BBDD · condición {int(condicion_energia_bbdd['condicion_id'])}"
+                    if condicion_energia_bbdd is not None else "Factura / manual"
+                )
+                detalle_costes.caption(
+                    f"Origen de precios o fórmula: {origen_energia_calculo}."
+                )
+                detalle_costes.dataframe(
+                    pd.DataFrame([{
+                        "Energía facturada": formato_euros(
+                            energia_facturada_comparable
+                        ),
+                        "Energía verificada": formato_euros(
+                            coste_energia_medida
+                        ),
+                        "Diferencia factura-verificación": formato_euros(
+                            energia_facturada_comparable - coste_energia_medida
+                        ),
+                    }]),
+                    hide_index=True,
+                    use_container_width=True,
+                )
                 detalle_potencia_beta, coste_potencia_beta = (
                     calcular_potencia_confirmada(potencia_confirmada)
                 )
@@ -3780,6 +4424,7 @@ with tab_verificacion:
                     energia_verificada=coste_energia_medida,
                     otros_facturados=componentes_facturados_beta,
                     otros_confirmados=componentes_confirmados,
+                    claves_otros_base_iee=("excesos_potencia",),
                     iee_facturado=factura.iee,
                     iva_facturado=factura.iva,
                     base_iee_factura=(
@@ -4061,6 +4706,84 @@ with tab_verificacion:
                         hide_index=True,
                         use_container_width=True,
                 )
+                if tabla_resumen_componentes.button(
+                    "Guardar verificación en la BBDD",
+                    type="primary",
+                    use_container_width=True,
+                    key=f"guardar_verificacion_bbdd_{huella[:8]}",
+                ):
+                    try:
+                        pct_verificacion = (
+                            reconstruccion_beta["diferencia_total"]
+                            / reconstruccion_beta["total_verificado"] * 100
+                            if abs(reconstruccion_beta["total_verificado"]) > 0.000001
+                            else None
+                        )
+                        componentes_historial = _componentes_historial(
+                            tabla_total_beta,
+                            columna_referencia="Verificado (€)",
+                            columna_diferencia="Diferencia (€)",
+                            columna_pct="Desvío (%)",
+                        )
+                        medida_sesion_historial = st.session_state.get(
+                            "factura_verificacion_consumos", {}
+                        )
+                        id_analisis, creado = guardar_analisis(
+                            tipo="VERIFICACION",
+                            cups=factura.cups,
+                            numero_factura=factura.numero_factura,
+                            fecha_factura=_fecha_iso_historial(factura.fecha_factura),
+                            ciclo_inicio=_fecha_iso_historial(factura.periodo_inicio),
+                            ciclo_fin=_fecha_iso_historial(factura.periodo_fin),
+                            estado=beta_texto,
+                            total_facturado_eur=factura.total,
+                            total_referencia_eur=reconstruccion_beta[
+                                "total_verificado"
+                            ],
+                            diferencia_eur=reconstruccion_beta["diferencia_total"],
+                            diferencia_pct=pct_verificacion,
+                            componentes=componentes_historial,
+                            referencias=_referencias_historial(contexto_contractual),
+                            snapshot={
+                                "tipo": "VERIFICACION",
+                                "huella_factura": huella,
+                                "texto_factura": texto,
+                                "factura": factura.como_dict(),
+                                "medida": _snapshot_medida_historial(
+                                    resultado_medida, medida_sesion_historial
+                                ),
+                                "resultado": {
+                                    "estado": beta_texto,
+                                    "reconstruccion": reconstruccion_beta,
+                                    "componentes": tabla_total_beta,
+                                    "detalle_energia": detalle_coste_mostrar,
+                                    "detalle_potencia": detalle_potencia_mostrar,
+                                    "detalle_excesos": detalle_excesos_beta,
+                                    "componentes_no_verificados": sorted(
+                                        componentes_no_verificados_beta
+                                    ),
+                                    "revision_manual_factura": revision_manual_factura,
+                                    "revision_manual_real": revision_manual_real,
+                                },
+                                "referencias": _referencias_historial(
+                                    contexto_contractual
+                                ),
+                            },
+                            version_calculo="verificacion_v1",
+                            creado_por=(
+                                "admin" if st.session_state.get("es_admin") else None
+                            ),
+                        )
+                        mensaje = (
+                            f"Verificación guardada con ID {id_analisis}."
+                            if creado else
+                            f"Esta verificación ya estaba guardada con ID {id_analisis}."
+                        )
+                        tabla_resumen_componentes.success(mensaje)
+                    except Exception as exc:
+                        tabla_resumen_componentes.error(
+                            f"No se pudo guardar la verificación: {exc}"
+                        )
                 if not reparto_energia_potencia.empty:
                     figura_reparto_contrato = px.pie(
                         reparto_energia_potencia,
@@ -4310,6 +5033,861 @@ with tab_verificacion:
                         "No se ha podido recalcular completamente IEE o IVA; se "
                         "mantiene el importe facturado del impuesto sin referencia."
                     )
+
+
+with tab_ahorro_factura:
+    if factura is None:
+        st.info("Carga una factura para calcular el escenario de referencia.")
+    elif _atr_indexado(factura.atr) is None:
+        st.info("El ATR de esta factura todavía no está soportado.")
+    else:
+        contexto_ahorro = _contexto_contractual_factura(factura)
+        medida_sesion_ahorro = st.session_state.get(
+            "factura_verificacion_consumos"
+        )
+        medida_ahorro = (
+            medida_sesion_ahorro.get("resultado")
+            if medida_sesion_ahorro
+            and medida_sesion_ahorro.get("huella") == huella else None
+        )
+        col_impacto_ahorro, col_detalle_ahorro = st.columns(
+            [0.40, 0.60], gap="large"
+        )
+        col_impacto_ahorro.subheader(
+            "Resultado de la comparativa", divider="rainbow"
+        )
+        col_impacto_ahorro.caption(
+            "Se realiza una comparativa de ahorro entre los importes "
+            "facturados y un escenario de referencia."
+        )
+        zona_impacto_principal_ahorro = col_impacto_ahorro.empty()
+        try:
+            comparativa_ref = _comparativa_referencia_potencia(
+                factura, medida_ahorro, contexto_ahorro,
+                _atr_indexado(factura.atr),
+            )
+            exceso_facturado = float(factura.excesos_potencia or 0.0)
+            verificacion_iee_ahorro = factura.verificacion_iee
+            verificacion_iva_ahorro = factura.verificacion_iva
+            reconstruccion_ref = reconstruir_total_beta(
+                total_factura=factura.total,
+                potencia_facturada=factura.potencia,
+                potencia_verificada=comparativa_ref["potencia_referencia"],
+                energia_facturada=factura.energia,
+                energia_verificada=factura.energia,
+                otros_facturados={"excesos": exceso_facturado},
+                otros_confirmados={
+                    "excesos": comparativa_ref["excesos_referencia"]
+                },
+                claves_otros_base_iee=("excesos",),
+                iee_facturado=factura.iee,
+                iva_facturado=factura.iva,
+                base_iee_factura=(
+                    verificacion_iee_ahorro.base_eur
+                    if verificacion_iee_ahorro else None
+                ),
+                tipo_iee_pct=(
+                    verificacion_iee_ahorro.tipo_regulado_pct
+                    or verificacion_iee_ahorro.tipo_pct
+                    if verificacion_iee_ahorro else None
+                ),
+                base_iva_factura=(
+                    verificacion_iva_ahorro.base_eur
+                    if verificacion_iva_ahorro else None
+                ),
+                tipo_iva_pct=(
+                    verificacion_iva_ahorro.tipo_regulado_pct
+                    or verificacion_iva_ahorro.tipo_pct
+                    if verificacion_iva_ahorro else None
+                ),
+            )
+            total_referencia = reconstruccion_ref["total_verificado"]
+            diferencia_total = float(factura.total) - total_referencia
+            impacto_componente = (
+                float(factura.potencia) + exceso_facturado
+                - comparativa_ref["potencia_referencia"]
+                - comparativa_ref["excesos_referencia"]
+            )
+            base_componente = (
+                comparativa_ref["potencia_referencia"]
+                + comparativa_ref["excesos_referencia"]
+            )
+            pct_componente = (
+                impacto_componente / base_componente * 100
+                if base_componente else None
+            )
+            pct_total = (
+                diferencia_total / total_referencia * 100
+                if total_referencia else None
+            )
+            efecto_iee = float(factura.iee) - reconstruccion_ref["iee_verificado"]
+            efecto_iva = float(factura.iva) - reconstruccion_ref["iva_verificado"]
+
+            veredicto = (
+                "Ahorro" if diferencia_total < 0
+                else "Sobrecoste" if diferencia_total > 0 else "Sin diferencia"
+            )
+            color_impacto = (
+                "#00c853" if diferencia_total < 0
+                else "#ef4444" if diferencia_total > 0 else "#9ca3af"
+            )
+            zona_gauge, zona_metricas = col_impacto_ahorro.columns(
+                [0.72, 0.28], gap="medium"
+            )
+            pct_gauge_real = float(pct_total or 0.0)
+            valor_gauge = max(-50.0, min(50.0, pct_gauge_real))
+            ancho_arco_impacto = abs(valor_gauge) / 50.0 * 90
+            centro_arco_impacto = (
+                90 - ancho_arco_impacto / 2
+                if valor_gauge >= 0 else 90 + ancho_arco_impacto / 2
+            )
+            figura_impacto = go.Figure()
+            figura_impacto.add_trace(go.Barpolar(
+                r=[0.28, 0.28], theta=[135, 45], width=[90, 90],
+                base=[0.72, 0.72],
+                marker_color=[
+                    "rgba(0,166,81,.16)", "rgba(239,68,68,.16)"
+                ],
+                marker_line_width=0, hoverinfo="skip", showlegend=False,
+            ))
+            if ancho_arco_impacto > 0:
+                figura_impacto.add_trace(go.Barpolar(
+                    r=[0.28], theta=[centro_arco_impacto],
+                    width=[ancho_arco_impacto], base=[0.72],
+                    marker_color=color_impacto, marker_line_width=0,
+                    hovertemplate=(
+                        f"Facturado − referencia: {pct_gauge_real:.2f} %<extra></extra>"
+                    ),
+                    showlegend=False,
+                ))
+            figura_impacto.add_trace(go.Scatterpolar(
+                r=[0.68, 1.05], theta=[90, 90], mode="lines",
+                line=dict(color="#9ca3af", width=2),
+                hoverinfo="skip", showlegend=False,
+            ))
+            figura_impacto.add_annotation(
+                x=0.5, y=1.18,
+                text=f"<b>{veredicto}</b>",
+                showarrow=False, font=dict(size=17),
+            )
+            figura_impacto.add_annotation(
+                x=0.5, y=0.02, xref="paper", yref="paper",
+                text=f"<b>{pct_gauge_real:.2f} %</b>", showarrow=False,
+                font=dict(size=50, color=color_impacto),
+            )
+            for posicion_x, posicion_y, etiqueta in (
+                (0.13, 0.02, "−50 %"),
+                (0.5, 1.07, "0 %"),
+                (0.87, 0.02, "+50 %"),
+            ):
+                figura_impacto.add_annotation(
+                    x=posicion_x, y=posicion_y, text=etiqueta,
+                    showarrow=False, font=dict(size=15),
+                )
+            figura_impacto.update_layout(
+                height=300, margin=dict(l=8, r=8, t=48, b=5),
+                paper_bgcolor="rgba(0,0,0,0)", font=dict(family="Arial"),
+                polar=dict(
+                    sector=[0, 180],
+                    radialaxis=dict(visible=False, range=[0, 1.08]),
+                    angularaxis=dict(visible=False),
+                    bgcolor="rgba(0,0,0,0)",
+                ),
+                barmode="overlay", showlegend=False,
+            )
+            zona_gauge.plotly_chart(
+                figura_impacto, use_container_width=True,
+                key=f"gauge_comparativa_ahorro_{huella[:8]}",
+                config={"displayModeBar": False},
+            )
+            zona_metricas.metric("Total factura", formato_euros(factura.total))
+            zona_metricas.metric(
+                "Total referencia", formato_euros(total_referencia)
+            )
+            with zona_metricas.container(border=True):
+                st.metric(
+                    veredicto.upper(),
+                    formato_euros_con_signo(diferencia_total),
+                    delta=(
+                        formato_pct_con_signo(pct_total, 2)
+                        if pct_total is not None else None
+                    ),
+                    delta_color="inverse",
+                )
+            zona_metricas.caption(
+                "Negativo = ahorro · Positivo = sobrecoste"
+            )
+
+            valores_referencia = {
+                "Potencia": comparativa_ref["potencia_referencia"],
+                "Excesos": comparativa_ref["excesos_referencia"],
+                "Excesos de potencia": comparativa_ref["excesos_referencia"],
+                "IEE": reconstruccion_ref["iee_verificado"],
+                "IVA": reconstruccion_ref["iva_verificado"],
+            }
+            filas_componentes = []
+            for componente in componentes_grafico(factura):
+                nombre = componente["Componente"]
+                importe_facturado = float(componente["Importe (€)"])
+                importe_referencia = float(
+                    valores_referencia.get(nombre, importe_facturado)
+                )
+                diferencia = importe_facturado - importe_referencia
+                filas_componentes.append({
+                    "Componente": nombre,
+                    "Facturado (€)": importe_facturado,
+                    "Referencia (€)": importe_referencia,
+                    "Facturado − referencia (€)": diferencia,
+                    "Diferencial (%)": (
+                        diferencia / importe_referencia * 100
+                        if importe_referencia else None
+                    ),
+                })
+            filas_componentes.append({
+                "Componente": "TOTAL",
+                "Facturado (€)": float(factura.total),
+                "Referencia (€)": total_referencia,
+                "Facturado − referencia (€)": diferencia_total,
+                "Diferencial (%)": pct_total,
+            })
+            tabla_componentes_ahorro = pd.DataFrame(filas_componentes)
+
+            def color_diferencia_ahorro(valor):
+                if pd.isna(valor) or float(valor) == 0:
+                    return ""
+                color = "#00c853" if float(valor) < 0 else "#ef4444"
+                return f"color:{color};font-weight:700;"
+
+            tabla_componentes_ahorro_estilo = (
+                tabla_componentes_ahorro.style
+                .format({
+                    "Facturado (€)": lambda valor: formato_euros(
+                        valor, unidad=False
+                    ),
+                    "Referencia (€)": lambda valor: formato_euros(
+                        valor, unidad=False
+                    ),
+                    "Facturado − referencia (€)": lambda valor: (
+                        formato_euros_con_signo(valor, unidad=False)
+                    ),
+                    "Diferencial (%)": lambda valor: formato_pct_con_signo(
+                        valor, unidad=False
+                    ),
+                }, na_rep="")
+                .applymap(
+                    color_diferencia_ahorro,
+                    subset=[
+                        "Facturado − referencia (€)",
+                        "Diferencial (%)",
+                    ],
+                )
+            )
+            diferencia_sin_iva = diferencia_total - efecto_iva
+            col_impacto_ahorro.subheader(
+                "Resumen por componentes", divider="rainbow"
+            )
+            col_impacto_ahorro.dataframe(
+                tabla_componentes_ahorro_estilo,
+                hide_index=True, use_container_width=True,
+            )
+
+            col_detalle_ahorro.subheader(
+                "Detalle del término de potencia", divider="rainbow"
+            )
+            (
+                tab_resumen_termino_potencia,
+                tab_detalle_potencia,
+                tab_detalle_excesos,
+            ) = col_detalle_ahorro.tabs(
+                (
+                    "Detalle del término de potencia",
+                    "Detalle de potencia facturada",
+                    "Detalle de excesos de potencia",
+                )
+            )
+            with tab_resumen_termino_potencia:
+                tabla_termino_potencia = pd.DataFrame([
+                    {
+                        "Concepto": "Potencia facturada",
+                        "Facturado (€)": float(factura.potencia),
+                        "Referencia (€)": comparativa_ref[
+                            "potencia_referencia"
+                        ],
+                    },
+                    {
+                        "Concepto": "Excesos de potencia",
+                        "Facturado (€)": exceso_facturado,
+                        "Referencia (€)": comparativa_ref[
+                            "excesos_referencia"
+                        ],
+                    },
+                ])
+                tabla_termino_potencia["Facturado − referencia (€)"] = (
+                    tabla_termino_potencia["Facturado (€)"]
+                    - tabla_termino_potencia["Referencia (€)"]
+                )
+                tabla_termino_potencia["Diferencial (%)"] = (
+                    tabla_termino_potencia[
+                        "Facturado − referencia (€)"
+                    ].div(
+                        tabla_termino_potencia["Referencia (€)"].replace(
+                            0, pd.NA
+                        )
+                    ).mul(100)
+                )
+                total_facturado_potencia = float(
+                    tabla_termino_potencia["Facturado (€)"].sum()
+                )
+                total_referencia_potencia = float(
+                    tabla_termino_potencia["Referencia (€)"].sum()
+                )
+                diferencia_termino_potencia = (
+                    total_facturado_potencia - total_referencia_potencia
+                )
+                pct_termino_potencia = (
+                    diferencia_termino_potencia
+                    / total_referencia_potencia * 100
+                    if total_referencia_potencia else None
+                )
+                def datos_visuales_impacto(valor):
+                    if valor < -0.005:
+                        return "AHORRO", "#00c853", "rgba(0,200,83,.08)"
+                    if valor > 0.005:
+                        return "SOBRECOSTE", "#ff1744", "rgba(255,23,68,.08)"
+                    return "SIN DIFERENCIA", "#9ca3af", "rgba(156,163,175,.08)"
+
+                _, color_con_iva_tp, fondo_con_iva_tp = (
+                    datos_visuales_impacto(diferencia_total)
+                )
+
+                icono_impacto_tp = (
+                    "▲" if diferencia_total < -0.005
+                    else "▼" if diferencia_total > 0.005 else "◆"
+                )
+                titulo_impacto_tp = (
+                    "Ahorro obtenido"
+                    if diferencia_total < -0.005
+                    else "Sobrecoste obtenido"
+                    if diferencia_total > 0.005
+                    else "Sin diferencia"
+                )
+                inicio_impacto_tp = str(factura.periodo_inicio or "").strip()
+                fin_impacto_tp = str(factura.periodo_fin or "").strip()
+                periodo_impacto_tp = (
+                    f"del {inicio_impacto_tp} al {fin_impacto_tp}"
+                    if inicio_impacto_tp and fin_impacto_tp else ""
+                )
+                zona_impacto_principal_ahorro.markdown(
+                    f"""
+                    <div style="min-height:180px;padding:16px 24px 14px;
+                        border-radius:20px;border:2px solid {color_con_iva_tp};
+                        background:{fondo_con_iva_tp};display:flex;
+                        flex-direction:column;justify-content:center;text-align:center;
+                        margin-bottom:1.75rem;">
+                      <div style="font-size:1.75rem;font-weight:900;line-height:1.05;">
+                        {titulo_impacto_tp}
+                      </div>
+                      <div style="font-size:.72rem;margin:.3rem 0 .45rem;
+                          color:#9ca3af;letter-spacing:.02em;">
+                        {periodo_impacto_tp}
+                      </div>
+                      <div style="display:flex;align-items:center;justify-content:center;
+                          gap:1.1rem;color:{color_con_iva_tp};">
+                        <span style="font-size:2.25rem;line-height:1;">
+                          {icono_impacto_tp}
+                        </span>
+                        <span style="font-size:2.25rem;font-weight:900;line-height:1;">
+                          {formato_euros(abs(diferencia_total))}
+                        </span>
+                      </div>
+                      <div style="font-size:.72rem;color:#9ca3af;margin-top:.15rem;">
+                        Importe final con IVA
+                      </div>
+                      <div style="font-size:.92rem;font-style:italic;margin-top:.65rem;">
+                        Importe total sin IVA:
+                        <strong>{formato_euros(abs(diferencia_sin_iva))}</strong>
+                        <span style="color:#9ca3af;"> · incluye IEE · base para bonificación</span>
+                      </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                etiqueta_impacto_tp, color_impacto_tp, fondo_impacto_tp = (
+                    datos_visuales_impacto(diferencia_termino_potencia)
+                )
+                tarjeta_tp_euros, tarjeta_tp_pct = st.columns(2, gap="medium")
+                estilo_tarjeta_tp = (
+                    "min-height:132px;padding:16px 18px;border-radius:14px;"
+                    f"border:1px solid {color_impacto_tp};"
+                    f"border-left:6px solid {color_impacto_tp};"
+                    f"background:{fondo_impacto_tp};"
+                    "display:flex;flex-direction:column;justify-content:center;"
+                )
+                tarjeta_tp_euros.markdown(
+                    f"""
+                    <div style="{estilo_tarjeta_tp}">
+                      <div style="font-size:.75rem;font-weight:800;letter-spacing:.08em;
+                          color:#9ca3af;text-align:center;">
+                        TÉRMINO DE POTENCIA · IMPACTO TOTAL
+                      </div>
+                      <div style="font-size:1.75rem;font-weight:900;text-align:center;
+                          color:{color_impacto_tp};margin:.3rem 0;">
+                        {etiqueta_impacto_tp} · {formato_euros(abs(diferencia_termino_potencia))}
+                      </div>
+                      <div style="font-size:.82rem;text-align:center;color:#cbd5e1;">
+                        Facturado {formato_euros(total_facturado_potencia)} →
+                        referencia {formato_euros(total_referencia_potencia)}
+                      </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                tarjeta_tp_pct.markdown(
+                    f"""
+                    <div style="{estilo_tarjeta_tp}">
+                      <div style="font-size:.75rem;font-weight:800;letter-spacing:.08em;
+                          color:#9ca3af;text-align:center;">
+                        IMPACTO RELATIVO · FACTURADO VS REFERENCIA
+                      </div>
+                      <div style="font-size:2.15rem;font-weight:900;text-align:center;
+                          color:{color_impacto_tp};margin:.2rem 0;">
+                        {formato_pct(abs(pct_termino_potencia), 2) if pct_termino_potencia is not None else '—'}
+                      </div>
+                      <div style="font-size:.82rem;text-align:center;color:#cbd5e1;">
+                        Potencia facturada + excesos de potencia
+                      </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                tabla_termino_potencia = pd.concat([
+                    tabla_termino_potencia,
+                    pd.DataFrame([{
+                        "Concepto": "TOTAL TÉRMINO DE POTENCIA",
+                        "Facturado (€)": total_facturado_potencia,
+                        "Referencia (€)": total_referencia_potencia,
+                        "Facturado − referencia (€)": (
+                            diferencia_termino_potencia
+                        ),
+                        "Diferencial (%)": pct_termino_potencia,
+                    }]),
+                ], ignore_index=True)
+                tabla_termino_potencia_fmt = formatear_columnas_tabla(
+                    tabla_termino_potencia,
+                    columnas_euros=[
+                        "Facturado (€)", "Referencia (€)",
+                        "Facturado − referencia (€)",
+                    ],
+                    columnas_pct=["Diferencial (%)"],
+                    incluir_unidades=False,
+                )
+                estilos_termino_potencia = pd.DataFrame(
+                    "", index=tabla_termino_potencia_fmt.index,
+                    columns=tabla_termino_potencia_fmt.columns,
+                )
+                for columna in (
+                    "Facturado − referencia (€)", "Diferencial (%)"
+                ):
+                    for indice, valor in tabla_termino_potencia[columna].items():
+                        if pd.isna(valor):
+                            continue
+                        if valor < -0.005:
+                            estilos_termino_potencia.loc[indice, columna] = (
+                                "color:#00e676;font-weight:800;"
+                            )
+                        elif valor > 0.005:
+                            estilos_termino_potencia.loc[indice, columna] = (
+                                "color:#ff1744;font-weight:800;"
+                            )
+                st.caption(
+                    "El término de potencia reúne la potencia facturada y los "
+                    "excesos de potencia del mismo ciclo."
+                )
+                st.dataframe(
+                    tabla_termino_potencia_fmt.style.apply(
+                        lambda _: estilos_termino_potencia, axis=None
+                    ),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+            with tab_detalle_potencia:
+                st.markdown("#### Cálculo justificativo de la referencia")
+                st.caption(
+                    "La potencia de referencia utiliza P1 REF…P6 REF y los "
+                    "precios de potencia vigentes guardados en la BBDD."
+                )
+                detalle_potencia_numerico = comparativa_ref[
+                    "detalle_potencia"
+                ].copy()
+                columna_diferencia_potencia = "Facturado − referencia (€)"
+                detalle_potencia_justificativo = detalle_potencia_numerico.drop(
+                    columns=[
+                        "Coste facturado (€)",
+                        columna_diferencia_potencia,
+                    ],
+                    errors="ignore",
+                )
+                detalle_potencia_formateado = formatear_columnas_tabla(
+                    detalle_potencia_justificativo,
+                    columnas_kw=[
+                        "Potencia facturada (kW)",
+                        "Potencia referencia (kW)",
+                    ],
+                    columnas_eur_kw_dia=["TP referencia (€/kW día)"],
+                    columnas_euros=[
+                        "Coste referencia (€)",
+                    ],
+                    incluir_unidades=False,
+                )
+                diferencia_potencia_total = float(
+                    detalle_potencia_numerico[
+                        columna_diferencia_potencia
+                    ].sum()
+                )
+                etiqueta_potencia = (
+                    "Ahorro en la potencia facturada"
+                    if diferencia_potencia_total < -0.005
+                    else "Sobrecoste en la potencia facturada"
+                    if diferencia_potencia_total > 0.005
+                    else "Sin diferencia en la potencia facturada"
+                )
+                color_potencia = (
+                    "#00e676" if diferencia_potencia_total < -0.005
+                    else "#ff1744" if diferencia_potencia_total > 0.005
+                    else "#9ca3af"
+                )
+                st.dataframe(
+                    detalle_potencia_formateado,
+                    hide_index=True, use_container_width=True,
+                )
+                st.markdown("#### Comparación final")
+                st.markdown(
+                    f"<div style='font-size:1.2rem;font-weight:700;margin:.35rem 0;'>"
+                    f"{etiqueta_potencia}: "
+                    f"<span style='color:{color_potencia};font-size:1.5rem;'>"
+                    f"{formato_euros(abs(diferencia_potencia_total))}</span></div>",
+                    unsafe_allow_html=True,
+                )
+                tabla_comparacion_potencia = (
+                    detalle_potencia_numerico.groupby(
+                        "Periodo", as_index=False
+                    )[[
+                        "Coste facturado (€)", "Coste referencia (€)",
+                        columna_diferencia_potencia,
+                    ]].sum()
+                )
+                tabla_comparacion_potencia["Diferencial (%)"] = (
+                    tabla_comparacion_potencia[
+                        columna_diferencia_potencia
+                    ].div(
+                        tabla_comparacion_potencia[
+                            "Coste referencia (€)"
+                        ].replace(0, pd.NA)
+                    ).mul(100)
+                )
+                coste_potencia_facturado_total = float(
+                    tabla_comparacion_potencia["Coste facturado (€)"].sum()
+                )
+                coste_potencia_referencia_total = float(
+                    tabla_comparacion_potencia["Coste referencia (€)"].sum()
+                )
+                pct_potencia_total = (
+                    diferencia_potencia_total
+                    / coste_potencia_referencia_total * 100
+                    if coste_potencia_referencia_total else None
+                )
+                tabla_comparacion_potencia = pd.concat([
+                    tabla_comparacion_potencia,
+                    pd.DataFrame([{
+                        "Periodo": "TOTAL",
+                        "Coste facturado (€)": coste_potencia_facturado_total,
+                        "Coste referencia (€)": coste_potencia_referencia_total,
+                        columna_diferencia_potencia: diferencia_potencia_total,
+                        "Diferencial (%)": pct_potencia_total,
+                    }]),
+                ], ignore_index=True)
+                tabla_comparacion_potencia_fmt = formatear_columnas_tabla(
+                    tabla_comparacion_potencia,
+                    columnas_euros=[
+                        "Coste facturado (€)", "Coste referencia (€)",
+                        columna_diferencia_potencia,
+                    ],
+                    columnas_pct=["Diferencial (%)"],
+                    incluir_unidades=False,
+                )
+                estilos_comparacion_potencia = pd.DataFrame(
+                    "", index=tabla_comparacion_potencia_fmt.index,
+                    columns=tabla_comparacion_potencia_fmt.columns,
+                )
+                for columna in (
+                    columna_diferencia_potencia, "Diferencial (%)"
+                ):
+                    for indice, valor in tabla_comparacion_potencia[columna].items():
+                        if pd.isna(valor):
+                            continue
+                        if valor < -0.005:
+                            estilos_comparacion_potencia.loc[indice, columna] = (
+                                "color:#00e676;font-weight:800;"
+                            )
+                        elif valor > 0.005:
+                            estilos_comparacion_potencia.loc[indice, columna] = (
+                                "color:#ff1744;font-weight:800;"
+                            )
+                st.dataframe(
+                    tabla_comparacion_potencia_fmt.style.apply(
+                        lambda _: estilos_comparacion_potencia, axis=None
+                    ),
+                    hide_index=True, use_container_width=True,
+                )
+            with tab_detalle_excesos:
+                diferencia_excesos_total = (
+                    exceso_facturado - comparativa_ref["excesos_referencia"]
+                )
+                etiqueta_excesos = (
+                    "Ahorro en los excesos de potencia"
+                    if diferencia_excesos_total < -0.005
+                    else "Sobrecoste en los excesos de potencia"
+                    if diferencia_excesos_total > 0.005
+                    else "Sin diferencia en los excesos de potencia"
+                )
+                color_excesos = (
+                    "#00e676" if diferencia_excesos_total < -0.005
+                    else "#ff1744" if diferencia_excesos_total > 0.005
+                    else "#9ca3af"
+                )
+                st.markdown("#### Cálculo justificativo de la referencia")
+                st.caption(
+                    "Los excesos se recalculan sobre la curva utilizando "
+                    "exclusivamente P1 REF…P6 REF."
+                )
+                detalle_excesos_referencia = comparativa_ref[
+                    "detalle_excesos"
+                ].rename(columns={
+                    "Potencia contratada (kW)": "Potencia de referencia (kW)",
+                    "Excesos sin prorrateo (€)": (
+                        "Coste referencia sin prorrateo (€)"
+                    ),
+                    "Excesos verificados (€)": "Coste referencia (€)",
+                })
+                factores_prorrateo = pd.to_numeric(
+                    detalle_excesos_referencia.get("Factor prorrateo"),
+                    errors="coerce",
+                )
+                hay_prorrateo_excesos = bool(
+                    factores_prorrateo is not None
+                    and factores_prorrateo.sub(1.0).abs().gt(1e-9).any()
+                )
+                if not hay_prorrateo_excesos:
+                    detalle_excesos_referencia = (
+                        detalle_excesos_referencia.drop(columns=[
+                            "Coste referencia sin prorrateo (€)",
+                            "Días ciclo",
+                            "Días mes",
+                            "Factor prorrateo",
+                        ], errors="ignore")
+                    )
+                    st.caption(
+                        "No se aplica prorrateo en este ciclo; se muestra "
+                        "directamente el coste de referencia."
+                    )
+                st.dataframe(
+                    formatear_columnas_tabla(
+                        detalle_excesos_referencia,
+                        columnas_kw=[
+                            "Potencia de referencia (kW)", "Maxímetro (kW)",
+                            "Raíz Σ excesos² (kW)",
+                        ],
+                        columnas_euros=[
+                            "Coste referencia sin prorrateo (€)",
+                            "Coste referencia (€)",
+                        ],
+                        incluir_unidades=False,
+                    ),
+                    hide_index=True, use_container_width=True,
+                )
+                st.markdown("#### Comparación final")
+                st.markdown(
+                    f"<div style='font-size:1.2rem;font-weight:700;margin:.35rem 0;'>"
+                    f"{etiqueta_excesos}: "
+                    f"<span style='color:{color_excesos};font-size:1.5rem;'>"
+                    f"{formato_euros(abs(diferencia_excesos_total))}</span></div>",
+                    unsafe_allow_html=True,
+                )
+                pct_excesos = (
+                    diferencia_excesos_total
+                    / comparativa_ref["excesos_referencia"] * 100
+                    if comparativa_ref["excesos_referencia"] else None
+                )
+                referencia_excesos_periodo = (
+                    detalle_excesos_referencia.groupby(
+                        "Periodo", as_index=False
+                    )["Coste referencia (€)"].sum()
+                )
+                facturado_excesos_periodo = pd.DataFrame([
+                    {
+                        "Periodo": item.periodo,
+                        "Coste facturado (€)": item.coste_calculado_eur,
+                    }
+                    for item in factura.excesos_verificados
+                ])
+                if facturado_excesos_periodo.empty:
+                    tabla_comparacion_excesos = pd.DataFrame(columns=[
+                        "Periodo", "Coste facturado (€)",
+                        "Coste referencia (€)",
+                        "Facturado − referencia (€)", "Diferencial (%)",
+                    ])
+                else:
+                    facturado_excesos_periodo = (
+                        facturado_excesos_periodo.groupby(
+                            "Periodo", as_index=False
+                        )["Coste facturado (€)"].sum()
+                    )
+                    tabla_comparacion_excesos = referencia_excesos_periodo.merge(
+                        facturado_excesos_periodo,
+                        on="Periodo",
+                        how="outer",
+                    ).fillna(0.0)
+                    tabla_comparacion_excesos[
+                        "Facturado − referencia (€)"
+                    ] = (
+                        tabla_comparacion_excesos["Coste facturado (€)"]
+                        - tabla_comparacion_excesos["Coste referencia (€)"]
+                    )
+                    tabla_comparacion_excesos["Diferencial (%)"] = (
+                        tabla_comparacion_excesos[
+                            "Facturado − referencia (€)"
+                        ].div(
+                            tabla_comparacion_excesos[
+                                "Coste referencia (€)"
+                            ].replace(0, pd.NA)
+                        ).mul(100)
+                    )
+                    tabla_comparacion_excesos = tabla_comparacion_excesos[[
+                        "Periodo", "Coste facturado (€)",
+                        "Coste referencia (€)",
+                        "Facturado − referencia (€)", "Diferencial (%)",
+                    ]]
+                tabla_comparacion_excesos = pd.concat([
+                    tabla_comparacion_excesos,
+                    pd.DataFrame([{
+                        "Periodo": "TOTAL",
+                        "Coste facturado (€)": exceso_facturado,
+                        "Coste referencia (€)": comparativa_ref[
+                            "excesos_referencia"
+                        ],
+                        "Facturado − referencia (€)": diferencia_excesos_total,
+                        "Diferencial (%)": pct_excesos,
+                    }]),
+                ], ignore_index=True)
+                tabla_comparacion_excesos_fmt = formatear_columnas_tabla(
+                    tabla_comparacion_excesos,
+                    columnas_euros=[
+                        "Coste facturado (€)", "Coste referencia (€)",
+                        "Facturado − referencia (€)",
+                    ],
+                    columnas_pct=["Diferencial (%)"],
+                    incluir_unidades=False,
+                )
+                estilos_comparacion_excesos = pd.DataFrame(
+                    "", index=tabla_comparacion_excesos_fmt.index,
+                    columns=tabla_comparacion_excesos_fmt.columns,
+                )
+                for columna in (
+                    "Facturado − referencia (€)", "Diferencial (%)"
+                ):
+                    for indice, valor in tabla_comparacion_excesos[columna].items():
+                        if pd.isna(valor):
+                            continue
+                        if valor < -0.005:
+                            estilos_comparacion_excesos.loc[indice, columna] = (
+                                "color:#00e676;font-weight:800;"
+                            )
+                        elif valor > 0.005:
+                            estilos_comparacion_excesos.loc[indice, columna] = (
+                                "color:#ff1744;font-weight:800;"
+                            )
+                if factura.excesos_verificados:
+                    st.caption(
+                        "El desglose facturado por periodo se reconstruye con "
+                        "los maxímetros o sobrepasamientos extraídos de la factura; "
+                        "la fila TOTAL conserva el importe facturado real."
+                    )
+                st.dataframe(
+                    tabla_comparacion_excesos_fmt.style.apply(
+                        lambda _: estilos_comparacion_excesos, axis=None
+                    ),
+                    hide_index=True, use_container_width=True,
+                )
+            if col_impacto_ahorro.button(
+                "Guardar comparativa en la BBDD",
+                type="primary",
+                use_container_width=True,
+                key=f"guardar_comparativa_bbdd_{huella[:8]}",
+            ):
+                try:
+                    componentes_historial = _componentes_historial(
+                        tabla_componentes_ahorro,
+                        columna_referencia="Referencia (€)",
+                        columna_diferencia="Facturado − referencia (€)",
+                        columna_pct="Diferencial (%)",
+                    )
+                    id_analisis, creado = guardar_analisis(
+                        tipo="COMPARATIVA_AHORRO",
+                        cups=factura.cups,
+                        numero_factura=factura.numero_factura,
+                        fecha_factura=_fecha_iso_historial(factura.fecha_factura),
+                        ciclo_inicio=_fecha_iso_historial(factura.periodo_inicio),
+                        ciclo_fin=_fecha_iso_historial(factura.periodo_fin),
+                        estado=veredicto.upper(),
+                        total_facturado_eur=factura.total,
+                        total_referencia_eur=total_referencia,
+                        diferencia_eur=diferencia_total,
+                        diferencia_pct=pct_total,
+                        componentes=componentes_historial,
+                        referencias=_referencias_historial(contexto_ahorro),
+                        snapshot={
+                            "tipo": "COMPARATIVA_AHORRO",
+                            "huella_factura": huella,
+                            "texto_factura": texto,
+                            "factura": factura.como_dict(),
+                            "medida": _snapshot_medida_historial(
+                                medida_ahorro, medida_sesion_ahorro
+                            ),
+                            "resultado": {
+                                "estado": veredicto,
+                                "reconstruccion": reconstruccion_ref,
+                                "componentes": tabla_componentes_ahorro,
+                                "termino_potencia": tabla_termino_potencia,
+                                "detalle_potencia": detalle_potencia_justificativo,
+                                "comparacion_potencia": tabla_comparacion_potencia,
+                                "detalle_excesos": detalle_excesos_referencia,
+                                "comparacion_excesos": tabla_comparacion_excesos,
+                                "diferencia_sin_iva": diferencia_sin_iva,
+                            },
+                            "referencias": _referencias_historial(contexto_ahorro),
+                        },
+                        version_calculo="comparativa_ahorro_v1",
+                        creado_por=(
+                            "admin" if st.session_state.get("es_admin") else None
+                        ),
+                    )
+                    mensaje = (
+                        f"Comparativa guardada con ID {id_analisis}."
+                        if creado else
+                        f"Esta comparativa ya estaba guardada con ID {id_analisis}."
+                    )
+                    col_impacto_ahorro.success(mensaje)
+                except Exception as exc:
+                    col_impacto_ahorro.error(
+                        f"No se pudo guardar la comparativa: {exc}"
+                    )
+        except Exception as exc:
+            st.warning(f"No se puede completar todavía la comparativa: {exc}")
+            if medida_ahorro is None:
+                st.info(
+                    "Obtén la curva desde la pestaña Verificación. Es necesaria "
+                    "para calcular el coste de excesos con P1 REF…P6 REF."
+                )
 
 
 with tab_comparativa:
@@ -4830,6 +6408,8 @@ with tab_informe:
             informes_disponibles = []
             if resultado_medida is not None and "tabla_total_beta" in locals():
                 informes_disponibles.append("Informe de verificación")
+            if "tabla_componentes_ahorro" in locals():
+                informes_disponibles.append("Informe comparativa de ahorro · Beta")
             if resultado is not None:
                 informes_disponibles.append("Informe comercial de propuesta")
             if not informes_disponibles:
@@ -4843,6 +6423,10 @@ with tab_informe:
             if tipo_informe_seleccionado == "Informe de verificación":
                 datos_informe["factura_informe_objeto"] = (
                     "Informe de verificación de factura"
+                )
+            elif tipo_informe_seleccionado == "Informe comparativa de ahorro · Beta":
+                datos_informe["factura_informe_objeto"] = (
+                    "Informe de comparativa de ahorro"
                 )
             huella_datos_informe = f"{huella}:cabecera_v3"
             if (
@@ -4979,6 +6563,327 @@ with tab_informe:
                 if logo_informe is not None:
                     st.image(logo_informe, width=180)
 
+            if tipo_informe_seleccionado == "Informe comparativa de ahorro · Beta":
+                contenedor_salida_informe.markdown(
+                    "#### Informe de comparativa de ahorro · Beta"
+                )
+                contenedor_salida_informe.caption(
+                    "Tres niveles: resultado, resumen por componentes y detalle "
+                    "justificativo."
+                )
+
+                firma_informe_ahorro = hashlib.sha256(repr((
+                    huella,
+                    tabla_componentes_ahorro.to_dict("records"),
+                    tabla_termino_potencia.to_dict("records"),
+                    detalle_potencia_justificativo.to_dict("records"),
+                    tabla_comparacion_potencia.to_dict("records"),
+                    detalle_excesos_referencia.to_dict("records"),
+                    tabla_comparacion_excesos.to_dict("records"),
+                    *(
+                        st.session_state.get(clave, "")
+                        for clave in datos_informe
+                    ),
+                    logo_informe.getvalue() if logo_informe is not None else b"",
+                )).encode("utf-8")).hexdigest()
+
+                if contenedor_salida_informe.button(
+                    "Preparar informe de comparativa de ahorro",
+                    type="primary",
+                    use_container_width=True,
+                    key=f"preparar_informe_ahorro_{huella[:8]}",
+                ):
+                    def tabla_html_ahorro(dataframe):
+                        if dataframe is None or dataframe.empty:
+                            return "<p><em>No hay detalle disponible.</em></p>"
+                        tabla = dataframe.copy()
+                        estilos_tabla = pd.DataFrame(
+                            "", index=tabla.index, columns=tabla.columns
+                        )
+                        for columna in tabla.columns:
+                            nombre_columna = str(columna).lower()
+                            if (
+                                "facturado − referencia" in nombre_columna
+                                or "diferencial" in nombre_columna
+                            ):
+                                valores_estilo = pd.to_numeric(
+                                    tabla[columna], errors="coerce"
+                                )
+                                for indice, valor in valores_estilo.items():
+                                    if pd.isna(valor):
+                                        continue
+                                    if valor < -0.005:
+                                        estilos_tabla.loc[indice, columna] = (
+                                            "color:#15803d;font-weight:800;"
+                                        )
+                                    elif valor > 0.005:
+                                        estilos_tabla.loc[indice, columna] = (
+                                            "color:#dc2626;font-weight:800;"
+                                        )
+                        for columna in tabla.columns:
+                            nombre = str(columna).lower()
+                            if "€/kwh" in nombre or "€/kw" in nombre or "precio" in nombre:
+                                tabla[columna] = tabla[columna].map(
+                                    lambda valor: formato_numero_es(valor, 6)
+                                    if valor is not None and not pd.isna(valor)
+                                    else "—"
+                                )
+                            elif "%" in nombre:
+                                tabla[columna] = tabla[columna].map(
+                                    lambda valor: formato_pct(valor, 2)
+                                    if valor is not None and not pd.isna(valor)
+                                    else "—"
+                                )
+                            elif "€" in nombre or "coste" in nombre or "importe" in nombre:
+                                tabla[columna] = tabla[columna].map(
+                                    lambda valor: formato_euros(valor)
+                                    if valor is not None and not pd.isna(valor)
+                                    else "—"
+                                )
+                            elif "kw" in nombre:
+                                tabla[columna] = tabla[columna].map(
+                                    lambda valor: formato_numero_es(valor, 3)
+                                    if valor is not None and not pd.isna(valor)
+                                    else "—"
+                                )
+                        return (
+                            tabla.style.apply(
+                                lambda _: estilos_tabla, axis=None
+                            ).hide(axis="index").to_html()
+                        )
+
+                    logo_data_ahorro = ""
+                    if logo_informe is not None:
+                        subtipo_logo = (
+                            "jpeg" if logo_informe.type == "image/jpeg" else "png"
+                        )
+                        logo_data_ahorro = (
+                            f"data:image/{subtipo_logo};base64,"
+                            + base64.b64encode(logo_informe.getvalue()).decode("ascii")
+                        )
+                    gauge_ahorro_data = ""
+                    try:
+                        figura_ahorro_informe = go.Figure(figura_impacto)
+                        figura_ahorro_informe.update_layout(
+                            height=300,
+                            margin=dict(l=8, r=8, t=50, b=4),
+                            paper_bgcolor="white",
+                        )
+                        png_gauge_ahorro = figura_ahorro_informe.to_image(
+                            format="png", width=620, height=360, scale=1.4
+                        )
+                        gauge_ahorro_data = (
+                            "data:image/png;base64,"
+                            + base64.b64encode(png_gauge_ahorro).decode("ascii")
+                        )
+                    except Exception:
+                        contenedor_salida_informe.warning(
+                            "No se ha podido incorporar el gauge al informe."
+                        )
+
+                    componentes_ahorro_informe = []
+                    for _, fila in tabla_componentes_ahorro.iterrows():
+                        diferencia_fila = float(
+                            fila["Facturado − referencia (€)"]
+                        )
+                        componentes_ahorro_informe.append({
+                            "componente": escape(str(fila["Componente"])),
+                            "facturado": formato_euros(fila["Facturado (€)"]),
+                            "referencia": formato_euros(fila["Referencia (€)"]),
+                            "diferencia": formato_euros_con_signo(diferencia_fila),
+                            "porcentaje": (
+                                formato_pct_con_signo(fila["Diferencial (%)"], 2)
+                                if fila["Diferencial (%)"] is not None
+                                and not pd.isna(fila["Diferencial (%)"])
+                                else "—"
+                            ),
+                            "clase": (
+                                "favorable" if diferencia_fila < -0.005
+                                else "unfavorable" if diferencia_fila > 0.005
+                                else "neutral"
+                            ),
+                        })
+
+                    def diferencia_componentes(nombres):
+                        filas = tabla_componentes_ahorro.loc[
+                            tabla_componentes_ahorro["Componente"].isin(nombres)
+                        ]
+                        return float(
+                            filas["Facturado − referencia (€)"].sum()
+                        )
+
+                    diferencia_tp_informe = diferencia_componentes({
+                        "Potencia", "Excesos", "Excesos de potencia"
+                    })
+                    diferencia_te_informe = diferencia_componentes({"Energía"})
+                    ahorro_tp = diferencia_tp_informe < -0.005
+                    ahorro_te = diferencia_te_informe < -0.005
+                    if ahorro_tp and ahorro_te:
+                        origen_ahorro = "El ahorro procede de la potencia y de la energía."
+                    elif ahorro_tp:
+                        origen_ahorro = "El ahorro procede del término de potencia."
+                    elif ahorro_te:
+                        origen_ahorro = "El ahorro procede del término de energía."
+                    elif diferencia_total < -0.005:
+                        origen_ahorro = (
+                            "El ahorro procede de otros componentes e impuestos."
+                        )
+                    else:
+                        origen_ahorro = "No se obtiene un ahorro neto en esta comparativa."
+
+                    detalle_energia_ahorro = pd.DataFrame([{
+                        "Periodo": item.periodo,
+                        "Consumo (kWh)": item.consumo_kwh,
+                        "Precio facturado (€/kWh)": item.precio_eur_kwh,
+                        "Coste facturado (€)": item.coste_eur,
+                    } for item in factura.energia_periodos])
+                    secciones_ahorro = [
+                        {
+                            "titulo": "Término de potencia",
+                            "texto": (
+                                "Resumen conjunto de la potencia facturada y los "
+                                "excesos de potencia del ciclo analizado."
+                            ),
+                            "tabla": tabla_html_ahorro(
+                                tabla_termino_potencia
+                            ),
+                            "subnivel": False,
+                        },
+                        {
+                            "titulo": "Potencia facturada · referencia",
+                            "texto": (
+                                "La potencia de referencia utiliza las potencias "
+                                "P1 REF…P6 REF y los precios registrados en la BBDD."
+                            ),
+                            "tabla": tabla_html_ahorro(
+                                detalle_potencia_justificativo
+                            ),
+                            "subnivel": True,
+                        },
+                        {
+                            "titulo": "Potencia facturada · comparación",
+                            "texto": "Comparación económica por periodo y total.",
+                            "tabla": tabla_html_ahorro(
+                                tabla_comparacion_potencia
+                            ),
+                            "subnivel": True,
+                        },
+                        {
+                            "titulo": "Excesos de potencia · referencia",
+                            "texto": (
+                                "Los excesos de referencia se calculan sobre la "
+                                "curva real con las potencias de referencia."
+                            ),
+                            "tabla": tabla_html_ahorro(
+                                detalle_excesos_referencia
+                            ),
+                            "subnivel": True,
+                        },
+                        {
+                            "titulo": "Excesos de potencia · comparación",
+                            "texto": "Comparación económica por periodo y total.",
+                            "tabla": tabla_html_ahorro(
+                                tabla_comparacion_excesos
+                            ),
+                            "subnivel": True,
+                        },
+                        {
+                            "titulo": "Término de energía",
+                            "texto": (
+                                "Detalle facturado utilizado. Si factura y referencia "
+                                "coinciden, este componente no genera ahorro."
+                            ),
+                            "tabla": tabla_html_ahorro(detalle_energia_ahorro),
+                            "subnivel": False,
+                        },
+                    ]
+                    contexto_ahorro_informe = {
+                        "logo": logo_data_ahorro,
+                        "gauge": gauge_ahorro_data,
+                        "cliente": escape(st.session_state.get("factura_informe_cliente", "")),
+                        "nif": escape(st.session_state.get("factura_informe_nif", "")),
+                        "cups": escape(st.session_state.get("factura_informe_cups", "")),
+                        "atr": escape(st.session_state.get("factura_informe_atr", "")),
+                        "comercializadora": escape(st.session_state.get("factura_informe_comercializadora", "")),
+                        "numero_factura": escape(st.session_state.get("factura_informe_numero", "")),
+                        "fecha_factura": escape(st.session_state.get("factura_informe_fecha", "")),
+                        "ciclo": escape(st.session_state.get("factura_informe_ciclo", "")),
+                        "realizado_por": escape(st.session_state.get("factura_informe_realizado_por", "")),
+                        "fecha_realizacion": escape(st.session_state.get("factura_informe_fecha_realizacion", "")),
+                        "objeto": escape(st.session_state.get("factura_informe_objeto", "")),
+                        "es_ahorro": diferencia_total < -0.005,
+                        "resultado": (
+                            "Ahorro obtenido" if diferencia_total < -0.005
+                            else "Sobrecoste obtenido" if diferencia_total > 0.005
+                            else "Sin diferencia"
+                        ),
+                        "importe_con_iva": formato_euros(abs(diferencia_total)),
+                        "importe_sin_iva": formato_euros(abs(diferencia_sin_iva)),
+                        "total_factura": formato_euros(factura.total),
+                        "total_referencia": formato_euros(total_referencia),
+                        "origen_ahorro": origen_ahorro,
+                        "impacto_tp": formato_euros_con_signo(diferencia_tp_informe),
+                        "impacto_te": formato_euros_con_signo(diferencia_te_informe),
+                        "componentes": componentes_ahorro_informe,
+                        "secciones": secciones_ahorro,
+                    }
+                    html_ahorro = _renderizar_plantilla_informe(
+                        contexto_ahorro_informe,
+                        "templates/informe_ahorro.html",
+                    )
+                    st.session_state["factura_informe_ahorro"] = {
+                        "firma": firma_informe_ahorro,
+                        "html": html_ahorro,
+                    }
+
+                informe_ahorro_sesion = st.session_state.get(
+                    "factura_informe_ahorro"
+                )
+                if (
+                    informe_ahorro_sesion
+                    and informe_ahorro_sesion.get("firma")
+                    == firma_informe_ahorro
+                ):
+                    with contenedor_salida_informe.expander(
+                        "Vista previa del informe de ahorro", expanded=True
+                    ):
+                        st.components.v1.html(
+                            informe_ahorro_sesion["html"],
+                            height=1100,
+                            scrolling=True,
+                        )
+                    def parte_nombre_informe_ahorro(valor, defecto):
+                        return (
+                            re.sub(
+                                r"[^A-Za-z0-9._-]+", "_", str(valor or defecto)
+                            ).strip("._")
+                            or defecto
+                        )
+
+                    numero_ahorro = parte_nombre_informe_ahorro(
+                        st.session_state.get("factura_informe_numero"),
+                        "factura",
+                    )
+                    cups_ahorro = parte_nombre_informe_ahorro(
+                        st.session_state.get("factura_informe_cups"),
+                        "sin_cups",
+                    )
+                    ciclo_ahorro = parte_nombre_informe_ahorro(
+                        st.session_state.get("factura_informe_ciclo"),
+                        "sin_ciclo",
+                    )
+                    contenedor_salida_informe.download_button(
+                        "Descargar informe de comparativa de ahorro HTML",
+                        data=informe_ahorro_sesion["html"].encode("utf-8"),
+                        file_name=(
+                            f"Informe_de_ahorro_{numero_ahorro}_"
+                            f"{cups_ahorro}_{ciclo_ahorro}.html"
+                        ),
+                        mime="text/html; charset=utf-8",
+                        use_container_width=True,
+                    )
+                st.stop()
+
             if tipo_informe_seleccionado == "Informe de verificación":
                 contenedor_salida_informe.markdown(
                     "#### Informe de verificación · V1"
@@ -5050,6 +6955,28 @@ with tab_informe:
                         "Completa el motivo de todas las revisiones manuales "
                         "antes de preparar el informe."
                     )
+                firma_informe_verificacion = hashlib.sha256(repr((
+                    huella,
+                    tabla_total_beta.to_dict("records"),
+                    df_componentes.to_dict("records"),
+                    detalle_potencia_mostrar.to_dict("records"),
+                    detalle_excesos_beta.to_dict("records"),
+                    detalle_coste_mostrar.to_dict("records"),
+                    beta_texto,
+                    beta_icono,
+                    tuple(
+                        sorted(
+                            (str(clave), str(valor))
+                            for clave, valor in st.session_state.items()
+                            if str(clave).startswith("factura_informe_")
+                            and clave not in {
+                                "factura_informe_verificacion",
+                                "factura_informe_ahorro",
+                            }
+                        )
+                    ),
+                    tuple(repr(revision) for revision in revisiones_manuales_activas),
+                )).encode("utf-8")).hexdigest()
                 if contenedor_salida_informe.button(
                     "Preparar informe de verificación",
                     type="primary",
@@ -5099,33 +7026,6 @@ with tab_informe:
                         ) if columna in tabla_niveles_informe.columns
                     ]
                     tabla_niveles_informe = tabla_niveles_informe[columnas_niveles]
-                    def semaforo_contraste_real(facturado, verificado):
-                        if importes_coinciden(
-                            float(facturado), float(verificado), "componentes"
-                        ):
-                            return "🟢"
-                        # Cobrar menos que el valor reconstruido es una
-                        # discrepancia verificada, pero favorable al cliente.
-                        return "🟢 ⚠️" if facturado < verificado else "🔴"
-
-                    if (
-                        coste_excesos_beta is not None
-                        and not detalle_excesos_beta.empty
-                    ):
-                        tabla_niveles_informe.loc[
-                            tabla_niveles_informe["Componente"] == "Excesos",
-                            "Verificación real",
-                        ] = semaforo_contraste_real(
-                            factura.excesos_potencia, coste_excesos_beta
-                        )
-                    if reactiva_verificada_medida:
-                        tabla_niveles_informe.loc[
-                            tabla_niveles_informe["Componente"] == "Reactiva",
-                            "Verificación real",
-                        ] = semaforo_contraste_real(
-                            factura.reactiva,
-                            componentes_confirmados.get("reactiva", factura.reactiva),
-                        )
 
                     def tabla_niveles_html_informe(dataframe):
                         def clase_estado(valor):
@@ -5416,7 +7316,7 @@ with tab_informe:
                         "templates/informe_verificacion.html",
                     )
                     st.session_state["factura_informe_verificacion"] = {
-                        "huella": huella,
+                        "firma": firma_informe_verificacion,
                         "html": html_verificacion,
                     }
 
@@ -5425,7 +7325,8 @@ with tab_informe:
                 )
                 if (
                     informe_verificacion_sesion
-                    and informe_verificacion_sesion.get("huella") == huella
+                    and informe_verificacion_sesion.get("firma")
+                    == firma_informe_verificacion
                 ):
                     with contenedor_salida_informe.expander(
                         "Vista previa del informe de verificación", expanded=True

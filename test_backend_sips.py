@@ -164,6 +164,44 @@ class LectorSipsTest(unittest.TestCase):
             "2025-01", "2025-02"
         ])
 
+    def test_lee_xls_html_exportado_por_excel(self):
+        from backend_sips import es_sips_excel_html
+
+        columnas = (
+            ["CUPS", "Fecha Lectura Inicial", "Fecha Lectura Final"]
+            + [f"P{i} Activa" for i in range(1, 7)]
+            + [f"P{i} Reactiva" for i in range(1, 7)]
+            + [f"P{i} Maximetro" for i in range(1, 7)]
+        )
+        medidas = (
+            ["", "2024-12-31T00:00:00", "2025-01-31T00:00:00"]
+            + ["108908,000", "0,000", "0,000", "12,500", "0,000", "42,000"]
+            + ["0,000"] * 6
+            + ["33,340"] * 6
+        )
+        def fila(valores):
+            return "<tr>" + "".join(f"<td>{valor}</td>" for valor in valores) + "</tr>"
+
+        html = (
+            "<html><body><table>"
+            + fila(columnas)
+            + fila(["ES001", *([""] * 20)])
+            + fila(medidas)
+            + fila(["", "2025-01-31T00:00:00", "2025-02-28T00:00:00", *medidas[3:]])
+            + "</table></body></html>"
+        )
+        archivo = io.BytesIO(html.encode("utf-8"))
+        archivo.name = "exportacion.xls"
+
+        self.assertTrue(es_sips_excel_html(archivo))
+        resultado = leer_sips_completo(archivo)
+        self.assertIsNone(resultado["atr"])
+        self.assertEqual(resultado["metadatos"]["cups"], "ES001")
+        self.assertEqual(resultado["consumos"].loc[0, "P1"], 108908)
+        self.assertEqual(resultado["consumos"].loc[0, "P4"], 12.5)
+        self.assertEqual(resultado["consumos"].loc[0, "P6"], 42)
+        self.assertAlmostEqual(resultado["maximetros"].loc[0, "P1"], 33.34)
+
 
 if __name__ == "__main__":
     unittest.main()

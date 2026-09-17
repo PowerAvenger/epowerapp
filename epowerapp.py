@@ -12,6 +12,19 @@ st.set_page_config(
 
 from utilidades import init_datos_mercado
 
+
+def limpiar_credenciales_axon_admin():
+    """Retira de la sesión las credenciales al salir del acceso admin."""
+    for clave in (
+        'axon_usuario_sesion', 'axon_password_sesion',
+        'factura_axon_usuario', 'factura_axon_password',
+        'curva_carga_axon_usuario', 'curva_carga_axon_password',
+        'curva_carga_axon_usuario__compartido',
+        'curva_carga_axon_password__compartido',
+        '_factura_acceso_medida_contexto', '_curva_axon_contexto',
+    ):
+        st.session_state.pop(clave, None)
+
 c1, c2, c3 = st.columns(3)
 
 if 'acceso' not in st.session_state:
@@ -62,15 +75,33 @@ with c2:
 
         st.text_input('Introduce el código de acceso', type='password', key='acceso')
         #if st.session_state.acceso == st.secrets['KEY_ACCESS'] or st.session_state.acceso == st.secrets['KEY_FREE'] or st.session_state.acceso == st.secrets['KEY_ACCESS2']:
-        if st.session_state.acceso == st.secrets['KEY_ACCESS'] or st.session_state.acceso == st.secrets['KEY_ACCESS2']:    
-            #acceso completo a la app
+        key_admin = st.secrets.get('KEY_ADMIN')
+        if key_admin and st.session_state.acceso == key_admin:
+            # Acceso personal con permisos para operaciones administrativas.
             acceso = st.button('🚀 Acceder a la aplicación', type='primary', use_container_width=True, disabled=False)
             st.session_state.usuario_autenticado = True
             st.session_state.usuario_free = False
-        elif st.session_state.acceso == st.secrets['KEY_FREE']:
+            st.session_state.es_admin = True
+        elif st.session_state.acceso in {
+            st.secrets.get('KEY_ACCESS'), st.secrets.get('KEY_ACCESS2')
+        } - {None}:
+            #acceso completo a la app
+            if st.session_state.get('es_admin', False):
+                limpiar_credenciales_axon_admin()
+            acceso = st.button('🚀 Acceder a la aplicación', type='primary', use_container_width=True, disabled=False)
+            st.session_state.usuario_autenticado = True
+            st.session_state.usuario_free = False
+            st.session_state.es_admin = False
+        elif (
+            st.secrets.get('KEY_FREE')
+            and st.session_state.acceso == st.secrets.get('KEY_FREE')
+        ):
+            if st.session_state.get('es_admin', False):
+                limpiar_credenciales_axon_admin()
             acceso = st.button('🚀 Acceder a la aplicación', type='primary', use_container_width=True, disabled=False)
             st.session_state.usuario_free = True    
-            st.session_state.usuario_autenticado = False        
+            st.session_state.usuario_autenticado = False
+            st.session_state.es_admin = False
         else:
             acceso = st.button('🚀 Acceder a la aplicación', type='primary', use_container_width=True, disabled=True)
 

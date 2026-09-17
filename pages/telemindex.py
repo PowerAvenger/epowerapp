@@ -174,6 +174,99 @@ def obtener_formula_compartida():
     )
 
 
+def mostrar_controles_telemindex(lista_meses, fecha_ultima_filtrado):
+    """Dibuja los controles exclusivos del tab Históricos."""
+
+    clave_rango = CLAVES_FILTRO_HISTORICO["rango"]
+    clave_año = CLAVES_FILTRO_HISTORICO["año"]
+    clave_mes = CLAVES_FILTRO_HISTORICO["mes"]
+    clave_dias = CLAVES_FILTRO_HISTORICO["dias"]
+    clave_zona = CLAVES_FILTRO_HISTORICO["zona"]
+
+    st.subheader('Info sobre datos', divider='rainbow')
+    st.info(
+        f"Última fecha disponible: {st.session_state.ultima_fecha_sheets.strftime('%d.%m.%Y')}"
+    )
+    st.info(
+        f"Última fecha C2 liquicomun: {st.session_state.ultima_fecha_csv.strftime('%d.%m.%Y')}"
+    )
+
+    st.subheader('Opciones', divider='rainbow')
+    with st.container(border=True):
+        persist_widget(
+            st.radio,
+            "Seleccionar rango temporal",
+            ['Por años', 'Por meses', 'Selecciona un rango de fechas'],
+            key=clave_rango,
+        )
+
+        if st.session_state[clave_rango] == 'Por años':
+            st.selectbox(
+                'Seleccione el año',
+                options=[2026, 2025, 2024],
+                key=clave_año,
+            )
+        elif st.session_state[clave_rango] == 'Por meses':
+            col_filtro1, col_filtro2 = st.columns(2)
+            with col_filtro1:
+                st.selectbox(
+                    'Seleccione el año',
+                    options=[2026, 2025, 2024],
+                    key=clave_año,
+                )
+            with col_filtro2:
+                st.selectbox(
+                    'Seleccionar mes',
+                    lista_meses,
+                    key=clave_mes,
+                )
+        else:
+            with st.form(key='form_fechas_telemindex_historico'):
+                ultima_fecha_sheets = st.session_state.ultima_fecha_sheets
+                if isinstance(
+                    ultima_fecha_sheets, (pd.Timestamp, datetime.datetime)
+                ):
+                    ultima_fecha_sheets = ultima_fecha_sheets.date()
+                st.date_input(
+                    'Selecciona un rango de días',
+                    min_value=datetime.date(2023, 1, 1),
+                    max_value=ultima_fecha_sheets,
+                    key=clave_dias,
+                )
+                st.form_submit_button('Actualizar cálculos')
+
+        opciones_zona_periodos = [
+            "peninsula", "baleares", "canarias", "ceuta", "melilla"
+        ]
+        persist_widget(
+            st.selectbox,
+            "Selecciona sistema eléctrico",
+            options=opciones_zona_periodos,
+            index=0,
+            key=clave_zona,
+            default="peninsula",
+            disabled=not bool(st.secrets.get("CSV_SNP")),
+            format_func=lambda x: {
+                "peninsula": "Península",
+                "baleares": "Baleares",
+                "canarias": "Canarias",
+                "ceuta": "Ceuta",
+                "melilla": "Melilla",
+            }[x],
+        )
+        if not st.secrets.get("CSV_SNP"):
+            st.caption(
+                "Configura `CSV_SNP` para habilitar Baleares, Canarias, Ceuta y Melilla."
+            )
+
+    st.subheader('Parámetros de fórmula', divider='rainbow')
+    with st.container(border=True):
+        render_formulario_formula_indexada(
+            clave="telemindex_historico",
+            claves_estado=CLAVES_FORMULA_HISTORICO,
+        )
+
+
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
 
@@ -230,6 +323,28 @@ df_filtrado_historico, lista_meses = filtrar_datos(
 df_filtrado_compartido, _ = filtrar_datos(
     st.session_state.df_sheets,
 )
+
+if df_filtrado_historico.empty or df_filtrado_historico["spot"].notna().sum() == 0:
+    fechas_disponibles = pd.to_datetime(
+        base_mercado_historico.loc[
+            base_mercado_historico["spot"].notna(), "fecha"
+        ],
+        errors="coerce",
+    ).dropna()
+    if fechas_disponibles.empty:
+        detalle_disponibilidad = "No hay precios disponibles para esta zona."
+    else:
+        detalle_disponibilidad = (
+            "Hay precios para esta zona entre el "
+            f"{fechas_disponibles.min():%d/%m/%Y} y el "
+            f"{fechas_disponibles.max():%d/%m/%Y}."
+        )
+    st.warning(
+        "No hay precios para la zona y el periodo seleccionados. "
+        + detalle_disponibilidad
+    )
+    mostrar_controles_telemindex(lista_meses, st.session_state.ultima_fecha_sheets)
+    st.stop()
 
 check_medias(df_filtrado_historico, "3.0")
 
@@ -481,99 +596,6 @@ def actualizar_texto_periodo_telemindex(fecha_ultima_filtrado):
         st.session_state[clave_texto] = (
             f"Rango seleccionado: {inicio.strftime('%d/%m/%Y')} → "
             f"{fin.strftime('%d/%m/%Y')}"
-        )
-
-
-def mostrar_controles_telemindex(lista_meses, fecha_ultima_filtrado):
-    """Dibuja los controles exclusivos del tab Históricos."""
-
-    clave_rango = CLAVES_FILTRO_HISTORICO["rango"]
-    clave_año = CLAVES_FILTRO_HISTORICO["año"]
-    clave_mes = CLAVES_FILTRO_HISTORICO["mes"]
-    clave_dias = CLAVES_FILTRO_HISTORICO["dias"]
-    clave_zona = CLAVES_FILTRO_HISTORICO["zona"]
-
-    st.subheader('Info sobre datos', divider='rainbow')
-    st.info(
-        f"Última fecha disponible: {st.session_state.ultima_fecha_sheets.strftime('%d.%m.%Y')}"
-    )
-    st.info(
-        f"Última fecha C2 liquicomun: {st.session_state.ultima_fecha_csv.strftime('%d.%m.%Y')}"
-    )
-
-    st.subheader('Opciones', divider='rainbow')
-    with st.container(border=True):
-        persist_widget(
-            st.radio,
-            "Seleccionar rango temporal",
-            ['Por años', 'Por meses', 'Selecciona un rango de fechas'],
-            key=clave_rango,
-        )
-
-        if st.session_state[clave_rango] == 'Por años':
-            st.selectbox(
-                'Seleccione el año',
-                options=[2026, 2025, 2024],
-                key=clave_año,
-            )
-        elif st.session_state[clave_rango] == 'Por meses':
-            col_filtro1, col_filtro2 = st.columns(2)
-            with col_filtro1:
-                st.selectbox(
-                    'Seleccione el año',
-                    options=[2026, 2025, 2024],
-                    key=clave_año,
-                )
-            with col_filtro2:
-                st.selectbox(
-                    'Seleccionar mes',
-                    lista_meses,
-                    key=clave_mes,
-                )
-        else:
-            with st.form(key='form_fechas_telemindex_historico'):
-                ultima_fecha_sheets = st.session_state.ultima_fecha_sheets
-                if isinstance(
-                    ultima_fecha_sheets, (pd.Timestamp, datetime.datetime)
-                ):
-                    ultima_fecha_sheets = ultima_fecha_sheets.date()
-                st.date_input(
-                    'Selecciona un rango de días',
-                    min_value=datetime.date(2023, 1, 1),
-                    max_value=ultima_fecha_sheets,
-                    key=clave_dias,
-                )
-                st.form_submit_button('Actualizar cálculos')
-
-        opciones_zona_periodos = [
-            "peninsula", "baleares", "canarias", "ceuta", "melilla"
-        ]
-        persist_widget(
-            st.selectbox,
-            "Selecciona sistema eléctrico",
-            options=opciones_zona_periodos,
-            index=0,
-            key=clave_zona,
-            default="peninsula",
-            disabled=not bool(st.secrets.get("CSV_SNP")),
-            format_func=lambda x: {
-                "peninsula": "Península",
-                "baleares": "Baleares",
-                "canarias": "Canarias",
-                "ceuta": "Ceuta",
-                "melilla": "Melilla",
-            }[x],
-        )
-        if not st.secrets.get("CSV_SNP"):
-            st.caption(
-                "Configura `CSV_SNP` para habilitar Baleares, Canarias, Ceuta y Melilla."
-            )
-
-    st.subheader('Parámetros de fórmula', divider='rainbow')
-    with st.container(border=True):
-        render_formulario_formula_indexada(
-            clave="telemindex_historico",
-            claves_estado=CLAVES_FORMULA_HISTORICO,
         )
 
 
@@ -830,9 +852,11 @@ with tab_curva:
     )
 
     with curva_col1:
-        contenedor_origen_curva = st.container(border=True)
-        contenedor_acciones_curva = st.container(border=True)
-        contenedor_formula_curva = st.container(border=True)
+        with st.expander("Opciones de curva", expanded=True):
+            contenedor_origen_curva = st.container(border=True)
+            contenedor_acciones_curva = st.container(border=True)
+        with st.expander("Parámetros de fórmula", expanded=True):
+            contenedor_formula_curva = st.container(border=True)
 
     render_origen_curva(
         contenedor_origen_curva,
@@ -849,7 +873,6 @@ with tab_curva:
         st.rerun()
 
     with contenedor_formula_curva:
-        st.markdown("#### Parámetros de fórmula")
         render_formulario_formula_indexada(
             clave="telemindex_curva",
         )
@@ -932,14 +955,15 @@ with tab_curva:
         st.subheader("Resultados ponderados", divider="rainbow")
         if hay_curva:
             resumen_curva = obtener_df_resumen(df_curva_uso, None, 0.0)
-            resumen_curva_mostrar = resumen_curva.T
-            resumen_curva_mostrar = formatear_columnas_tabla(
-                resumen_curva_mostrar,
-                columnas_kwh=["Consumo (kWh)"],
-                columnas_euros=["Coste (€)"],
-                columnas_eur_kwh=["Precio medio (€/kWh)"],
-                incluir_unidades=False,
-            ).T
+            periodos_afectados_curva = (
+                df_curva_uso["periodo"].dropna().astype(str)
+                .str.strip().str.upper().unique().tolist()
+            )
+            resumen_curva_mostrar = formatear_resumen_mixto(
+                resumen_curva,
+                columnas_en_blanco=periodos_no_aplicables_atr(atr_curva),
+                periodos_afectados=periodos_afectados_curva,
+            )
             st.caption(
                 f"Consumos, costes y precios medios · ATR {atr_curva}"
             )
@@ -1041,18 +1065,19 @@ with tab_curva:
                         height=38 + 35 * len(desglose_ssaa_curva_mostrar),
                     )
 
-            st.plotly_chart(
-                graficar_mensual_apilado(df_curva_uso),
-                use_container_width=True,
-                key="telemindex_curva_consumo_mensual",
-            )
+            with st.expander("Consumo mensual", expanded=True):
+                st.plotly_chart(
+                    graficar_mensual_apilado(df_curva_uso),
+                    use_container_width=True,
+                    key="telemindex_curva_consumo_mensual",
+                )
 
-            st.subheader("Perfil de consumo vs coste", divider="rainbow")
-            st.plotly_chart(
-                construir_grafico_perfil_consumo_coste(df_curva_uso),
-                use_container_width=True,
-                key="telemindex_curva_perfil_consumo_coste",
-            )
+            with st.expander("Perfil de consumo vs coste", expanded=True):
+                st.plotly_chart(
+                    construir_grafico_perfil_consumo_coste(df_curva_uso),
+                    use_container_width=True,
+                    key="telemindex_curva_perfil_consumo_coste",
+                )
         else:
             st.info(
                 "Carga una curva para calcular sus consumos, costes y precios."

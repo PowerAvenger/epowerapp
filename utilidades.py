@@ -34,6 +34,14 @@ def generar_menu():
         st.page_link('pages/simulindex.py', label = 'Simulindex: Futuros de indexados', icon = "🔮")
         try:
             st.page_link(
+                'pages/historico_analisis.py',
+                label='Histórico de análisis',
+                icon='📚',
+            )
+        except st.errors.StreamlitAPIException:
+            st.caption('📚 Histórico de análisis · reinicia la app para activarlo')
+        try:
+            st.page_link(
                 'pages/comparador_luz.py',
                 label='Comparador luz',
                 icon='⚖️',

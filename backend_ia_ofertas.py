@@ -10,6 +10,7 @@ import base64
 import json
 import math
 import re
+import unicodedata
 
 import pandas as pd
 
@@ -122,18 +123,54 @@ def _factor_a_eur_kwh(unidad, tarifas=None):
     return 1 / 1000, True         # precios como 236,937: EUR/MWh
 
 
-def _factor_potencia_a_diaria(unidad):
+def _texto_normalizado(valor):
+    texto = unicodedata.normalize("NFKD", str(valor or ""))
+    return "".join(c for c in texto if not unicodedata.combining(c)).casefold()
+
+
+def _fusionar_filas_potencia_energia(tarifas):
+    """Une tablas horizontales que expresan potencia y energía como filas."""
+    tarifas = [dict(fila) for fila in tarifas or []]
+    indices_potencia = [
+        indice for indice, fila in enumerate(tarifas)
+        if "potencia" in _texto_normalizado(fila.get("nombre"))
+    ]
+    indices_energia = [
+        indice for indice, fila in enumerate(tarifas)
+        if "energia" in _texto_normalizado(fila.get("nombre"))
+    ]
+    if len(indices_potencia) != 1 or len(indices_energia) != 1:
+        return tarifas, False
+    indice_potencia, indice_energia = indices_potencia[0], indices_energia[0]
+    potencia, energia = tarifas[indice_potencia], tarifas[indice_energia]
+    for periodo in [f"P{i}" for i in range(1, 7)]:
+        if _numero_extraido(energia.get(f"potencia_{periodo}")) is None:
+            energia[f"potencia_{periodo}"] = potencia.get(periodo)
+    return [
+        fila for indice, fila in enumerate(tarifas)
+        if indice not in {indice_potencia, indice_energia}
+    ] + [energia], True
+
+
+def _factor_potencia_a_diaria(unidad, valores=None):
     """Convierte una unidad explícita de potencia a €/kW/día."""
     texto = (
         str(unidad or "").lower().replace(" ", "")
         .replace("eur", "€").replace("año", "ano")
     )
     if "€/kw/d" in texto or "€/kwdia" in texto or "€/kw/dia" in texto:
-        return 1.0
+        return 1.0, False
     if "€/kw/ano" in texto or "€/kwano" in texto:
-        return 1 / 365
+        return 1 / 365, False
     if "€/kw/mes" in texto or "€/kwmes" in texto:
-        return 12 / 365
+        return 12 / 365, False
+    validos = sorted(
+        float(valor) for valor in (valores or [])
+        if valor is not None and math.isfinite(float(valor)) and float(valor) > 0
+    )
+    if validos:
+        mediana = validos[len(validos) // 2]
+        return (1.0 if mediana < 0.5 else 1 / 365), True
     raise ValueError(
         "Se han detectado precios de potencia, pero no se reconoce su unidad."
     )
@@ -143,16 +180,20 @@ def validar_oferta_extraida(resultado, atr_contexto=None):
     """Valida y convierte la extracción a una tabla canónica en €/kWh."""
     if not isinstance(resultado, dict) or not resultado.get("tarifas"):
         raise ValueError("No se ha detectado ninguna tarifa en la imagen.")
+    tarifas, filas_fusionadas = _fusionar_filas_potencia_energia(
+        resultado.get("tarifas")
+    )
     factor, unidad_inferida = _factor_a_eur_kwh(
-        resultado.get("unidad_original"), resultado.get("tarifas")
+        resultado.get("unidad_original"), tarifas
     )
     filas = []
     filas_potencia = []
     campos_revisar = []
     nombres_usados = {}
-    numero_tarifas = len(resultado["tarifas"])
+    numero_tarifas = len(tarifas)
     nombre_global = str(resultado.get("nombre") or "Oferta desde imagen").strip()
-    for indice, tarifa in enumerate(resultado["tarifas"], start=1):
+    potencia_unidad_inferida = False
+    for indice, tarifa in enumerate(tarifas, start=1):
         # La etiqueta visible de la fila (p. ej. "2.0 TD") es más fiable que
         # un ATR repetido erróneamente por el modelo en todas las filas.
         atr_nombre = detectar_atr_en_texto(tarifa.get("nombre"))
@@ -192,8 +233,12 @@ def validar_oferta_extraida(resultado, atr_contexto=None):
             for periodo in [f"P{i}" for i in range(1, 7)]
         }
         if any(valor is not None for valor in valores_potencia.values()):
-            factor_potencia = _factor_potencia_a_diaria(
-                resultado.get("unidad_potencia_original")
+            factor_potencia, potencia_inferida_fila = _factor_potencia_a_diaria(
+                resultado.get("unidad_potencia_original"),
+                valores_potencia.values(),
+            )
+            potencia_unidad_inferida = (
+                potencia_unidad_inferida or potencia_inferida_fila
             )
             periodos_potencia = (
                 ["P1", "P2"] if atr == "2.0"
@@ -222,6 +267,8 @@ def validar_oferta_extraida(resultado, atr_contexto=None):
     tabla.attrs["unidad_inferida"] = unidad_inferida
     tabla.attrs["campos_revisar"] = campos_revisar
     tabla.attrs["potencia_tarifas"] = pd.DataFrame(filas_potencia)
+    tabla.attrs["unidad_potencia_inferida"] = potencia_unidad_inferida
+    tabla.attrs["filas_potencia_energia_fusionadas"] = filas_fusionadas
     tabla.attrs["unidad_potencia_original"] = resultado.get(
         "unidad_potencia_original"
     )
@@ -270,7 +317,10 @@ def extraer_oferta_imagen(
             "deja todos los campos potencia_P en null. Cuando la captura "
             "contenga dos tablas, la tabla de potencia aparece primero y la "
             "tabla de energía después; confirma igualmente sus encabezados y "
-            "unidades visibles antes de asignar los valores."
+            "unidades visibles antes de asignar los valores. Una tabla única "
+            "también puede contener dos filas llamadas POTENCIA y ENERGÍA: "
+            "asigna POTENCIA a potencia_P1-potencia_P6 y ENERGÍA a P1-P6 "
+            "dentro de una sola tarifa."
         ),
         input=[{
             "role": "user",

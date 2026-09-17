@@ -182,8 +182,8 @@ zona_mensajes.empty()
 seccion_gas = st.segmented_control(
     "Sección",
     [
-        'Históricos', 'OMIE vs MIBGAS', 'Comparador', 'Futuros',
-        'CO2', 'Simulador', 'Previsión anual',
+        'Históricos', 'Futuros', 'Previsión anual', 'OMIE vs MIBGAS',
+        'Comparador', 'CO2', 'Simulador',
     ],
     default='Históricos',
     key='seccion_gas',

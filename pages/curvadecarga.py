@@ -5,6 +5,7 @@ import io
 import base64
 import re
 import json
+import sqlite3
 from html import escape
 from pathlib import Path
 from dateutil.relativedelta import relativedelta
@@ -27,6 +28,7 @@ from backend_curvadecarga import (
     calcular_tabla_potencia_media_qh,calcular_tabla_coef_k, calcular_tabla_q_condensadores,
     calcular_comparacion, calcular_comparacion_costes,
     calcular_comparativa_ahorro,
+    filtrar_intervalos_comparacion,
     preparar_costes_mensuales_rango,
     )
 from backend_comun import (
@@ -60,6 +62,8 @@ from backend_contractual import (
     cargar_datos_suministro,
     condicion_como_referencia,
     condicion_manual_como_referencia,
+    referencias_del_mismo_registro,
+    ultimo_dia_cubierto_desde,
     guardar_costes_extra_cups,
     preparar_indexado_contractual,
     resumir_calculo_contractual,
@@ -72,10 +76,17 @@ from servicio_curva import (
 )
 from componentes_curva import (
     OPCIONES_ATR_CURVA,
+    anio_anterior_y_actual,
+    excluir_periodo_automatico,
     guardar_selector_atr_curva,
     preparar_selector_atr_curva,
     render_campos_axon,
     render_campos_archivo_curva,
+)
+from data_beta.axon_access import listar_suministros_axon
+from data_beta.contract_periods import (
+    listar_periodos_cups,
+    sugerir_cambios_contrato,
 )
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
@@ -117,6 +128,15 @@ def cargar_widget_desde_sesion(clave_widget, clave_sesion, valor_defecto=""):
 def guardar_widget_en_sesion(clave_widget, clave_sesion):
     """Copia inmediatamente el valor temporal del widget a estado permanente."""
     st.session_state[clave_sesion] = st.session_state.get(clave_widget)
+
+
+def usar_vigencia_en_ahorro(inicio, fin, condicion_referencia_id):
+    """Aplica el periodo sugerido y conserva el precio de referencia elegido."""
+    rango = (inicio, fin)
+    st.session_state.rango_ahorro_widget = rango
+    st.session_state.rango_ahorro_seleccionado = rango
+    if st.session_state.get("origen_referencia_ahorro") == "Condición anterior del contrato":
+        st.session_state.condicion_referencia_ahorro = condicion_referencia_id
 
 
 def guardar_preferencias_datadis_sesion():
@@ -247,6 +267,81 @@ with tab_curva:
                 hoja_curva_excel = campos_archivo["hoja_excel"]
                 periodos_en_entrada = campos_archivo["trae_periodos"]
             elif origen_curva == "Axon":
+                if st.session_state.get("es_admin", False):
+                    try:
+                        suministros_axon = listar_suministros_axon()
+                    except (OSError, ValueError, KeyError, sqlite3.Error) as exc:
+                        suministros_axon = []
+                        st.warning(f"No se pudo consultar la lista de CUPS Axon: {exc}")
+
+                    por_cups = {fila["cups"]: fila for fila in suministros_axon}
+                    if suministros_axon:
+                        cups_guardado_sesion = st.session_state.get(
+                            "curva_carga_axon_cups_guardado_sesion", ""
+                        )
+                        if st.session_state.get(
+                            "curva_carga_axon_cups_guardado", cups_guardado_sesion
+                        ) not in ("", *por_cups):
+                            st.session_state["curva_carga_axon_cups_guardado"] = ""
+                        cargar_widget_desde_sesion(
+                            "curva_carga_axon_cups_guardado",
+                            "curva_carga_axon_cups_guardado_sesion",
+                        )
+                        cups_elegido = st.selectbox(
+                            "CUPS Axon guardado",
+                            ("", *por_cups),
+                            format_func=lambda cups: (
+                                "Selecciona un CUPS"
+                                if not cups else (
+                                    f"{cups} · {por_cups[cups]['denominacion']}"
+                                    if por_cups[cups]["denominacion"] else cups
+                                )
+                            ),
+                            key="curva_carga_axon_cups_guardado",
+                            on_change=guardar_widget_en_sesion,
+                            args=(
+                                "curva_carga_axon_cups_guardado",
+                                "curva_carga_axon_cups_guardado_sesion",
+                            ),
+                        )
+                    else:
+                        cups_elegido = ""
+                        st.caption("No hay CUPS Axon disponibles en la base local.")
+
+                    referencia = (
+                        por_cups[cups_elegido]["credencial_ref"]
+                        if cups_elegido else "axon_principal"
+                    )
+                    atr_bbdd = por_cups[cups_elegido]["atr"] if cups_elegido else ""
+                    atr_normalizado = re.sub(r"\s+", "", atr_bbdd.upper())
+                    if atr_normalizado.endswith("TD"):
+                        atr_normalizado = atr_normalizado[:-2]
+                    contexto_axon = (cups_elegido, referencia, atr_bbdd)
+                    if st.session_state.get("_curva_axon_contexto") != contexto_axon:
+                        if cups_elegido:
+                            st.session_state["curva_carga_axon_cups"] = cups_elegido
+                            st.session_state.axon_cups_sesion = cups_elegido
+                            if atr_normalizado in OPCIONES_ATR_CURVA:
+                                st.session_state.atr_curva_preferido = atr_normalizado
+                        credencial = st.secrets.get("MEASURE_CREDENTIALS", {}).get(
+                            referencia, {}
+                        ) if referencia else {}
+                        if str(credencial.get("proveedor", "")).upper() == "AXON":
+                            st.session_state.axon_usuario_sesion = str(
+                                credencial.get("usuario", "")
+                            )
+                            st.session_state.axon_password_sesion = str(
+                                credencial.get("password", "")
+                            )
+                        elif cups_elegido:
+                            st.session_state.axon_usuario_sesion = ""
+                            st.session_state.axon_password_sesion = ""
+                        st.session_state["_curva_axon_contexto"] = contexto_axon
+                    if cups_elegido and atr_normalizado not in OPCIONES_ATR_CURVA:
+                        st.caption(
+                            "Este CUPS no tiene un peaje compatible en la base; "
+                            "selecciónalo manualmente."
+                        )
                 campos_axon = render_campos_axon("curva_carga")
                 usuario_axon = campos_axon["usuario"]
                 password_axon = campos_axon["password"]
@@ -476,6 +571,8 @@ with tab_curva:
                 inicio_12m, fin_12m = ultimos_doce_meses_completos()
                 mes_inicio_12m = pd.Timestamp(inicio_12m).strftime("%Y/%m")
                 mes_fin_12m = pd.Timestamp(fin_12m).strftime("%Y/%m")
+                inicio_dos_anios, _ = anio_anterior_y_actual()
+                mes_inicio_dos_anios = pd.Timestamp(inicio_dos_anios).strftime("%Y/%m")
                 for clave_mes_datadis in (
                     "mes_inicio_datadis",
                     "mes_fin_datadis",
@@ -488,28 +585,46 @@ with tab_curva:
                 seleccionar_12m_datadis = st.checkbox(
                     "Seleccionar automáticamente los últimos 12 meses completos",
                     key="seleccionar_12m_completos_datadis",
+                    on_change=excluir_periodo_automatico,
+                    args=(
+                        "seleccionar_12m_completos_datadis",
+                        "seleccionar_dos_anios_datadis",
+                    ),
                     help=(
                         "Excluye el mes actual. Por ejemplo, en agosto selecciona "
                         "desde agosto del año anterior hasta julio."
                     ),
                 )
+                seleccionar_dos_anios_datadis = st.checkbox(
+                    "Seleccionar el año anterior completo y el año actual",
+                    key="seleccionar_dos_anios_datadis",
+                    on_change=excluir_periodo_automatico,
+                    args=(
+                        "seleccionar_dos_anios_datadis",
+                        "seleccionar_12m_completos_datadis",
+                    ),
+                    help="Desde enero del año anterior hasta el mes actual.",
+                )
                 if seleccionar_12m_datadis:
                     st.session_state.mes_inicio_datadis = mes_inicio_12m
                     st.session_state.mes_fin_datadis = mes_fin_12m
+                elif seleccionar_dos_anios_datadis:
+                    st.session_state.mes_inicio_datadis = mes_inicio_dos_anios
+                    st.session_state.mes_fin_datadis = str(mes_actual_datadis).replace("-", "/")
                 col_mes_inicio, col_mes_fin = st.columns(2)
                 with col_mes_inicio:
                     mes_inicio_datadis = st.selectbox(
                         "Mes inicial",
                         meses_datadis,
                         key="mes_inicio_datadis",
-                        disabled=seleccionar_12m_datadis,
+                        disabled=seleccionar_12m_datadis or seleccionar_dos_anios_datadis,
                     )
                 with col_mes_fin:
                     mes_fin_datadis = st.selectbox(
                         "Mes final",
                         meses_datadis,
                         key="mes_fin_datadis",
-                        disabled=seleccionar_12m_datadis,
+                        disabled=seleccionar_12m_datadis or seleccionar_dos_anios_datadis,
                     )
                 st.caption("Datadis recibirá las fechas en formato AAAA/MM.")
                 preferir_qh_datadis = st.checkbox(
@@ -1578,11 +1693,21 @@ if st.session_state.get("df_norm") is not None:
                 version_curva_calculada = st.session_state.get(
                     "version_curva_costes_comparativa"
                 )
+                rango_costes_actual = st.session_state.get(
+                    "rango_fechas_comparativa_guardado"
+                )
+                rango_costes_actual = (
+                    tuple(rango_costes_actual)
+                    if isinstance(rango_costes_actual, (tuple, list))
+                    and len(rango_costes_actual) == 2 else None
+                )
                 if (
                     st.session_state.get("precios_mensuales") is not None
                     and (
                         cups_costes_calculado != cups_costes_actual
                         or version_curva_calculada != version_curva_actual
+                        or st.session_state.get("rango_costes_calculado")
+                        != rango_costes_actual
                     )
                 ):
                     for clave_costes in (
@@ -1591,6 +1716,7 @@ if st.session_state.get("df_norm") is not None:
                         "origen_costes_comparativa",
                         "cups_costes_comparativa",
                         "version_curva_costes_comparativa",
+                        "rango_costes_calculado",
                     ):
                         st.session_state.pop(clave_costes, None)
                 modo_coste_energia = st.radio(
@@ -1733,6 +1859,23 @@ if st.session_state.get("df_norm") is not None:
                                 st.session_state.df_sheets.copy()
                             )
                             if modo_coste_energia == "Condiciones del contrato":
+                                fechas_curva_completa = pd.to_datetime(
+                                    df_curva_indexada["fecha_hora"]
+                                ).dt.to_period("M").astype(str)
+                                consumos_mensuales_completos = (
+                                    df_curva_indexada.groupby(
+                                        fechas_curva_completa
+                                    )["consumo_neto_kWh"].sum().to_dict()
+                                )
+                            df_curva_indexada = filtrar_intervalos_comparacion(
+                                df_curva_indexada, rango_costes_actual
+                            )
+                            if df_curva_indexada.empty:
+                                raise ValueError(
+                                    "No hay intervalos de curva en el periodo "
+                                    "seleccionado y su réplica del año siguiente."
+                                )
+                            if modo_coste_energia == "Condiciones del contrato":
                                 df_curva_indexada = aplicar_condiciones_contractuales(
                                     df_curva_indexada,
                                     condiciones,
@@ -1740,7 +1883,8 @@ if st.session_state.get("df_norm") is not None:
                                 )
                                 costes_extra = cargar_costes_extra_cups(cups_contrato)
                                 df_curva_indexada = aplicar_costes_extra_mensuales(
-                                    df_curva_indexada, costes_extra
+                                    df_curva_indexada, costes_extra,
+                                    consumos_mensuales_base=consumos_mensuales_completos,
                                 )
                                 st.session_state.resumen_costes_contractuales = (
                                     resumir_calculo_contractual(df_curva_indexada)
@@ -1767,6 +1911,9 @@ if st.session_state.get("df_norm") is not None:
                             )
                             st.session_state.version_curva_costes_comparativa = (
                                 version_curva_actual
+                            )
+                            st.session_state.rango_costes_calculado = (
+                                rango_costes_actual
                             )
                             precios_mensuales, _ = evol_mensual(
                                 df_curva_indexada, {}
@@ -1945,6 +2092,67 @@ if st.session_state.get("df_norm") is not None:
         ).dropna()
         fecha_min_ahorro = fechas_rango_ahorro.min().date()
         fecha_max_ahorro = fechas_rango_ahorro.max().date()
+        cups_ahorro = str(st.session_state.get("cups_curva", "") or "")
+        if cups_ahorro:
+            col_resumen.markdown(f"**CUPS de la curva activa:** `{cups_ahorro}`")
+        else:
+            col_resumen.warning(
+                "La curva activa no tiene un CUPS asociado. Carga la curva "
+                "desde Axon o Datadis para consultar sus condiciones."
+            )
+        if origen_curva == "Axon" and cups_axon_base and cups_ahorro:
+            if cups_axon_base != cups_ahorro[:20]:
+                col_resumen.warning(
+                    "El CUPS indicado en Curva es distinto del de la curva "
+                    "activa. Descarga y normaliza la curva de ese CUPS."
+                )
+        condiciones_ahorro = None
+        error_condiciones_ahorro = None
+        sugerencias_ahorro = []
+        periodos_ahorro = []
+        try:
+            condiciones_ahorro = cargar_condiciones_cups(cups_ahorro)
+        except Exception as exc:
+            error_condiciones_ahorro = str(exc)
+        if condiciones_ahorro is not None:
+            try:
+                periodos_ahorro = listar_periodos_cups(cups_ahorro)
+                sugerencias_ahorro = sugerir_cambios_contrato(
+                    periodos_ahorro, condiciones_ahorro,
+                    fecha_min_ahorro, fecha_max_ahorro,
+                )
+            except (ValueError, sqlite3.Error) as exc:
+                col_resumen.warning(
+                    f"No se pudieron consultar las vigencias contractuales: {exc}"
+                )
+
+        contexto_sugerencia = (
+            cups_ahorro,
+            tuple(
+                (periodo["id"], periodo["fecha_inicio"],
+                 periodo["fecha_vencimiento"])
+                for periodo in periodos_ahorro
+            ),
+        )
+        if st.session_state.get("_ahorro_contexto_vigencias") != contexto_sugerencia:
+            if sugerencias_ahorro:
+                sugerencia = sugerencias_ahorro[-1]
+                st.session_state.rango_ahorro_widget = (
+                    sugerencia["inicio"], sugerencia["fin"]
+                )
+                st.session_state.rango_ahorro_seleccionado = (
+                    sugerencia["inicio"], sugerencia["fin"]
+                )
+                st.session_state.origen_referencia_ahorro = (
+                    "Condición anterior del contrato"
+                )
+                st.session_state.condicion_referencia_ahorro = (
+                    sugerencia["condicion_referencia_id"]
+                )
+            else:
+                st.session_state.pop("rango_ahorro_widget", None)
+                st.session_state.pop("condicion_referencia_ahorro", None)
+            st.session_state["_ahorro_contexto_vigencias"] = contexto_sugerencia
         rango_defecto_ahorro = (fecha_min_ahorro, fecha_max_ahorro)
         rango_guardado_ahorro = st.session_state.get(
             "rango_ahorro_seleccionado", rango_defecto_ahorro
@@ -1966,18 +2174,48 @@ if st.session_state.get("df_norm") is not None:
         )
         origen_referencia = col_resumen.radio(
             "Precio de referencia",
-            ("Condición anterior del contrato", "Oferta fija manual", "Oferta indexada manual"),
+            (
+                "Condición anterior del contrato",
+                "Referencia del mismo registro",
+                "Oferta fija manual",
+                "Oferta indexada manual",
+            ),
             horizontal=False,
             key="origen_referencia_ahorro",
         )
 
-        cups_ahorro = str(st.session_state.get("cups_curva", "") or "")
-        condiciones_ahorro = None
-        error_condiciones_ahorro = None
-        try:
-            condiciones_ahorro = cargar_condiciones_cups(cups_ahorro)
-        except Exception as exc:
-            error_condiciones_ahorro = str(exc)
+        if periodos_ahorro:
+            with col_resumen.expander(
+                "Cambios de contrato registrados", expanded=True
+            ):
+                st.caption(
+                    "Se muestran todos los contratos del CUPS. Los cambios "
+                    "dentro del periodo cargado pueden aplicarse a la comparativa."
+                )
+                sugerencias_por_periodo = {
+                    item["periodo_id"]: item for item in sugerencias_ahorro
+                }
+                for periodo in periodos_ahorro:
+                    sugerencia = sugerencias_por_periodo.get(periodo["id"])
+                    vencimiento_txt = (
+                        f"{pd.Timestamp(periodo['fecha_vencimiento']):%d/%m/%Y}"
+                        if periodo["fecha_vencimiento"] else "sin registrar"
+                    )
+                    st.write(
+                        f"**{pd.Timestamp(periodo['fecha_inicio']):%d/%m/%Y}** · "
+                        f"{periodo['comercializadora']} · "
+                        f"vencimiento {vencimiento_txt}"
+                    )
+                    if sugerencia:
+                        st.button(
+                            f"Usar cambio del {sugerencia['inicio']:%d/%m/%Y}",
+                            key=f"usar_periodo_ahorro_{sugerencia['periodo_id']}",
+                            on_click=usar_vigencia_en_ahorro,
+                            args=(
+                                sugerencia["inicio"], sugerencia["fin"],
+                                sugerencia["condicion_referencia_id"],
+                            ),
+                        )
 
         condicion_referencia_id = None
         precios_fijos_referencia = None
@@ -2032,6 +2270,54 @@ if st.session_state.get("df_norm") is not None:
                     "Se conserva su fórmula o sus precios, pero no su vigencia original. "
                     "No se trasladan extras históricos al escenario de referencia."
                 )
+        elif origen_referencia == "Referencia del mismo registro":
+            col_resumen.caption(
+                "Cada tramo fijo se compara con su fórmula indexada de referencia; "
+                "cada tramo indexado, con sus precios TE REF."
+            )
+            if (
+                condiciones_ahorro is not None
+                and isinstance(rango_ahorro, (tuple, list))
+                and len(rango_ahorro) == 2
+            ):
+                try:
+                    referencias_vista = referencias_del_mismo_registro(
+                        condiciones_ahorro, st.session_state.atr_dfnorm,
+                        *rango_ahorro,
+                    )
+                except ValueError as exc:
+                    col_resumen.warning(str(exc))
+                else:
+                    resumen_referencias = []
+                    for _, fila in referencias_vista.iterrows():
+                        payload = json.loads(fila["payload_json"] or "{}")
+                        if str(fila["tipo_precio"]).startswith("INDEX"):
+                            detalle = (
+                                f"CG {payload.get('INDEX CG', '')} €/MWh · "
+                                f"posición {payload.get('CG F', '')}"
+                            )
+                        else:
+                            detalle = " · ".join(
+                                f"P{i} {payload.get(f'TE P{i}', '')} €/kWh"
+                                for i in range(
+                                    1, 4 if str(st.session_state.atr_dfnorm).startswith("2.0") else 7
+                                )
+                            )
+                        resumen_referencias.append({
+                            "Condición": int(fila["condicion_id"]),
+                            "Desde": pd.Timestamp(fila["inicio_condicion"]).date(),
+                            "Hasta": (
+                                pd.Timestamp(fila["fin_condicion"]).date()
+                                if pd.notna(fila["fin_condicion"]) else None
+                            ),
+                            "Referencia": str(fila["tipo_precio"]),
+                            "Detalle": detalle,
+                        })
+                    with col_resumen.expander("Referencias aplicadas por tramo"):
+                        st.dataframe(
+                            pd.DataFrame(resumen_referencias),
+                            use_container_width=True, hide_index=True,
+                        )
         elif origen_referencia == "Oferta fija manual":
             numero_periodos_ahorro = 3 if str(st.session_state.atr_dfnorm) == "2.0" else 6
             columnas_fijo_ahorro = col_resumen.columns(2)
@@ -2069,6 +2355,7 @@ if st.session_state.get("df_norm") is not None:
             disabled=bool(error_condiciones_ahorro),
         )
         if calcular_ahorro:
+            st.session_state.pop("aviso_cobertura_ahorro", None)
             try:
                 if error_condiciones_ahorro:
                     raise ValueError(error_condiciones_ahorro)
@@ -2077,12 +2364,28 @@ if st.session_state.get("df_norm") is not None:
                 inicio_ahorro, fin_ahorro = map(pd.Timestamp, rango_ahorro)
                 if inicio_ahorro > fin_ahorro:
                     raise ValueError("La fecha inicial no puede ser posterior a la final.")
+                fin_solicitado_ahorro = fin_ahorro
+                fin_ahorro = ultimo_dia_cubierto_desde(
+                    condiciones_ahorro, inicio_ahorro, fin_ahorro
+                )
+                aviso_cobertura_ahorro = (
+                    "El periodo solicitado llega al "
+                    f"{fin_solicitado_ahorro:%d/%m/%Y}, pero las condiciones "
+                    f"solo permiten comparar hasta el {fin_ahorro:%d/%m/%Y}. "
+                    "El cálculo excluye los días posteriores."
+                    if fin_ahorro < fin_solicitado_ahorro else None
+                )
                 if origen_referencia == "Condición anterior del contrato":
                     fila_ref = condiciones_ahorro.loc[
                         condiciones_ahorro["condicion_id"].eq(condicion_referencia_id)
                     ].iloc[0]
                     condicion_ref = condicion_como_referencia(
                         fila_ref, inicio_ahorro, fin_ahorro
+                    )
+                elif origen_referencia == "Referencia del mismo registro":
+                    condicion_ref = referencias_del_mismo_registro(
+                        condiciones_ahorro, st.session_state.atr_dfnorm,
+                        inicio_ahorro, fin_ahorro,
                     )
                 elif origen_referencia == "Oferta fija manual":
                     condicion_ref = condicion_manual_como_referencia(
@@ -2146,7 +2449,10 @@ if st.session_state.get("df_norm") is not None:
                     if not resultado_nuevo_ahorro["ok"]:
                         raise ValueError(resultado_nuevo_ahorro["mensaje"])
                     st.session_state.resultado_comparativa_ahorro = resultado_nuevo_ahorro
-                    st.session_state.rango_ahorro_seleccionado = tuple(rango_ahorro)
+                    st.session_state.rango_ahorro_seleccionado = (
+                        inicio_ahorro.date(), fin_ahorro.date()
+                    )
+                    st.session_state.aviso_cobertura_ahorro = aviso_cobertura_ahorro
                     st.session_state.detalle_actual_ahorro = curva_actual
                     st.session_state.detalle_referencia_ahorro = curva_ref
             except Exception as exc:
@@ -2155,9 +2461,19 @@ if st.session_state.get("df_norm") is not None:
 
         resultado_ahorro = st.session_state.get("resultado_comparativa_ahorro")
         if resultado_ahorro is not None:
+            aviso_cobertura_ahorro = st.session_state.get("aviso_cobertura_ahorro")
+            if aviso_cobertura_ahorro:
+                col_resumen.warning(aviso_cobertura_ahorro)
             if not resultado_ahorro["ok"]:
                 st.warning(resultado_ahorro["mensaje"])
             else:
+                rango_calculado = st.session_state.get("rango_ahorro_seleccionado")
+                if rango_calculado:
+                    col_resumen.caption(
+                        "Periodo comparado: "
+                        f"{rango_calculado[0]:%d/%m/%Y} – "
+                        f"{rango_calculado[1]:%d/%m/%Y}."
+                    )
                 st.session_state.comparativa_ahorro_informe_datos = {
                     "resultado": resultado_ahorro,
                     "cups": str(st.session_state.get("cups_curva", "") or ""),

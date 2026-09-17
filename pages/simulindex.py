@@ -1,4 +1,5 @@
 import streamlit as st
+import hashlib
 from pathlib import Path
 from backend_simulindex import (obtener_historicos_meff, obtener_meff_anual, obtener_meff_trimestral, obtener_meff_mensual,
                                 pyc_2026,
@@ -44,7 +45,9 @@ from backend_opt2 import (
     consumos_mensuales_desde_curva_normalizada,
     normalizar_tabla_consumos_sips,
 )
-from backend_sips import leer_sips_completo, perfil_anual_meses_naturales
+from backend_sips import (
+    es_sips_excel, leer_sips_completo, perfil_anual_meses_naturales,
+)
 from backend_ofertas_fijas import (
     cargar_catalogo_ofertas,
     precios_energia_oferta,
@@ -65,11 +68,49 @@ from componentes_indexados import (
 from componentes_curva import render_origen_curva
 from informe_simulindex import mostrar_informe_comparador_trimestral
 
+def _limpiar_consumos_comparador():
+    """Descarta los consumos compartidos y los archivos seleccionados."""
+    for clave in (
+        'df_consumos_pricing', 'df_consumos_pricing_origen', 'sips_pricing',
+        'upload_consumos_comparador_simulindex',
+        'pricing_upload_consumos', 'firma_consumos_comparador_simulindex',
+        '_pendiente_pricing_atr_seleccionado',
+        '_limpiar_upload_pricing_por_comparador',
+        '_reiniciar_atr_sips_comparador',
+        'simulindex_comparador_atr_sips_manual',
+        'pricing_atr_manual_confirmado_sips',
+        'pricing_atr_seleccionado',
+    ):
+        st.session_state.pop(clave, None)
+
+
+def _confirmar_atr_pricing_sips():
+    st.session_state.pricing_atr_manual_confirmado_sips = True
+
+
+def _cambiar_archivo_pricing():
+    st.session_state.pop('pricing_atr_manual_confirmado_sips', None)
+    st.session_state.pop('pricing_atr_seleccionado', None)
+    st.session_state.pop('simulindex_comparador_atr_sips_manual', None)
+
+
+def _confirmar_atr_comparador_sips():
+    atr = st.session_state.get('simulindex_comparador_atr_sips_manual')
+    if atr is not None:
+        st.session_state.pricing_atr_seleccionado = atr
+        st.session_state.pricing_atr_manual_confirmado_sips = True
+
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
 
 generar_menu()
 init_app()
+if st.session_state.pop('_limpiar_upload_pricing_por_comparador', False):
+    st.session_state.pop('pricing_upload_consumos', None)
+if st.session_state.pop('_reiniciar_atr_sips_comparador', False):
+    st.session_state.pop('simulindex_comparador_atr_sips_manual', None)
+    st.session_state.pop('pricing_atr_manual_confirmado_sips', None)
+    st.session_state.pop('pricing_atr_seleccionado', None)
 
 st.sidebar.header('⚡ Simulindex: Futuros de indexados ⚡')
 zona_mensajes = st.sidebar.empty()
@@ -590,7 +631,10 @@ with tab7:
         if (
             not usar_curva_pricing
             and archivo_pricing_sesion is not None
-            and archivo_pricing_sesion.name.lower().endswith('.csv')
+            and (
+                archivo_pricing_sesion.name.lower().endswith('.csv')
+                or es_sips_excel(archivo_pricing_sesion)
+            )
         ):
             try:
                 sips_pricing_detectado = leer_sips_completo(
@@ -611,11 +655,60 @@ with tab7:
         elif atr_sips_pricing in {'2.0', '3.0', '6.1', '6.2'}:
             st.session_state.pricing_atr_seleccionado = atr_sips_pricing
 
+        sips_sin_atr_pricing = (
+            not usar_curva_pricing
+            and (
+                sips_pricing_detectado is not None
+                or st.session_state.get('df_consumos_pricing_origen') == 'sips'
+            )
+            and atr_sips_pricing is None
+            and (
+                sips_pricing_detectado is not None
+                or st.session_state.get('sips_pricing', {}).get('atr') is None
+            )
+        )
+        tabla_sips_atr_pricing = (
+            sips_pricing_detectado['consumos']
+            if sips_pricing_detectado is not None
+            else st.session_state.get('df_consumos_pricing')
+        )
+        sips_con_seis_periodos_pricing = (
+            sips_sin_atr_pricing
+            and isinstance(tabla_sips_atr_pricing, pd.DataFrame)
+            and all(
+                periodo in tabla_sips_atr_pricing.columns
+                for periodo in ('P4', 'P5', 'P6')
+            )
+            and tabla_sips_atr_pricing[['P4', 'P5', 'P6']]
+            .apply(pd.to_numeric, errors='coerce')
+            .fillna(0).ne(0).any().any()
+        )
+        opciones_atr_pricing = (
+            ['3.0', '6.1', '6.2']
+            if sips_con_seis_periodos_pricing
+            else ['2.0', '3.0', '6.1', '6.2']
+        )
+        if st.session_state.get('pricing_atr_seleccionado') not in [
+            None, *opciones_atr_pricing
+        ]:
+            st.session_state.pop('pricing_atr_manual_confirmado_sips', None)
+            st.session_state.pop('pricing_atr_seleccionado', None)
+        if (
+            sips_sin_atr_pricing
+            and not st.session_state.get('pricing_atr_manual_confirmado_sips')
+        ):
+            st.session_state.pop('pricing_atr_seleccionado', None)
+
         atr_pricing_seleccionado = st.selectbox(
             'ATR para ponderación por consumo',
-            options=['2.0', '3.0', '6.1', '6.2'],
+            options=opciones_atr_pricing,
             format_func=lambda atr: f'{atr}TD',
             key='pricing_atr_seleccionado',
+            index=None if sips_sin_atr_pricing else 0,
+            placeholder='Selecciona el ATR real del suministro',
+            on_change=(
+                _confirmar_atr_pricing_sips if sips_sin_atr_pricing else None
+            ),
             disabled=(
                 usar_curva_pricing
                 or atr_sips_pricing in {'2.0', '3.0', '6.1', '6.2'}
@@ -662,13 +755,17 @@ with tab7:
                 st.session_state.pop('df_consumos_pricing', None)
                 st.session_state.pop('df_consumos_pricing_origen', None)
             archivo_consumos_pricing = st.file_uploader(
-                'Sube Excel de consumos o CSV SIPS',
+                'Sube Excel de consumos o archivo SIPS (CSV/Excel)',
                 type=['xlsx', 'xls', 'csv'],
                 key='pricing_upload_consumos',
+                on_change=_cambiar_archivo_pricing,
             )
             if archivo_consumos_pricing is not None:
                 try:
-                    if archivo_consumos_pricing.name.lower().endswith('.csv'):
+                    if (
+                        archivo_consumos_pricing.name.lower().endswith('.csv')
+                        or es_sips_excel(archivo_consumos_pricing)
+                    ):
                         sips_pricing = (
                             sips_pricing_detectado
                             or leer_sips_completo(archivo_consumos_pricing)
@@ -1400,7 +1497,9 @@ with tab7:
             f'M+12 ({fin_horizonte_pricing.strftime("%m/%Y")}).'
         )
         df_consumos_pricing = st.session_state.get('df_consumos_pricing')
-        if df_consumos_pricing is None or df_consumos_pricing.empty:
+        if atr_pricing_seleccionado is None:
+            st.info('El SIPS no informa el ATR. Selecciónalo para calcular el pricing.')
+        elif df_consumos_pricing is None or df_consumos_pricing.empty:
             columnas_metricas_consumo = st.columns(2)
             precio_sin_ponderar_seleccionado = tabla_resumen_anual_pricing.loc[
                 f'{atr_pricing_seleccionado}TD', 'Precio medio anual'
@@ -2031,6 +2130,17 @@ with tab5:
         atr_sips_en_sesion = st.session_state.get('sips_pricing', {}).get('atr')
         if atr_sips_en_sesion in {'2.0', '3.0', '6.1', '6.2'}:
             atr_consumos_pricing = atr_sips_en_sesion
+        else:
+            if (
+                st.session_state.get('simulindex_comparador_atr_sips_manual') is None
+                and st.session_state.get('pricing_atr_manual_confirmado_sips')
+            ):
+                st.session_state.simulindex_comparador_atr_sips_manual = (
+                    atr_pricing_seleccionado
+                )
+            atr_consumos_pricing = st.session_state.get(
+                'simulindex_comparador_atr_sips_manual'
+            )
     pricing_comparador_disponible = (
         isinstance(consumos_pricing_comparador, pd.DataFrame)
         and not consumos_pricing_comparador.empty
@@ -2055,7 +2165,9 @@ with tab5:
     if origen_guardado_comparador not in opciones_origen_comparador:
         st.session_state.origen_consumos_comparador_simulindex = (
             'Consumos mensuales / SIPS'
-            if pricing_comparador_disponible and not curva_comparador_disponible
+            if isinstance(consumos_pricing_comparador, pd.DataFrame)
+            and not consumos_pricing_comparador.empty
+            and not curva_comparador_disponible
             else 'Curva de carga'
         )
     c1, c2, c3 = st.columns(3)
@@ -2082,13 +2194,48 @@ with tab5:
             if (
                 origen_comparador_seleccionado
                 == 'Consumos mensuales / SIPS'
-                and not pricing_comparador_disponible
             ):
+                if (
+                    st.session_state.get('df_consumos_pricing_origen') == 'sips'
+                    and st.session_state.get('sips_pricing', {}).get('atr') is None
+                    and isinstance(consumos_pricing_comparador, pd.DataFrame)
+                ):
+                    hay_p4_p6 = bool(
+                        consumos_pricing_comparador[['P4', 'P5', 'P6']]
+                        .apply(pd.to_numeric, errors='coerce')
+                        .fillna(0).ne(0).any().any()
+                    )
+                    opciones_atr_sips = (
+                        ['3.0', '6.1', '6.2'] if hay_p4_p6
+                        else ['2.0', '3.0', '6.1', '6.2']
+                    )
+                    if st.session_state.get(
+                        'simulindex_comparador_atr_sips_manual'
+                    ) not in [None, *opciones_atr_sips]:
+                        st.session_state.pop(
+                            'simulindex_comparador_atr_sips_manual', None
+                        )
+                    st.selectbox(
+                        'ATR del SIPS (no figura en el archivo)',
+                        opciones_atr_sips,
+                        index=None,
+                        placeholder='Selecciona el peaje real del suministro',
+                        format_func=lambda valor: f'{valor}TD',
+                        key='simulindex_comparador_atr_sips_manual',
+                        on_change=_confirmar_atr_comparador_sips,
+                    )
                 archivo_consumos_comparador = st.file_uploader(
-                    'Sube un Excel de consumos mensuales o un CSV SIPS',
+                    'Sube un Excel de consumos mensuales o un SIPS (CSV/Excel)',
                     type=['xlsx', 'xls', 'csv'],
                     key='upload_consumos_comparador_simulindex',
                 )
+                if isinstance(consumos_pricing_comparador, pd.DataFrame):
+                    st.caption('Hay consumos cargados. Puedes sustituir el archivo o eliminarlos.')
+                    st.button(
+                        'Eliminar consumos cargados',
+                        key='eliminar_consumos_comparador_simulindex',
+                        on_click=_limpiar_consumos_comparador,
+                    )
 
     if origen_comparador_seleccionado == 'Curva de carga':
         render_origen_curva(
@@ -2127,18 +2274,30 @@ with tab5:
         )
         st.stop()
 
-    if (
-        origen_comparador_seleccionado == 'Consumos mensuales / SIPS'
-        and not pricing_comparador_disponible
-    ):
-        if archivo_consumos_comparador is not None:
+    if origen_comparador_seleccionado == 'Consumos mensuales / SIPS':
+        firma_archivo_comparador = (
+            hashlib.sha256(archivo_consumos_comparador.getvalue()).hexdigest()
+            if archivo_consumos_comparador is not None else None
+        )
+        if (
+            firma_archivo_comparador is not None
+            and firma_archivo_comparador != st.session_state.get(
+                'firma_consumos_comparador_simulindex'
+            )
+        ):
             try:
-                if archivo_consumos_comparador.name.lower().endswith('.csv'):
+                if (
+                    archivo_consumos_comparador.name.lower().endswith('.csv')
+                    or es_sips_excel(archivo_consumos_comparador)
+                ):
                     sips_comparador = leer_sips_completo(
                         archivo_consumos_comparador
                     )
                     atr_sips_comparador = sips_comparador.get('atr')
-                    if atr_sips_comparador not in {'2.0', '3.0', '6.1', '6.2'}:
+                    if (
+                        atr_sips_comparador is not None
+                        and atr_sips_comparador not in {'2.0', '3.0', '6.1', '6.2'}
+                    ):
                         raise ValueError(
                             'El SIPS no contiene un ATR compatible '
                             '(2.0TD, 3.0TD, 6.1TD o 6.2TD).'
@@ -2148,11 +2307,13 @@ with tab5:
                             sips_comparador['consumos']
                         )
                     )
-                    st.session_state._pendiente_pricing_atr_seleccionado = (
-                        atr_sips_comparador
-                    )
+                    if atr_sips_comparador is not None:
+                        st.session_state._pendiente_pricing_atr_seleccionado = (
+                            atr_sips_comparador
+                        )
                     st.session_state.sips_pricing = sips_comparador
                     st.session_state.df_consumos_pricing_origen = 'sips'
+                    st.session_state._reiniciar_atr_sips_comparador = True
                 else:
                     consumos_excel_comparador = pd.read_excel(
                         archivo_consumos_comparador
@@ -2163,6 +2324,11 @@ with tab5:
                         )
                     )
                     st.session_state.df_consumos_pricing_origen = 'excel'
+                    st.session_state.pop('sips_pricing', None)
+                st.session_state.firma_consumos_comparador_simulindex = (
+                    firma_archivo_comparador
+                )
+                st.session_state._limpiar_upload_pricing_por_comparador = True
                 st.success(
                     'Consumos cargados. También quedan disponibles en Pricing.'
                 )
@@ -2173,11 +2339,37 @@ with tab5:
             except Exception as error_carga_comparador:
                 st.error(f'No se pudieron leer los consumos: {error_carga_comparador}')
 
-        with c1:
-            st.info(
-                'Carga los consumos para habilitar los tres escenarios y la '
-                'comparación con ofertas fijas.'
-            )
+    if (
+        origen_comparador_seleccionado == 'Consumos mensuales / SIPS'
+        and not pricing_comparador_disponible
+    ):
+        sips_sin_atr_comparador = (
+            st.session_state.get('df_consumos_pricing_origen') == 'sips'
+            and st.session_state.get('sips_pricing', {}).get('atr') is None
+            and isinstance(consumos_pricing_comparador, pd.DataFrame)
+        )
+        if sips_sin_atr_comparador:
+            with c2:
+                st.subheader('Consumo anual por periodo del SIPS')
+                periodos_sips = [f'P{i}' for i in range(1, 7)]
+                totales_sips = (
+                    consumos_pricing_comparador[periodos_sips]
+                    .apply(pd.to_numeric, errors='coerce').sum()
+                )
+                st.dataframe(
+                    formatear_df_resumen(pd.DataFrame(
+                        [totales_sips], index=['Consumo (kWh)']
+                    )),
+                    use_container_width=True,
+                )
+            with c1:
+                st.info('El SIPS no informa el ATR. Selecciona el peaje real para calcular la comparación.')
+        else:
+            with c1:
+                st.info(
+                    'Carga los consumos para habilitar los tres escenarios y la '
+                    'comparación con ofertas fijas.'
+                )
         st.stop()
 
     usar_pricing_en_comparador = (
@@ -2565,7 +2757,7 @@ with tab5:
         atr_resultado_comparador = (
             atr_calculo_comparador
         )
-        st.subheader('Consumos mensuales')
+        st.subheader('Consumo anual por periodo')
         st.dataframe(
             df_consumos_view,
             use_container_width=True,

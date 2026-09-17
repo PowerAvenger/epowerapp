@@ -1,3 +1,4 @@
+import hashlib
 import pandas as pd
 import plotly.express as px
 import re
@@ -37,6 +38,8 @@ from componentes_indexados import (
 )
 from servicio_curva import obtener_curva_sesion
 from componentes_ofertas_fijas import (
+    aplicar_seleccion_ofertas,
+    actualizar_seleccion_ofertas,
     combinar_ofertas,
     normalizar_excel_ofertas,
     periodos_con_consumo,
@@ -52,6 +55,37 @@ from utilidades import (
 )
 
 COLOR_INDEXADO_ETIQUETA = '#7E57C2'
+
+
+def _limpiar_sips_comparador_luz():
+    for clave in (
+        'comparador_luz_perfil_sips', 'comparador_luz_atr_sips',
+        'comparador_luz_potencias_sips', 'comparador_luz_metadatos_sips',
+        'comparador_luz_upload_sips', 'comparador_luz_atr_manual_sips',
+        'comparador_luz_firma_sips',
+    ):
+        st.session_state.pop(clave, None)
+    for clave in list(st.session_state):
+        if str(clave).startswith((
+            'comparador_luz_atr_manual_sips_',
+            'comparador_luz_potencia_manual_sips_',
+        )):
+            st.session_state.pop(clave, None)
+
+
+def resaltar_ofertas_indexadas(estilo, nombres_indexados):
+    """Aplica la misma identidad visual a los indexados en cualquier tabla."""
+    return estilo.apply(
+        lambda columna: [
+            (
+                f'background-color: {COLOR_INDEXADO_ETIQUETA}; '
+                'color: white; font-weight: 600;'
+            )
+            if str(valor) in nombres_indexados else ''
+            for valor in columna
+        ],
+        subset=['Oferta'],
+    )
 
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
@@ -83,30 +117,49 @@ atr_sips_guardado = st.session_state.get('comparador_luz_atr_sips')
 potencias_sips_guardadas = st.session_state.get('comparador_luz_potencias_sips')
 metadatos_sips = st.session_state.get('comparador_luz_metadatos_sips', {})
 hay_curva = isinstance(curva_sesion, pd.DataFrame) and not curva_sesion.empty
-opciones = ['Curva + datos potencia', 'CSV SIPS']
+opciones = ['Curva + datos potencia', 'Archivo SIPS']
 with col1:
     st.subheader('Origen de datos', divider='rainbow')
+    expander_origen_datos = st.expander(
+        'Configurar origen de datos', expanded=True
+    )
+    resumen_curva_comparador = st.expander(
+        'Gráficos de consumo', expanded=False
+    )
+with expander_origen_datos:
     origen = st.radio(
         'Selecciona el origen', opciones, horizontal=True,
         label_visibility='collapsed',
     )
-if origen == 'Curva + datos potencia':
-    with col1:
+    archivo = None
+    if origen == 'Curva + datos potencia':
         contenedor_curva_comparador = st.container()
         acciones_curva_comparador = st.container()
-    render_origen_curva(
-        contenedor_curva_comparador,
-        acciones_curva_comparador,
-        clave='comparador_luz_curva',
-        titulo_compacto=True,
-    )
+        render_origen_curva(
+            contenedor_curva_comparador,
+            acciones_curva_comparador,
+            clave='comparador_luz_curva',
+            titulo_compacto=True,
+            resumen=resumen_curva_comparador,
+        )
+    else:
+        archivo = st.file_uploader(
+            'Sube el CSV o Excel SIPS', type=['csv', 'xlsx', 'xls'],
+            key='comparador_luz_upload_sips',
+        )
+        if isinstance(perfil_sips_guardado, pd.DataFrame):
+            st.button(
+                'Eliminar SIPS cargado',
+                key='comparador_luz_eliminar_sips',
+                on_click=_limpiar_sips_comparador_luz,
+            )
+
+if origen == 'Curva + datos potencia':
     curva_actual_comparador = obtener_curva_sesion(st.session_state)
     if curva_actual_comparador is not None:
         curva_sesion = curva_actual_comparador.get('df_norm_h')
         hay_curva = isinstance(curva_sesion, pd.DataFrame) and not curva_sesion.empty
-if origen == 'CSV SIPS':
-    with col1:
-        archivo = st.file_uploader('Sube el CSV SIPS', type=['csv'])
+if origen == 'Archivo SIPS':
     if archivo is None and isinstance(perfil_sips_guardado, pd.DataFrame):
         perfil_mensual = perfil_sips_guardado.copy()
         atr = str(atr_sips_guardado or '')
@@ -116,7 +169,7 @@ if origen == 'CSV SIPS':
             st.caption('SIPS recuperado de la sesión.')
     elif archivo is None:
         with col1:
-            st.info('Sube un CSV SIPS para cargar consumos, ATR y periodos.')
+            st.info('Sube un CSV o Excel SIPS para cargar consumos y periodos.')
         st.stop()
     else:
       try:
@@ -129,6 +182,9 @@ if origen == 'CSV SIPS':
         st.session_state.comparador_luz_atr_sips = atr
         st.session_state.comparador_luz_potencias_sips = potencias_contratadas.copy()
         st.session_state.comparador_luz_metadatos_sips = dict(metadatos_sips)
+        st.session_state.comparador_luz_firma_sips = hashlib.sha256(
+            archivo.getvalue()
+        ).hexdigest()
       except Exception as error:
         st.error(f'No se pudo leer el SIPS: {error}'); st.stop()
 else:
@@ -151,6 +207,65 @@ else:
         perfil_mensual = consumos_mensuales_desde_curva_normalizada(curva_sesion)
     except ValueError as error:
         st.error(str(error)); st.stop()
+if origen == 'Archivo SIPS' and not atr:
+    hay_p4_p6_sips = bool(
+        perfil_mensual[['P4', 'P5', 'P6']]
+        .apply(pd.to_numeric, errors='coerce')
+        .fillna(0).ne(0).any().any()
+    )
+    opciones_atr_sips = (
+        ['3.0', '6.1', '6.2'] if hay_p4_p6_sips
+        else ['2.0', '3.0', '6.1', '6.2']
+    )
+    with col1:
+        st.info('Este SIPS no informa el ATR. Selecciona el peaje de acceso.')
+        atr = st.selectbox(
+            'ATR del SIPS', opciones_atr_sips,
+            key=(
+                'comparador_luz_atr_manual_sips_'
+                + st.session_state.get('comparador_luz_firma_sips', '')[:12]
+            ),
+            index=None,
+            placeholder='Selecciona el peaje real del suministro',
+        )
+    if atr is None:
+        with col1:
+            st.dataframe(
+                perfil_mensual[[f'P{i}' for i in range(1, 7)]]
+                .apply(pd.to_numeric, errors='coerce').sum()
+                .to_frame('Consumo (kWh)').T,
+                use_container_width=True,
+            )
+        st.stop()
+if origen == 'Archivo SIPS':
+    periodos_potencia_sips = (
+        ['P1', 'P2'] if atr == '2.0' else [f'P{i}' for i in range(1, 7)]
+    )
+    periodos_sin_potencia = [
+        periodo for periodo in periodos_potencia_sips
+        if pd.isna(potencias_contratadas[periodo])
+    ]
+    if periodos_sin_potencia:
+        with col1:
+            st.info('El SIPS no informa las potencias contratadas. Introdúcelas para calcular la comparación.')
+            columnas_potencias_sips = st.columns(len(periodos_sin_potencia))
+            for columna, periodo in zip(columnas_potencias_sips, periodos_sin_potencia):
+                with columna:
+                    valor = st.text_input(
+                        f'{periodo} (kW)',
+                        key=(
+                            'comparador_luz_potencia_manual_sips_'
+                            + st.session_state.get('comparador_luz_firma_sips', '')[:12]
+                            + f'_{periodo}'
+                        ),
+                    )
+                    potencia = pd.to_numeric(
+                        valor.strip().replace(',', '.'), errors='coerce'
+                    )
+                    if pd.notna(potencia) and potencia > 0:
+                        potencias_contratadas[periodo] = float(potencia)
+        if any(pd.isna(potencias_contratadas[p]) for p in periodos_sin_potencia):
+            st.stop()
 atrs_indexados = {'2.0', '3.0', '6.1', '6.2'}
 atrs_comparador = {*atrs_indexados, '6.2'}
 if atr not in atrs_comparador:
@@ -178,7 +293,7 @@ with col1:
     )
     if not potencias_contratadas.notna().any():
         st.info('El origen no informa las potencias contratadas P1–P6.')
-        if origen == 'CSV SIPS':
+        if origen == 'Archivo SIPS':
             campos_potencia_sips = [
                 clave for clave in metadatos_sips
                 if 'pot' in clave or re.fullmatch(r'p[1-6]|pc[1-6]|pt[1-6]', clave)
@@ -188,11 +303,14 @@ with col1:
                     st.write(', '.join(campos_potencia_sips))
                 else:
                     st.write(
-                        'La ficha del CSV no contiene campos cuyo nombre '
+                        'La ficha del SIPS no contiene campos cuyo nombre '
                         'identifique potencias contratadas.'
                     )
-    elif origen == 'CSV SIPS':
-        st.caption('Potencias contratadas tomadas de PT1–PT6 de la ficha superior del SIPS.')
+    elif origen == 'Archivo SIPS':
+        if periodos_sin_potencia:
+            st.caption('Potencias contratadas introducidas manualmente; el SIPS no las informa.')
+        else:
+            st.caption('Potencias contratadas tomadas de la ficha del SIPS.')
     st.markdown('#### Consumos anuales P1–P6')
     st.dataframe(
         consumos.to_frame().T.style.format(
@@ -480,12 +598,23 @@ with col2:
         ofertas_vista_editor = ofertas.drop(
             columns=columnas_internas_oferta, errors='ignore'
         ).copy()
-        ofertas_vista_editor.insert(0, 'Eliminar', False)
+        clave_seleccion_ofertas = 'comparador_luz_seleccion_ofertas'
+        estado_seleccion_ofertas = st.session_state.get(
+            clave_seleccion_ofertas, {}
+        )
+        ofertas_vista_editor = aplicar_seleccion_ofertas(
+            ofertas_vista_editor, estado_seleccion_ofertas
+        )
+        ofertas_vista_editor.insert(1, 'Eliminar', False)
         ofertas_editadas = st.data_editor(
             ofertas_vista_editor,
             hide_index=True, num_rows='fixed', use_container_width=True,
             disabled=['oferta', 'Vigencia desde', 'Vigencia hasta', *periodos],
             column_config={
+                'Comparar': st.column_config.CheckboxColumn(
+                    'Comparar',
+                    help='Incluye o excluye la oferta de resultados y gráficos.',
+                ),
                 'Eliminar': st.column_config.CheckboxColumn(
                     'Eliminar', help='Marca las ofertas que quieres borrar.'
                 ),
@@ -497,6 +626,9 @@ with col2:
             on_change=guardar_cambios_fee_editor,
         )
         ofertas_editadas = ofertas_editadas.reset_index(drop=True)
+        st.session_state[clave_seleccion_ofertas] = actualizar_seleccion_ofertas(
+            ofertas_editadas, estado_seleccion_ofertas
+        )
         st.session_state.comparador_luz_fees_por_oferta = {
             str(fila['oferta']): float(
                 pd.to_numeric(fila['Fee (€/MWh)'], errors='coerce')
@@ -559,6 +691,13 @@ with col2:
                 nombre: fee for nombre, fee in fees_sesion.items()
                 if str(nombre).strip().casefold() not in nombres_borrar
             }
+            seleccion_sesion = dict(st.session_state.get(
+                clave_seleccion_ofertas, {}
+            ))
+            st.session_state[clave_seleccion_ofertas] = {
+                nombre: activo for nombre, activo in seleccion_sesion.items()
+                if str(nombre).strip().casefold() not in nombres_borrar
+            }
             ids_no_eliminados = ids_solicitados.difference(ids_eliminados)
             cantidad_temporales = int(
                 seleccionadas_borrar['ID oferta'].isna().sum()
@@ -581,7 +720,9 @@ with col2:
                 revision_editor_ofertas + 1
             )
             st.rerun()
-        ofertas = ofertas_editadas.drop(columns='Eliminar')
+        ofertas = ofertas_editadas.loc[
+            ofertas_editadas['Comparar'].fillna(False).astype(bool)
+        ].drop(columns=['Comparar', 'Eliminar'])
         ofertas, ofertas_excluidas = filtrar_ofertas_elegibles(
             ofertas, float(consumos.sum()), potencias_contratadas,
             cups=cups_comparacion,
@@ -606,7 +747,30 @@ with col_resultados_energia:
     resultado = pd.concat(partes, ignore_index=True).sort_values('Coste energía (€)') if partes else pd.DataFrame()
     if resultado.empty: st.info('No hay escenarios u ofertas compatibles que comparar.')
     else:
-        st.dataframe(resultado.style.format({'Coste energía (€)': lambda x: formato_numero_es(x, 2), 'Precio medio energía (€/kWh)': lambda x: formato_numero_es(x, 6)}), hide_index=True, use_container_width=True)
+        nombres_indexados_energia = set(
+            resultado.loc[
+                resultado['Tipo'].eq('Indexado'), 'Oferta'
+            ].astype(str)
+        )
+        columna_coste_energia = next(
+            columna for columna in resultado.columns
+            if str(columna).startswith('Coste energ')
+        )
+        columna_precio_energia = next(
+            columna for columna in resultado.columns
+            if str(columna).startswith('Precio medio energ')
+        )
+        estilo_resultado_energia = resaltar_ofertas_indexadas(
+            resultado.style.format({
+                columna_coste_energia: lambda x: formato_numero_es(x, 2),
+                columna_precio_energia: lambda x: formato_numero_es(x, 6),
+            }),
+            nombres_indexados_energia,
+        )
+        st.dataframe(
+            estilo_resultado_energia,
+            hide_index=True, use_container_width=True,
+        )
         resultado_grafico = resultado.sort_values(
             'Coste energía (€)', ascending=False
         )
@@ -1068,16 +1232,9 @@ with col_resultados_principal:
                 tabla_costes_anuales['Delta vs ref. (%)']
                 .map(lambda x: f'{formato_numero_es(x, 2)} %')
             )
-            estilo_costes_anuales = tabla_costes_anuales.style.apply(
-                lambda columna: [
-                    (
-                        f'background-color: {COLOR_INDEXADO_ETIQUETA}; '
-                        'color: white; font-weight: 600;'
-                    )
-                    if str(valor) in nombres_indexados else ''
-                    for valor in columna
-                ],
-                subset=['Oferta'],
+            estilo_costes_anuales = resaltar_ofertas_indexadas(
+                tabla_costes_anuales.style,
+                nombres_indexados,
             )
             st.dataframe(
                 estilo_costes_anuales,

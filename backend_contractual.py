@@ -97,6 +97,29 @@ def cargar_datos_suministro(cups, fecha=None, db_path: str | Path = DEFAULT_DB_P
     }
 
 
+def cargar_acceso_medida_cups(cups, db_path: str | Path = DEFAULT_DB_PATH):
+    """Devuelve proveedor y referencia de credencial asociados al suministro."""
+    initialize_database(db_path)
+    cups20 = re.sub(r"[^A-Z0-9]", "", str(cups or "").upper())[:20]
+    if len(cups20) != 20:
+        return {}
+    with connect(db_path) as connection:
+        fila = connection.execute(
+            """
+            SELECT proveedor_curva_actual, credencial_curva_ref
+            FROM suministros
+            WHERE cups20 = ?
+            """,
+            (cups20,),
+        ).fetchone()
+    if fila is None:
+        return {}
+    return {
+        "proveedor": str(fila["proveedor_curva_actual"] or "").strip().upper(),
+        "credencial_ref": str(fila["credencial_curva_ref"] or "").strip(),
+    }
+
+
 def _numero_es(valor, default=0.0):
     if valor is None or str(valor).strip() == "":
         return default
@@ -177,6 +200,75 @@ def condicion_como_referencia(condicion, inicio, fin, condicion_id=-1):
     referencia.loc[:, "fin_condicion"] = pd.Timestamp(fin).normalize()
     referencia.loc[:, "condicion_id"] = int(condicion_id)
     return referencia
+
+
+def referencias_del_mismo_registro(
+    condiciones: pd.DataFrame, atr: str, inicio, fin,
+) -> pd.DataFrame:
+    """Usa la alternativa fija/indexada guardada en cada tramo contractual."""
+    desde, hasta = pd.Timestamp(inicio).normalize(), pd.Timestamp(fin).normalize()
+    referencias = condiciones.loc[
+        condiciones["inicio_condicion"].le(hasta)
+        & (
+            condiciones["fin_condicion"].isna()
+            | condiciones["fin_condicion"].ge(desde)
+        )
+    ].copy()
+    if referencias.empty:
+        raise ValueError("No hay condiciones en el periodo seleccionado.")
+    numero_periodos = 3 if str(atr).startswith("2.0") else 6
+    for indice, fila in referencias.iterrows():
+        payload = json.loads(fila["payload_json"] or "{}")
+        tipo = str(fila["tipo_precio"] or "").strip().upper()
+        identificador = int(fila["condicion_id"])
+        if tipo.startswith("FIJO"):
+            if not str(payload.get("INDEX CG") or "").strip():
+                raise ValueError(
+                    f"La condición {identificador} no tiene fórmula indexada de referencia."
+                )
+            referencias.at[indice, "tipo_precio"] = "INDEX PT"
+        else:
+            precios = {}
+            for periodo in range(1, numero_periodos + 1):
+                valor = payload.get(f"TE REF{periodo}")
+                if valor is None or not str(valor).strip():
+                    raise ValueError(
+                        f"La condición {identificador} no tiene precio fijo "
+                        f"de referencia P{periodo}."
+                    )
+                precios[f"TE P{periodo}"] = _numero_es(valor)
+            payload.update(precios)
+            referencias.at[indice, "tipo_precio"] = "FIJO"
+            referencias.at[indice, "payload_json"] = json.dumps(payload)
+    return referencias
+
+
+def ultimo_dia_cubierto_desde(condiciones: pd.DataFrame, inicio, fin) -> pd.Timestamp:
+    """Devuelve el último día cubierto sin interrupciones desde el inicio."""
+    desde, hasta = pd.Timestamp(inicio).normalize(), pd.Timestamp(fin).normalize()
+    if desde > hasta:
+        raise ValueError("La fecha inicial no puede ser posterior a la final.")
+    tramos = condiciones.sort_values("inicio_condicion")
+    siguiente = desde
+    for _, tramo in tramos.iterrows():
+        tramo_inicio = pd.Timestamp(tramo["inicio_condicion"]).normalize()
+        tramo_fin = (
+            pd.Timestamp(tramo["fin_condicion"]).normalize()
+            if pd.notna(tramo["fin_condicion"]) else hasta
+        )
+        if tramo_fin < siguiente:
+            continue
+        if tramo_inicio > siguiente:
+            break
+        siguiente = max(siguiente, min(tramo_fin, hasta) + pd.Timedelta(days=1))
+        if siguiente > hasta:
+            return hasta
+    if siguiente == desde:
+        raise ValueError(
+            f"No hay condición contractual al inicio del periodo: "
+            f"{desde:%d/%m/%Y}."
+        )
+    return siguiente - pd.Timedelta(days=1)
 
 
 def condicion_manual_como_referencia(

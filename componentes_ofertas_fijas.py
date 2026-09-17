@@ -237,6 +237,13 @@ def render_oferta_ia(
                     "magnitud de los precios; comprueba los valores en €/kWh."
                 )
 
+            if tabla.attrs.get("unidad_potencia_inferida"):
+                st.warning(
+                    "La imagen no indica claramente la unidad de potencia. "
+                    "Se ha inferido por la magnitud y normalizado a €/kW/día; "
+                    "comprueba los seis valores antes de guardar."
+                )
+
             clave_nombre_editor = f"{clave}_nombre_editor"
             if clave_nombre_editor not in st.session_state:
                 st.session_state[clave_nombre_editor] = st.session_state.get(

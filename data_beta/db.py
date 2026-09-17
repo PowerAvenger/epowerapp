@@ -249,6 +249,116 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
             ON costes_extra_contractuales(suministro_id, mes);
         """,
     ),
+    (
+        8,
+        """
+        CREATE TABLE cambios_condiciones_contractuales (
+            id INTEGER PRIMARY KEY,
+            condicion_id INTEGER REFERENCES filas_contrato_origen(id),
+            contrato_id INTEGER REFERENCES contratos(id),
+            accion TEXT NOT NULL CHECK (accion IN ('ACTUALIZAR', 'CREAR')),
+            datos_anteriores_json TEXT,
+            datos_nuevos_json TEXT NOT NULL,
+            motivo TEXT,
+            creado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX idx_cambios_condicion
+            ON cambios_condiciones_contractuales(condicion_id, creado_en);
+        """,
+    ),
+    (
+        9,
+        """
+        ALTER TABLE suministros ADD COLUMN credencial_curva_ref TEXT;
+
+        UPDATE suministros
+        SET credencial_curva_ref = 'axon_principal',
+            updated_at = CURRENT_TIMESTAMP
+        WHERE UPPER(COALESCE(proveedor_curva_actual, '')) = 'AXON'
+          AND credencial_curva_ref IS NULL;
+        """,
+    ),
+    (
+        10,
+        """
+        CREATE TABLE analisis_factura (
+            id INTEGER PRIMARY KEY,
+            tipo TEXT NOT NULL CHECK (
+                tipo IN ('VERIFICACION', 'COMPARATIVA_AHORRO')
+            ),
+            suministro_id INTEGER NOT NULL REFERENCES suministros(id),
+            contrato_id INTEGER REFERENCES contratos(id),
+            numero_factura TEXT,
+            fecha_factura TEXT,
+            ciclo_inicio TEXT NOT NULL,
+            ciclo_fin TEXT NOT NULL,
+            estado TEXT NOT NULL,
+            total_facturado_eur REAL NOT NULL,
+            total_referencia_eur REAL NOT NULL,
+            diferencia_eur REAL NOT NULL,
+            diferencia_pct REAL,
+            version_calculo TEXT NOT NULL,
+            snapshot_sha256 TEXT NOT NULL,
+            snapshot_json TEXT NOT NULL,
+            creado_por TEXT,
+            creado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(tipo, snapshot_sha256)
+        );
+
+        CREATE INDEX idx_analisis_suministro_ciclo
+            ON analisis_factura(suministro_id, tipo, ciclo_inicio, ciclo_fin);
+        CREATE INDEX idx_analisis_factura
+            ON analisis_factura(numero_factura, tipo);
+
+        CREATE TABLE componentes_analisis_factura (
+            id INTEGER PRIMARY KEY,
+            analisis_id INTEGER NOT NULL REFERENCES analisis_factura(id)
+                ON DELETE CASCADE,
+            orden INTEGER NOT NULL,
+            componente TEXT NOT NULL,
+            facturado_eur REAL,
+            referencia_eur REAL,
+            diferencia_eur REAL,
+            diferencia_pct REAL,
+            estado TEXT,
+            detalle_json TEXT,
+            UNIQUE(analisis_id, orden)
+        );
+
+        CREATE INDEX idx_componentes_analisis
+            ON componentes_analisis_factura(analisis_id, componente);
+
+        CREATE TABLE referencias_analisis_factura (
+            id INTEGER PRIMARY KEY,
+            analisis_id INTEGER NOT NULL REFERENCES analisis_factura(id)
+                ON DELETE CASCADE,
+            condicion_id INTEGER REFERENCES filas_contrato_origen(id),
+            rol TEXT NOT NULL,
+            referencia_json TEXT NOT NULL,
+            UNIQUE(analisis_id, rol, condicion_id)
+        );
+        """,
+    ),
+    (
+        11,
+        """
+        CREATE TABLE periodos_contrato (
+            id INTEGER PRIMARY KEY,
+            contrato_id INTEGER NOT NULL REFERENCES contratos(id),
+            fecha_inicio TEXT NOT NULL,
+            fecha_vencimiento TEXT,
+            observaciones TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(contrato_id, fecha_inicio),
+            CHECK (fecha_vencimiento IS NULL OR fecha_vencimiento >= fecha_inicio)
+        );
+
+        CREATE INDEX idx_periodos_contrato_vencimiento
+            ON periodos_contrato(fecha_vencimiento);
+        """,
+    ),
 )
 
 

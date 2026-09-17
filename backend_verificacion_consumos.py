@@ -538,6 +538,7 @@ def reconstruir_total_beta(
     otros_confirmados,
     iee_facturado,
     iva_facturado,
+    claves_otros_base_iee=(),
     base_iee_factura=None,
     tipo_iee_pct=None,
     base_iva_factura=None,
@@ -556,12 +557,20 @@ def reconstruir_total_beta(
         otros_confirmados.get(clave, valor) - valor
         for clave, valor in otros_facturados.items()
     )
+    delta_otros_base_iee = sum(
+        otros_confirmados.get(clave, otros_facturados.get(clave, 0.0))
+        - otros_facturados.get(clave, 0.0)
+        for clave in claves_otros_base_iee
+    )
 
     iee_verificado = float(iee_facturado)
     base_iee_verificada = base_iee_factura
     if base_iee_factura is not None and tipo_iee_pct is not None:
         base_iee_verificada = (
-            float(base_iee_factura) + delta_potencia + delta_energia
+            float(base_iee_factura)
+            + delta_potencia
+            + delta_energia
+            + delta_otros_base_iee
         )
         iee_verificado = round(
             base_iee_verificada * float(tipo_iee_pct) / 100, 2

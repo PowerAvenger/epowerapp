@@ -17,6 +17,35 @@ def oferta_30(unidad, valores):
 
 
 class OfertasImagenTest(unittest.TestCase):
+    def test_fusiona_filas_potencia_energia_e_infiere_precio_diario(self):
+        resultado = {
+            "nombre": "Naturgy Plan Fijo One",
+            "unidad_original": "EUR/kWh",
+            "unidad_potencia_original": None,
+            "tarifas": [
+                {
+                    "nombre": "POTENCIA", "atr": "",
+                    "P1": 0.081083, "P2": 0.042506, "P3": 0.018635,
+                    "P4": 0.014778, "P5": 0.005822, "P6": 0.002751,
+                },
+                {
+                    "nombre": "ENERGÍA", "atr": "",
+                    "P1": 0.166700, "P2": 0.145900, "P3": 0.130200,
+                    "P4": 0.120000, "P5": 0.113300, "P6": 0.106000,
+                },
+            ],
+        }
+
+        energia, _ = validar_oferta_extraida(resultado, atr_contexto="3.0TD")
+        potencia = energia.attrs["potencia_tarifas"]
+
+        self.assertEqual(len(energia), 1)
+        self.assertAlmostEqual(energia.loc[0, "P1"], 0.166700)
+        self.assertAlmostEqual(potencia.loc[0, "P1"], 0.081083)
+        self.assertAlmostEqual(potencia.loc[0, "P6"], 0.002751)
+        self.assertTrue(energia.attrs["unidad_potencia_inferida"])
+        self.assertTrue(energia.attrs["filas_potencia_energia_fusionadas"])
+
     def test_separa_energia_y_potencia_anual_de_una_tabla_galp(self):
         resultado = {
             "nombre": "Galp 12 meses",
