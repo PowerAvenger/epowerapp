@@ -687,6 +687,8 @@ def graficar_queso_componentes_ponderados(df_curva, atr):
         "Peajes y cargos": f"pyc_{atr}",
         "Margen": f"margen_{atr}",
     }
+    if f"otros_costes_{atr}" in df_curva.columns:
+        columnas["Otros costes"] = f"otros_costes_{atr}"
     faltantes = sorted(
         {f"precio_{atr}", f"perd_{atr}"}.union(columnas.values())
         .difference(df_curva.columns)
@@ -3595,12 +3597,21 @@ def construir_df_curva_sheets(df_filtrado):
     df_norm["fecha"] = pd.to_datetime(df_norm["fecha"]).dt.date
     df_filtrado["fecha"] = pd.to_datetime(df_filtrado["fecha"]).dt.date
 
-    # Unión por fecha + hora
+    # Distinguir las dos ocurrencias de la misma hora civil en octubre.
+    # Un merge solo por fecha y hora multiplica ambas filas (2 x 2).
+    df_norm['_ocurrencia_hora'] = df_norm.groupby(
+        ['fecha', 'hora'], sort=False
+    ).cumcount()
+    df_filtrado = df_filtrado.copy()
+    df_filtrado['_ocurrencia_hora'] = df_filtrado.groupby(
+        ['fecha', 'hora'], sort=False
+    ).cumcount()
     df = df_norm.merge(
         df_filtrado,
-        on=["fecha", "hora"],
-        how="left"
-    )
+        on=['fecha', 'hora', '_ocurrencia_hora'],
+        how='left',
+        validate='one_to_one',
+    ).drop(columns='_ocurrencia_hora')
     print('df curva sheets construida en la función')
     print(df)
 
@@ -3620,6 +3631,7 @@ def añadir_costes_curva(df):
     df["coste_pyc"] = df[f"pyc_{atr}"] * cons #usado para tablas
     df["coste_base"] = df[f"coste_{atr}"] * cons #sin pycs ni margen
     df["coste_margen"] = df[f"margen_{atr}"] * cons
+    df["coste_otros"] = df.get(f"otros_costes_{atr}", 0.0) * cons
     df["coste_total"] = df[col_precio] * cons
 
     return df

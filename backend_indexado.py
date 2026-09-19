@@ -21,6 +21,8 @@ class FormulaIndexada:
     incluir_fnee: bool = False
     fnee_pos: str = "perdidas"
     cf_pct: float = 0.0
+    otros_costes: float = 0.0
+    otros_costes_pos: str = "tm"
 
 
 def describir_formula_indexada(
@@ -40,6 +42,7 @@ def describir_formula_indexada(
         "Fórmula activa: "
         f"desvíos {formula.desvios_apant:g} €/MWh · "
         f"margen {formula.margen:g} €/MWh ({formula.margen_pos}) · "
+        f"otros costes {formula.otros_costes:g} €/MWh ({formula.otros_costes_pos}) · "
         f"FNEE {fnee} · CF {formula.cf_pct:g}% · "
         f"peaje {texto_atr}"
     )
@@ -51,6 +54,8 @@ def _validar_formula_y_componentes(
 ) -> pd.DataFrame:
     if formula.margen_pos not in POSICIONES_FORMULA:
         raise ValueError(f"Ubicación de margen no válida: {formula.margen_pos}.")
+    if formula.otros_costes_pos not in POSICIONES_FORMULA:
+        raise ValueError(f"Ubicación de otros costes no válida: {formula.otros_costes_pos}.")
     if formula.fnee_pos not in POSICIONES_FORMULA:
         raise ValueError(f"Ubicación de FNEE no válida: {formula.fnee_pos}.")
     requeridas = {"spot", "ssaa", "osom"}
@@ -134,6 +139,12 @@ def calcular_precios_atr_formula(
                 margen * (1 + resultado[f"perd_{atr}"]) * (1 + tm_rate) * (1 + cf)
             )
             base_precio += margen
+        if formula.otros_costes_pos == "perdidas":
+            resultado[f"otros_costes_{atr}"] = (
+                formula.otros_costes * (1 + resultado[f"perd_{atr}"])
+                * (1 + tm_rate) * (1 + cf)
+            )
+            base_precio += formula.otros_costes
 
         base_coste *= 1 + resultado[f"perd_{atr}"]
         base_precio *= 1 + resultado[f"perd_{atr}"]
@@ -141,6 +152,11 @@ def calcular_precios_atr_formula(
         if formula.margen_pos == "tm":
             resultado[f"margen_{atr}"] = margen * (1 + tm_rate) * (1 + cf)
             base_precio += margen
+        if formula.otros_costes_pos == "tm":
+            resultado[f"otros_costes_{atr}"] = (
+                formula.otros_costes * (1 + tm_rate) * (1 + cf)
+            )
+            base_precio += formula.otros_costes
 
         if formula.incluir_fnee and formula.fnee_pos == "tm":
             base_coste += resultado["fnee"]
@@ -158,6 +174,9 @@ def calcular_precios_atr_formula(
         if formula.margen_pos == "neto":
             resultado[f"margen_{atr}"] = margen
             base_precio += margen
+        if formula.otros_costes_pos == "neto":
+            resultado[f"otros_costes_{atr}"] = formula.otros_costes
+            base_precio += formula.otros_costes
 
         resultado[f"coste_{atr}"] = base_coste
         resultado[f"precio_{atr}"] = base_precio + resultado[f"pyc_{atr}"]
@@ -334,6 +353,9 @@ def construir_desglose_precio_indexado(
     if formula.margen_pos == "perdidas":
         aportaciones["Margen · antes de pérdidas"] = formula.margen
         subtotal_perdidas += formula.margen
+    if formula.otros_costes_pos == "perdidas":
+        aportaciones["Otros costes · antes de pérdidas"] = formula.otros_costes
+        subtotal_perdidas += formula.otros_costes
 
     aportaciones["Pérdidas reales"] = subtotal_perdidas * calculado[f"perd_{atr}"]
     subtotal_tm = subtotal_perdidas + aportaciones["Pérdidas reales"]
@@ -343,6 +365,9 @@ def construir_desglose_precio_indexado(
     if formula.margen_pos == "tm":
         aportaciones["Margen · antes de TM"] = formula.margen
         subtotal_tm += formula.margen
+    if formula.otros_costes_pos == "tm":
+        aportaciones["Otros costes · antes de TM"] = formula.otros_costes
+        subtotal_tm += formula.otros_costes
 
     aportaciones["Tasa municipal (TM)"] = subtotal_tm * tm_rate
     subtotal_cf = subtotal_tm + aportaciones["Tasa municipal (TM)"]
@@ -352,6 +377,8 @@ def construir_desglose_precio_indexado(
         aportaciones["FNEE · en neto"] = calculado["fnee"]
     if formula.margen_pos == "neto":
         aportaciones["Margen · en neto"] = formula.margen
+    if formula.otros_costes_pos == "neto":
+        aportaciones["Otros costes · en neto"] = formula.otros_costes
     aportaciones["PyC"] = calculado[f"pyc_{atr}"]
     aportaciones["Precio final"] = calculado[f"precio_{atr}"]
 

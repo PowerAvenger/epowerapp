@@ -3,6 +3,30 @@
 from __future__ import annotations
 
 
+def sincronizar_valor_inicial(estado, clave_widget: str, valor_actual: float) -> None:
+    """Actualiza un valor heredado solo mientras el usuario no lo haya editado."""
+    clave_anterior = f"_origen_{clave_widget}"
+    anterior = estado.get(clave_anterior)
+    if anterior is None or clave_widget not in estado or estado[clave_widget] == anterior:
+        estado[clave_widget] = float(valor_actual)
+    estado[clave_anterior] = float(valor_actual)
+
+
+def sincronizar_escenarios_aplicados(estado, clave: str, valores: dict[str, float]) -> None:
+    """Propaga nuevos valores de referencia a los escenarios no personalizados."""
+    clave_anterior = f"_origen_{clave}"
+    anteriores = estado.get(clave_anterior)
+    escenarios = estado.get(clave)
+    if escenarios is not None and anteriores != valores:
+        omie, otros = escenarios
+        otros = dict(otros)
+        for nombre, valor in valores.items():
+            if anteriores is None or otros.get(nombre) == anteriores.get(nombre):
+                otros[nombre] = float(valor)
+        estado[clave] = (omie, otros)
+    estado[clave_anterior] = dict(valores)
+
+
 def _publicar_formula_diferida(clave, claves_estado, nombres):
     """Copia los widgets temporales antes del rerun natural del formulario."""
     import streamlit as st
@@ -33,7 +57,10 @@ def render_escenarios_omie(precio_central: float, clave: str) -> dict[str, float
     return valores
 
 
-def render_otros_escenarios(clave: str) -> dict[str, float]:
+def render_otros_escenarios(
+    clave: str, en_formulario: bool = False,
+    aplicados: dict[str, float] | None = None,
+) -> dict[str, float]:
     """Muestra SSAA, SRAD y FNEE en una fila común de tres columnas."""
     import streamlit as st
 
@@ -48,10 +75,18 @@ def render_otros_escenarios(clave: str) -> dict[str, float]:
         st.columns(3), componentes
     ):
         clave_widget = f'_{clave_estado}_{clave}'
-        if clave_widget not in st.session_state:
+        if clave_widget not in st.session_state and aplicados is not None:
             st.session_state[clave_widget] = float(
+                aplicados.get(nombre, st.session_state.get(clave_estado, defecto))
+            )
+            st.session_state[f'_origen_{clave_widget}'] = float(
                 st.session_state.get(clave_estado, defecto)
             )
+        sincronizar_valor_inicial(
+            st.session_state,
+            clave_widget,
+            st.session_state.get(clave_estado, defecto),
+        )
 
         def guardar_pendiente(
             widget=clave_widget, destino=clave_estado
@@ -61,12 +96,13 @@ def render_otros_escenarios(clave: str) -> dict[str, float]:
             )
 
         with columna:
+            opciones = {} if en_formulario else {'on_change': guardar_pendiente}
             valores[nombre] = st.number_input(
                 etiqueta,
                 min_value=0.0,
                 step=0.1,
                 key=clave_widget,
-                on_change=guardar_pendiente,
+                **opciones,
             )
     return valores
 

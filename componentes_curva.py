@@ -673,6 +673,7 @@ def render_origen_curva(
                     use_container_width=True,
                 )
             )
+            normalizacion_solicitada = bool(obtener)
 
     with acciones:
         st.markdown("#### Acciones de curva")
@@ -717,6 +718,7 @@ def render_origen_curva(
             except Exception as exc:
                 st.error(f"No se pudieron consultar los suministros: {exc}")
 
+        curva_publicada = False
         if obtener:
             try:
                 if origen == "Axon":
@@ -763,6 +765,7 @@ def render_origen_curva(
                             "La curva contiene periodos ajenos a la tarifa 2.0."
                         )
                 _publicar(resultado, st)
+                curva_publicada = True
             except Exception as exc:
                 st.error(f"No se pudo obtener y normalizar la curva: {exc}")
 
@@ -781,3 +784,7 @@ def render_origen_curva(
             clave=clave,
             contenedor=resumen or contenedor,
         )
+    return {
+        "normalizacion_solicitada": normalizacion_solicitada,
+        "curva_publicada": curva_publicada,
+    }

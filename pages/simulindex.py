@@ -1,5 +1,6 @@
 import streamlit as st
 import hashlib
+from io import BytesIO
 from pathlib import Path
 from backend_simulindex import (obtener_historicos_meff, obtener_meff_anual, obtener_meff_trimestral, obtener_meff_mensual,
                                 pyc_2026,
@@ -26,9 +27,9 @@ from utilidades import (
     generar_menu,
     init_app,
     init_app_index,
+    mostrar_parametros_formula_indexado,
     persist_widget,
 )
-from backend_curvadecarga import graficar_media_horaria, graficar_queso_periodos
 from formato_es import formato_cent_eur_kwh, formato_eur_mwh, formato_numero_es
 from backend_previsiones import (
     guardar_prevision_omie_en_sesion,
@@ -46,10 +47,12 @@ from backend_opt2 import (
     normalizar_tabla_consumos_sips,
 )
 from backend_sips import (
-    es_sips_excel, leer_sips_completo, perfil_anual_meses_naturales,
+    combinar_consumos_sips, es_sips_excel, leer_sips_completo,
+    perfil_anual_meses_naturales,
 )
 from backend_pricing_indexados import (
     calcular_escenarios_pricing_mensuales,
+    obtener_pyc_historico_por_periodo,
     preparar_referencia_pricing,
 )
 from backend_ofertas_fijas import (
@@ -68,8 +71,9 @@ from componentes_indexados import (
     render_escenarios_omie,
     render_formula_indexada,
     render_otros_escenarios,
+    sincronizar_escenarios_aplicados,
 )
-from componentes_curva import render_origen_curva
+from componentes_curva import render_origen_curva, render_resumen_grafico_curva
 from informe_simulindex import mostrar_informe_comparador_trimestral
 
 def _limpiar_consumos_comparador():
@@ -93,9 +97,20 @@ def _confirmar_atr_pricing_sips():
 
 
 def _cambiar_archivo_pricing():
+    st.session_state.pop('df_consumos_pricing', None)
+    st.session_state.pop('df_consumos_pricing_origen', None)
+    st.session_state.pop('sips_pricing', None)
     st.session_state.pop('pricing_atr_manual_confirmado_sips', None)
     st.session_state.pop('pricing_atr_seleccionado', None)
     st.session_state.pop('simulindex_comparador_atr_sips_manual', None)
+
+
+@st.cache_data(show_spinner=False, max_entries=12)
+def _leer_sips_pricing(nombre, contenido):
+    """Evita volver a leer los mismos SIPS en cada recarga de Pricing."""
+    archivo = BytesIO(contenido)
+    archivo.name = nombre
+    return leer_sips_completo(archivo)
 
 
 def _confirmar_atr_comparador_sips():
@@ -185,6 +200,7 @@ def aplicar_pyc_2026_atr(df, pyc_2026):
             df[f"coste_{atr_short}"]
             + df[f"pyc_{atr_short}"]
             + df[f"margen_{atr_short}"]
+            + df.get(f"otros_costes_{atr_short}", 0.0)
         )
 
     return df
@@ -230,9 +246,6 @@ if isinstance(df_norm_simulindex, pd.DataFrame) and not df_norm_simulindex.empty
     if necesita_reconstruir_curva:
         df_curva_simulindex = construir_df_curva_sheets(df_base)
         df_curva_simulindex = añadir_costes_curva(df_curva_simulindex)
-        df_curva_simulindex = df_curva_simulindex.drop_duplicates(
-            subset=["fecha", "hora"], keep="first"
-        )
         st.session_state.df_curva_simulindex_persistente = (
             df_curva_simulindex
         )
@@ -481,9 +494,8 @@ df_evol_media_forward_suav = añadir_suavizado_omip_y_diferencial(
     col_omie="omie_real_12m_alineado_omip"
 )
 
-# Valor comun para el ultimo punto del grafico suavizado y el SPOT previsto de
-# Pricing. Se actualiza al renovar la prevision, salvo si el usuario ha
-# sustituido manualmente el anterior valor automatico.
+# Valor inicial del SPOT previsto de Pricing. El valor editado se guarda en
+# una clave independiente del widget para conservarlo al salir de la página.
 serie_forward_suav = pd.to_numeric(
     df_evol_media_forward_suav['media_forward_12m_suav'], errors='coerce'
 ).dropna()
@@ -492,22 +504,36 @@ spot_forward_suav_default = (
     if not serie_forward_suav.empty else float(precio_medio_omip)
 )
 spot_forward_suav_default = round(spot_forward_suav_default, 2)
-spot_forward_auto_anterior = st.session_state.get(
-    '_pricing_spot_forward_auto_anterior'
-)
-spot_forward_actual = st.session_state.get('pricing_spot_forward_12m')
-if (
-    spot_forward_actual is None
-    or float(spot_forward_actual) == 0.0
-    or (
-        spot_forward_auto_anterior is not None
-        and abs(
-            float(spot_forward_actual) - float(spot_forward_auto_anterior)
-        ) < 1e-9
+spot_forward_auto_anterior = st.session_state.get('_pricing_spot_forward_auto_anterior')
+clave_spot_guardado = 'simulindex_pricing_spot_forward_guardado'
+if clave_spot_guardado not in st.session_state:
+    valor_anterior = st.session_state.get('pricing_spot_forward_12m')
+    st.session_state[clave_spot_guardado] = (
+        float(valor_anterior) if valor_anterior is not None
+        else spot_forward_suav_default
     )
+spot_forward_actual = st.session_state[clave_spot_guardado]
+if spot_forward_actual is None:
+    st.session_state[clave_spot_guardado] = spot_forward_suav_default
+elif (
+    not st.session_state.get('_pricing_spot_forward_manual', False)
+    and spot_forward_auto_anterior is not None
+    and abs(float(spot_forward_actual) - float(spot_forward_auto_anterior)) < 1e-9
 ):
-    st.session_state.pricing_spot_forward_12m = spot_forward_suav_default
+    st.session_state[clave_spot_guardado] = spot_forward_suav_default
+elif (
+    spot_forward_auto_anterior is not None
+    and abs(float(spot_forward_actual) - float(spot_forward_auto_anterior)) >= 1e-9
+):
+    st.session_state['_pricing_spot_forward_manual'] = True
 st.session_state._pricing_spot_forward_auto_anterior = spot_forward_suav_default
+
+
+def guardar_spot_forward_pricing():
+    st.session_state[clave_spot_guardado] = st.session_state[
+        '_widget_pricing_spot_forward_12m'
+    ]
+    st.session_state['_pricing_spot_forward_manual'] = True
 
 fig_omip_suav_vs_omie = graficar_omip_suavizado_vs_omie_real(
     df_evol=df_evol_media_forward_suav,
@@ -542,16 +568,38 @@ def sincronizar_input_prevision(origen, destino):
         st.session_state[destino] = valor
 
 
-for clave_pricing, clave_principal in {
+def sincronizar_prevision_principal(clave_principal, clave_pricing):
+    """Conserva el ajuste de Principal al cambiar de sección."""
+    valor = st.session_state[f'_widget_{clave_principal}']
+    st.session_state[clave_principal] = valor
+    st.session_state[f'_pendiente_{clave_pricing}'] = valor
+
+
+_previsiones_principal_pricing = {
     'pricing_ssaa_forward_12m': 'media_ssaa_prev',
     'pricing_fnee_prev': 'media_fnee_prev',
     'pricing_srad_prev': 'media_rad3_prev',
-}.items():
-    if clave_pricing not in st.session_state:
+}
+_sincronizacion_inicial = not st.session_state.get(
+    '_previsiones_principal_pricing_sincronizadas', False
+)
+for clave_pricing, clave_principal in _previsiones_principal_pricing.items():
+    if _sincronizacion_inicial or clave_pricing not in st.session_state:
         st.session_state[clave_pricing] = st.session_state[clave_principal]
     clave_pendiente = f'_pendiente_{clave_pricing}'
     if clave_pendiente in st.session_state:
         st.session_state[clave_pricing] = st.session_state.pop(clave_pendiente)
+st.session_state['_previsiones_principal_pricing_sincronizadas'] = True
+
+sincronizar_escenarios_aplicados(
+    st.session_state,
+    'escenarios_comparador_simulindex',
+    {
+        'ssaa': float(st.session_state.pricing_ssaa_forward_12m),
+        'srad': float(st.session_state.pricing_srad_prev),
+        'fnee': float(st.session_state.pricing_fnee_prev),
+    },
+)
 
 
 
@@ -573,665 +621,756 @@ seccion_simulindex = st.segmented_control('Sección', [
 # Prepara las tablas que utiliza Comparador; solo se muestra su interfaz al
 # seleccionar Pricing.
 # =======================================================================================================================================================================
-contenedor_pricing = st.empty()
-with contenedor_pricing.container():
+if seccion_simulindex != 'Pricing':
+    st.markdown(
+        '<style>.st-key-pricing_contenido_oculto {display: none;}</style>',
+        unsafe_allow_html=True,
+    )
+contenedor_pricing = st.container(
+    key=(
+        'pricing_contenido_oculto'
+        if seccion_simulindex != 'Pricing' else 'pricing_contenido_visible'
+    )
+)
+with contenedor_pricing:
     col_pricing1, col_pricing2, col_pricing3 = st.columns(3)
 
     with col_pricing1:
         st.subheader('Parámetros de pricing', divider='rainbow')
-        spot_forward_pricing = st.number_input(
-            'SPOT previsto (€/MWh)', min_value=0.0, step=0.1,
-            key='pricing_spot_forward_12m',
-            help=(
-                'Parte del último valor de la media OMIP forward 12 meses '
-                'suavizada del tab Previsión anual.'
-            ),
-        )
-        ssaa_forward_pricing = st.number_input(
-            'SSAA previstos sin SRAD (€/MWh)', min_value=0.0, max_value=40.0,
-            step=0.1, key='pricing_ssaa_forward_12m',
-            on_change=sincronizar_input_prevision,
-            args=('pricing_ssaa_forward_12m', 'media_ssaa_prev'),
-        )
-        fnee_pricing = st.number_input(
-            'FNEE previsto (€/MWh)', min_value=0.0, max_value=4.0,
-            step=0.1, key='pricing_fnee_prev',
-            on_change=sincronizar_input_prevision,
-            args=('pricing_fnee_prev', 'media_fnee_prev'),
-        )
-        srad_pricing = st.number_input(
-            'SRAD previsto (€/MWh)', min_value=0.0, max_value=3.0,
-            step=0.1, key='pricing_srad_prev',
-            on_change=sincronizar_input_prevision,
-            args=('pricing_srad_prev', 'media_rad3_prev'),
-        )
-
-        # Simulindex trabaja habitualmente con la versión horaria compartida.
-        # Algunas curvas recuperadas de sesión pueden conservar df_norm_h sin
-        # conservar la tabla de intervalos original df_norm.
-        df_curva_pricing_actual = st.session_state.get('df_norm_h')
-        if df_curva_pricing_actual is None or df_curva_pricing_actual.empty:
-            df_curva_pricing_actual = st.session_state.get('df_norm')
-        atr_curva_pricing = str(
-            st.session_state.get('atr_dfnorm', '')
-        ).upper().removesuffix('TD')
-        curva_pricing_disponible = (
-            df_curva_pricing_actual is not None
-            and not df_curva_pricing_actual.empty
-            and atr_curva_pricing in {'2.0', '3.0', '6.1', '6.2'}
-        )
-        opciones_origen_consumos = ['Subir Excel / SIPS']
-        if curva_pricing_disponible:
-            opciones_origen_consumos.append('Usar curva normalizada')
-        origen_consumos_pricing = st.radio(
-            'Origen de los consumos',
-            options=opciones_origen_consumos,
-            horizontal=True,
-            key='pricing_origen_consumos',
-        )
-        usar_curva_pricing = origen_consumos_pricing == 'Usar curva normalizada'
-        archivo_pricing_sesion = st.session_state.get('pricing_upload_consumos')
-        sips_pricing_detectado = None
-        atr_sips_pricing = None
-        if (
-            not usar_curva_pricing
-            and archivo_pricing_sesion is not None
-            and (
-                archivo_pricing_sesion.name.lower().endswith('.csv')
-                or es_sips_excel(archivo_pricing_sesion)
-            )
-        ):
-            try:
-                sips_pricing_detectado = leer_sips_completo(
-                    archivo_pricing_sesion
+        with st.expander('Parametriza el escenario'):
+            col_spot_pricing, col_ssaa_pricing = st.columns(2)
+            with col_spot_pricing:
+                st.session_state['_widget_pricing_spot_forward_12m'] = (
+                    st.session_state[clave_spot_guardado]
                 )
-                atr_sips_pricing = sips_pricing_detectado.get('atr')
-            except Exception:
-                # El bloque de carga inferior muestra el diagnóstico completo.
-                pass
-        atr_pricing_pendiente = st.session_state.pop(
-            '_pendiente_pricing_atr_seleccionado', None
-        )
-        if atr_pricing_pendiente in {'2.0', '3.0', '6.1', '6.2'}:
-            st.session_state.pricing_atr_seleccionado = atr_pricing_pendiente
+                spot_forward_pricing = st.number_input(
+                    'SPOT previsto (€/MWh)', min_value=0.0, step=0.1,
+                    key='_widget_pricing_spot_forward_12m',
+                    on_change=guardar_spot_forward_pricing,
+                    help=(
+                        'Parte del último valor de la media OMIP forward 12 meses '
+                        'suavizada del tab Previsión anual.'
+                    ),
+                )
+                st.session_state[clave_spot_guardado] = spot_forward_pricing
+            with col_ssaa_pricing:
+                ssaa_forward_pricing = st.number_input(
+                    'SSAA previstos sin SRAD (€/MWh)', min_value=0.0,
+                    max_value=40.0, step=0.1,
+                    key='pricing_ssaa_forward_12m',
+                    on_change=sincronizar_input_prevision,
+                    args=('pricing_ssaa_forward_12m', 'media_ssaa_prev'),
+                )
+            col_fnee_pricing, col_srad_pricing = st.columns(2)
+            with col_fnee_pricing:
+                fnee_pricing = st.number_input(
+                    'FNEE previsto (€/MWh)', min_value=0.0, max_value=4.0,
+                    step=0.1, key='pricing_fnee_prev',
+                    on_change=sincronizar_input_prevision,
+                    args=('pricing_fnee_prev', 'media_fnee_prev'),
+                )
+            with col_srad_pricing:
+                srad_pricing = st.number_input(
+                    'SRAD previsto (€/MWh)', min_value=0.0, max_value=3.0,
+                    step=0.1, key='pricing_srad_prev',
+                    on_change=sincronizar_input_prevision,
+                    args=('pricing_srad_prev', 'media_rad3_prev'),
+                )
+        with st.expander('Parametriza componentes'):
+            mostrar_parametros_formula_indexado(
+                widget_suffix='simulindex_pricing',
+                dos_filas_tres_columnas=True,
+            )
 
-        if usar_curva_pricing:
-            st.session_state.pricing_atr_seleccionado = atr_curva_pricing
-        elif atr_sips_pricing in {'2.0', '3.0', '6.1', '6.2'}:
-            st.session_state.pricing_atr_seleccionado = atr_sips_pricing
+        with st.expander('Origen de los consumos'):
+            # Simulindex trabaja habitualmente con la versión horaria compartida.
+            # Algunas curvas recuperadas de sesión pueden conservar df_norm_h sin
+            # conservar la tabla de intervalos original df_norm.
+            df_curva_pricing_actual = st.session_state.get('df_norm_h')
+            if df_curva_pricing_actual is None or df_curva_pricing_actual.empty:
+                df_curva_pricing_actual = st.session_state.get('df_norm')
+            atr_curva_pricing = str(
+                st.session_state.get('atr_dfnorm', '')
+            ).upper().removesuffix('TD')
+            curva_pricing_disponible = (
+                df_curva_pricing_actual is not None
+                and not df_curva_pricing_actual.empty
+                and atr_curva_pricing in {'2.0', '3.0', '6.1', '6.2'}
+            )
+            opciones_origen_consumos = ['Subir Excel / SIPS']
+            if curva_pricing_disponible:
+                opciones_origen_consumos.append('Usar curva normalizada')
+            origen_consumos_pricing = st.radio(
+                'Origen de los consumos',
+                options=opciones_origen_consumos,
+                horizontal=True,
+                key='pricing_origen_consumos',
+                label_visibility='collapsed',
+            )
+            usar_curva_pricing = origen_consumos_pricing == 'Usar curva normalizada'
+            archivos_pricing_sesion = st.session_state.get('pricing_upload_consumos') or []
+            if not isinstance(archivos_pricing_sesion, list):
+                archivos_pricing_sesion = [archivos_pricing_sesion]
+            sips_pricing_detectado = None
+            atr_sips_pricing = None
+            error_sips_pricing = None
+            if not usar_curva_pricing and archivos_pricing_sesion:
+                try:
+                    if len(archivos_pricing_sesion) > 1:
+                        sips_pricing_detectado = combinar_consumos_sips([
+                            _leer_sips_pricing(archivo.name, archivo.getvalue())
+                            for archivo in archivos_pricing_sesion
+                        ])
+                    else:
+                        archivo = archivos_pricing_sesion[0]
+                        if archivo.name.lower().endswith('.csv') or es_sips_excel(archivo):
+                            sips_pricing_detectado = _leer_sips_pricing(
+                                archivo.name, archivo.getvalue()
+                            )
+                    if sips_pricing_detectado is not None:
+                        atr_sips_pricing = sips_pricing_detectado.get('atr')
+                except Exception as error:
+                    error_sips_pricing = str(error)
+            if (
+                not usar_curva_pricing
+                and sips_pricing_detectado is None
+                and st.session_state.get('df_consumos_pricing_origen') == 'sips'
+            ):
+                atr_sips_pricing = (
+                    st.session_state.get('sips_pricing') or {}
+                ).get('atr')
+            atr_pricing_pendiente = st.session_state.pop(
+                '_pendiente_pricing_atr_seleccionado', None
+            )
+            if atr_pricing_pendiente in {'2.0', '3.0', '6.1', '6.2'}:
+                st.session_state.pricing_atr_seleccionado = atr_pricing_pendiente
 
-        sips_sin_atr_pricing = (
-            not usar_curva_pricing
-            and (
+            if usar_curva_pricing:
+                st.session_state.pricing_atr_seleccionado = atr_curva_pricing
+            elif atr_sips_pricing in {'2.0', '3.0', '6.1', '6.2'}:
+                st.session_state.pricing_atr_seleccionado = atr_sips_pricing
+
+            sips_sin_atr_pricing = (
+                not usar_curva_pricing
+                and (
+                    sips_pricing_detectado is not None
+                    or st.session_state.get('df_consumos_pricing_origen') == 'sips'
+                )
+                and atr_sips_pricing is None
+                and (
+                    sips_pricing_detectado is not None
+                    or st.session_state.get('sips_pricing', {}).get('atr') is None
+                )
+            )
+            tabla_sips_atr_pricing = (
+                sips_pricing_detectado['consumos']
+                if sips_pricing_detectado is not None
+                else st.session_state.get('df_consumos_pricing')
+            )
+            sips_con_seis_periodos_pricing = (
+                sips_sin_atr_pricing
+                and isinstance(tabla_sips_atr_pricing, pd.DataFrame)
+                and all(
+                    periodo in tabla_sips_atr_pricing.columns
+                    for periodo in ('P4', 'P5', 'P6')
+                )
+                and tabla_sips_atr_pricing[['P4', 'P5', 'P6']]
+                .apply(pd.to_numeric, errors='coerce')
+                .fillna(0).ne(0).any().any()
+            )
+            opciones_atr_pricing = (
+                ['3.0', '6.1', '6.2']
+                if sips_con_seis_periodos_pricing
+                else ['2.0', '3.0', '6.1', '6.2']
+            )
+            if st.session_state.get('pricing_atr_seleccionado') not in [
+                None, *opciones_atr_pricing
+            ]:
+                st.session_state.pop('pricing_atr_manual_confirmado_sips', None)
+                st.session_state.pop('pricing_atr_seleccionado', None)
+            if (
+                sips_sin_atr_pricing
+                and not st.session_state.get('pricing_atr_manual_confirmado_sips')
+            ):
+                st.session_state.pop('pricing_atr_seleccionado', None)
+
+            atr_pricing_seleccionado = st.selectbox(
+                'ATR para ponderación por consumo',
+                options=opciones_atr_pricing,
+                format_func=lambda atr: f'{atr}TD',
+                key='pricing_atr_seleccionado',
+                index=None if sips_sin_atr_pricing else 0,
+                placeholder='Selecciona el ATR real del suministro',
+                on_change=(
+                    _confirmar_atr_pricing_sips if sips_sin_atr_pricing else None
+                ),
+                disabled=(
+                    usar_curva_pricing
+                    or atr_sips_pricing in {'2.0', '3.0', '6.1', '6.2'}
+                ),
+            )
+            if (
                 sips_pricing_detectado is not None
                 or st.session_state.get('df_consumos_pricing_origen') == 'sips'
-            )
-            and atr_sips_pricing is None
-            and (
-                sips_pricing_detectado is not None
-                or st.session_state.get('sips_pricing', {}).get('atr') is None
-            )
-        )
-        tabla_sips_atr_pricing = (
-            sips_pricing_detectado['consumos']
-            if sips_pricing_detectado is not None
-            else st.session_state.get('df_consumos_pricing')
-        )
-        sips_con_seis_periodos_pricing = (
-            sips_sin_atr_pricing
-            and isinstance(tabla_sips_atr_pricing, pd.DataFrame)
-            and all(
-                periodo in tabla_sips_atr_pricing.columns
-                for periodo in ('P4', 'P5', 'P6')
-            )
-            and tabla_sips_atr_pricing[['P4', 'P5', 'P6']]
-            .apply(pd.to_numeric, errors='coerce')
-            .fillna(0).ne(0).any().any()
-        )
-        opciones_atr_pricing = (
-            ['3.0', '6.1', '6.2']
-            if sips_con_seis_periodos_pricing
-            else ['2.0', '3.0', '6.1', '6.2']
-        )
-        if st.session_state.get('pricing_atr_seleccionado') not in [
-            None, *opciones_atr_pricing
-        ]:
-            st.session_state.pop('pricing_atr_manual_confirmado_sips', None)
-            st.session_state.pop('pricing_atr_seleccionado', None)
-        if (
-            sips_sin_atr_pricing
-            and not st.session_state.get('pricing_atr_manual_confirmado_sips')
-        ):
-            st.session_state.pop('pricing_atr_seleccionado', None)
-
-        atr_pricing_seleccionado = st.selectbox(
-            'ATR para ponderación por consumo',
-            options=opciones_atr_pricing,
-            format_func=lambda atr: f'{atr}TD',
-            key='pricing_atr_seleccionado',
-            index=None if sips_sin_atr_pricing else 0,
-            placeholder='Selecciona el ATR real del suministro',
-            on_change=(
-                _confirmar_atr_pricing_sips if sips_sin_atr_pricing else None
-            ),
-            disabled=(
-                usar_curva_pricing
-                or atr_sips_pricing in {'2.0', '3.0', '6.1', '6.2'}
-            ),
-        )
-        if sips_pricing_detectado is not None:
-            if atr_sips_pricing is None:
-                st.warning(
-                    'El SIPS no informa el ATR. Selecciónalo manualmente antes '
-                    'de calcular el pricing.'
-                )
-            elif atr_sips_pricing not in {'2.0', '3.0', '6.1', '6.2'}:
-                st.error(
-                    f'El SIPS informa {atr_sips_pricing}TD, pero Pricing solo '
-                    'admite actualmente 2.0TD, 3.0TD, 6.1TD y 6.2TD.'
-                )
-            else:
-                st.info(
-                    f'ATR {atr_sips_pricing}TD leído del SIPS. El selector '
-                    'queda bloqueado.'
-                )
-
-        if usar_curva_pricing:
-            try:
-                st.session_state.df_consumos_pricing = (
-                    consumos_mensuales_desde_curva_normalizada(
-                        df_curva_pricing_actual,
+            ):
+                if atr_sips_pricing is None:
+                    st.warning(
+                        'El SIPS no informa el ATR. Selecciónalo manualmente antes '
+                        'de calcular el pricing.'
                     )
-                )
-                st.session_state.df_consumos_pricing_origen = 'curva'
-                st.success(
-                    'Curva agrupada por meses y periodos: '
-                    f'{atr_pricing_seleccionado}TD.'
-                )
-            except ValueError as error_consumos_pricing:
-                st.session_state.pop('df_consumos_pricing', None)
-                st.session_state.pop('df_consumos_pricing_origen', None)
-                st.warning(
-                    'La curva cargada no es válida para un pricing anual: '
-                    f'{error_consumos_pricing}'
-                )
-        else:
-            if st.session_state.get('df_consumos_pricing_origen') == 'curva':
-                st.session_state.pop('df_consumos_pricing', None)
-                st.session_state.pop('df_consumos_pricing_origen', None)
-            archivo_consumos_pricing = st.file_uploader(
-                'Sube Excel de consumos o archivo SIPS (CSV/Excel)',
-                type=['xlsx', 'xls', 'csv'],
-                key='pricing_upload_consumos',
-                on_change=_cambiar_archivo_pricing,
-            )
-            if archivo_consumos_pricing is not None:
+                elif atr_sips_pricing not in {'2.0', '3.0', '6.1', '6.2'}:
+                    st.error(
+                        f'El SIPS informa {atr_sips_pricing}TD, pero Pricing solo '
+                        'admite actualmente 2.0TD, 3.0TD, 6.1TD y 6.2TD.'
+                    )
+                else:
+                    st.info(
+                        f'ATR {atr_sips_pricing}TD leído del SIPS. El selector '
+                        'queda bloqueado.'
+                    )
+
+            if usar_curva_pricing:
                 try:
-                    if (
-                        archivo_consumos_pricing.name.lower().endswith('.csv')
-                        or es_sips_excel(archivo_consumos_pricing)
-                    ):
-                        sips_pricing = (
-                            sips_pricing_detectado
-                            or leer_sips_completo(archivo_consumos_pricing)
+                    st.session_state.df_consumos_pricing = (
+                        consumos_mensuales_desde_curva_normalizada(
+                            df_curva_pricing_actual,
                         )
-                        st.session_state.df_consumos_pricing = (
-                            perfil_anual_meses_naturales(
-                                sips_pricing['consumos']
-                            )
-                        )
-                        st.session_state.sips_pricing = sips_pricing
-                        st.session_state.df_consumos_pricing_origen = 'sips'
-                        st.success(
-                            'SIPS normalizado: activa, reactiva y maxímetros. '
-                            'Pricing usa la lectura más reciente de cada mes natural.'
-                        )
-                    else:
-                        st.session_state.pop('sips_pricing', None)
-                        consumos_raw_pricing = pd.read_excel(
-                            archivo_consumos_pricing
-                        )
-                        st.session_state.df_consumos_pricing = (
-                            normalizar_tabla_consumos_sips(
-                                consumos_raw_pricing
-                            )
-                        )
-                        st.session_state.df_consumos_pricing_origen = 'excel'
-                        st.success(
-                            'Consumos normalizados: últimos 12 meses disponibles.'
-                        )
-                except Exception as error_consumos_pricing:
+                    )
+                    st.session_state.df_consumos_pricing_origen = 'curva'
+                    st.success(
+                        'Curva agrupada por meses y periodos: '
+                        f'{atr_pricing_seleccionado}TD.'
+                    )
+                except ValueError as error_consumos_pricing:
                     st.session_state.pop('df_consumos_pricing', None)
                     st.session_state.pop('df_consumos_pricing_origen', None)
-                    if sips_pricing_detectado is None:
-                        st.session_state.pop('sips_pricing', None)
-                    else:
-                        st.session_state.sips_pricing = sips_pricing_detectado
-                    st.error(f'Error al leer consumos: {error_consumos_pricing}')
-
-        if st.session_state.get('df_consumos_pricing') is not None:
-            df_consumos_pricing_vista = st.session_state.df_consumos_pricing.copy()
-            formato_consumos_pricing = {
-                'año': lambda valor: str(int(valor)),
-                'mes': lambda valor: str(int(valor)),
-                **{
-                    f'P{i}': lambda valor: formato_numero_es(valor, 0)
-                    for i in range(1, 7)
-                },
-            }
-            st.dataframe(
-                df_consumos_pricing_vista.style.format(
-                    formato_consumos_pricing
-                ).hide(axis='index'),
-                use_container_width=True,
-                height=460,
-            )
-
-        df_spot_periodos = preparar_referencia_pricing(
-            st.session_state.df_sheets
-        )
-        df_spot_periodos['mes_pricing'] = df_spot_periodos['fecha'].dt.to_period('M')
-
-        # Compatibilidad con tablas horarias conservadas en sesión antes de
-        # incorporar 6.2TD. Ambas pérdidas comparten el mismo coeficiente K,
-        # por lo que la equivalencia por periodo se obtiene con la relación
-        # exacta entre los coeficientes BOE de 6.2TD y 6.1TD.
-        ratios_perdidas_62_61 = {
-            'P1': 0.052 / 0.065,
-            'P2': 0.054 / 0.068,
-            'P3': 0.049 / 0.065,
-            'P4': 0.050 / 0.065,
-            'P5': 0.035 / 0.043,
-            'P6': 0.054 / 0.077,
-        }
-        perdidas_61_compat = pd.to_numeric(
-            df_spot_periodos['perd_6.1'], errors='coerce'
-        )
-        perdidas_62_compat = pd.to_numeric(
-            df_spot_periodos.get(
-                'perd_6.2', pd.Series(index=df_spot_periodos.index, dtype=float)
-            ),
-            errors='coerce',
-        )
-        perdidas_62_calculadas = perdidas_61_compat * (
-            df_spot_periodos['dh_6p'].map(ratios_perdidas_62_61)
-        )
-        df_spot_periodos['perd_6.2'] = perdidas_62_compat.fillna(
-            perdidas_62_calculadas
-        )
-
-        periodos_3p_pricing = ['P1', 'P2', 'P3']
-        tabla_spot_3p = df_spot_periodos.pivot_table(
-            index='mes_pricing',
-            columns='dh_3p',
-            values='spot',
-            aggfunc='mean',
-        ).reindex(columns=periodos_3p_pricing)
-        tabla_spot_3p['Media mes'] = df_spot_periodos.groupby(
-            'mes_pricing'
-        )['spot'].mean()
-        tabla_spot_3p.index = tabla_spot_3p.index.strftime('%Y-%m')
-        tabla_spot_3p.index.name = 'Mes'
-
-        st.markdown('#### SPOT medio por periodo · 2.0TD (3P)')
-        st.dataframe(
-            tabla_spot_3p.style.format(
-                lambda valor: formato_numero_es(valor, 2) if pd.notna(valor) else '-'
-            ),
-            use_container_width=True,
-            height=460,
-        )
-
-        media_spot_12m = df_spot_periodos['spot'].mean()
-        st.markdown(
-            f"**Media horaria del SPOT en los 12 meses: "
-            f":orange[{formato_numero_es(media_spot_12m, 2)} €/MWh]**"
-        )
-        tabla_apuntamientos_spot_3p = tabla_spot_3p[periodos_3p_pricing].div(
-            tabla_spot_3p['Media mes'], axis=0
-        )
-        tabla_apuntamientos_spot_3p['Media mes'] = 1.0
-        st.markdown('#### Apuntamiento SPOT por periodo · 2.0TD (3P)')
-        st.dataframe(
-            tabla_apuntamientos_spot_3p.style.format(
-                lambda valor: formato_numero_es(valor, 4) if pd.notna(valor) else '-'
-            ),
-            use_container_width=True,
-            height=460,
-        )
-
-        tabla_spot_forward_3p = (
-            tabla_apuntamientos_spot_3p[periodos_3p_pricing]
-            * spot_forward_pricing
-        )
-        tabla_spot_forward_3p['Media'] = spot_forward_pricing
-        st.markdown('#### SPOT forward por periodo · 2.0TD (3P)')
-        st.dataframe(
-            tabla_spot_forward_3p.style.format(
-                lambda valor: formato_numero_es(valor, 2) if pd.notna(valor) else '-'
-            ),
-            use_container_width=True,
-            height=460,
-        )
-
-        df_ssaa_3p = df_spot_periodos.copy()
-        df_ssaa_3p['ssaa'] = (
-            pd.to_numeric(df_ssaa_3p['ssaa'], errors='coerce')
-            - pd.to_numeric(df_ssaa_3p['rad3'], errors='coerce')
-        )
-        tabla_ssaa_3p = df_ssaa_3p.pivot_table(
-            index='mes_pricing',
-            columns='dh_3p',
-            values='ssaa',
-            aggfunc='mean',
-        ).reindex(columns=periodos_3p_pricing)
-        tabla_ssaa_3p['Media mes'] = df_ssaa_3p.groupby('mes_pricing')['ssaa'].mean()
-        tabla_ssaa_3p.index = tabla_ssaa_3p.index.strftime('%Y-%m')
-        tabla_ssaa_3p.index.name = 'Mes'
-
-        st.markdown('#### SSAA medios por periodo · 2.0TD (3P)')
-        st.dataframe(
-            tabla_ssaa_3p.style.format(
-                lambda valor: formato_numero_es(valor, 2) if pd.notna(valor) else '-'
-            ),
-            use_container_width=True,
-            height=460,
-        )
-
-        media_ssaa_12m_pricing = df_ssaa_3p['ssaa'].mean()
-        st.markdown(
-            f"**Media horaria de SSAA en los 12 meses: "
-            f":orange[{formato_numero_es(media_ssaa_12m_pricing, 2)} €/MWh]**"
-        )
-        media_ssaa_3p_no_cero = tabla_ssaa_3p['Media mes'].where(
-            tabla_ssaa_3p['Media mes'].ne(0)
-        )
-        tabla_apuntamientos_ssaa_3p = tabla_ssaa_3p[
-            periodos_3p_pricing
-        ].div(media_ssaa_3p_no_cero, axis=0)
-        tabla_apuntamientos_ssaa_3p['Media mes'] = 1.0
-        st.markdown('#### Apuntamiento SSAA por periodo · 2.0TD (3P)')
-        st.dataframe(
-            tabla_apuntamientos_ssaa_3p.style.format(
-                lambda valor: formato_numero_es(valor, 4) if pd.notna(valor) else '-'
-            ),
-            use_container_width=True,
-            height=460,
-        )
-
-        tabla_ssaa_forward_3p = (
-            tabla_apuntamientos_ssaa_3p[periodos_3p_pricing]
-            * ssaa_forward_pricing
-        )
-        tabla_ssaa_forward_3p['Media'] = ssaa_forward_pricing
-        st.markdown('#### SSAA previstos por periodo · 2.0TD (3P)')
-        st.dataframe(
-            tabla_ssaa_forward_3p.style.format(
-                lambda valor: formato_numero_es(valor, 2) if pd.notna(valor) else '-'
-            ),
-            use_container_width=True,
-            height=460,
-        )
-
-        st.markdown('---')
-        st.markdown('#### SPOT medio por periodo · estructura 6P')
-        columna_periodo = 'dh_6p'
-        tabla_spot_periodos = df_spot_periodos.pivot_table(
-            index='mes_pricing',
-            columns=columna_periodo,
-            values='spot',
-            aggfunc='mean',
-        )
-        tabla_spot_periodos = tabla_spot_periodos.reindex(
-            columns=sorted(
-                tabla_spot_periodos.columns,
-                key=lambda periodo: int(str(periodo).replace('P', '')),
-            )
-        )
-        tabla_spot_periodos['Media mes'] = df_spot_periodos.groupby(
-            'mes_pricing'
-        )['spot'].mean()
-        tabla_spot_periodos.index = tabla_spot_periodos.index.strftime('%Y-%m')
-        tabla_spot_periodos.index.name = 'Mes'
-
-        st.dataframe(
-            tabla_spot_periodos.style.format(
-                lambda valor: formato_numero_es(valor, 2) if pd.notna(valor) else '-'
-            ),
-            use_container_width=True,
-            height=460,
-        )
-
-        media_spot_12m = df_spot_periodos['spot'].mean()
-        st.markdown(
-            f"**Media horaria del SPOT en los 12 meses: "
-            f":orange[{formato_numero_es(media_spot_12m, 2)} €/MWh]**"
-        )
-
-        st.markdown('#### Apuntamiento SPOT por periodo · 6P')
-        columnas_periodo_pricing = [
-            columna for columna in tabla_spot_periodos.columns
-            if str(columna).startswith('P')
-        ]
-        tabla_apuntamientos = tabla_spot_periodos[columnas_periodo_pricing].div(
-            tabla_spot_periodos['Media mes'], axis=0
-        )
-        tabla_apuntamientos['Media mes'] = 1.0
-        tabla_apuntamientos.index.name = 'Mes'
-
-        st.dataframe(
-            tabla_apuntamientos.style.format(
-                lambda valor: formato_numero_es(valor, 4) if pd.notna(valor) else '-'
-            ),
-            use_container_width=True,
-            height=460,
-        )
-
-        spot_forward_pricing = st.session_state.pricing_spot_forward_12m
-
-        tabla_spot_forward = (
-            tabla_apuntamientos[columnas_periodo_pricing]
-            * spot_forward_pricing
-        )
-        tabla_spot_forward['Media'] = spot_forward_pricing
-        tabla_spot_forward.index.name = 'Mes'
-
-        st.markdown('#### SPOT forward por periodo · 6P')
-        st.dataframe(
-            tabla_spot_forward.style.format(
-                lambda valor: formato_numero_es(valor, 2) if pd.notna(valor) else '-'
-            ),
-            use_container_width=True,
-            height=460,
-            hide_index=False,
-        )
-
-    with col_pricing1:
-        st.markdown('#### SSAA medios por periodo · estructura 6P')
-
-        df_ssaa_periodos = df_spot_periodos.copy()
-        df_ssaa_periodos['ssaa'] = (
-            pd.to_numeric(df_ssaa_periodos['ssaa'], errors='coerce')
-            - pd.to_numeric(df_ssaa_periodos['rad3'], errors='coerce')
-        )
-        df_ssaa_periodos = df_ssaa_periodos.dropna(subset=['ssaa'])
-
-        tabla_ssaa_periodos = df_ssaa_periodos.pivot_table(
-            index='mes_pricing',
-            columns=columna_periodo,
-            values='ssaa',
-            aggfunc='mean',
-        ).reindex(columns=columnas_periodo_pricing)
-        tabla_ssaa_periodos['Media mes'] = df_ssaa_periodos.groupby(
-            'mes_pricing'
-        )['ssaa'].mean()
-        tabla_ssaa_periodos.index = tabla_ssaa_periodos.index.strftime('%Y-%m')
-        tabla_ssaa_periodos.index.name = 'Mes'
-
-        st.dataframe(
-            tabla_ssaa_periodos.style.format(
-                lambda valor: formato_numero_es(valor, 2) if pd.notna(valor) else '-'
-            ),
-            use_container_width=True,
-            height=460,
-        )
-
-        media_ssaa_12m_pricing = df_ssaa_periodos['ssaa'].mean()
-        st.markdown(
-            f"**Media horaria de SSAA en los 12 meses: "
-            f":orange[{formato_numero_es(media_ssaa_12m_pricing, 2)} €/MWh]**"
-        )
-
-        st.markdown('#### Apuntamiento SSAA por periodo · 6P')
-        media_mensual_ssaa_no_cero = tabla_ssaa_periodos['Media mes'].where(
-            tabla_ssaa_periodos['Media mes'].ne(0)
-        )
-        tabla_apuntamientos_ssaa = tabla_ssaa_periodos[
-            columnas_periodo_pricing
-        ].div(media_mensual_ssaa_no_cero, axis=0)
-        tabla_apuntamientos_ssaa['Media mes'] = 1.0
-        tabla_apuntamientos_ssaa.index.name = 'Mes'
-
-        st.dataframe(
-            tabla_apuntamientos_ssaa.style.format(
-                lambda valor: formato_numero_es(valor, 4) if pd.notna(valor) else '-'
-            ),
-            use_container_width=True,
-            height=460,
-        )
-
-        ssaa_forward_pricing = st.session_state.pricing_ssaa_forward_12m
-
-        tabla_ssaa_forward = (
-            tabla_apuntamientos_ssaa[columnas_periodo_pricing]
-            * ssaa_forward_pricing
-        )
-        tabla_ssaa_forward['Media'] = ssaa_forward_pricing
-        tabla_ssaa_forward.index.name = 'Mes'
-
-        st.markdown('#### SSAA previstos por periodo · 6P')
-        st.dataframe(
-            tabla_ssaa_forward.style.format(
-                lambda valor: formato_numero_es(valor, 2) if pd.notna(valor) else '-'
-            ),
-            use_container_width=True,
-            height=460,
-            hide_index=False,
-        )
-
-        st.markdown('#### PPC por periodo')
-        df_ppc_pricing = st.session_state.df_sheets.copy()
-        df_ppc_pricing['fecha'] = pd.to_datetime(
-            df_ppc_pricing['fecha'], errors='coerce'
-        )
-        columnas_ppc_pricing = ['ppcc_2.0', 'ppcc_3.0', 'ppcc_6.1', 'ppcc_6.2']
-        for columna_ppc_pricing in columnas_ppc_pricing:
-            df_ppc_pricing[columna_ppc_pricing] = pd.to_numeric(
-                df_ppc_pricing[columna_ppc_pricing], errors='coerce'
-            )
-        df_ppc_pricing = df_ppc_pricing.dropna(subset=['fecha']).sort_values('fecha')
-        ultimo_año_ppc = int(df_ppc_pricing['fecha'].dt.year.max())
-        df_ppc_ultimo_año = df_ppc_pricing[
-            df_ppc_pricing['fecha'].dt.year == ultimo_año_ppc
-        ]
-        configuracion_ppc_pricing = {
-            '2.0TD': ('dh_3p', 'ppcc_2.0'),
-            '3.0TD': ('dh_6p', 'ppcc_3.0'),
-            '6.1TD': ('dh_6p', 'ppcc_6.1'),
-            '6.2TD': ('dh_6p', 'ppcc_6.2'),
-        }
-        tabla_ppc_pricing = pd.DataFrame.from_dict(
-            {
-                tarifa: (
-                    df_ppc_ultimo_año.dropna(subset=[columna_periodo_ppc, columna_valor_ppc])
-                    .groupby(columna_periodo_ppc)[columna_valor_ppc]
-                    .last()
-                    .reindex([f'P{i}' for i in range(1, 7)])
-                    .to_dict()
+                    st.warning(
+                        'La curva cargada no es válida para un pricing anual: '
+                        f'{error_consumos_pricing}'
+                    )
+            else:
+                if st.session_state.get('df_consumos_pricing_origen') == 'curva':
+                    st.session_state.pop('df_consumos_pricing', None)
+                    st.session_state.pop('df_consumos_pricing_origen', None)
+                archivo_consumos_pricing = st.file_uploader(
+                    'Sube uno o varios SIPS (CSV/Excel) o un Excel de consumos',
+                    type=['xlsx', 'xls', 'csv'],
+                    key='pricing_upload_consumos',
+                    on_change=_cambiar_archivo_pricing,
+                    accept_multiple_files=True,
+                    help=(
+                        'Varios archivos deben ser SIPS de CUPS distintos, con el '
+                        'mismo ATR y los mismos 12 meses. Se suman P1-P6 por mes.'
+                    ),
                 )
-                for tarifa, (
-                    columna_periodo_ppc,
-                    columna_valor_ppc,
-                ) in configuracion_ppc_pricing.items()
-            },
-            orient='index',
-        ).reindex(columns=[f'P{i}' for i in range(1, 7)])
-        tabla_ppc_pricing.index.name = f'ATR · {ultimo_año_ppc}'
-        st.dataframe(
-            tabla_ppc_pricing.style.format(
-                lambda valor: formato_numero_es(valor, 2) if pd.notna(valor) else '-'
-            ),
-            use_container_width=True,
-        )
+                if archivo_consumos_pricing:
+                    try:
+                        if error_sips_pricing:
+                            raise ValueError(error_sips_pricing)
+                        if sips_pricing_detectado is not None:
+                            sips_pricing = sips_pricing_detectado
+                            st.session_state.df_consumos_pricing = (
+                                sips_pricing['consumos']
+                                if len(archivo_consumos_pricing) > 1
+                                else perfil_anual_meses_naturales(
+                                    sips_pricing['consumos']
+                                )
+                            )
+                            st.session_state.sips_pricing = sips_pricing
+                            st.session_state.df_consumos_pricing_origen = 'sips'
+                            if len(archivo_consumos_pricing) > 1:
+                                st.success(
+                                    f'{len(archivo_consumos_pricing)} SIPS agregados '
+                                    'por mes y período. Pricing usa el consumo '
+                                    'total para calcular el precio común.'
+                                )
+                            else:
+                                st.success(
+                                    'SIPS normalizado: activa, reactiva y maxímetros. '
+                                    'Pricing usa la lectura más reciente de cada mes natural.'
+                                )
+                        else:
+                            st.session_state.pop('sips_pricing', None)
+                            consumos_raw_pricing = pd.read_excel(
+                                archivo_consumos_pricing[0]
+                            )
+                            st.session_state.df_consumos_pricing = (
+                                normalizar_tabla_consumos_sips(
+                                    consumos_raw_pricing
+                                )
+                            )
+                            st.session_state.df_consumos_pricing_origen = 'excel'
+                            st.success(
+                                'Consumos normalizados: últimos 12 meses disponibles.'
+                            )
+                    except Exception as error_consumos_pricing:
+                        st.session_state.pop('df_consumos_pricing', None)
+                        st.session_state.pop('df_consumos_pricing_origen', None)
+                        st.session_state.pop('sips_pricing', None)
+                        st.error(f'Error al leer consumos: {error_consumos_pricing}')
 
-        osom_12m_pricing = pd.to_numeric(
-            df_spot_periodos['osom'], errors='coerce'
-        ).mean()
-        st.info(
-            'OSOM medio horario de los 12 meses completos: '
-            f'**{formato_numero_es(osom_12m_pricing, 2)} €/MWh**.',
-            icon='ℹ️',
-        )
+            if (
+                st.session_state.get('df_consumos_pricing_origen') == 'sips'
+                and st.session_state.get('df_consumos_pricing') is not None
+            ):
+                sips_resumen = st.session_state.get('sips_pricing', {})
+                periodos_resumen = [f'P{i}' for i in range(1, 7)]
+                filas_resumen = sips_resumen.get('resumen_sips')
+                if not filas_resumen:
+                    consumos_sips = st.session_state.df_consumos_pricing
+                    filas_resumen = [{
+                        'CUPS': sips_resumen.get('metadatos', {}).get('cups', 'SIPS'),
+                        **{
+                            periodo: float(consumos_sips[periodo].sum())
+                            for periodo in periodos_resumen
+                        },
+                    }]
+                tabla_resumen_sips = pd.DataFrame(filas_resumen)
+                tabla_resumen_sips['Total (kWh)'] = tabla_resumen_sips[
+                    periodos_resumen
+                ].sum(axis=1)
+                if len(tabla_resumen_sips) > 1:
+                    totales_sips = tabla_resumen_sips[
+                        [*periodos_resumen, 'Total (kWh)']
+                    ].sum()
+                    tabla_resumen_sips.loc[len(tabla_resumen_sips)] = {
+                        'CUPS': 'TOTAL',
+                        **totales_sips.to_dict(),
+                    }
+                st.markdown('#### Resumen de consumos')
+                st.dataframe(
+                    tabla_resumen_sips.style.format({
+                        columna: lambda valor: formato_numero_es(valor, 0)
+                        for columna in [*periodos_resumen, 'Total (kWh)']
+                    }),
+                    hide_index=True,
+                    use_container_width=True,
+                )
 
-        configuracion_perdidas_pricing = {
-            '2.0': ('dh_3p', ['P1', 'P2', 'P3']),
-            '3.0': ('dh_6p', [f'P{i}' for i in range(1, 7)]),
-            '6.1': ('dh_6p', [f'P{i}' for i in range(1, 7)]),
-            '6.2': ('dh_6p', [f'P{i}' for i in range(1, 7)]),
-        }
-        for atr_perdidas_pricing, (
-            columna_periodo_perdidas,
-            periodos_perdidas_pricing,
-        ) in configuracion_perdidas_pricing.items():
-            columna_perdidas_pricing = f'perd_{atr_perdidas_pricing}'
-            df_perdidas_pricing = df_spot_periodos.copy()
-            df_perdidas_pricing[columna_perdidas_pricing] = pd.to_numeric(
-                df_perdidas_pricing[columna_perdidas_pricing], errors='coerce'
+            if st.session_state.get('df_consumos_pricing') is not None:
+                df_consumos_pricing_vista = st.session_state.df_consumos_pricing.copy()
+                formato_consumos_pricing = {
+                    'año': lambda valor: str(int(valor)),
+                    'mes': lambda valor: str(int(valor)),
+                    **{
+                        f'P{i}': lambda valor: formato_numero_es(valor, 0)
+                        for i in range(1, 7)
+                    },
+                }
+                st.markdown('#### Desglose de consumos por meses')
+                st.dataframe(
+                    df_consumos_pricing_vista.style.format(
+                        formato_consumos_pricing
+                    ).hide(axis='index'),
+                    use_container_width=True,
+                    height=460,
+                )
+
+        with st.expander('Formación del precio'):
+            df_spot_periodos = preparar_referencia_pricing(
+                st.session_state.df_sheets
             )
-            tabla_perdidas_pricing = df_perdidas_pricing.pivot_table(
+            df_spot_periodos['mes_pricing'] = df_spot_periodos['fecha'].dt.to_period('M')
+
+            # Compatibilidad con tablas horarias conservadas en sesión antes de
+            # incorporar 6.2TD. Ambas pérdidas comparten el mismo coeficiente K,
+            # por lo que la equivalencia por periodo se obtiene con la relación
+            # exacta entre los coeficientes BOE de 6.2TD y 6.1TD.
+            ratios_perdidas_62_61 = {
+                'P1': 0.052 / 0.065,
+                'P2': 0.054 / 0.068,
+                'P3': 0.049 / 0.065,
+                'P4': 0.050 / 0.065,
+                'P5': 0.035 / 0.043,
+                'P6': 0.054 / 0.077,
+            }
+            perdidas_61_compat = pd.to_numeric(
+                df_spot_periodos['perd_6.1'], errors='coerce'
+            )
+            perdidas_62_compat = pd.to_numeric(
+                df_spot_periodos.get(
+                    'perd_6.2', pd.Series(index=df_spot_periodos.index, dtype=float)
+                ),
+                errors='coerce',
+            )
+            perdidas_62_calculadas = perdidas_61_compat * (
+                df_spot_periodos['dh_6p'].map(ratios_perdidas_62_61)
+            )
+            df_spot_periodos['perd_6.2'] = perdidas_62_compat.fillna(
+                perdidas_62_calculadas
+            )
+
+            periodos_3p_pricing = ['P1', 'P2', 'P3']
+            tabla_spot_3p = df_spot_periodos.pivot_table(
                 index='mes_pricing',
-                columns=columna_periodo_perdidas,
-                values=columna_perdidas_pricing,
+                columns='dh_3p',
+                values='spot',
                 aggfunc='mean',
-            ).reindex(columns=periodos_perdidas_pricing).mul(100)
-            tabla_perdidas_pricing.index = (
-                tabla_perdidas_pricing.index.strftime('%Y-%m')
-            )
-            tabla_perdidas_pricing.index.name = 'Mes'
+            ).reindex(columns=periodos_3p_pricing)
+            tabla_spot_3p['Media mes'] = df_spot_periodos.groupby(
+                'mes_pricing'
+            )['spot'].mean()
+            tabla_spot_3p.index = tabla_spot_3p.index.strftime('%Y-%m')
+            tabla_spot_3p.index.name = 'Mes'
 
-            st.markdown(
-                f'#### Pérdidas reales mensuales {atr_perdidas_pricing}TD (%)'
-            )
+            st.markdown('#### SPOT medio por periodo · 2.0TD (3P)')
             st.dataframe(
-                tabla_perdidas_pricing.style.format(
-                    lambda valor: formato_numero_es(valor, 2)
-                    if pd.notna(valor) else '-'
+                tabla_spot_3p.style.format(
+                    lambda valor: formato_numero_es(valor, 2) if pd.notna(valor) else '-'
                 ),
                 use_container_width=True,
                 height=460,
             )
 
-        st.markdown('#### Peajes y cargos 2026 por periodo')
-        periodos_pyc_pricing = [f'P{i}' for i in range(1, 7)]
-        tabla_pyc_pricing = pd.DataFrame.from_dict(
-            {
-                tarifa: {
-                    periodo: (
-                        valor * 1000 if valor is not None else float('nan')
+            media_spot_12m = df_spot_periodos['spot'].mean()
+            st.markdown(
+                f"**Media horaria del SPOT en los 12 meses: "
+                f":orange[{formato_numero_es(media_spot_12m, 2)} €/MWh]**"
+            )
+            tabla_apuntamientos_spot_3p = tabla_spot_3p[periodos_3p_pricing].div(
+                tabla_spot_3p['Media mes'], axis=0
+            )
+            tabla_apuntamientos_spot_3p['Media mes'] = 1.0
+            st.markdown('#### Apuntamiento SPOT por periodo · 2.0TD (3P)')
+            st.dataframe(
+                tabla_apuntamientos_spot_3p.style.format(
+                    lambda valor: formato_numero_es(valor, 4) if pd.notna(valor) else '-'
+                ),
+                use_container_width=True,
+                height=460,
+            )
+
+            tabla_spot_forward_3p = (
+                tabla_apuntamientos_spot_3p[periodos_3p_pricing]
+                * spot_forward_pricing
+            )
+            tabla_spot_forward_3p['Media'] = spot_forward_pricing
+            st.markdown('#### SPOT forward por periodo · 2.0TD (3P)')
+            st.dataframe(
+                tabla_spot_forward_3p.style.format(
+                    lambda valor: formato_numero_es(valor, 2) if pd.notna(valor) else '-'
+                ),
+                use_container_width=True,
+                height=460,
+            )
+
+            df_ssaa_3p = df_spot_periodos.copy()
+            df_ssaa_3p['ssaa'] = (
+                pd.to_numeric(df_ssaa_3p['ssaa'], errors='coerce')
+                - pd.to_numeric(df_ssaa_3p['rad3'], errors='coerce')
+            )
+            tabla_ssaa_3p = df_ssaa_3p.pivot_table(
+                index='mes_pricing',
+                columns='dh_3p',
+                values='ssaa',
+                aggfunc='mean',
+            ).reindex(columns=periodos_3p_pricing)
+            tabla_ssaa_3p['Media mes'] = df_ssaa_3p.groupby('mes_pricing')['ssaa'].mean()
+            tabla_ssaa_3p.index = tabla_ssaa_3p.index.strftime('%Y-%m')
+            tabla_ssaa_3p.index.name = 'Mes'
+
+            st.markdown('#### SSAA medios por periodo · 2.0TD (3P)')
+            st.dataframe(
+                tabla_ssaa_3p.style.format(
+                    lambda valor: formato_numero_es(valor, 2) if pd.notna(valor) else '-'
+                ),
+                use_container_width=True,
+                height=460,
+            )
+
+            media_ssaa_12m_pricing = df_ssaa_3p['ssaa'].mean()
+            st.markdown(
+                f"**Media horaria de SSAA en los 12 meses: "
+                f":orange[{formato_numero_es(media_ssaa_12m_pricing, 2)} €/MWh]**"
+            )
+            media_ssaa_3p_no_cero = tabla_ssaa_3p['Media mes'].where(
+                tabla_ssaa_3p['Media mes'].ne(0)
+            )
+            tabla_apuntamientos_ssaa_3p = tabla_ssaa_3p[
+                periodos_3p_pricing
+            ].div(media_ssaa_3p_no_cero, axis=0)
+            tabla_apuntamientos_ssaa_3p['Media mes'] = 1.0
+            st.markdown('#### Apuntamiento SSAA por periodo · 2.0TD (3P)')
+            st.dataframe(
+                tabla_apuntamientos_ssaa_3p.style.format(
+                    lambda valor: formato_numero_es(valor, 4) if pd.notna(valor) else '-'
+                ),
+                use_container_width=True,
+                height=460,
+            )
+
+            tabla_ssaa_forward_3p = (
+                tabla_apuntamientos_ssaa_3p[periodos_3p_pricing]
+                * ssaa_forward_pricing
+            )
+            tabla_ssaa_forward_3p['Media'] = ssaa_forward_pricing
+            st.markdown('#### SSAA previstos por periodo · 2.0TD (3P)')
+            st.dataframe(
+                tabla_ssaa_forward_3p.style.format(
+                    lambda valor: formato_numero_es(valor, 2) if pd.notna(valor) else '-'
+                ),
+                use_container_width=True,
+                height=460,
+            )
+
+            st.markdown('---')
+            st.markdown('#### SPOT medio por periodo · estructura 6P')
+            columna_periodo = 'dh_6p'
+            tabla_spot_periodos = df_spot_periodos.pivot_table(
+                index='mes_pricing',
+                columns=columna_periodo,
+                values='spot',
+                aggfunc='mean',
+            )
+            tabla_spot_periodos = tabla_spot_periodos.reindex(
+                columns=sorted(
+                    tabla_spot_periodos.columns,
+                    key=lambda periodo: int(str(periodo).replace('P', '')),
+                )
+            )
+            tabla_spot_periodos['Media mes'] = df_spot_periodos.groupby(
+                'mes_pricing'
+            )['spot'].mean()
+            tabla_spot_periodos.index = tabla_spot_periodos.index.strftime('%Y-%m')
+            tabla_spot_periodos.index.name = 'Mes'
+
+            st.dataframe(
+                tabla_spot_periodos.style.format(
+                    lambda valor: formato_numero_es(valor, 2) if pd.notna(valor) else '-'
+                ),
+                use_container_width=True,
+                height=460,
+            )
+
+            media_spot_12m = df_spot_periodos['spot'].mean()
+            st.markdown(
+                f"**Media horaria del SPOT en los 12 meses: "
+                f":orange[{formato_numero_es(media_spot_12m, 2)} €/MWh]**"
+            )
+
+            st.markdown('#### Apuntamiento SPOT por periodo · 6P')
+            columnas_periodo_pricing = [
+                columna for columna in tabla_spot_periodos.columns
+                if str(columna).startswith('P')
+            ]
+            tabla_apuntamientos = tabla_spot_periodos[columnas_periodo_pricing].div(
+                tabla_spot_periodos['Media mes'], axis=0
+            )
+            tabla_apuntamientos['Media mes'] = 1.0
+            tabla_apuntamientos.index.name = 'Mes'
+
+            st.dataframe(
+                tabla_apuntamientos.style.format(
+                    lambda valor: formato_numero_es(valor, 4) if pd.notna(valor) else '-'
+                ),
+                use_container_width=True,
+                height=460,
+            )
+
+            spot_forward_pricing = st.session_state[clave_spot_guardado]
+
+            tabla_spot_forward = (
+                tabla_apuntamientos[columnas_periodo_pricing]
+                * spot_forward_pricing
+            )
+            tabla_spot_forward['Media'] = spot_forward_pricing
+            tabla_spot_forward.index.name = 'Mes'
+
+            st.markdown('#### SPOT forward por periodo · 6P')
+            st.dataframe(
+                tabla_spot_forward.style.format(
+                    lambda valor: formato_numero_es(valor, 2) if pd.notna(valor) else '-'
+                ),
+                use_container_width=True,
+                height=460,
+                hide_index=False,
+            )
+
+            st.markdown('#### SSAA medios por periodo · estructura 6P')
+
+            df_ssaa_periodos = df_spot_periodos.copy()
+            df_ssaa_periodos['ssaa'] = (
+                pd.to_numeric(df_ssaa_periodos['ssaa'], errors='coerce')
+                - pd.to_numeric(df_ssaa_periodos['rad3'], errors='coerce')
+            )
+            df_ssaa_periodos = df_ssaa_periodos.dropna(subset=['ssaa'])
+
+            tabla_ssaa_periodos = df_ssaa_periodos.pivot_table(
+                index='mes_pricing',
+                columns=columna_periodo,
+                values='ssaa',
+                aggfunc='mean',
+            ).reindex(columns=columnas_periodo_pricing)
+            tabla_ssaa_periodos['Media mes'] = df_ssaa_periodos.groupby(
+                'mes_pricing'
+            )['ssaa'].mean()
+            tabla_ssaa_periodos.index = tabla_ssaa_periodos.index.strftime('%Y-%m')
+            tabla_ssaa_periodos.index.name = 'Mes'
+
+            st.dataframe(
+                tabla_ssaa_periodos.style.format(
+                    lambda valor: formato_numero_es(valor, 2) if pd.notna(valor) else '-'
+                ),
+                use_container_width=True,
+                height=460,
+            )
+
+            media_ssaa_12m_pricing = df_ssaa_periodos['ssaa'].mean()
+            st.markdown(
+                f"**Media horaria de SSAA en los 12 meses: "
+                f":orange[{formato_numero_es(media_ssaa_12m_pricing, 2)} €/MWh]**"
+            )
+
+            st.markdown('#### Apuntamiento SSAA por periodo · 6P')
+            media_mensual_ssaa_no_cero = tabla_ssaa_periodos['Media mes'].where(
+                tabla_ssaa_periodos['Media mes'].ne(0)
+            )
+            tabla_apuntamientos_ssaa = tabla_ssaa_periodos[
+                columnas_periodo_pricing
+            ].div(media_mensual_ssaa_no_cero, axis=0)
+            tabla_apuntamientos_ssaa['Media mes'] = 1.0
+            tabla_apuntamientos_ssaa.index.name = 'Mes'
+
+            st.dataframe(
+                tabla_apuntamientos_ssaa.style.format(
+                    lambda valor: formato_numero_es(valor, 4) if pd.notna(valor) else '-'
+                ),
+                use_container_width=True,
+                height=460,
+            )
+
+            ssaa_forward_pricing = st.session_state.pricing_ssaa_forward_12m
+
+            tabla_ssaa_forward = (
+                tabla_apuntamientos_ssaa[columnas_periodo_pricing]
+                * ssaa_forward_pricing
+            )
+            tabla_ssaa_forward['Media'] = ssaa_forward_pricing
+            tabla_ssaa_forward.index.name = 'Mes'
+
+            st.markdown('#### SSAA previstos por periodo · 6P')
+            st.dataframe(
+                tabla_ssaa_forward.style.format(
+                    lambda valor: formato_numero_es(valor, 2) if pd.notna(valor) else '-'
+                ),
+                use_container_width=True,
+                height=460,
+                hide_index=False,
+            )
+
+            st.markdown('#### PPC por periodo')
+            df_ppc_pricing = st.session_state.df_sheets.copy()
+            df_ppc_pricing['fecha'] = pd.to_datetime(
+                df_ppc_pricing['fecha'], errors='coerce'
+            )
+            columnas_ppc_pricing = ['ppcc_2.0', 'ppcc_3.0', 'ppcc_6.1', 'ppcc_6.2']
+            for columna_ppc_pricing in columnas_ppc_pricing:
+                df_ppc_pricing[columna_ppc_pricing] = pd.to_numeric(
+                    df_ppc_pricing[columna_ppc_pricing], errors='coerce'
+                )
+            df_ppc_pricing = df_ppc_pricing.dropna(subset=['fecha']).sort_values('fecha')
+            ultimo_año_ppc = int(df_ppc_pricing['fecha'].dt.year.max())
+            df_ppc_ultimo_año = df_ppc_pricing[
+                df_ppc_pricing['fecha'].dt.year == ultimo_año_ppc
+            ]
+            configuracion_ppc_pricing = {
+                '2.0TD': ('dh_3p', 'ppcc_2.0'),
+                '3.0TD': ('dh_6p', 'ppcc_3.0'),
+                '6.1TD': ('dh_6p', 'ppcc_6.1'),
+                '6.2TD': ('dh_6p', 'ppcc_6.2'),
+            }
+            tabla_ppc_pricing = pd.DataFrame.from_dict(
+                {
+                    tarifa: (
+                        df_ppc_ultimo_año.dropna(subset=[columna_periodo_ppc, columna_valor_ppc])
+                        .groupby(columna_periodo_ppc)[columna_valor_ppc]
+                        .last()
+                        .reindex([f'P{i}' for i in range(1, 7)])
+                        .to_dict()
                     )
-                    for periodo, valor in pyc_2026[tarifa].items()
-                }
-                for tarifa in ['2.0TD', '3.0TD', '6.1TD', '6.2TD']
-            },
-            orient='index',
-        ).reindex(columns=periodos_pyc_pricing)
-        tabla_pyc_pricing.index.name = 'ATR'
-        st.dataframe(
-            tabla_pyc_pricing.style.format(
-                lambda valor: formato_numero_es(valor, 2) if pd.notna(valor) else '-'
-            ),
-            use_container_width=True,
-        )
+                    for tarifa, (
+                        columna_periodo_ppc,
+                        columna_valor_ppc,
+                    ) in configuracion_ppc_pricing.items()
+                },
+                orient='index',
+            ).reindex(columns=[f'P{i}' for i in range(1, 7)])
+            tabla_ppc_pricing.index.name = f'ATR · {ultimo_año_ppc}'
+            st.dataframe(
+                tabla_ppc_pricing.style.format(
+                    lambda valor: formato_numero_es(valor, 2) if pd.notna(valor) else '-'
+                ),
+                use_container_width=True,
+            )
+
+            osom_12m_pricing = pd.to_numeric(
+                df_spot_periodos['osom'], errors='coerce'
+            ).mean()
+            st.info(
+                'OSOM medio horario de los 12 meses completos: '
+                f'**{formato_numero_es(osom_12m_pricing, 2)} €/MWh**.',
+                icon='ℹ️',
+            )
+
+            configuracion_perdidas_pricing = {
+                '2.0': ('dh_3p', ['P1', 'P2', 'P3']),
+                '3.0': ('dh_6p', [f'P{i}' for i in range(1, 7)]),
+                '6.1': ('dh_6p', [f'P{i}' for i in range(1, 7)]),
+                '6.2': ('dh_6p', [f'P{i}' for i in range(1, 7)]),
+            }
+            for atr_perdidas_pricing, (
+                columna_periodo_perdidas,
+                periodos_perdidas_pricing,
+            ) in configuracion_perdidas_pricing.items():
+                columna_perdidas_pricing = f'perd_{atr_perdidas_pricing}'
+                df_perdidas_pricing = df_spot_periodos.copy()
+                df_perdidas_pricing[columna_perdidas_pricing] = pd.to_numeric(
+                    df_perdidas_pricing[columna_perdidas_pricing], errors='coerce'
+                )
+                tabla_perdidas_pricing = df_perdidas_pricing.pivot_table(
+                    index='mes_pricing',
+                    columns=columna_periodo_perdidas,
+                    values=columna_perdidas_pricing,
+                    aggfunc='mean',
+                ).reindex(columns=periodos_perdidas_pricing).mul(100)
+                tabla_perdidas_pricing.index = (
+                    tabla_perdidas_pricing.index.strftime('%Y-%m')
+                )
+                tabla_perdidas_pricing.index.name = 'Mes'
+
+                st.markdown(
+                    f'#### Pérdidas reales mensuales {atr_perdidas_pricing}TD (%)'
+                )
+                st.dataframe(
+                    tabla_perdidas_pricing.style.format(
+                        lambda valor: formato_numero_es(valor, 2)
+                        if pd.notna(valor) else '-'
+                    ),
+                    use_container_width=True,
+                    height=460,
+                )
+
+            st.markdown('#### Peajes y cargos 2026 por periodo')
+            periodos_pyc_pricing = [f'P{i}' for i in range(1, 7)]
+            tabla_pyc_pricing = pd.DataFrame.from_dict(
+                {
+                    tarifa: {
+                        periodo: (
+                            valor * 1000 if valor is not None else float('nan')
+                        )
+                        for periodo, valor in pyc_2026[tarifa].items()
+                    }
+                    for tarifa in ['2.0TD', '3.0TD', '6.1TD', '6.2TD']
+                },
+                orient='index',
+            ).reindex(columns=periodos_pyc_pricing)
+            tabla_pyc_pricing.index.name = 'ATR'
+            st.dataframe(
+                tabla_pyc_pricing.style.format(
+                    lambda valor: formato_numero_es(valor, 2) if pd.notna(valor) else '-'
+                ),
+                use_container_width=True,
+            )
 
     with col_pricing2:
         st.subheader(
@@ -1256,6 +1395,8 @@ with contenedor_pricing.container():
             desvios_apant=st.session_state.get('desvios_apant', 0.0),
             margen=st.session_state.get('margen_telemindex', 0.0),
             margen_pos=st.session_state.get('cfg_margen_pos', 'tm'),
+            otros_costes=st.session_state.get('otros_costes_indexado', 0.0),
+            otros_costes_pos=st.session_state.get('cfg_otros_costes_pos', 'tm'),
             incluir_fnee=st.session_state.get('cfg_fnee', True),
             fnee_pos=st.session_state.get('cfg_fnee_pos', 'perdidas'),
             cf_pct=st.session_state.get('cf_pct', 0.0),
@@ -1403,11 +1544,6 @@ with contenedor_pricing.container():
             tabla_fijo_pricing.index.name = 'Mes'
             tablas_fijas_pricing[atr_fijo] = tabla_fijo_pricing.copy()
 
-            st.markdown(f"#### Precio fijo {config_fijo['etiqueta']} (€/kWh)")
-            st.markdown(
-                '**Precio anual ponderado: '
-                f':orange[{formato_numero_es(precio_anual_ponderado, 6)} €/kWh]**'
-            )
             tabla_resumen_atr_pricing = pd.DataFrame(
                 [{
                     periodo: fila_resumen_anual[periodo]
@@ -1417,21 +1553,28 @@ with contenedor_pricing.container():
             ).reindex(
                 columns=[*config_fijo['periodos'], 'Precio medio anual']
             )
-            st.dataframe(
-                tabla_resumen_atr_pricing.style.format(
-                    lambda valor: formato_numero_es(valor, 6)
-                    if pd.notna(valor) else '-'
-                ),
-                use_container_width=True,
-            )
-            st.dataframe(
-                tabla_fijo_pricing.style.format(
-                    lambda valor: formato_numero_es(valor, 6)
-                    if pd.notna(valor) else '-'
-                ),
-                use_container_width=True,
-                height=460,
-            )
+            with st.expander(
+                f"Precio fijo {config_fijo['etiqueta']} (€/kWh)"
+            ):
+                st.markdown(
+                    '**Precio anual ponderado: '
+                    f':orange[{formato_numero_es(precio_anual_ponderado, 6)} €/kWh]**'
+                )
+                st.dataframe(
+                    tabla_resumen_atr_pricing.style.format(
+                        lambda valor: formato_numero_es(valor, 6)
+                        if pd.notna(valor) else '-'
+                    ),
+                    use_container_width=True,
+                )
+                st.dataframe(
+                    tabla_fijo_pricing.style.format(
+                        lambda valor: formato_numero_es(valor, 6)
+                        if pd.notna(valor) else '-'
+                    ),
+                    use_container_width=True,
+                    height=460,
+                )
 
         tabla_resumen_anual_pricing = pd.DataFrame(
             resumen_anual_pricing
@@ -1631,9 +1774,34 @@ with contenedor_pricing.container():
                 tabla_anual_consumo_vista,
                 use_container_width=True,
             )
-            st.markdown(
-                f'#### Detalle mensual {atr_pricing_seleccionado}TD'
-            )
+            with st.container(border=True):
+                st.markdown('##### Parámetros utilizados')
+                st.caption('Escenario')
+                st.dataframe(
+                    pd.DataFrame([
+                        ('SPOT', f'{formato_numero_es(spot_forward_pricing, 2)} €/MWh'),
+                        ('SSAA sin SRAD', f'{formato_numero_es(ssaa_forward_pricing, 2)} €/MWh'),
+                        ('SRAD', f'{formato_numero_es(srad_pricing, 2)} €/MWh'),
+                        ('FNEE previsto', f'{formato_numero_es(fnee_pricing, 2)} €/MWh'),
+                    ], columns=['Parámetro', 'Valor']),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+                st.caption('Componentes de fórmula')
+                st.dataframe(
+                    pd.DataFrame([
+                        ('Desvíos apantallados', f'{formato_numero_es(formula_pricing.desvios_apant, 2)} €/MWh'),
+                        ('Margen', f'{formato_numero_es(formula_pricing.margen, 2)} €/MWh'),
+                        ('Ubicación margen', formula_pricing.margen_pos),
+                        ('Otros costes', f'{formato_numero_es(formula_pricing.otros_costes, 2)} €/MWh'),
+                        ('Ubicación otros costes', formula_pricing.otros_costes_pos),
+                        ('Incluye FNEE', 'Sí' if formula_pricing.incluir_fnee else 'No'),
+                        ('Ubicación FNEE', formula_pricing.fnee_pos if formula_pricing.incluir_fnee else '—'),
+                        ('Coste financiero', f'{formato_numero_es(formula_pricing.cf_pct, 2)} %'),
+                    ], columns=['Parámetro', 'Valor']),
+                    hide_index=True,
+                    use_container_width=True,
+                )
             formatos_mensual_consumo = {
                 periodo: (lambda valor: formato_numero_es(valor, 6))
                 for periodo in periodos_atr_seleccionado
@@ -1644,11 +1812,12 @@ with contenedor_pricing.container():
             formatos_mensual_consumo['Consumo mes (kWh)'] = (
                 lambda valor: formato_numero_es(valor, 0)
             )
-            st.dataframe(
-                tabla_mensual_consumo.style.format(formatos_mensual_consumo),
-                use_container_width=True,
-                height=460,
-            )
+            with st.expander(f'Detalle mensual {atr_pricing_seleccionado}TD'):
+                st.dataframe(
+                    tabla_mensual_consumo.style.format(formatos_mensual_consumo),
+                    use_container_width=True,
+                    height=460,
+                )
 
             tabla_consumos_mensuales = df_ponderacion_pricing.pivot_table(
                 index='Mes', columns='Periodo', values='Consumo', aggfunc='sum'
@@ -1662,29 +1831,26 @@ with contenedor_pricing.container():
             tabla_costes_mensuales['Total'] = tabla_costes_mensuales.sum(axis=1)
             tabla_costes_mensuales.index.name = 'Mes'
 
-            st.markdown('#### Consumos mensuales por periodo (kWh)')
-            st.dataframe(
-                tabla_consumos_mensuales.style.format(
-                    lambda valor: formato_numero_es(valor, 0)
-                ),
-                use_container_width=True,
-                height=460,
-            )
-            st.markdown('#### Costes mensuales por periodo (€)')
-            st.dataframe(
-                tabla_costes_mensuales.style.format(
-                    lambda valor: formato_numero_es(valor, 2)
-                ),
-                use_container_width=True,
-                height=460,
-            )
+            with st.expander('Consumos mensuales por periodo (kWh)'):
+                st.dataframe(
+                    tabla_consumos_mensuales.style.format(
+                        lambda valor: formato_numero_es(valor, 0)
+                    ),
+                    use_container_width=True,
+                    height=460,
+                )
+            with st.expander('Costes mensuales por periodo (€)'):
+                st.dataframe(
+                    tabla_costes_mensuales.style.format(
+                        lambda valor: formato_numero_es(valor, 2)
+                    ),
+                    use_container_width=True,
+                    height=460,
+                )
 
 # ========================================================================================================================================================================
 #PANTALLA PRINCIPAL CON LAS RECTAS DE SIMULACIÓN Y DATOS PARA UN SOLO ESCENARIO OMIE
 # ========================================================================================================================================================================
-if seccion_simulindex != 'Pricing':
-    contenedor_pricing.empty()
-
 if seccion_simulindex == 'Combo index-fijo':
     st.subheader('Combo index-fijo · precio del volumen fijo', divider='rainbow')
     ruta_cuadrante_combo = (
@@ -1728,6 +1894,8 @@ if seccion_simulindex == 'Combo index-fijo':
             desvios_apant=st.session_state.get('desvios_apant', 0.0),
             margen=st.session_state.get('margen_telemindex', 0.0),
             margen_pos=st.session_state.get('cfg_margen_pos', 'tm'),
+            otros_costes=st.session_state.get('otros_costes_indexado', 0.0),
+            otros_costes_pos=st.session_state.get('cfg_otros_costes_pos', 'tm'),
             incluir_fnee=st.session_state.get('cfg_fnee', True),
             fnee_pos=st.session_state.get('cfg_fnee_pos', 'perdidas'),
             cf_pct=st.session_state.get('cf_pct', 0.0),
@@ -1947,6 +2115,12 @@ if seccion_simulindex == 'Combo index-fijo':
 
 
 if seccion_simulindex == 'Principal':
+    for clave_principal in (
+        'media_ssaa_prev', 'media_fnee_prev', 'media_rad3_prev'
+    ):
+        st.session_state[f'_widget_{clave_principal}'] = (
+            st.session_state[clave_principal]
+        )
  
     col1, col2 = st.columns([0.2, 0.8])
     with col1:
@@ -1969,8 +2143,8 @@ if seccion_simulindex == 'Principal':
  
                 st.number_input(
                     'SSAA previsto (€/MWh)', min_value=0.0, max_value=40.0,
-                    step=1.0, key='media_ssaa_prev',
-                    on_change=sincronizar_input_prevision,
+                    step=1.0, key='_widget_media_ssaa_prev',
+                    on_change=sincronizar_prevision_principal,
                     args=('media_ssaa_prev', 'pricing_ssaa_forward_12m'),
                 )
                 
@@ -1979,8 +2153,8 @@ if seccion_simulindex == 'Principal':
                 
                 st.number_input(
                     'FNEE previsto (€/MWh)', min_value=0.0, max_value=4.0,
-                    step=.1, key='media_fnee_prev',
-                    on_change=sincronizar_input_prevision,
+                    step=.1, key='_widget_media_fnee_prev',
+                    on_change=sincronizar_prevision_principal,
                     args=('media_fnee_prev', 'pricing_fnee_prev'),
                 )
                 
@@ -1990,8 +2164,8 @@ if seccion_simulindex == 'Principal':
                 
                 st.number_input(
                     'SRAD previsto (€/MWh)', min_value=0.0, max_value=3.0,
-                    step=0.1, key='media_rad3_prev',
-                    on_change=sincronizar_input_prevision,
+                    step=0.1, key='_widget_media_rad3_prev',
+                    on_change=sincronizar_prevision_principal,
                     args=('media_rad3_prev', 'pricing_srad_prev'),
                 )
                 
@@ -2179,35 +2353,7 @@ if seccion_simulindex == 'Comparador':
                 origen_comparador_seleccionado
                 == 'Consumos mensuales / SIPS'
             ):
-                if (
-                    st.session_state.get('df_consumos_pricing_origen') == 'sips'
-                    and st.session_state.get('sips_pricing', {}).get('atr') is None
-                    and isinstance(consumos_pricing_comparador, pd.DataFrame)
-                ):
-                    hay_p4_p6 = bool(
-                        consumos_pricing_comparador[['P4', 'P5', 'P6']]
-                        .apply(pd.to_numeric, errors='coerce')
-                        .fillna(0).ne(0).any().any()
-                    )
-                    opciones_atr_sips = (
-                        ['3.0', '6.1', '6.2'] if hay_p4_p6
-                        else ['2.0', '3.0', '6.1', '6.2']
-                    )
-                    if st.session_state.get(
-                        'simulindex_comparador_atr_sips_manual'
-                    ) not in [None, *opciones_atr_sips]:
-                        st.session_state.pop(
-                            'simulindex_comparador_atr_sips_manual', None
-                        )
-                    st.selectbox(
-                        'ATR del SIPS (no figura en el archivo)',
-                        opciones_atr_sips,
-                        index=None,
-                        placeholder='Selecciona el peaje real del suministro',
-                        format_func=lambda valor: f'{valor}TD',
-                        key='simulindex_comparador_atr_sips_manual',
-                        on_change=_confirmar_atr_comparador_sips,
-                    )
+                contenedor_atr_sips_comparador = st.empty()
                 archivo_consumos_comparador = st.file_uploader(
                     'Sube un Excel de consumos mensuales o un SIPS (CSV/Excel)',
                     type=['xlsx', 'xls', 'csv'],
@@ -2222,27 +2368,70 @@ if seccion_simulindex == 'Comparador':
                     )
 
     if origen_comparador_seleccionado == 'Curva de carga':
-        render_origen_curva(
+        estado_normalizacion_comparador = render_origen_curva(
             contenedor_origen_curva_comparador,
             contenedor_acciones_curva_comparador,
             clave='simulindex_comparador_curva',
             titulo_compacto=True,
             mostrar_resumen=False,
         )
+        if estado_normalizacion_comparador['normalizacion_solicitada']:
+            st.session_state['_comparador_curva_sin_normalizar'] = (
+                not estado_normalizacion_comparador['curva_publicada']
+            )
+            st.session_state['_comparador_curva_version_bloqueada'] = (
+                st.session_state.get('curva_reactiva_version')
+            )
+        if (
+            st.session_state.get('_comparador_curva_sin_normalizar', False)
+            and st.session_state.get('curva_reactiva_version')
+            != st.session_state.get('_comparador_curva_version_bloqueada')
+        ):
+            st.session_state.pop('_comparador_curva_sin_normalizar', None)
+        if st.session_state.get('df_norm_h') is None:
+            st.session_state.pop('_comparador_curva_sin_normalizar', None)
+        if st.session_state.get('_comparador_curva_sin_normalizar', False):
+            c2.error(
+                'La nueva curva no se ha normalizado. Se han ocultado los '
+                'resultados de la curva anterior.'
+            )
+            c3.info('Corrige la carga y pulsa «Normalizar curva de carga».')
+            st.stop()
+        # La curva pudo cambiar dentro del formulario en esta misma ejecución.
+        # Volvemos a leerla antes de cualquier cálculo del comparador.
         curva_publicada_comparador = st.session_state.get('df_norm_h')
+        if (
+            not isinstance(curva_publicada_comparador, pd.DataFrame)
+            or curva_publicada_comparador.empty
+        ):
+            curva_publicada_comparador = st.session_state.get('df_norm')
+        df_curva_pricing_actual = curva_publicada_comparador
         atr_publicado_comparador = str(
             st.session_state.get('atr_dfnorm', '')
         ).upper().removesuffix('TD')
-        curva_comparador_disponible_ahora = (
+        atr_curva_pricing = atr_publicado_comparador
+        curva_comparador_disponible = (
             isinstance(curva_publicada_comparador, pd.DataFrame)
             and not curva_publicada_comparador.empty
             and atr_publicado_comparador in {'2.0', '3.0', '6.1', '6.2'}
         )
-        if curva_comparador_disponible_ahora and not curva_comparador_disponible:
-            st.session_state._pendiente_origen_consumos_comparador = (
-                'Curva de carga'
-            )
-            st.rerun()
+
+        curva_graficos_comparador = st.session_state.get('df_norm')
+        if (
+            not isinstance(curva_graficos_comparador, pd.DataFrame)
+            or curva_graficos_comparador.empty
+        ):
+            curva_graficos_comparador = curva_publicada_comparador
+        if (
+            isinstance(curva_graficos_comparador, pd.DataFrame)
+            and not curva_graficos_comparador.empty
+        ):
+            with c1:
+                with st.expander('Gráficos de consumo', expanded=True):
+                    render_resumen_grafico_curva(
+                        curva_graficos_comparador,
+                        clave='simulindex_comparador_curva',
+                    )
 
     if (
         origen_comparador_seleccionado == 'Curva de carga'
@@ -2297,7 +2486,9 @@ if seccion_simulindex == 'Comparador':
                         )
                     st.session_state.sips_pricing = sips_comparador
                     st.session_state.df_consumos_pricing_origen = 'sips'
-                    st.session_state._reiniciar_atr_sips_comparador = True
+                    st.session_state.pop(
+                        'simulindex_comparador_atr_sips_manual', None
+                    )
                 else:
                     consumos_excel_comparador = pd.read_excel(
                         archivo_consumos_comparador
@@ -2319,9 +2510,52 @@ if seccion_simulindex == 'Comparador':
                 st.session_state._pendiente_origen_consumos_comparador = (
                     'Consumos mensuales / SIPS'
                 )
-                st.rerun()
+                consumos_pricing_comparador = st.session_state.df_consumos_pricing
+                if st.session_state.get('df_consumos_pricing_origen') == 'sips':
+                    atr_consumos_pricing = st.session_state.sips_pricing.get('atr')
+                pricing_comparador_disponible = (
+                    isinstance(consumos_pricing_comparador, pd.DataFrame)
+                    and not consumos_pricing_comparador.empty
+                    and atr_consumos_pricing in tablas_fijas_pricing
+                )
             except Exception as error_carga_comparador:
                 st.error(f'No se pudieron leer los consumos: {error_carga_comparador}')
+
+        if (
+            st.session_state.get('df_consumos_pricing_origen') == 'sips'
+            and st.session_state.get('sips_pricing', {}).get('atr') is None
+            and isinstance(consumos_pricing_comparador, pd.DataFrame)
+        ):
+            hay_p4_p6 = bool(
+                consumos_pricing_comparador[['P4', 'P5', 'P6']]
+                .apply(pd.to_numeric, errors='coerce')
+                .fillna(0).ne(0).any().any()
+            )
+            opciones_atr_sips = (
+                ['3.0', '6.1', '6.2'] if hay_p4_p6
+                else ['2.0', '3.0', '6.1', '6.2']
+            )
+            if st.session_state.get(
+                'simulindex_comparador_atr_sips_manual'
+            ) not in [None, *opciones_atr_sips]:
+                st.session_state.pop(
+                    'simulindex_comparador_atr_sips_manual', None
+                )
+            with contenedor_atr_sips_comparador.container():
+                atr_consumos_pricing = st.selectbox(
+                    'ATR del SIPS (no figura en el archivo)',
+                    opciones_atr_sips,
+                    index=None,
+                    placeholder='Selecciona el peaje real del suministro',
+                    format_func=lambda valor: f'{valor}TD',
+                    key='simulindex_comparador_atr_sips_manual',
+                    on_change=_confirmar_atr_comparador_sips,
+                )
+            pricing_comparador_disponible = (
+                isinstance(consumos_pricing_comparador, pd.DataFrame)
+                and not consumos_pricing_comparador.empty
+                and atr_consumos_pricing in tablas_fijas_pricing
+            )
 
     if (
         origen_comparador_seleccionado == 'Consumos mensuales / SIPS'
@@ -2404,6 +2638,49 @@ if seccion_simulindex == 'Comparador':
         else:
             consumos_fuente_comparador = consumos_pricing_comparador
             atr_calculo_comparador = atr_consumos_pricing
+        anios_consumo_comparador = (
+            pd.to_numeric(
+                consumos_fuente_comparador.get('año', pd.Series(dtype=float)),
+                errors='coerce',
+            ).dropna().astype(int).unique().tolist()
+        )
+        if 'perfil_mercado_comparador_simulindex' not in st.session_state:
+            st.session_state.perfil_mercado_comparador_simulindex = (
+                '2025 histórico' if anios_consumo_comparador == [2025]
+                else 'Últimos 12 meses'
+            )
+        perfil_mercado_comparador = st.selectbox(
+            'Perfil de mercado para la comparación',
+            ['Últimos 12 meses', '2025 histórico'],
+            key='perfil_mercado_comparador_simulindex',
+            help=(
+                '2025 histórico usa OMIE, SSAA, pérdidas, PPCC, OSOM y '
+                'peajes y cargos de 2025. Conserva los escenarios OMIE, '
+                'SSAA y FNEE introducidos.'
+            ),
+        )
+        usar_perfil_2025_comparador = (
+            perfil_mercado_comparador == '2025 histórico'
+        )
+        if usar_perfil_2025_comparador:
+            st.caption(
+                'Referencia 2025 agregada por mes y periodo. Su resultado '
+                'puede diferir del cálculo horario de Telemindex.'
+            )
+        referencia_comparador = st.session_state.df_sheets
+        if usar_perfil_2025_comparador:
+            fechas_referencia_comparador = pd.to_datetime(
+                referencia_comparador['fecha'], errors='coerce'
+            )
+            referencia_comparador = referencia_comparador.loc[
+                fechas_referencia_comparador.dt.year.eq(2025)
+            ].copy()
+            meses_referencia_comparador = preparar_referencia_pricing(
+                referencia_comparador
+            )['fecha'].dt.to_period('M').nunique()
+            if meses_referencia_comparador != 12:
+                st.error('No hay 12 meses completos de mercado en 2025.')
+                st.stop()
         periodos_comparador_pricing = (
             ['P1', 'P2', 'P3']
             if atr_calculo_comparador == '2.0'
@@ -2424,13 +2701,39 @@ if seccion_simulindex == 'Comparador':
         # 6. MOSTRAR TABLA
         # ----------------------------
         with st.expander('Escenarios OMIE y otros escenarios'):
-            escenarios_omie_comparador = render_escenarios_omie(
-                st.session_state.precio_omip_previsto,
-                'simulindex_escenarios',
+            with st.form('form_escenarios_comparador_simulindex'):
+                omie_editados = render_escenarios_omie(
+                    st.session_state.precio_omip_previsto,
+                    'simulindex_escenarios',
+                )
+                escenarios_aplicados = st.session_state.get(
+                    'escenarios_comparador_simulindex'
+                )
+                otros_editados = render_otros_escenarios(
+                    'simulindex_comparador', en_formulario=True,
+                    aplicados=(
+                        escenarios_aplicados[1]
+                        if escenarios_aplicados is not None else None
+                    ),
+                )
+                aplicar_escenarios = st.form_submit_button(
+                    'Aplicar escenarios', type='primary',
+                    use_container_width=True,
+                )
+            if (
+                aplicar_escenarios
+                or 'escenarios_comparador_simulindex' not in st.session_state
+            ):
+                st.session_state.escenarios_comparador_simulindex = (
+                    omie_editados.copy(), otros_editados.copy()
+                )
+            escenarios_omie_comparador, otros_escenarios_comparador = (
+                st.session_state.escenarios_comparador_simulindex
             )
             lista_simul = list(escenarios_omie_comparador.values())
-
-            render_otros_escenarios('simulindex_comparador')
+            ssaa_forward_pricing = otros_escenarios_comparador['ssaa']
+            srad_pricing = otros_escenarios_comparador['srad']
+            fnee_pricing = otros_escenarios_comparador['fnee']
 
         with st.expander('Fórmula indexada'):
             render_formula_indexada('simulindex_comparador')
@@ -2759,9 +3062,21 @@ if seccion_simulindex == 'Comparador':
             unsafe_allow_html=True,
         )
 
-        # Ambos comparadores calculan A/B/C con el mismo motor mensual.
+        # El cotejo histórico conserva el cálculo mensual por periodo del
+        # comparador; así se puede medir su error frente a Telemindex.
+        pyc_2025_comparador = None
+        if usar_perfil_2025_comparador:
+            pyc_2025_comparador = obtener_pyc_historico_por_periodo(
+                st.session_state.df_sheets, atr_calculo_comparador, 2025
+            )
+        opciones_perfil_comparador = {
+            'perfil_anual': usar_perfil_2025_comparador,
+            'ssaa_incluye_srad': (
+                usar_perfil_2025_comparador and abs(srad_pricing) < 1e-9
+            ),
+        }
         resultado_indexados = calcular_escenarios_pricing_mensuales(
-            st.session_state.df_sheets,
+            referencia_comparador,
             consumos_fuente_comparador,
             atr_calculo_comparador,
             formula_pricing,
@@ -2769,7 +3084,92 @@ if seccion_simulindex == 'Comparador':
             ssaa_forward_pricing,
             fnee_pricing,
             srad_pricing,
+            pyc_por_periodo=pyc_2025_comparador,
+            **opciones_perfil_comparador,
         )
+        try:
+            if pyc_2025_comparador is None:
+                pyc_2025_comparador = obtener_pyc_historico_por_periodo(
+                    st.session_state.df_sheets, atr_calculo_comparador, 2025
+                )
+        except ValueError as error_pyc_2025:
+            st.info(str(error_pyc_2025))
+        else:
+            resultado_otro_pyc = calcular_escenarios_pricing_mensuales(
+                referencia_comparador,
+                consumos_fuente_comparador,
+                atr_calculo_comparador,
+                formula_pricing,
+                escenarios_omie_comparador,
+                ssaa_forward_pricing,
+                fnee_pricing,
+                srad_pricing,
+                pyc_por_periodo=(
+                    None if usar_perfil_2025_comparador
+                    else pyc_2025_comparador
+                ),
+                **opciones_perfil_comparador,
+            )
+            resultado_pyc_2025 = (
+                resultado_indexados if usar_perfil_2025_comparador
+                else resultado_otro_pyc
+            )
+            resultado_pyc_2026 = (
+                resultado_otro_pyc if usar_perfil_2025_comparador
+                else resultado_indexados
+            )
+            columnas_comparativa_pyc = [
+                'Oferta', 'Coste energía (€)', 'Precio medio energía (€/kWh)'
+            ]
+            resumen_pyc_2026 = resultado_pyc_2026[
+                columnas_comparativa_pyc
+            ].copy()
+            resumen_pyc_2025 = resultado_pyc_2025[
+                columnas_comparativa_pyc
+            ].copy()
+            # Los resultados completos guardan DataFrames en attrs; Pandas
+            # intenta compararlos al concatenar las columnas del merge.
+            resumen_pyc_2026.attrs = {}
+            resumen_pyc_2025.attrs = {}
+            comparativa_pyc = resumen_pyc_2026.merge(
+                resumen_pyc_2025,
+                on='Oferta', suffixes=(' 2026', ' 2025'),
+                validate='one_to_one',
+            )
+            comparativa_pyc['Diferencia 2025 − 2026 (€)'] = (
+                comparativa_pyc['Coste energía (€) 2025']
+                - comparativa_pyc['Coste energía (€) 2026']
+            )
+            st.markdown('#### Efecto de los peajes y cargos 2025')
+            st.caption(
+                'Mismo consumo, OMIE, SSAA, FNEE y fórmula; solo cambia '
+                'el PyC de energía por periodo.'
+            )
+            st.dataframe(
+                comparativa_pyc.style.format({
+                    'Coste energía (€) 2026': '{:,.2f}',
+                    'Coste energía (€) 2025': '{:,.2f}',
+                    'Precio medio energía (€/kWh) 2026': '{:.6f}',
+                    'Precio medio energía (€/kWh) 2025': '{:.6f}',
+                    'Diferencia 2025 − 2026 (€)': '{:+,.2f}',
+                }),
+                hide_index=True,
+                use_container_width=True,
+            )
+            st.markdown('#### Medias realmente aplicadas al consumo')
+            st.caption(
+                'Permite cotejar el perfilado del simulador con el OMIE y '
+                'los SSAA ponderados de Telemindex. El cambio de PyC no '
+                'altera estas dos medias.'
+            )
+            st.dataframe(
+                resultado_pyc_2025.attrs['componentes_ponderados'].style.format({
+                    'OMIE aplicado ponderado (€/MWh)': '{:.2f}',
+                    'SSAA aplicados ponderados (€/MWh)': '{:.2f}',
+                }),
+                hide_index=True,
+                use_container_width=True,
+            )
         detalle_indexados = resultado_indexados.attrs['detalle']
         escenarios = []
         for nombre_escenario, omie_escenario in escenarios_omie_comparador.items():
@@ -3179,31 +3579,6 @@ if seccion_simulindex == 'Comparador':
             )
             fig = aplicar_estilo(fig)
             st.plotly_chart(fig, use_container_width=True)
-
-        with c1:
-            if usar_pricing_en_comparador:
-                st.info(
-                    'Comparación calculada con consumos mensuales. No se '
-                    'muestra perfil horario porque no existe curva de carga.'
-                )
-            else:
-                with st.expander('Gráficos de consumo'):
-                    st.subheader("Perfil horario")
-                    graf_medias_horarias = graficar_media_horaria('Total')
-                    st.plotly_chart(
-                        graf_medias_horarias,
-                        use_container_width=True,
-                    )
-                    st.subheader("Consumo por periodos")
-                    graf_periodos, df_periodos = graficar_queso_periodos(
-                        st.session_state.df_norm_h
-                    )
-                    st.plotly_chart(
-                        graf_periodos,
-                        use_container_width=True,
-                    )
-
-
 
 # =======================================================================================================================================================================
 # SECCIÓN COBERTURA TRIMESTRAL

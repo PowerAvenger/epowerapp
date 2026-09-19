@@ -1164,12 +1164,23 @@ if st.session_state.get("df_norm") is not None:
                 .reset_index(drop=True)
                 .fillna("")
             )
-            # Algunos ficheros sin cabecera generan nombres de columna
-            # numpy.int64. La curva se normaliza correctamente, pero PyArrow
-            # no puede serializar esas etiquetas al renderizar el original.
-            df_in_preview.columns = [
-                str(columna) for columna in df_in_preview.columns
-            ]
+            # PyArrow necesita etiquetas de texto unicas. Las columnas sin
+            # nombre pueden convertirse ambas en "nan" al mostrar el origen.
+            etiquetas_originales = [str(columna) for columna in df_in_preview.columns]
+            etiquetas_reservadas = set(etiquetas_originales)
+            etiquetas_usadas = set()
+            etiquetas_preview = []
+            for etiqueta in etiquetas_originales:
+                nombre = etiqueta
+                sufijo = 2
+                while nombre in etiquetas_usadas or (
+                    nombre != etiqueta and nombre in etiquetas_reservadas
+                ):
+                    nombre = f"{etiqueta} ({sufijo})"
+                    sufijo += 1
+                etiquetas_preview.append(nombre)
+                etiquetas_usadas.add(nombre)
+            df_in_preview.columns = etiquetas_preview
             df_in_preview.index.name = None
             st.caption(
                 f"Lecturas de origen: {formato_numero_es(len(df_in_preview))}"
@@ -1187,23 +1198,39 @@ if st.session_state.get("df_norm") is not None:
                     st.write(f"• {fichero}")
 
         st.markdown("**Tabla normalizada**")
-        if st.button(
-            "÷ 1.000 energías (Wh → kWh)",
-            key="dividir_energias_curva_1000",
+        conversion_energia = st.selectbox(
+            "Conversión manual de unidades",
+            options=(
+                "Multiplicar por 1.000 (MWh → kWh)",
+                "Dividir por 1.000 (Wh → kWh)",
+            ),
+            key="conversion_energias_curva_1000",
             disabled=st.session_state.get(
                 "curva_escala_manual_1000_aplicada", False
             ),
             help=(
-                "Divide entre 1.000 consumo, excedentes, generación y energía "
+                "Reescala consumo, excedentes, generación y energía "
                 "reactiva/capacitiva. No modifica fechas, horas ni periodos."
+            ),
+        )
+        if st.button(
+            "Aplicar conversión",
+            key="dividir_energias_curva_1000",
+            disabled=st.session_state.get(
+                "curva_escala_manual_1000_aplicada", False
             ),
             use_container_width=True,
         ):
+            divisor_energia = (
+                0.001
+                if conversion_energia.startswith("Multiplicar")
+                else 1000.0
+            )
             st.session_state.df_norm = dividir_energias_curva(
-                st.session_state.df_norm
+                st.session_state.df_norm, divisor=divisor_energia
             )
             st.session_state.df_norm_h = dividir_energias_curva(
-                st.session_state.df_norm_h
+                st.session_state.df_norm_h, divisor=divisor_energia
             )
             df_norm_reescalada = st.session_state.df_norm
             st.session_state.consumo_total = df_norm_reescalada[
@@ -1725,6 +1752,16 @@ if st.session_state.get("df_norm") is not None:
                     horizontal=False,
                     key="modo_coste_energia_comparativa",
                 )
+                if (
+                    st.session_state.get("precios_mensuales") is not None
+                    and (
+                        st.session_state.get("modo_coste_energia_calculado")
+                        != modo_coste_energia
+                        or st.session_state.get("df_curva_sheets") is None
+                    )
+                ):
+                    st.session_state.pop("precios_mensuales", None)
+                    st.session_state.pop("df_curva_sheets", None)
                 precios_mensuales = st.session_state.get("precios_mensuales", None)
                 if precios_mensuales is None:
                     st.warning(
@@ -1893,6 +1930,20 @@ if st.session_state.get("df_norm") is not None:
                                     f"contrato del CUPS {cups_contrato[:20]}"
                                 )
                             else:
+                                columna_precio = (
+                                    f"precio_{st.session_state.atr_dfnorm}"
+                                )
+                                precios_horarios = pd.to_numeric(
+                                    df_curva_indexada[columna_precio],
+                                    errors="coerce",
+                                )
+                                if precios_horarios.isna().any():
+                                    raise ValueError(
+                                        "Faltan precios indexados para "
+                                        f"{int(precios_horarios.isna().sum())} "
+                                        "intervalos de la curva. Revise la "
+                                        "cobertura del histórico de Telemindex."
+                                    )
                                 df_curva_indexada = añadir_costes_curva(
                                     df_curva_indexada
                                 )
@@ -1902,10 +1953,10 @@ if st.session_state.get("df_norm") is not None:
                                 st.session_state.origen_costes_comparativa = (
                                     "indexado estándar"
                                 )
-                            df_curva_indexada = df_curva_indexada.drop_duplicates(
-                                subset=["fecha", "hora"], keep="first"
-                            )
                             st.session_state.df_curva_sheets = df_curva_indexada
+                            st.session_state.modo_coste_energia_calculado = (
+                                modo_coste_energia
+                            )
                             st.session_state.cups_costes_comparativa = (
                                 cups_costes_actual
                             )
@@ -2338,6 +2389,8 @@ if st.session_state.get("df_norm") is not None:
                 desvios_apant=float(parametros_ref.get("desvios_apant", 0.0)),
                 margen=float(parametros_ref.get("margen_telemindex", 0.0)),
                 margen_pos=parametros_ref.get("cfg_margen_pos", "tm"),
+                otros_costes=float(parametros_ref.get("otros_costes_indexado", 0.0)),
+                otros_costes_pos=parametros_ref.get("cfg_otros_costes_pos", "tm"),
                 incluir_fnee=bool(parametros_ref.get("cfg_fnee", False)),
                 fnee_pos=parametros_ref.get("cfg_fnee_pos", "perdidas"),
                 cf_pct=float(parametros_ref.get("cf_pct", 0.0)),

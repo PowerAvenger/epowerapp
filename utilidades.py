@@ -292,6 +292,8 @@ def _init_app_index():
         # "cfg_srad": True,
         "margen_telemindex": 0.0,
         "cfg_margen_pos": "tm",
+        "otros_costes_indexado": 0.0,
+        "cfg_otros_costes_pos": "tm",
         "cfg_fnee": True,
         "cfg_fnee_pos": "perdidas",
         "cf_pct": 0.0,
@@ -416,6 +418,8 @@ def init_app_index_old():
             #"cfg_srad": True,
             "margen_telemindex": 0.0,
             "cfg_margen_pos": "tm",
+            "otros_costes_indexado": 0.0,
+            "cfg_otros_costes_pos": "tm",
             "cfg_fnee": True,
             "cfg_fnee_pos": "perdidas",
             "cf_pct": 0.0
@@ -677,6 +681,19 @@ def mostrar_parametros_formula_indexado(
                 min_value=0.0, max_value=10.0, step=0.01,
                 key="cf_pct", default=0.0,
             )
+        fila3_col1, fila3_col2, _ = st.columns(3)
+        with fila3_col1:
+            widget(
+                st.number_input, "Otros costes (€/MWh)",
+                min_value=0.0, step=0.1,
+                key="otros_costes_indexado", default=0.0,
+            )
+        with fila3_col2:
+            widget(
+                st.selectbox, "Ubicación otros costes",
+                ["perdidas", "tm", "neto"],
+                key="cfg_otros_costes_pos", default="tm",
+            )
         return valores
 
     widget(
@@ -703,6 +720,16 @@ def mostrar_parametros_formula_indexado(
         ["perdidas", "tm", "neto"],
         key="cfg_margen_pos",
         default="tm",
+    )
+    widget(
+        st.number_input, "Otros costes (€/MWh)",
+        min_value=0.0, step=0.1,
+        key="otros_costes_indexado", default=0.0,
+    )
+    widget(
+        st.selectbox, "Ubicación otros costes",
+        ["perdidas", "tm", "neto"],
+        key="cfg_otros_costes_pos", default="tm",
     )
     widget(
         st.checkbox,

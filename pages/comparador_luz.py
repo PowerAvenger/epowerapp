@@ -411,7 +411,7 @@ with col2:
     fnee = otros_escenarios['fnee']
     render_formula_indexada('comparador_luz')
 
-formula = FormulaIndexada(desvios_apant=st.session_state.get('desvios_apant', 0.0), margen=st.session_state.get('margen_telemindex', 0.0), margen_pos=st.session_state.get('cfg_margen_pos', 'tm'), incluir_fnee=st.session_state.get('cfg_fnee', True), fnee_pos=st.session_state.get('cfg_fnee_pos', 'perdidas'), cf_pct=st.session_state.get('cf_pct', 0.0))
+formula = FormulaIndexada(desvios_apant=st.session_state.get('desvios_apant', 0.0), margen=st.session_state.get('margen_telemindex', 0.0), margen_pos=st.session_state.get('cfg_margen_pos', 'tm'), otros_costes=st.session_state.get('otros_costes_indexado', 0.0), otros_costes_pos=st.session_state.get('cfg_otros_costes_pos', 'tm'), incluir_fnee=st.session_state.get('cfg_fnee', True), fnee_pos=st.session_state.get('cfg_fnee_pos', 'perdidas'), cf_pct=st.session_state.get('cf_pct', 0.0))
 referencia = st.session_state.get('df_sheets'); resultado_index = pd.DataFrame()
 if (
     atr in atrs_indexados

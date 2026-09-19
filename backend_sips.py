@@ -111,6 +111,73 @@ class _LectorTablaHTML(HTMLParser):
             self.fila = None
 
 
+def _filas_sips_bloques(filas):
+    """Convierte la ficha y los tres bloques de medidas en una tabla SIPS."""
+    for indice, fila in enumerate(filas):
+        nombres = [_nombre_columna(valor) for valor in fila]
+        if not (
+            len(nombres) >= 20
+            and nombres[2:4] == ["fecha_ini", "fecha_fin"]
+            and nombres[4:10] == [f"p{i}" for i in range(1, 7)]
+            and nombres[12:14] == ["fecha_ini", "fecha_fin"]
+            and nombres[14:20] == [f"p{i}" for i in range(1, 7)]
+        ):
+            continue
+        ficha = {}
+        for fila_ficha in filas[:indice]:
+            for posicion in (2, 12):
+                if len(fila_ficha) <= posicion + 2:
+                    continue
+                clave = _nombre_columna(fila_ficha[posicion])
+                if clave in {"codigo_cups", "tarifa_de_acceso", "potencia_contratada"}:
+                    ficha["cups" if clave == "codigo_cups" else clave] = (
+                        fila_ficha[posicion + 2].strip()
+                    )
+        if not ficha.get("cups"):
+            raise ValueError("La ficha SIPS no informa el CUPS.")
+
+        inicio_reactiva = next((
+            j for j in range(indice + 1, len(filas))
+            if [_nombre_columna(valor) for valor in filas[j][2:10]]
+            == ["fecha_ini", "fecha_fin", *[f"p{i}" for i in range(1, 7)]]
+        ), None)
+        if inicio_reactiva is None:
+            raise ValueError("No encuentro el bloque de energía reactiva del SIPS.")
+        reactiva = {
+            (fila[2].strip(), fila[3].strip()): fila[4:10]
+            for fila in filas[inicio_reactiva + 1:]
+            if len(fila) >= 10 and fila[2].strip() and fila[3].strip()
+        }
+        cabecera = [
+            "CUPS", "Fecha Lectura Inicial", "Fecha Lectura Final",
+            *[f"P{i} Activa" for i in range(1, 7)],
+            *[f"P{i} Reactiva" for i in range(1, 7)],
+            *[f"P{i} Maximetro" for i in range(1, 7)],
+        ]
+        medidas = []
+        for fila_medida in filas[indice + 1:inicio_reactiva]:
+            if len(fila_medida) < 20 or not all(fila_medida[2:4]):
+                continue
+            fechas = tuple(valor.strip() for valor in fila_medida[2:4])
+            if fechas != tuple(valor.strip() for valor in fila_medida[12:14]):
+                raise ValueError("Las fechas de activa y maxímetros no coinciden.")
+            if fechas not in reactiva:
+                raise ValueError("Falta energía reactiva para un ciclo del SIPS.")
+            medidas.append([
+                ficha["cups"], *fechas, *fila_medida[4:10],
+                *reactiva[fechas], *fila_medida[14:20],
+            ])
+        if not medidas:
+            raise ValueError("El SIPS no contiene ciclos de consumo válidos.")
+        return [
+            list(ficha),
+            [ficha[clave] for clave in ficha],
+            cabecera,
+            *medidas,
+        ]
+    return None
+
+
 def _filas_excel_sips(contenido):
     """Localiza la hoja de medidas de un SIPS Excel y la convierte en filas."""
     if es_sips_excel_html(contenido):
@@ -132,6 +199,9 @@ def _filas_excel_sips(contenido):
             for tabla in hojas.values()
         ]
     for filas in grupos_filas:
+        bloques = _filas_sips_bloques(filas)
+        if bloques is not None:
+            return bloques
         for fila in filas:
             nombres = {_nombre_columna(celda) for celda in fila}
             if {
@@ -278,10 +348,10 @@ def leer_sips_completo(origen):
             })
         lecturas = lecturas.rename(columns=renombrado)
         lecturas["fecha_fin"] = pd.to_datetime(
-            lecturas["f_fin"], errors="coerce"
+            lecturas["f_fin"], errors="coerce", format="mixed", dayfirst=True
         )
         lecturas["fecha_inicio"] = pd.to_datetime(
-            lecturas["f_inicio"], errors="coerce"
+            lecturas["f_inicio"], errors="coerce", format="mixed", dayfirst=True
         )
     else:
         lecturas["fecha_fin"] = pd.to_datetime(lecturas["f_fin"], errors="coerce")
@@ -407,3 +477,66 @@ def perfil_anual_meses_naturales(tabla):
             f"Meses disponibles: {meses}."
         )
     return datos.drop(columns="_periodo").reset_index(drop=True)
+
+
+def combinar_consumos_sips(sips_lecturas):
+    """Suma P1-P6 de varios SIPS con el mismo ATR y los mismos meses."""
+    if len(sips_lecturas) < 2:
+        raise ValueError("Selecciona al menos dos SIPS para combinar consumos.")
+
+    atr = sips_lecturas[0].get("atr")
+    if not atr or any(sips.get("atr") != atr for sips in sips_lecturas):
+        raise ValueError(
+            "Los SIPS deben informar el mismo ATR para calcular un precio común."
+        )
+    if atr not in {"2.0", "3.0", "6.1", "6.2"}:
+        raise ValueError(f"Pricing no admite el ATR {atr}TD de estos SIPS.")
+
+    periodos = [f"P{i}" for i in range(1, 7)]
+    perfiles = []
+    resumen_sips = []
+    cups_vistos = set()
+    cups = []
+    for sips in sips_lecturas:
+        cups_original = str(sips.get("metadatos", {}).get("cups") or "").strip()
+        cups_normalizado = re.sub(r"[^A-Z0-9]", "", cups_original.upper())
+        cups_clave = (
+            cups_normalizado[:20]
+            if len(cups_normalizado) >= 20 else cups_normalizado
+        )
+        if not cups_clave:
+            raise ValueError("Todos los SIPS deben informar su CUPS.")
+        if cups_clave in cups_vistos:
+            raise ValueError(f"El CUPS {cups_original} aparece en más de un SIPS.")
+        cups_vistos.add(cups_clave)
+        cups.append(cups_original)
+        perfil = perfil_anual_meses_naturales(sips["consumos"])
+        perfiles.append(perfil)
+        resumen_sips.append({
+            "CUPS": cups_original,
+            **{
+                periodo: float(pd.to_numeric(perfil[periodo], errors="raise").sum())
+                for periodo in periodos
+            },
+        })
+
+    meses_referencia = perfiles[0]["periodo_mes"].astype(str).tolist()
+    for perfil in perfiles[1:]:
+        if perfil["periodo_mes"].astype(str).tolist() != meses_referencia:
+            raise ValueError(
+                "Los SIPS deben cubrir los mismos 12 meses naturales. "
+                "Revisa los períodos de lectura antes de combinarlos."
+            )
+
+    combinado = perfiles[0][
+        ["periodo_mes", "año", "mes", "mes_nom"]
+    ].copy()
+    for periodo in periodos:
+        combinado[periodo] = sum(
+            pd.to_numeric(perfil[periodo], errors="raise").to_numpy()
+            for perfil in perfiles
+        )
+    return {
+        "atr": atr, "cups": cups, "consumos": combinado,
+        "resumen_sips": resumen_sips,
+    }

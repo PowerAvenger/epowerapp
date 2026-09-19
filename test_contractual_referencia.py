@@ -27,13 +27,18 @@ class TestCondicionReferencia(unittest.TestCase):
         self.assertEqual(original["fin_condicion"], pd.Timestamp("2025-09-30"))
 
     def test_formula_manual_genera_payload_contractual(self):
-        formula = FormulaIndexada(margen=1.3, margen_pos="tm")
+        formula = FormulaIndexada(
+            margen=1.3, margen_pos="tm", otros_costes=2.5,
+            otros_costes_pos="perdidas",
+        )
         referencia = condicion_manual_como_referencia(
             "INDEXADO", "2025-10-01", "2025-12-31", formula=formula
         )
         payload = json.loads(referencia.iloc[0]["payload_json"])
         self.assertEqual(payload["INDEX CG"], 1.3)
         self.assertEqual(payload["CG F"], "2")
+        self.assertEqual(payload["INDEX OTROS COSTES"], 2.5)
+        self.assertEqual(payload["OTROS COSTES F"], "1")
 
     def test_extra_parcial_usa_consumo_del_mes_completo(self):
         curva = pd.DataFrame({

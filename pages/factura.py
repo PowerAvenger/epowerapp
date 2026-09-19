@@ -648,6 +648,8 @@ def _firma_formula_indexado():
         st.session_state.get("desvios_apant", 0.0),
         st.session_state.get("margen_telemindex", 0.0),
         st.session_state.get("cfg_margen_pos", "tm"),
+        st.session_state.get("otros_costes_indexado", 0.0),
+        st.session_state.get("cfg_otros_costes_pos", "tm"),
         st.session_state.get("cfg_fnee", True),
         st.session_state.get("cfg_fnee_pos", "perdidas"),
         st.session_state.get("cf_pct", 0.0),
@@ -3560,6 +3562,12 @@ with tab_verificacion:
                                 "cfg_margen_pos": posiciones.get(
                                     str(payload_formula.get("CG F")), "tm"
                                 ),
+                                "otros_costes_indexado": numero_contractual(
+                                    payload_formula.get("INDEX OTROS COSTES")
+                                ),
+                                "cfg_otros_costes_pos": posiciones.get(
+                                    str(payload_formula.get("OTROS COSTES F")), "tm"
+                                ),
                                 "cfg_fnee": str(payload_formula.get("FNEE F"))
                                 in posiciones,
                                 "cfg_fnee_pos": posiciones.get(
@@ -3584,6 +3592,11 @@ with tab_verificacion:
                                     "Parámetro": "Margen",
                                     "Valor BBDD": payload_formula.get("INDEX CG"),
                                     "Posición": payload_formula.get("CG F"),
+                                },
+                                {
+                                    "Parámetro": "Otros costes",
+                                    "Valor BBDD": payload_formula.get("INDEX OTROS COSTES", 0),
+                                    "Posición": payload_formula.get("OTROS COSTES F", "2"),
                                 },
                                 {
                                     "Parámetro": "Desvíos",
@@ -4090,7 +4103,20 @@ with tab_verificacion:
                 titulo_resumen_componentes = col_tabla_reconstruccion.empty()
                 aviso_resumen_componentes = col_tabla_reconstruccion.empty()
                 tabla_resumen_componentes = col_tabla_reconstruccion.empty()
-                detalle_costes = col_tabla_reconstruccion.container()
+                boton_guardar_verificacion = col_tabla_reconstruccion.empty()
+                aviso_guardar_verificacion = col_tabla_reconstruccion.empty()
+                detalle_potencia = col_tabla_reconstruccion.expander(
+                    "Coste previsto de la potencia facturada"
+                )
+                detalle_costes = col_tabla_reconstruccion.expander(
+                    "Coste previsto del consumo"
+                )
+                coste_consumo = detalle_costes.container()
+                comparativa_consumos = detalle_costes.container()
+                if coste_excesos_beta is not None:
+                    detalle_excesos = col_tabla_reconstruccion.expander(
+                        "Excesos de potencia según medida"
+                    )
                 grafico_componentes = col_metricas_resultado.container()
                 col_medida_resultado, _ = st.columns(
                     [0.70, 0.30], gap="medium"
@@ -4105,8 +4131,8 @@ with tab_verificacion:
                     consumos_factura,
                     resultado_medida.consumos_periodos,
                 )
-                col_medida_resultado.markdown("#### Comparativa de consumos")
-                col_medida_resultado.dataframe(
+                comparativa_consumos.markdown("#### Comparativa de consumos")
+                comparativa_consumos.dataframe(
                     formatear_columnas_tabla(
                         tabla_consumos,
                         columnas_kwh=[
@@ -4236,7 +4262,7 @@ with tab_verificacion:
                         )
                     except Exception as exc:
                         precios_resultado = {}
-                        detalle_costes.error(
+                        coste_consumo.error(
                             "No se ha podido calcular la fórmula indexada con "
                             f"Telemindex: {exc}"
                         )
@@ -4288,10 +4314,7 @@ with tab_verificacion:
                     ],
                     ignore_index=True,
                 )
-                detalle_costes.markdown(
-                    "#### Coste previsto del consumo"
-                )
-                detalle_costes.dataframe(
+                coste_consumo.dataframe(
                     formatear_columnas_tabla(
                         detalle_coste_mostrar,
                         columnas_kwh=["Consumo medida (kWh)"],
@@ -4306,10 +4329,10 @@ with tab_verificacion:
                     f"BBDD · condición {int(condicion_energia_bbdd['condicion_id'])}"
                     if condicion_energia_bbdd is not None else "Factura / manual"
                 )
-                detalle_costes.caption(
+                coste_consumo.caption(
                     f"Origen de precios o fórmula: {origen_energia_calculo}."
                 )
-                detalle_costes.dataframe(
+                coste_consumo.dataframe(
                     pd.DataFrame([{
                         "Energía facturada": formato_euros(
                             energia_facturada_comparable
@@ -4340,9 +4363,6 @@ with tab_verificacion:
                     ],
                     ignore_index=True,
                 )
-                detalle_costes.markdown(
-                    "#### Coste previsto de la potencia facturada"
-                )
                 tabla_potencia_mostrar = formatear_columnas_tabla(
                         detalle_potencia_mostrar,
                         columnas_kw=["Potencia confirmada (kW)"],
@@ -4352,15 +4372,9 @@ with tab_verificacion:
                         columnas_euros=["Coste verificado (€)"],
                         incluir_unidades=False,
                     ).fillna("")
-                detalle_costes.table(tabla_potencia_mostrar)
+                detalle_potencia.table(tabla_potencia_mostrar)
 
                 if coste_excesos_beta is not None:
-                    col_excesos_tabla, col_excesos_metricas = st.columns(
-                        [0.70, 0.30], gap="medium"
-                    )
-                    col_excesos_tabla.markdown(
-                        "#### Excesos de potencia según medida"
-                    )
                     tabla_excesos_mostrar = formatear_columnas_tabla(
                         detalle_excesos_beta,
                         columnas_kw=[
@@ -4374,44 +4388,32 @@ with tab_verificacion:
                         ],
                         incluir_unidades=False,
                     )
-                    col_excesos_tabla.table(tabla_excesos_mostrar)
+                    detalle_excesos.table(tabla_excesos_mostrar)
                     coste_excesos_bruto_beta = float(
                         detalle_excesos_beta[
                             "Excesos sin prorrateo (€)"
                         ].sum()
                     )
-                    col_excesos_tabla.caption(
+                    detalle_excesos.caption(
                         "Coste de excesos sin prorrateo: "
                         f"{formato_euros(coste_excesos_bruto_beta)}. "
                         "El prorrateo se aplica al coste de cada tramo; no "
                         "modifica sus sobrepasamientos."
                     )
-                    col_excesos_metricas.markdown("#### Excesos")
-                    col_excesos_metricas.metric(
-                        "Excesos facturados",
-                        formato_euros(factura.excesos_potencia),
-                    )
-                    col_excesos_metricas.metric(
-                        "Excesos según Axon",
-                        formato_euros(coste_excesos_beta),
-                    )
-                    diferencia_excesos_reales = (
-                        factura.excesos_potencia - coste_excesos_beta
-                    )
-                    diferencia_excesos_reales_pct = (
-                        diferencia_excesos_reales
-                        / factura.excesos_potencia * 100
-                        if factura.excesos_potencia else None
-                    )
-                    col_excesos_metricas.metric(
-                        "Diferencia real",
-                        formato_euros_con_signo(diferencia_excesos_reales),
-                        delta=(
-                            f"{formato_pct_con_signo(diferencia_excesos_reales_pct, 2)} "
-                            "de los excesos facturados"
-                            if diferencia_excesos_reales_pct is not None else None
-                        ),
-                        delta_color="inverse",
+                    detalle_excesos.dataframe(
+                        pd.DataFrame([{
+                            "Excesos facturados": formato_euros(
+                                factura.excesos_potencia
+                            ),
+                            "Excesos verificados": formato_euros(
+                                coste_excesos_beta
+                            ),
+                            "Diferencia factura-verificación": formato_euros(
+                                factura.excesos_potencia - coste_excesos_beta
+                            ),
+                        }]),
+                        hide_index=True,
+                        use_container_width=True,
                     )
 
                 verificacion_iee_beta = factura.verificacion_iee
@@ -4706,7 +4708,7 @@ with tab_verificacion:
                         hide_index=True,
                         use_container_width=True,
                 )
-                if tabla_resumen_componentes.button(
+                if boton_guardar_verificacion.button(
                     "Guardar verificación en la BBDD",
                     type="primary",
                     use_container_width=True,
@@ -4779,9 +4781,9 @@ with tab_verificacion:
                             if creado else
                             f"Esta verificación ya estaba guardada con ID {id_analisis}."
                         )
-                        tabla_resumen_componentes.success(mensaje)
+                        aviso_guardar_verificacion.success(mensaje)
                     except Exception as exc:
-                        tabla_resumen_componentes.error(
+                        aviso_guardar_verificacion.error(
                             f"No se pudo guardar la verificación: {exc}"
                         )
                 if not reparto_energia_potencia.empty:
@@ -4906,7 +4908,6 @@ with tab_verificacion:
                         config={"displayModeBar": False},
                     )
                 if not reparto_energia_potencia.empty:
-                    grafico_componentes.markdown("#### Potencia y Energía")
                     grafico_componentes.plotly_chart(
                         figura_reparto_contrato,
                         use_container_width=True,
@@ -5226,7 +5227,23 @@ with tab_ahorro_factura:
                 "IVA": reconstruccion_ref["iva_verificado"],
             }
             filas_componentes = []
-            for componente in componentes_grafico(factura):
+            componentes_ahorro = componentes_grafico(factura)
+            if not any(
+                item["Componente"] == "Excesos" for item in componentes_ahorro
+            ):
+                posicion_excesos = next(
+                    (
+                        indice + 1
+                        for indice, item in enumerate(componentes_ahorro)
+                        if item["Componente"] == "Energía"
+                    ),
+                    0,
+                )
+                componentes_ahorro.insert(posicion_excesos, {
+                    "Componente": "Excesos",
+                    "Importe (€)": exceso_facturado,
+                })
+            for componente in componentes_ahorro:
                 nombre = componente["Componente"]
                 importe_facturado = float(componente["Importe (€)"])
                 importe_referencia = float(
@@ -5406,7 +5423,6 @@ with tab_ahorro_factura:
                       <div style="font-size:.92rem;font-style:italic;margin-top:.65rem;">
                         Importe total sin IVA:
                         <strong>{formato_euros(abs(diferencia_sin_iva))}</strong>
-                        <span style="color:#9ca3af;"> · incluye IEE · base para bonificación</span>
                       </div>
                     </div>
                     """,
@@ -7649,6 +7665,18 @@ with tab_informe:
                                 "nombre": "Posición del margen",
                                 "valor": escape(str(st.session_state.get(
                                     "cfg_margen_pos", "tm"
+                                ))),
+                            },
+                            {
+                                "nombre": "Otros costes",
+                                "valor": formato_eur_mwh(
+                                    st.session_state.get("otros_costes_indexado", 0.0), 2
+                                ),
+                            },
+                            {
+                                "nombre": "Posición de otros costes",
+                                "valor": escape(str(st.session_state.get(
+                                    "cfg_otros_costes_pos", "tm"
                                 ))),
                             },
                             {

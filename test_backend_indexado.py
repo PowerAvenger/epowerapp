@@ -91,9 +91,10 @@ class MotorIndexadoTest(unittest.TestCase):
                         incluir_fnee=incluir_fnee,
                         fnee_pos=fnee_pos,
                     ):
+                        historico = calculo_historico(self.df, formula)
                         assert_frame_equal(
-                            calcular_precios_atr_formula(self.df, formula),
-                            calculo_historico(self.df, formula),
+                            calcular_precios_atr_formula(self.df, formula)[historico.columns],
+                            historico,
                             check_exact=True,
                         )
 
@@ -131,6 +132,29 @@ class MotorIndexadoTest(unittest.TestCase):
                     rtol=1e-12,
                     atol=1e-12,
                 )
+
+    def test_otros_costes_solo_aumentan_precio_y_concilian(self):
+        base = calcular_precios_atr_formula(self.df, FormulaIndexada())
+        for posicion in ("perdidas", "tm", "neto"):
+            formula = FormulaIndexada(otros_costes=3.5, otros_costes_pos=posicion)
+            calculado = calcular_precios_atr_formula(self.df, formula)
+            pd.testing.assert_series_equal(
+                calculado["coste_2.0"], base["coste_2.0"]
+            )
+            pd.testing.assert_series_equal(
+                calculado["precio_2.0"] - base["precio_2.0"],
+                calculado["otros_costes_2.0"],
+                check_names=False,
+            )
+            tabla = construir_desglose_precio_indexado(
+                self.df, "2.0", formula, "consumo_neto_kWh"
+            ).set_index("Componente")
+            self.assertTrue(any(nombre.startswith("Otros costes") for nombre in tabla.index))
+            pd.testing.assert_series_equal(
+                tabla.drop(index="Precio final").sum(axis=0),
+                tabla.loc["Precio final"], check_names=False,
+                rtol=1e-12, atol=1e-12,
+            )
 
     def test_desglose_usa_media_ponderada_total_y_periodos(self):
         tabla = construir_desglose_precio_indexado(

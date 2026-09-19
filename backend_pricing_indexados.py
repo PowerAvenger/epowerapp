@@ -77,6 +77,41 @@ def _ppcc_vigente(referencia: pd.DataFrame, atr: str) -> pd.Series:
     )
 
 
+def obtener_pyc_historico_por_periodo(
+    referencia: pd.DataFrame, atr: str, anio: int
+) -> pd.Series:
+    """Recupera los PyC de cada mes y periodo de un año, en €/MWh."""
+    columna_periodo = 'dh_3p' if atr == '2.0' else 'dh_6p'
+    columna_pyc = f'pyc_{atr}'
+    datos = referencia[['fecha', columna_periodo, columna_pyc]].copy()
+    datos['fecha'] = pd.to_datetime(datos['fecha'], errors='coerce')
+    datos[columna_pyc] = pd.to_numeric(datos[columna_pyc], errors='coerce')
+    datos = datos.loc[datos['fecha'].dt.year.eq(anio)].dropna()
+    datos['mes'] = datos['fecha'].dt.month
+    datos['periodo'] = datos[columna_periodo].astype(str).str.upper()
+    valores = (
+        datos.sort_values('fecha')
+        .groupby(['mes', 'periodo'])[columna_pyc]
+        .last()
+    )
+    if valores.empty:
+        raise ValueError(f'No hay PyC de {anio} para {atr}TD.')
+    meses_referencia = preparar_referencia_pricing(referencia)
+    meses_referencia['mes'] = meses_referencia['fecha'].dt.month
+    meses_referencia['periodo'] = (
+        meses_referencia[columna_periodo].astype(str).str.upper()
+    )
+    necesarios = pd.MultiIndex.from_frame(
+        meses_referencia[['mes', 'periodo']]
+    ).unique()
+    if not necesarios.isin(valores.index).all():
+        raise ValueError(
+            f'Faltan PyC de {anio} para algún mes y periodo usados '
+            'en la comparación.'
+        )
+    return valores
+
+
 def calcular_escenarios_pricing_mensuales(
     referencia: pd.DataFrame,
     consumos_mensuales: pd.DataFrame,
@@ -86,6 +121,9 @@ def calcular_escenarios_pricing_mensuales(
     ssaa_previsto: float,
     fnee_previsto: float,
     srad_previsto: float,
+    pyc_por_periodo: pd.Series | None = None,
+    perfil_anual: bool = False,
+    ssaa_incluye_srad: bool = False,
 ) -> pd.DataFrame:
     """Aplica el perfilado y los componentes vigentes de Pricing a A/B/C."""
     if atr not in ATRS:
@@ -97,33 +135,53 @@ def calcular_escenarios_pricing_mensuales(
     periodos = PERIODOS[:3] if atr == "2.0" else PERIODOS
     datos["periodo"] = datos[columna_periodo].astype(str).str.upper()
     datos["mes_referencia"] = datos["fecha"].dt.to_period("M")
-    datos["ssaa_sin_srad"] = (
-        pd.to_numeric(datos["ssaa"], errors="coerce")
-        - pd.to_numeric(datos["rad3"], errors="coerce")
-    )
-    for columna in ("spot", "ssaa_sin_srad", f"perd_{atr}"):
+    datos["ssaa_perfil"] = pd.to_numeric(datos["ssaa"], errors="coerce")
+    if not ssaa_incluye_srad:
+        datos["ssaa_perfil"] -= pd.to_numeric(
+            datos["rad3"], errors="coerce"
+        )
+    for columna in ("spot", "ssaa_perfil", f"perd_{atr}"):
         datos[columna] = pd.to_numeric(datos[columna], errors="coerce")
     grupo = datos.groupby(["mes_referencia", "periodo"], as_index=False).agg(
         spot=("spot", "mean"),
-        ssaa=("ssaa_sin_srad", "mean"),
+        ssaa=("ssaa_perfil", "mean"),
         perd=(f"perd_{atr}", "mean"),
     )
-    media_mes = datos.groupby("mes_referencia").agg(
-        spot=("spot", "mean"), ssaa=("ssaa_sin_srad", "mean")
-    )
-    grupo["ap_spot"] = (
-        grupo["spot"] / grupo["mes_referencia"].map(media_mes["spot"])
-    )
-    grupo["ap_ssaa"] = (
-        grupo["ssaa"]
-        / grupo["mes_referencia"].map(media_mes["ssaa"].replace(0, np.nan))
-    ).fillna(1.0)
+    if perfil_anual:
+        media_spot = datos["spot"].mean()
+        media_ssaa = datos["ssaa_perfil"].mean()
+        if not np.isfinite(media_spot) or media_spot == 0:
+            raise ValueError("La referencia anual no tiene una media OMIE válida.")
+        grupo["ap_spot"] = grupo["spot"] / media_spot
+        grupo["ap_ssaa"] = (
+            grupo["ssaa"] / media_ssaa
+            if np.isfinite(media_ssaa) and media_ssaa != 0 else 1.0
+        )
+    else:
+        media_mes = datos.groupby("mes_referencia").agg(
+            spot=("spot", "mean"), ssaa=("ssaa_perfil", "mean")
+        )
+        grupo["ap_spot"] = (
+            grupo["spot"] / grupo["mes_referencia"].map(media_mes["spot"])
+        )
+        grupo["ap_ssaa"] = (
+            grupo["ssaa"]
+            / grupo["mes_referencia"].map(
+                media_mes["ssaa"].replace(0, np.nan)
+            )
+        ).fillna(1.0)
     grupo = grupo.loc[grupo["periodo"].isin(periodos)].copy()
     grupo["mes"] = grupo["mes_referencia"].dt.month
 
     ppcc = _ppcc_vigente(referencia, atr)
     grupo["ppcc"] = grupo["periodo"].map(ppcc)
-    grupo["pyc"] = grupo["periodo"].map(pyc_2026[f"{atr}TD"]) * 1000
+    if pyc_por_periodo is None:
+        grupo['pyc'] = grupo['periodo'].map(pyc_2026[f'{atr}TD']) * 1000
+    else:
+        indice_pyc = pd.MultiIndex.from_frame(grupo[['mes', 'periodo']])
+        grupo['pyc'] = indice_pyc.map(pyc_por_periodo).to_numpy()
+        if grupo['pyc'].isna().any():
+            raise ValueError('Faltan PyC históricos para algún mes y periodo.')
     osom = pd.to_numeric(datos["osom"], errors="coerce").mean()
 
     consumos = consumos_mensuales.copy()
@@ -145,6 +203,7 @@ def calcular_escenarios_pricing_mensuales(
     resultados = []
     detalles = []
     precios = []
+    componentes_ponderados = []
     for nombre, omie in escenarios.items():
         componentes = grupo.copy()
         componentes["spot"] = componentes["ap_spot"] * float(omie)
@@ -172,7 +231,7 @@ def calcular_escenarios_pricing_mensuales(
         tabla_precios["Oferta"] = nombre
         precios.append(tabla_precios)
         ponderacion = detalle_consumo.merge(
-            calculado[["mes", "periodo", f"precio_{atr}"]],
+            calculado[["mes", "periodo", "spot", "ssaa", f"precio_{atr}"]],
             on=["mes", "periodo"], how="inner", validate="many_to_one",
         )
         if len(ponderacion) != len(detalle_consumo):
@@ -182,6 +241,17 @@ def calcular_escenarios_pricing_mensuales(
         )
         coste = float(ponderacion["coste"].sum())
         energia = float(ponderacion["consumo"].sum())
+        componentes_ponderados.append({
+            "Oferta": nombre,
+            "OMIE aplicado ponderado (€/MWh)": (
+                float((ponderacion["spot"] * ponderacion["consumo"]).sum())
+                / energia if energia else np.nan
+            ),
+            "SSAA aplicados ponderados (€/MWh)": (
+                float((ponderacion["ssaa"] * ponderacion["consumo"]).sum())
+                / energia if energia else np.nan
+            ),
+        })
         resultados.append({
             "Oferta": nombre,
             "Tipo": "Indexado",
@@ -204,5 +274,8 @@ def calcular_escenarios_pricing_mensuales(
     )
     resultado.attrs["precios"] = (
         pd.concat(precios, ignore_index=True) if precios else pd.DataFrame()
+    )
+    resultado.attrs["componentes_ponderados"] = pd.DataFrame(
+        componentes_ponderados
     )
     return resultado

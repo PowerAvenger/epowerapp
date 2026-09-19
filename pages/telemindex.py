@@ -82,6 +82,8 @@ CLAVES_FORMULA_HISTORICO = {
     "desvios_apant": "telemindex_historico_desvios_apant",
     "margen_telemindex": "telemindex_historico_margen",
     "cfg_margen_pos": "telemindex_historico_margen_pos",
+    "otros_costes_indexado": "telemindex_historico_otros_costes",
+    "cfg_otros_costes_pos": "telemindex_historico_otros_costes_pos",
     "cfg_fnee": "telemindex_historico_incluir_fnee",
     "cfg_fnee_pos": "telemindex_historico_fnee_pos",
     "cf_pct": "telemindex_historico_cf_pct",
@@ -100,6 +102,8 @@ DEFAULTS_FORMULA_HISTORICO = {
     "desvios_apant": 0.0,
     "margen_telemindex": 0.0,
     "cfg_margen_pos": "tm",
+    "otros_costes_indexado": 0.0,
+    "cfg_otros_costes_pos": "tm",
     "cfg_fnee": True,
     "cfg_fnee_pos": "perdidas",
     "cf_pct": 0.0,
@@ -154,6 +158,8 @@ def obtener_formula_historico():
         desvios_apant=float(estado[CLAVES_FORMULA_HISTORICO["desvios_apant"]]),
         margen=float(estado[CLAVES_FORMULA_HISTORICO["margen_telemindex"]]),
         margen_pos=estado[CLAVES_FORMULA_HISTORICO["cfg_margen_pos"]],
+        otros_costes=float(estado[CLAVES_FORMULA_HISTORICO["otros_costes_indexado"]]),
+        otros_costes_pos=estado[CLAVES_FORMULA_HISTORICO["cfg_otros_costes_pos"]],
         incluir_fnee=bool(estado[CLAVES_FORMULA_HISTORICO["cfg_fnee"]]),
         fnee_pos=estado[CLAVES_FORMULA_HISTORICO["cfg_fnee_pos"]],
         cf_pct=float(estado[CLAVES_FORMULA_HISTORICO["cf_pct"]]),
@@ -168,6 +174,8 @@ def obtener_formula_compartida():
         desvios_apant=float(estado.get("desvios_apant", 0.0)),
         margen=float(estado.get("margen_telemindex", 0.0)),
         margen_pos=estado.get("cfg_margen_pos", "tm"),
+        otros_costes=float(estado.get("otros_costes_indexado", 0.0)),
+        otros_costes_pos=estado.get("cfg_otros_costes_pos", "tm"),
         incluir_fnee=bool(estado.get("cfg_fnee", False)),
         fnee_pos=estado.get("cfg_fnee_pos", "perdidas"),
         cf_pct=float(estado.get("cf_pct", 0.0)),
@@ -376,9 +384,53 @@ if df_filtrado_historico.empty:
 else:
     fecha_ultima_filtrado = df_filtrado_historico['fecha'].iloc[-1]
 
+# El origen debe procesarse antes de calcular la curva y la comparativa.
+# Streamlit ejecuta el script de arriba abajo en cada envío del formulario.
+tab1, tab2, tab_curva, tab3, tab4 = st.tabs(
+    [
+        'Históricos', 'Evol', 'Curva', 'Comparativa', 'Verificación SSAA',
+    ]
+)
+with tab_curva:
+    curva_col1, curva_col2, curva_col3 = st.columns(
+        [.14, .58, .28], gap="small"
+    )
+    with curva_col1:
+        with st.expander("Opciones de curva", expanded=True):
+            contenedor_origen_curva = st.container(border=True)
+            contenedor_acciones_curva = st.container(border=True)
+        with st.expander("Parámetros de fórmula", expanded=True):
+            contenedor_formula_curva = st.container(border=True)
+
+    estado_normalizacion_curva = render_origen_curva(
+        contenedor_origen_curva,
+        contenedor_acciones_curva,
+        clave="telemindex_curva",
+        titulo_compacto=True,
+        mostrar_resumen=False,
+    )
+    if estado_normalizacion_curva["normalizacion_solicitada"]:
+        st.session_state["_telemindex_curva_sin_normalizar"] = (
+            not estado_normalizacion_curva["curva_publicada"]
+        )
+        st.session_state["_telemindex_curva_version_bloqueada"] = (
+            st.session_state.get("curva_reactiva_version")
+        )
+    if (
+        st.session_state.get("_telemindex_curva_sin_normalizar", False)
+        and st.session_state.get("curva_reactiva_version")
+        != st.session_state.get("_telemindex_curva_version_bloqueada")
+    ):
+        st.session_state.pop("_telemindex_curva_sin_normalizar", None)
+    if st.session_state.get("df_norm_h") is None:
+        st.session_state.pop("_telemindex_curva_sin_normalizar", None)
+    with contenedor_formula_curva:
+        render_formulario_formula_indexada(clave="telemindex_curva")
+
 hay_curva = (
     st.session_state.get("df_norm_h") is not None
     and "rango_curvadecarga" in st.session_state
+    and not st.session_state.get("_telemindex_curva_sin_normalizar", False)
 )
 
 if hay_curva:
@@ -393,7 +445,6 @@ if hay_curva:
     df_curva_sheets = añadir_costes_curva(df_curva_sheets)
     
     df_curva_uso = df_curva_sheets.copy()
-    df_curva_uso = df_curva_uso.drop_duplicates(subset=["fecha", "hora", "spot"])
     st.session_state.df_curva_sheets = df_curva_uso
 
     #consumo total curva
@@ -485,7 +536,6 @@ if hay_curva:
 
     df_curva_cober_omip = construir_df_curva_sheets(df_filtrado_cober)
     df_curva_cober_omip = añadir_costes_curva(df_curva_cober_omip)
-    df_curva_cober_omip = df_curva_cober_omip.drop_duplicates(subset=["fecha", "hora", "spot"])
            
     #df_heat = st.session_state.df_curva_sheets[["fecha","hora"]].copy()
 
@@ -837,46 +887,7 @@ def mostrar_tabla_apuntamiento(tabla):
 actualizar_texto_periodo_telemindex(fecha_ultima_filtrado)
 
 
-# ZONA PRINCIPAL DE GRÁFICOS++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
-tab1, tab2, tab_curva, tab3, tab4 = st.tabs(
-    [
-        'Históricos', 'Evol', 'Curva', 'Comparativa', 'Verificación SSAA',
-    ]
-)
-
 with tab_curva:
-    curva_col1, curva_col2, curva_col3 = st.columns(
-        [.14, .58, .28],
-        gap="small",
-    )
-
-    with curva_col1:
-        with st.expander("Opciones de curva", expanded=True):
-            contenedor_origen_curva = st.container(border=True)
-            contenedor_acciones_curva = st.container(border=True)
-        with st.expander("Parámetros de fórmula", expanded=True):
-            contenedor_formula_curva = st.container(border=True)
-
-    render_origen_curva(
-        contenedor_origen_curva,
-        contenedor_acciones_curva,
-        clave="telemindex_curva",
-        titulo_compacto=True,
-        mostrar_resumen=False,
-    )
-    if (
-        not hay_curva
-        and st.session_state.get("df_norm_h") is not None
-        and st.session_state.get("rango_curvadecarga") is not None
-    ):
-        st.rerun()
-
-    with contenedor_formula_curva:
-        render_formulario_formula_indexada(
-            clave="telemindex_curva",
-        )
-
     with curva_col2:
         if hay_curva:
             atr_curva = st.session_state.atr_dfnorm
@@ -946,10 +957,16 @@ with tab_curva:
                 )
         else:
             st.subheader("Curva histórica ponderada", divider="rainbow")
-            st.info(
-                "Carga una curva para visualizar sus precios y apuntamientos "
-                "ponderados por consumo."
-            )
+            if st.session_state.get("_telemindex_curva_sin_normalizar", False):
+                st.error(
+                    "La nueva curva no se ha normalizado. Se han ocultado "
+                    "los resultados de la curva anterior."
+                )
+            else:
+                st.info(
+                    "Carga una curva para visualizar sus precios y apuntamientos "
+                    "ponderados por consumo."
+                )
 
     with curva_col3:
         st.subheader("Resultados ponderados", divider="rainbow")
@@ -1079,9 +1096,12 @@ with tab_curva:
                     key="telemindex_curva_perfil_consumo_coste",
                 )
         else:
-            st.info(
-                "Carga una curva para calcular sus consumos, costes y precios."
-            )
+            if st.session_state.get("_telemindex_curva_sin_normalizar", False):
+                st.info("Corrige la carga y pulsa «Normalizar curva de carga».")
+            else:
+                st.info(
+                    "Carga una curva para calcular sus consumos, costes y precios."
+                )
 
 # Código del antiguo tab Desglose conservado temporalmente, pero sin renderizar.
 if False:
@@ -1149,6 +1169,8 @@ if False:
         desvios_apant=st.session_state.get("desvios_apant", 0.0),
         margen=st.session_state.get("margen_telemindex", 0.0),
         margen_pos=st.session_state.get("cfg_margen_pos", "tm"),
+        otros_costes=st.session_state.get("otros_costes_indexado", 0.0),
+        otros_costes_pos=st.session_state.get("cfg_otros_costes_pos", "tm"),
         incluir_fnee=st.session_state.get("cfg_fnee", False),
         fnee_pos=st.session_state.get("cfg_fnee_pos", "perdidas"),
         cf_pct=st.session_state.get("cf_pct", 0.0),

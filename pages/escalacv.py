@@ -16,7 +16,7 @@ from utilidades import (
 
 from backend_escalacv import (
     diarios_totales, diarios, mensuales, horarios, medias_horarias, evolucion_mensual, meses_español,
-    obtener_df_scatter_mensual, graficar_scatter_combo, obtener_puntos_anuales, graficar_simulacion_cuadratica, graficar_bandas_ssaa,
+    obtener_df_scatter_mensual, graficar_scatter_combo, obtener_puntos_anuales, graficar_simulacion_cuadratica, graficar_bandas_ssaa_horarias, construir_df_spot_ssaa_json,
     mapa_calor_mes, mapa_calor_mes_gradual, graficar_media_acumulada_periodo,
     calcular_spreads_diarios, graficar_spreads_historicos,
     calcular_volatilidad_diaria, graficar_volatilidad_historica,
@@ -636,8 +636,8 @@ if st.sidebar.button('Recargar datos desde Drive', use_container_width=True):
 
 # VISUALIZACIÓN ÁREA PRINCIPAL---------------------------------------------------------------------------------------------------------
 
-tab_diario, tab_mensual, tab_anual, tab_historica, tab_spread, tab_volatilidad, tab_mapa, tab_simulador = st.tabs(
-    ['Diario', 'Mensual', 'Anual', 'Serie histórica', 'Spread', 'Volatilidad', 'Mapa de Calor', 'Simulador']
+tab_diario, tab_mensual, tab_anual, tab_historica, tab_spread, tab_volatilidad, tab_mapa, tab_simulador, tab_spot_ssaa = st.tabs(
+    ['Diario', 'Mensual', 'Anual', 'Serie histórica', 'Spread', 'Volatilidad', 'Mapa de Calor', 'Simulador', 'SPOT vs SSAA']
 )
 
 with tab_diario:
@@ -1791,13 +1791,39 @@ with tab_simulador:
                 st.plotly_chart(graf_scatter_combo, use_container_width=True)
 
             
-    with col2:
-        if "csv_componentes" not in st.session_state:    
-            init_app()
-            init_app_index()
-             
-        graf_bandas_combo = graficar_bandas_ssaa()
-        st.write(graf_bandas_combo)         
+with tab_spot_ssaa:
+    col_filtros_bandas, col_grafico_bandas = st.columns([0.2, 0.8])
+    with col_filtros_bandas:
+        st.markdown('**Años visibles**')
+        años_bandas = [
+            año for año in range(2018, 2027)
+            if st.checkbox(
+                str(año), value=(año == 2026),
+                key=f'bandas_ssaa_json_año_{año}',
+            )
+        ]
+    with col_grafico_bandas:
+        st.caption(
+            'Fuente: JSON horarios de SPOT y SSAA. Cada banda muestra el '
+            'percentil 5–95 de SSAA en tramos de SPOT de 2 €/MWh. '
+            'Se usan todas las horas para calcularlos; el cursor indica '
+            'cuántas horas hay por tramo.'
+        )
+        datos_bandas = construir_df_spot_ssaa_json(
+            datos_spot_general, datos_ssaa_general
+        )
+
+        if not años_bandas:
+            st.info('Selecciona al menos un año para mostrar las bandas.')
+        elif not set(años_bandas).intersection(
+            pd.to_numeric(datos_bandas['año'], errors='coerce').dropna()
+        ):
+            st.info('Los JSON no contienen datos para los años seleccionados.')
+        else:
+            graf_bandas_combo = graficar_bandas_ssaa_horarias(
+                datos_bandas, años_bandas
+            )
+            st.plotly_chart(graf_bandas_combo, use_container_width=True)
         
 
         

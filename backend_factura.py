@@ -6375,6 +6375,16 @@ def _naturgy_grandes_clientes(texto: str) -> FacturaLeida:
     if derechos_enganche:
         otros.append(OtroConcepto("Derechos de enganche", derechos_enganche))
 
+    deposito_garantia = buscar_numero(texto, [
+        r"^DEP[OÓ]SITO\s+DE\s+GARANT[IÍ]A(?:\s+O\s+FIANZA)?\s+"
+        r"(?:\d{2}\.\d{2}\.\d{4}\s*-\s*)?"
+        r"([+-]?[\d.,]+)\s+Eur\s*$",
+    ])
+    if deposito_garantia:
+        otros.append(OtroConcepto(
+            "Depósito de garantía o fianza", deposito_garantia
+        ))
+
     sobrepasamientos = extraer_ep_naturgy_gc(texto)
     if not sobrepasamientos:
         sobrepasamientos = [

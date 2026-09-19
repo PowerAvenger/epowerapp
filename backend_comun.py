@@ -116,7 +116,7 @@ def recalcular_componentes_regulados(df):
         df[columnas_ppcc]
         .apply(pd.to_numeric, errors="coerce")
         * 1000
-    ).round(2)
+    )
 
     # =====================================================
     # 2. RECALCULAR PÉRDIDAS BOE
@@ -210,6 +210,8 @@ def calcular_precios_atr(df):
         desvios_apant=st.session_state.get("desvios_apant", 0.0),
         margen=st.session_state.get("margen_telemindex", 0.0),
         margen_pos=st.session_state.get("cfg_margen_pos", "tm"),
+        otros_costes=st.session_state.get("otros_costes_indexado", 0.0),
+        otros_costes_pos=st.session_state.get("cfg_otros_costes_pos", "tm"),
         incluir_fnee=st.session_state.get("cfg_fnee", False),
         fnee_pos=st.session_state.get("cfg_fnee_pos", "perdidas"),
         cf_pct=st.session_state.get("cf_pct", 0.0),

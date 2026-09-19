@@ -292,6 +292,8 @@ def condicion_manual_como_referencia(
             "INDEX DESVIOS": float(formula.desvios_apant),
             "INDEX CG": float(formula.margen),
             "CG F": posiciones[formula.margen_pos],
+            "INDEX OTROS COSTES": float(formula.otros_costes),
+            "OTROS COSTES F": posiciones[formula.otros_costes_pos],
             "FNEE F": posiciones[formula.fnee_pos] if formula.incluir_fnee else "",
             "C FINAN %": float(formula.cf_pct),
         }
@@ -382,6 +384,10 @@ def _formula_desde_payload(payload):
         desvios_apant=_numero_es(payload.get("INDEX DESVIOS")),
         margen=_numero_es(payload.get("INDEX CG")),
         margen_pos=posicion_margen,
+        otros_costes=_numero_es(payload.get("INDEX OTROS COSTES")),
+        otros_costes_pos=POSICIONES_LEGACY.get(
+            str(payload.get("OTROS COSTES F", "2")), "tm"
+        ),
         incluir_fnee=posicion_fnee is not None,
         fnee_pos=posicion_fnee or "perdidas",
         cf_pct=_numero_es(payload.get("C FINAN %")),
@@ -416,6 +422,7 @@ def preparar_indexado_contractual(df_precios, condiciones, atr):
         )
         resultado.loc[mascara, "formula_indexada_contrato"] = (
             f"Telemindex: CG={formula.margen:g} ({formula.margen_pos}), "
+            f"otros={formula.otros_costes:g} ({formula.otros_costes_pos}), "
             f"desvios={formula.desvios_apant:g}, CF={formula.cf_pct:g}%"
         )
     return resultado

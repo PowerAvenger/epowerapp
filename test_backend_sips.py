@@ -1,7 +1,10 @@
 import io
 import unittest
 
+import pandas as pd
+
 from backend_sips import (
+    combinar_consumos_sips,
     leer_sips_completo,
     obtener_atr_sips,
     perfil_anual_meses_naturales,
@@ -9,7 +12,55 @@ from backend_sips import (
 )
 
 
+def _sips_mensual(cups, atr="6.1", anio=2025, consumo_p1=1.0):
+    return {
+        "atr": atr,
+        "metadatos": {"cups": cups},
+        "consumos": pd.DataFrame({
+            "periodo_mes": [f"{anio}-{mes:02d}" for mes in range(1, 13)],
+            "año": [anio] * 12,
+            "mes": list(range(1, 13)),
+            "mes_nom": list(range(1, 13)),
+            "dias_facturacion": [30] * 12,
+            **{f"P{i}": [consumo_p1 if i == 1 else float(i)] * 12
+               for i in range(1, 7)},
+        }),
+    }
+
+
 class LectorSipsTest(unittest.TestCase):
+    def test_combina_consumos_de_sips_distintos_sin_cambiar_periodos(self):
+        primero = _sips_mensual("ES001", consumo_p1=100.0)
+        segundo = _sips_mensual("ES002", consumo_p1=25.0)
+        tercero = _sips_mensual("ES003", consumo_p1=5.0)
+
+        combinado = combinar_consumos_sips([primero, segundo, tercero])
+
+        self.assertEqual(combinado["atr"], "6.1")
+        self.assertEqual(combinado["cups"], ["ES001", "ES002", "ES003"])
+        self.assertEqual(len(combinado["consumos"]), 12)
+        self.assertEqual(combinado["consumos"].loc[0, "periodo_mes"], "2025-01")
+        self.assertEqual(combinado["consumos"].loc[0, "P1"], 130.0)
+        self.assertEqual(combinado["consumos"].loc[0, "P6"], 18.0)
+        self.assertEqual(
+            [fila["P1"] for fila in combinado["resumen_sips"]],
+            [1200.0, 300.0, 60.0],
+        )
+
+    def test_rechaza_atr_cups_o_meses_incompatibles(self):
+        primero = _sips_mensual("ES001")
+        with self.assertRaisesRegex(ValueError, "mismo ATR"):
+            combinar_consumos_sips([primero, _sips_mensual("ES002", atr="3.0")])
+        with self.assertRaisesRegex(ValueError, "no admite el ATR"):
+            combinar_consumos_sips([
+                _sips_mensual("ES001", atr="6.3"),
+                _sips_mensual("ES002", atr="6.3"),
+            ])
+        with self.assertRaisesRegex(ValueError, "aparece en más de un SIPS"):
+            combinar_consumos_sips([primero, _sips_mensual("ES001")])
+        with self.assertRaisesRegex(ValueError, "mismos 12 meses"):
+            combinar_consumos_sips([primero, _sips_mensual("ES002", anio=2026)])
+
     def test_normaliza_atr_y_admite_ausencia(self):
         self.assertEqual(obtener_atr_sips({"tarifa_atr": "3.0TD"}), "3.0")
         self.assertEqual(obtener_atr_sips({"tarifa_atr": "6,1 TD"}), "6.1")
@@ -201,6 +252,58 @@ class LectorSipsTest(unittest.TestCase):
         self.assertEqual(resultado["consumos"].loc[0, "P4"], 12.5)
         self.assertEqual(resultado["consumos"].loc[0, "P6"], 42)
         self.assertAlmostEqual(resultado["maximetros"].loc[0, "P1"], 33.34)
+
+    def test_lee_sips_excel_con_bloques_laterales_y_reactiva_separada(self):
+        from openpyxl import Workbook
+        from backend_sips import es_sips_excel
+
+        libro = Workbook()
+        hoja = libro.active
+        hoja.cell(4, 3, "Código CUPS")
+        hoja.cell(4, 5, "ES001")
+        hoja.cell(8, 3, "Tarifa de acceso")
+        hoja.cell(8, 5, "6.1 TD")
+        hoja.cell(9, 3, "Potencia contratada")
+        hoja.cell(9, 5, "10 kW | 20 kW | 30 kW | 40 kW | 50 kW | 60 kW")
+        for columna_inicio in (3, 13):
+            for offset, titulo in enumerate(
+                ["Fecha ini", "Fecha fin", *[f"P{i}" for i in range(1, 7)]]
+            ):
+                hoja.cell(15, columna_inicio + offset, titulo)
+        for offset, titulo in enumerate(
+            ["Fecha ini", "Fecha fin", *[f"P{i}" for i in range(1, 7)]]
+        ):
+            hoja.cell(20, 3 + offset, titulo)
+        for fila, inicio, fin, activa, maximetro, reactiva in (
+            (16, "31/01/2025", "28/02/2025", 12.5, 33.4, 1.5),
+            (17, "28/02/2025", "31/03/2025", 20, 44.5, 2.5),
+        ):
+            for columna_inicio in (3, 13):
+                hoja.cell(fila, columna_inicio, inicio)
+                hoja.cell(fila, columna_inicio + 1, fin)
+            hoja.cell(fila, 5, activa)
+            hoja.cell(fila, 15, maximetro)
+            fila_reactiva = fila + 5
+            hoja.cell(fila_reactiva, 3, inicio)
+            hoja.cell(fila_reactiva, 4, fin)
+            hoja.cell(fila_reactiva, 5, reactiva)
+
+        archivo = io.BytesIO()
+        archivo.name = "sips_bloques.xlsx"
+        libro.save(archivo)
+        archivo.seek(0)
+        self.assertTrue(es_sips_excel(archivo))
+        resultado = leer_sips_completo(archivo)
+        self.assertEqual(resultado["atr"], "6.1")
+        self.assertEqual(resultado["consumos"]["periodo_mes"].tolist(), [
+            "2025-02", "2025-03"
+        ])
+        self.assertEqual(resultado["consumos"]["P1"].tolist(), [12.5, 20])
+        self.assertEqual(resultado["reactiva"]["P1"].tolist(), [1.5, 2.5])
+        self.assertEqual(resultado["maximetros"]["P1"].tolist(), [33.4, 44.5])
+        self.assertEqual(
+            potencias_contratadas_sips(resultado["metadatos"])["P6"], 60
+        )
 
 
 if __name__ == "__main__":

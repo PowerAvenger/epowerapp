@@ -693,16 +693,20 @@ def leer_json(file_id, _creds_dict):
     # Convertir a DataFrame
     datos = pd.DataFrame(datos_json)
     datos['datetime'] = pd.to_datetime(datos['datetime'], utc=True)
-    datos['datetime'] = datos['datetime'].dt.tz_convert('Europe/Madrid').dt.tz_localize(None)
     
     if 'id' in datos.columns and 'name' in datos.columns:
         # Datos de SSAA
         datos = datos[['datetime', 'id', 'value', 'name']]
+        # Agregar componentes por instante UTC antes de quitar la zona:
+        # las dos horas locales repetidas de octubre son instantes distintos.
         datos = datos.groupby('datetime', as_index=False)['value'].sum()
     else:
         # Datos tipo spot
         datos = datos[['datetime', 'value']]
-        
+
+    datos['datetime'] = (
+        datos['datetime'].dt.tz_convert('Europe/Madrid').dt.tz_localize(None)
+    )
     datos['fecha']=datos['datetime'].dt.date
     datos['hora']=datos['datetime'].dt.hour
     datos['dia']=datos['datetime'].dt.day
@@ -3044,87 +3048,264 @@ def graficar_simulacion_cuadratica(fig, df_scatter_mensual, p, omie_input, nombr
 
 
 
-def graficar_bandas_ssaa():
+def construir_df_spot_ssaa_json(datos_spot, datos_ssaa):
+    """Prepara las series JSON horarias para comparar SPOT y SSAA."""
+    datos = combinar_series_mercado(datos_spot, datos_ssaa).reset_index()
+    return datos.rename(columns={
+        'value_spot': 'spot', 'value_ssaa': 'ssaa'
+    })[['fecha', 'año', 'mes', 'spot', 'ssaa']]
 
+
+def graficar_bandas_ssaa_horarias(datos, años_seleccionados):
+    """Bandas P5-P95 de SSAA por tramo de SPOT con todas las horas JSON."""
     colores = {
-        2024: "rgba(255,255,0,0.3)",
-        2025: "rgba(255,0,255,0.3)",
-        2026: "rgba(0,255,255,0.3)"
+        2018: ('#8c9eff', 'rgba(140,158,255,0.25)'),
+        2019: ('#64b5f6', 'rgba(100,181,246,0.25)'),
+        2020: ('#81c784', 'rgba(129,199,132,0.25)'),
+        2021: ('#ffb74d', 'rgba(255,183,77,0.25)'),
+        2022: ('#ef5350', 'rgba(239,83,80,0.25)'),
+        2023: ('#b39ddb', 'rgba(179,157,219,0.25)'),
+        2024: ('#ffff00', 'rgba(255,255,0,0.3)'),
+        2025: ('#ff00ff', 'rgba(255,0,255,0.3)'),
+        2026: ('#00ffff', 'rgba(0,255,255,0.3)'),
     }
-    colores_linea = {
-        2024: "yellow",
-        2025: "magenta",
-        2026: "cyan"
-    }
+    df = datos[['año', 'spot', 'ssaa']].copy()
+    for columna in ('año', 'spot', 'ssaa'):
+        df[columna] = pd.to_numeric(df[columna], errors='coerce')
+    df = df.dropna().loc[lambda datos: datos['año'].isin(años_seleccionados)]
     fig = go.Figure()
-
-    df = construir_df_spot_ssaa()
-    df["año"] = df["año"].astype(int)
-    for año in sorted(df["año"].unique(), reverse=False):
-
-        df_a = df[df["año"] == año].copy()
-
-        if df_a.empty:
-            continue
-        q_low = df_a["spot"].quantile(0.02)
-        q_high = df_a["spot"].quantile(0.95)    
-        df_a = df_a.sort_values("spot")
-        df_a = df_a[(df_a["spot"] >= q_low) & (df_a["spot"] <= q_high)]
-
-        # 🔹 ventana dinámica (ajústala si quieres)
-        window = max(20, int(len(df_a) * 0.05))
-
-        df_a["p25"] = df_a["ssaa"].rolling(window, center=True).quantile(0.25)
-        df_a["p75"] = df_a["ssaa"].rolling(window, center=True).quantile(0.75)
-
-        df_a["p25"] = df_a["p25"].interpolate()
-        df_a["p75"] = df_a["p75"].interpolate()
-
-        # 🔹 línea superior
-        fig.add_trace(go.Scatter(
-            x=df_a["spot"],
-            y=df_a["p75"],
-            mode="lines",
-            #line=dict(width=0),
-            #line=dict(width=2, color=colores_linea[año]),
-            line=dict(width=1, color="rgba(255,255,255,0.5)"),
-            name=f"Límite superior {año}"
-            #showlegend=False
-        ))
-
-        # 🔹 banda
-        fig.add_trace(go.Scatter(
-            x=df_a["spot"],
-            y=df_a["p25"],
-            mode="lines",
-            fill="tonexty",
-            #fillcolor=colores.get(año, "rgba(200,200,200,1)"),
-            fillcolor=colores[año],
-            line=dict(width=0),
-            name=f"Banda {año}"
-        ))
-
+    for año, df_a in df.groupby('año', sort=True):
+        año = int(año)
+        df_a = df_a.copy()
+        df_a['tramo_spot'] = (np.floor(df_a['spot'] / 2) * 2).astype(int)
+        banda = df_a.groupby('tramo_spot')['ssaa'].agg(
+            inferior=lambda valores: valores.quantile(0.05),
+            superior=lambda valores: valores.quantile(0.95),
+            horas='size',
+        )
+        # Plotly une el relleno "tonexty" a través de huecos y dibuja
+        # triángulos ficticios. Construir un polígono por bloque contiguo.
+        bloques = banda.index.to_series().diff().gt(2).cumsum()
+        puntos_aislados = []
+        leyenda_mostrada = False
+        for _, bloque in banda.groupby(bloques):
+            if len(bloque) < 4:
+                puntos_aislados.append(bloque)
+                continue
+            spot = bloque.index.to_numpy(dtype=float) + 1.0
+            superior = bloque['superior'].to_numpy()
+            inferior = bloque['inferior'].to_numpy()
+            horas = bloque['horas'].to_numpy()
+            fig.add_trace(go.Scatter(
+                x=np.r_[spot, spot[::-1], spot[0]],
+                y=np.r_[superior, inferior[::-1], superior[0]],
+                customdata=np.r_[horas, horas[::-1], horas[0]],
+                mode='lines', fill='toself', fillcolor=colores[año][1],
+                line=dict(color=colores[año][0], width=1),
+                name=str(año), showlegend=not leyenda_mostrada,
+                hovertemplate=(
+                    'SPOT: %{x:.1f} €/MWh<br>'
+                    'SSAA límite: %{y:.2f} €/MWh<br>'
+                    'Horas: %{customdata:.0f}<extra></extra>'
+                ),
+            ))
+            leyenda_mostrada = True
+        if puntos_aislados:
+            aislados = pd.concat(puntos_aislados)
+            spot = aislados.index.to_numpy(dtype=float) + 1.0
+            extremos = np.column_stack((
+                aislados['inferior'], aislados['superior']
+            ))
+            fig.add_trace(go.Scatter(
+                x=np.repeat(spot, 2), y=extremos.ravel(),
+                customdata=np.repeat(aislados['horas'].to_numpy(), 2),
+                mode='markers',
+                marker=dict(size=5, color=colores[año][0]),
+                name=str(año), showlegend=not leyenda_mostrada,
+                hovertemplate=(
+                    'SPOT: %{x:.1f} €/MWh<br>'
+                    'SSAA: %{y:.2f} €/MWh<br>'
+                    'Horas: %{customdata:.0f}<extra></extra>'
+                ),
+            ))
     fig.update_layout(
-        title=dict(
-            text="Bandas SSAA vs SPOT por año",
-            x=0.5,
-            xanchor="center"
+        title='Bandas SSAA vs SPOT por año · percentiles 5–95',
+        xaxis_title='SPOT (€/MWh)', yaxis_title='SSAA (€/MWh)',
+        legend=dict(orientation='h', y=1.02, x=0.5, xanchor='center'),
+    )
+    fig = aplicar_estilo(fig)
+    fig.update_layout(height=900)
+    return fig
+
+
+def graficar_bandas_ssaa(
+    datos=None, años_seleccionados=None, envolvente_acumulada=False
+):
+    """Anima por mes las bandas acumuladas de SSAA frente a SPOT."""
+    colores = {
+        2018: ('#8c9eff', 'rgba(140,158,255,0.25)'),
+        2019: ('#64b5f6', 'rgba(100,181,246,0.25)'),
+        2020: ('#81c784', 'rgba(129,199,132,0.25)'),
+        2021: ('#ffb74d', 'rgba(255,183,77,0.25)'),
+        2022: ('#ef5350', 'rgba(239,83,80,0.25)'),
+        2023: ('#b39ddb', 'rgba(179,157,219,0.25)'),
+        2024: ('#ffff00', 'rgba(255,255,0,0.3)'),
+        2025: ('#ff00ff', 'rgba(255,0,255,0.3)'),
+        2026: ('#00ffff', 'rgba(0,255,255,0.3)'),
+    }
+    df = construir_df_spot_ssaa() if datos is None else datos.copy()
+    df['fecha'] = pd.to_datetime(df['fecha'], errors='coerce')
+    df['año'] = pd.to_numeric(df['año'], errors='coerce')
+    df['spot'] = pd.to_numeric(df['spot'], errors='coerce')
+    df['ssaa'] = pd.to_numeric(df['ssaa'], errors='coerce')
+    df = df.dropna(subset=['fecha', 'año', 'spot', 'ssaa'])
+    df['año'] = df['año'].astype(int)
+    años_visibles = (
+        set(colores) if años_seleccionados is None
+        else set(años_seleccionados)
+    )
+    df = df.loc[df['año'].isin(años_visibles & set(colores))].copy()
+    if df.empty:
+        return go.Figure()
+    df['mes_num'] = df['fecha'].dt.month
+
+    meses = [meses_español[mes] for mes in range(1, 13)]
+    años = sorted(df['año'].unique())
+    limites_spot = {
+        año: tuple(
+            df.loc[df['año'].eq(año), 'spot'].quantile([0.02, 0.95])
+        )
+        for año in años
+    }
+    series = [
+        nombre
+        for año in años
+        for nombre in (f'Límite superior {año}', f'Banda {año}')
+    ]
+    colores_series = {
+        nombre: colores[año][0]
+        for año in años
+        for nombre in (f'Límite superior {año}', f'Banda {año}')
+    }
+    envolventes = {año: {} for año in años}
+    filas = []
+    for mes_num, mes_nombre in enumerate(meses, start=1):
+        for año in años:
+            df_a = df.loc[
+                df['año'].eq(año) & df['mes_num'].le(mes_num),
+                ['spot', 'ssaa'],
+            ].copy()
+            if df_a.empty:
+                continue
+            # Límites fijos del año: el rango X acumulado solo puede crecer.
+            q_low, q_high = limites_spot[año]
+            df_a = df_a.loc[df_a['spot'].between(q_low, q_high)]
+            df_a = df_a.sort_values('spot')
+            ventana = max(20, int(len(df_a) * 0.05))
+            df_a['p25'] = df_a['ssaa'].rolling(
+                ventana, center=True, min_periods=1
+            ).quantile(0.25)
+            df_a['p75'] = df_a['ssaa'].rolling(
+                ventana, center=True, min_periods=1
+            ).quantile(0.75)
+            # Un punto por cada 0,5 €/MWh evita miles de puntos por fotograma.
+            df_a['spot_tramo'] = (df_a['spot'] * 2).round() / 2
+            banda = df_a.groupby('spot_tramo', as_index=False)[
+                ['p25', 'p75']
+            ].mean()
+            if envolvente_acumulada:
+                # Mantener las zonas ya mostradas en el gráfico JSON.
+                envolvente = envolventes[año]
+                for spot, p25, p75 in banda.itertuples(index=False, name=None):
+                    anterior = envolvente.get(spot)
+                    envolvente[spot] = (
+                        min(p25, anterior[0]) if anterior else p25,
+                        max(p75, anterior[1]) if anterior else p75,
+                    )
+                banda = pd.DataFrame(
+                    [
+                        (spot, p25, p75)
+                        for spot, (p25, p75) in sorted(envolvente.items())
+                    ],
+                    columns=['spot_tramo', 'p25', 'p75'],
+                )
+            for limite, columna in (
+                (f'Límite superior {año}', 'p75'),
+                (f'Banda {año}', 'p25'),
+            ):
+                filas.extend(
+                    (mes_nombre, limite, spot, ssaa)
+                    for spot, ssaa in zip(
+                        banda['spot_tramo'], banda[columna]
+                    )
+                )
+
+    datos_animacion = pd.DataFrame(
+        filas, columns=['Mes', 'Serie', 'SPOT', 'SSAA']
+    )
+    fig = px.line(
+        datos_animacion,
+        x='SPOT', y='SSAA', color='Serie', animation_frame='Mes',
+        category_orders={'Mes': meses, 'Serie': series},
+        color_discrete_map=colores_series,
+        labels={'SPOT': 'SPOT (€/MWh)', 'SSAA': 'SSAA (€/MWh)'},
+        title=(
+            'Bandas SSAA vs SPOT por año · envolvente acumulada'
+            if envolvente_acumulada else
+            'Bandas SSAA vs SPOT por año · acumulado hasta el mes'
         ),
-        
-        xaxis_title="SPOT (€/MWh)",
-        yaxis_title="SSAA (€/MWh)",
-        legend=dict(
-            orientation="h",
-            y=1.02,
-            x=0.5,
-            xanchor="center"
-        ),
-        height = 900
     )
 
-    fig = aplicar_estilo(fig)
-    fig.update_layout(height = 900)
+    def estilizar_bandas(trazas):
+        for traza in trazas:
+            if traza.name.startswith('Banda '):
+                año = int(traza.name.rsplit(' ', 1)[-1])
+                traza.update(
+                    fill='tonexty', fillcolor=colores[año][1],
+                    line=dict(width=0),
+                )
+            else:
+                traza.update(
+                    line=dict(width=1, color='rgba(255,255,255,0.5)'),
+                    showlegend=False,
+                )
 
+    estilizar_bandas(fig.data)
+    for fotograma in fig.frames:
+        estilizar_bandas(fotograma.data)
+    # Abrir con el acumulado completo, como el gráfico original. La animación
+    # sigue recorriendo enero → diciembre al pulsar Reproducir.
+    if fig.frames:
+        ultimo_mes = fig.frames[-1]
+        for traza_actual, traza_final in zip(fig.data, ultimo_mes.data):
+            traza_actual.x = traza_final.x
+            traza_actual.y = traza_final.y
+        for deslizador in fig.layout.sliders:
+            deslizador.active = len(fig.frames) - 1
+    fig.update_layout(
+        legend=dict(
+            orientation='h', y=1.02, x=0.5, xanchor='center', title_text=''
+        ),
+    )
+    fig.update_xaxes(range=[0, max(180, df['spot'].quantile(0.95) * 1.05)])
+    fig.update_yaxes(range=[0, max(35, df['ssaa'].quantile(0.98) * 1.1)])
+    for menu in fig.layout.updatemenus:
+        for boton in menu.buttons:
+            if boton.label == '&#9654;':
+                opciones = dict(boton.args[1])
+                opciones['fromcurrent'] = False
+                opciones['frame'] = dict(
+                    opciones['frame'], duration=500, redraw=True
+                )
+                boton.args = (
+                    [fotograma.name for fotograma in fig.frames],
+                    opciones,
+                )
+    for deslizador in fig.layout.sliders:
+        for paso in deslizador.steps:
+            paso.args[1]['frame']['redraw'] = True
+    fig = aplicar_estilo(fig)
+    fig.update_layout(height=900)
     return fig
 
 
