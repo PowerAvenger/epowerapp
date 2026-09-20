@@ -28,6 +28,7 @@ from backend_escalacv import (
 )
 from backend_comun import (
     aplicar_estilo,
+    carga_mibgas,
     construir_media_acumulada_prevista,
     paso_eje_escala_cv,
 )
@@ -190,6 +191,7 @@ datos_dia, graf_ecv_diario = diarios(
     año_comparado=st.session_state.año_seleccionado_comp,
 )
 prevision_omie_anual = st.session_state.get("prevision_omie_anual")
+ultimo_punto_previsto = None
 if (
     componente_anual == "SPOT"
     and isinstance(prevision_omie_anual, dict)
@@ -230,6 +232,71 @@ if (
             yshift=18,
             font=dict(color="yellow", size=15),
         )
+traza_comparacion = next(
+    (
+        traza for traza in graf_ecv_diario.data
+        if traza.name == f"Media acumulada {st.session_state.año_seleccionado_comp}"
+    ),
+    None,
+)
+if traza_comparacion is not None and len(traza_comparacion.y):
+    indice_derecho = max(
+        range(len(traza_comparacion.x)),
+        key=lambda indice: pd.Timestamp(traza_comparacion.x[indice]),
+    )
+    valor_comparado = traza_comparacion.y[indice_derecho]
+    if ultimo_punto_previsto is not None:
+        valor_referencia = ultimo_punto_previsto["media_acumulada_prevista"]
+        desplazamiento = 45 if valor_comparado >= valor_referencia else -28
+    else:
+        valor_referencia = datos_dia["media"].iloc[-1]
+        desplazamiento = 28 if valor_comparado >= valor_referencia else -28
+    graf_ecv_diario.add_annotation(
+        x=(
+            ultimo_punto_previsto["fecha"]
+            if ultimo_punto_previsto is not None
+            else fecha_fin_año
+        ),
+        y=valor_comparado,
+        text=f"Media {st.session_state.año_seleccionado_comp}: {valor_comparado:.2f} €/MWh",
+        showarrow=False,
+        xanchor="right",
+        yshift=desplazamiento,
+        font=dict(color="#B0BFC7", size=15),
+    )
+
+init_app()
+datos_mibgas_d1 = carga_mibgas()
+datos_mibgas_d1 = datos_mibgas_d1.loc[
+    datos_mibgas_d1["producto"] == "GDAES_D+1",
+    ["fecha_entrega", "precio_gas"],
+].dropna(subset=["fecha_entrega", "precio_gas"])
+medias_mibgas_anuales = (
+    datos_mibgas_d1.groupby(datos_mibgas_d1["fecha_entrega"].dt.year)["precio_gas"]
+    .mean()
+)
+lineas_mibgas = []
+for año_mibgas in (año_anual, st.session_state.año_seleccionado_comp):
+    media_mibgas = medias_mibgas_anuales.get(año_mibgas)
+    valor_mibgas = (
+        f"{formato_numero_es(media_mibgas, 2)} €/MWh"
+        if pd.notna(media_mibgas) else "sin datos"
+    )
+    lineas_mibgas.append(f"MIBGAS D+1 {año_mibgas}: {valor_mibgas}")
+graf_ecv_diario.add_annotation(
+    x=0.99,
+    y=0.99,
+    xref="paper",
+    yref="paper",
+    text="<br>".join(lineas_mibgas),
+    showarrow=False,
+    xanchor="right",
+    yanchor="top",
+    align="right",
+    font=dict(color="#f8fafc", size=13),
+    bgcolor="rgba(25, 35, 45, 0.82)",
+    borderpad=6,
+)
 valor_medio_diario = round(datos_dia['value'].mean(),2)
 valor_minimo_diario = datos_dia['value'].min()
 valor_maximo_diario = datos_dia['value'].max()
@@ -391,32 +458,36 @@ def _render_opciones_mercado_escala(vista, mostrar_leyendas=True):
         _leyenda_escala_cv('SSAA', 'SSAA')
 
 
-def _marcar_apagon_28a(figura):
-    """Señala el apagón peninsular del 28 de abril de 2025."""
-    fecha_apagon = pd.Timestamp('2025-04-28')
-    figura.add_shape(
-        type='line',
-        x0=fecha_apagon,
-        x1=fecha_apagon,
-        y0=0,
-        y1=1,
-        xref='x',
-        yref='paper',
-        line=dict(color='yellow', width=2, dash='dash'),
-        layer='above',
-    )
-    figura.add_annotation(
-        x=fecha_apagon,
-        y=1,
-        xref='x',
-        yref='paper',
-        text='<b>28A</b>',
-        showarrow=False,
-        xshift=5,
-        yshift=12,
-        xanchor='left',
-        font=dict(color='yellow', size=15, family='Arial'),
-    )
+def _marcar_hitos_historicos(figura):
+    """Señala los hitos 28A y 28F en las series históricas."""
+    for fecha, etiqueta in (
+        ('2025-04-28', '28A'),
+        ('2026-02-28', '28F'),
+    ):
+        fecha_hito = pd.Timestamp(fecha)
+        figura.add_shape(
+            type='line',
+            x0=fecha_hito,
+            x1=fecha_hito,
+            y0=0,
+            y1=1,
+            xref='x',
+            yref='paper',
+            line=dict(color='yellow', width=2, dash='dash'),
+            layer='above',
+        )
+        figura.add_annotation(
+            x=fecha_hito,
+            y=1,
+            xref='x',
+            yref='paper',
+            text=f'<b>{etiqueta}</b>',
+            showarrow=False,
+            xshift=5,
+            yshift=12,
+            xanchor='left',
+            font=dict(color='yellow', size=15, family='Arial'),
+        )
 
 @st.cache_data(show_spinner=False)
 def _cargar_cua_ajom():
@@ -1578,8 +1649,8 @@ with tab_historica:
                 ),
             )
         )
-    _marcar_apagon_28a(graf_historico_spot)
-    _marcar_apagon_28a(graf_historico_ssaa)
+    _marcar_hitos_historicos(graf_historico_spot)
+    _marcar_hitos_historicos(graf_historico_ssaa)
     st.plotly_chart(graf_historico_spot, use_container_width=True)
     st.plotly_chart(graf_historico_ssaa, use_container_width=True)
     modo_mapa_historico = st.radio(

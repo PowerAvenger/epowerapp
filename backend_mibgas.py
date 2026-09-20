@@ -223,20 +223,129 @@ def graficar_qs(df_mg_q):
     
     return fig
 
-def graficar_da_corrido(df):
+def _colores_anuales_d1(df):
+    """Usa la escala de medias anuales del comparador."""
+    año_actual = datetime.now().year
+    medias = (
+        df[df["año_entrega"] < año_actual]
+        .groupby("año_entrega")["precio_gas"]
+        .mean()
+        .sort_values()
+    )
+    escala = [[0.0, "#D6EAF8"], [0.45, "#F4D03F"],
+              [0.75, "#F39C12"], [1.0, "#EF553B"]]
+    resultado = {}
+    if not medias.empty:
+        minimo, maximo = medias.min(), medias.max()
+        for año, media in medias.items():
+            posicion = 1.0 if maximo == minimo else (media - minimo) / (maximo - minimo)
+            resultado[str(int(año))] = px.colors.sample_colorscale(
+                escala, [float(posicion)]
+            )[0]
+    resultado[str(año_actual)] = COLOR_MIBGAS_2026
+    return resultado
+
+
+def _anadir_linea_gas_por_precio(fig, df, precio_maximo, escala="umbrales"):
+    """Colorea el precio diario con una escala fija, compartida entre gráficos."""
+    numero_colores = 24
+    if escala == "umbrales":
+        colores_precio = px.colors.sample_colorscale(
+            [
+                [0.0, "#18845A"],
+                [0.25, "#F5DC55"],
+                [0.5, "#FF9848"],
+                [0.75, "#FF5555"],
+                [1.0, "#A86BFF"],
+            ],
+            np.linspace(0, 1, numero_colores),
+        )
+        marcas_escala = [0, 0.25, 0.5, 0.75, 1]
+        etiquetas_escala = ["≤20", "40", "60", "80", "≥100"]
+    else:
+        colores_precio = px.colors.sample_colorscale(
+            "Turbo", np.linspace(0.1, 0.95, numero_colores)
+        )
+        etiquetas_escala = [
+            f"{precio_maximo * posicion ** 2:.0f}"
+            for posicion in (0, 0.25, 0.5, 0.75, 1)
+        ]
+        marcas_escala = [0, 0.25, 0.5, 0.75, 1]
+    segmentos_x = [[] for _ in range(numero_colores)]
+    segmentos_y = [[] for _ in range(numero_colores)]
+    for _, grupo in df.groupby(df["fecha_entrega"].dt.year, sort=True):
+        fechas = grupo["fecha_entrega"].tolist()
+        precios = grupo["precio_gas"].tolist()
+        for i in range(len(grupo) - 1):
+            precio_tramo = (precios[i] + precios[i + 1]) / 2
+            if escala == "umbrales":
+                posicion = np.interp(
+                    precio_tramo, [20, 40, 60, 80, 100],
+                    marcas_escala,
+                )
+            else:
+                posicion = np.sqrt(max(precio_tramo, 0) / precio_maximo)
+            indice_color = min(int(posicion * numero_colores), numero_colores - 1)
+            segmentos_x[indice_color].extend((fechas[i], fechas[i + 1], None))
+            segmentos_y[indice_color].extend((precios[i], precios[i + 1], None))
+
+    for i, color in enumerate(colores_precio):
+        if segmentos_x[i]:
+            fig.add_trace(go.Scattergl(
+                x=segmentos_x[i], y=segmentos_y[i],
+                mode="lines", line=dict(color=color, width=2.5),
+                showlegend=False,
+                hovertemplate=(
+                    "<b>%{x|%d/%m/%Y}</b><br>"
+                    "MIBGAS D+1: %{y:.2f} €/MWh<extra></extra>"
+                ),
+            ))
+    fig.add_trace(go.Scattergl(
+        x=[None, None], y=[None, None], mode="markers",
+        marker=dict(
+            size=0, color=[0, 1], cmin=0, cmax=1,
+            colorscale=[
+                [i / (numero_colores - 1), color]
+                for i, color in enumerate(colores_precio)
+            ],
+            showscale=True,
+            colorbar=dict(
+                title="€/MWh",
+                tickvals=marcas_escala,
+                ticktext=etiquetas_escala,
+            ),
+        ),
+        showlegend=False, hoverinfo="skip",
+    ))
+
+
+def graficar_da_corrido(df, degradado=False, escala="umbrales"):
 
     df = df.copy()
 
-    df["fecha_entrega"] = pd.to_datetime(df["fecha_entrega"])
+    df["fecha_entrega"] = pd.to_datetime(df["fecha_entrega"], errors="coerce")
+    df["precio_gas"] = pd.to_numeric(df["precio_gas"], errors="coerce")
+    df = df.dropna(subset=["fecha_entrega", "precio_gas"])
+    df = df[df["fecha_entrega"].dt.year >= 2018].sort_values("fecha_entrega")
+    df["año_entrega"] = df["fecha_entrega"].dt.year
+    df["año_serie"] = df["año_entrega"].astype(str)
 
-    fig = px.line(
-        df,
-        x="fecha_entrega",
-        y="precio_gas",
-        color="año_entrega",
-        color_discrete_map=colores,
-        title="Evolución del precio de MIBGAS D+1 por año",
-    )
+    if degradado and not df.empty:
+        fig = go.Figure()
+        _anadir_linea_gas_por_precio(
+            fig, df, max(float(df["precio_gas"].max()), 1), escala=escala
+        )
+    else:
+        fig = px.line(
+            df,
+            x="fecha_entrega",
+            y="precio_gas",
+            color="año_serie",
+            color_discrete_map=_colores_anuales_d1(df),
+            title="Evolución histórica del precio de MIBGAS D+1 desde 2018",
+        )
+
+    fig.update_layout(title="Evolución histórica del precio de MIBGAS D+1 desde 2018")
 
     fig.update_layout(
         title_font_size=28,
@@ -257,7 +366,8 @@ def graficar_da_corrido(df):
             showgrid=True,
             gridwidth=1,
             tickmode="linear",
-            dtick="M1",
+            dtick="M12",
+            tickformat="%Y",
         ),
 
         hoverlabel=dict(
@@ -278,7 +388,10 @@ def graficar_da_corrido(df):
 
     return fig
 
-def graficar_da_2026_acumulado(df, año=2026, mes=None):
+def graficar_da_2026_acumulado(
+    df, año=2026, mes=None, degradado=False, precio_maximo_escala=None,
+    escala="umbrales",
+):
 
     df = df.copy()
     if mes is None:
@@ -318,24 +431,30 @@ def graficar_da_2026_acumulado(df, año=2026, mes=None):
 
     fig = go.Figure()
 
-    fig.add_trace(go.Scatter(
-        x=df["fecha_entrega"],
-        y=df["precio_gas"],
-        mode="lines",
-        name="Precio diario",
-        line=dict(color=colores.get(año, COLOR_MIBGAS_2026), width=2),
-        hovertemplate=(
-            "MIBGAS D+1: %{y:.2f} €/MWh"
-            "<extra></extra>"
+    if degradado:
+        maximo = precio_maximo_escala or float(df["precio_gas"].max())
+        _anadir_linea_gas_por_precio(
+            fig, df, max(float(maximo), 1), escala=escala
         )
-    ))
+    else:
+        fig.add_trace(go.Scatter(
+            x=df["fecha_entrega"],
+            y=df["precio_gas"],
+            mode="lines",
+            name="Precio diario",
+            line=dict(color=colores.get(año, COLOR_MIBGAS_2026), width=2),
+            hovertemplate=(
+                "MIBGAS D+1: %{y:.2f} €/MWh"
+                "<extra></extra>"
+            )
+        ))
 
     fig.add_trace(go.Scatter(
         x=df["fecha_entrega"],
         y=df["media_acumulada_gas"],
         mode="lines",
         name="Media acumulada diaria",
-        line=dict(color="gold", width=3, dash="dot"),
+        line=dict(color="#29B6FF", width=3, dash="dot"),
         hovertemplate=(
             "Media acumulada: %{y:.2f} €/MWh"
             "<extra></extra>"
@@ -1191,35 +1310,8 @@ def graficar_da_comparado(df, años=None, titulo=None):
     df = df.dropna(subset=["fecha_entrega", "precio_gas"])
     df["año_entrega"] = df["fecha_entrega"].dt.year
 
-    # La intensidad de los años cerrados representa su media anual. El año
-    # en curso conserva un verde propio para distinguirlo de los históricos.
     año_actual = datetime.now().year
-    medias_anuales = (
-        df[df["año_entrega"] < año_actual]
-        .groupby("año_entrega")["precio_gas"]
-        .mean()
-        .sort_values()
-    )
-    colores_comparacion = {}
-    if not medias_anuales.empty:
-        media_min = medias_anuales.min()
-        media_max = medias_anuales.max()
-        for año_media, media in medias_anuales.items():
-            posicion = (
-                1.0
-                if media_max == media_min
-                else (media - media_min) / (media_max - media_min)
-            )
-            colores_comparacion[str(int(año_media))] = px.colors.sample_colorscale(
-                [
-                    [0.0, "#D6EAF8"],
-                    [0.45, "#F4D03F"],
-                    [0.75, "#F39C12"],
-                    [1.0, "#EF553B"],
-                ],
-                [float(posicion)],
-            )[0]
-    colores_comparacion[str(año_actual)] = COLOR_MIBGAS_2026
+    colores_comparacion = _colores_anuales_d1(df)
 
     if años is not None:
         df = df[df["fecha_entrega"].dt.year.isin(años)].copy()
@@ -1430,7 +1522,7 @@ def graficar_medias_acumuladas_comparadas(
     return aplicar_estilo(fig)
 
 
-def graficar_ranking_medias_anuales_mibgas(df):
+def graficar_ranking_medias_anuales_mibgas(df, compacto=False):
     """Ranking de la media anual del producto diario MIBGAS D+1."""
     datos = df.copy()
     datos["fecha_entrega"] = pd.to_datetime(
@@ -1478,7 +1570,7 @@ def graficar_ranking_medias_anuales_mibgas(df):
         marker_color=[colores_barras[int(año)] for año in resumen["año"]],
         text=resumen["media"].map(lambda valor: f"{valor:.2f}"),
         textposition="outside",
-        textfont=dict(size=17),
+        textfont=dict(size=12 if compacto else 17),
         customdata=resumen[["dias"]],
         hovertemplate=(
             "%{y}: %{x:.2f} €/MWh<br>"
@@ -1487,20 +1579,22 @@ def graficar_ranking_medias_anuales_mibgas(df):
     ))
     fig.update_layout(
         title=dict(
-            text="Ranking media anual<br>MIBGAS D+1",
+            text="Media anual<br>MIBGAS D+1" if compacto else "Ranking media anual<br>MIBGAS D+1",
             x=0.5,
             xanchor="center",
-            font=dict(size=18),
+            font=dict(size=14 if compacto else 18),
         ),
         xaxis_title="€/MWh",
         yaxis_title="",
         showlegend=False,
-        height=520,
+        height=360 if compacto else 520,
         barcornerradius=8,
-        margin=dict(l=15, r=45, t=75, b=45),
+        margin=dict(l=5 if compacto else 15, r=30 if compacto else 45, t=60 if compacto else 75, b=35 if compacto else 45),
     )
-    fig.update_xaxes(range=[0, resumen["media"].max() * 1.18])
+    fig.update_xaxes(range=[0, resumen["media"].max() * (1.35 if compacto else 1.18)])
     fig = aplicar_estilo(fig)
+    if compacto:
+        fig.update_layout(height=360, font=dict(size=11), title_font=dict(size=14))
     return fig
 
 def graficar_da_comparado_old(df):

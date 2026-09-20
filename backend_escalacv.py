@@ -1380,7 +1380,6 @@ def diarios(
             mode='lines',
             name=f"Media acumulada {año_comparado}",
             line=dict(color="#B0BFC7", width=2),
-            visible='legendonly'   # 👈 MISMO EFECTO que en demanda
         )
     )
     

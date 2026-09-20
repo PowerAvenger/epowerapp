@@ -22,7 +22,7 @@ def generar_menu():
         st.markdown(f"Deja tus impresiones y valoraciones en [Linkedin]({url_linkedin}).")
 
         st.page_link('epowerapp.py', label = 'Bienvenida', icon = "🙌")
-        st.page_link('pages/escalacv.py', label = 'Mercados OMIE', icon = "📊")
+        st.page_link('pages/escalacv.py', label = 'Mercados OMIE', icon = "💡")
         st.page_link('pages/mibgas.py', label = 'Mercados GAS & Furious', icon = "🔥")
         st.page_link('pages/indicadores_mensuales.py', label = 'Indicadores mensuales', icon = "📋")
         st.page_link('pages/indicadores_anuales.py', label = 'Indicadores anuales', icon = "📅")

@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+from html import escape
 #import pygwalker as pyg
 #from pygwalker.api.streamlit import StreamlitRenderer
 
@@ -32,6 +33,232 @@ from backend_previsiones import (
     guardar_prevision_omie_en_sesion,
     obtener_prevision_omie_anual,
 )
+
+
+COLOR_HITO_GAS = "#F1948A"
+COLOR_28F_GAS = "#FF7575"
+
+
+def _marcar_evento_gas(figura, inicio, etiqueta, color, fin=None, y=0.98, dentro=False):
+    """Marca una fecha precisa o un periodo aproximado sin alterar las series."""
+    inicio = pd.Timestamp(inicio)
+    if fin is None:
+        destacar_28f = inicio == pd.Timestamp("2026-02-28")
+        color = COLOR_28F_GAS if destacar_28f else COLOR_HITO_GAS
+        figura.add_shape(
+            type="line", x0=inicio, x1=inicio, y0=0, y1=1,
+            xref="x", yref="paper",
+            line=dict(color=color, width=2.5 if destacar_28f else 1.5, dash="dash"),
+        )
+        x_etiqueta = inicio
+    else:
+        fin = pd.Timestamp(fin)
+        figura.add_shape(
+            type="rect", x0=inicio, x1=fin, y0=0, y1=1,
+            xref="x", yref="paper",
+            line=dict(width=0), fillcolor=color, opacity=0.12,
+            layer="below",
+        )
+        x_etiqueta = inicio + (fin - inicio) / 2
+    figura.add_annotation(
+        x=x_etiqueta, y=0.68 if dentro else y, xref="x", yref="paper",
+        text=f"<b>{etiqueta}</b>" if fin is None and destacar_28f else etiqueta,
+        showarrow=False,
+        xanchor="center" if fin is not None else "left",
+        yanchor="middle" if dentro else "top",
+        xshift=0 if fin is not None else 3,
+        textangle=0,
+        font=dict(
+            color=color,
+            size=15 if fin is None and inicio in (
+                pd.Timestamp("2025-04-28"), pd.Timestamp("2026-02-28")
+            ) else 12,
+        ),
+    )
+
+
+def _marcar_contexto_historico_gas(figura, fecha_final):
+    """Hitos selectivos desde 2021; las franjas indican periodos, no días."""
+    _marcar_evento_gas(
+        figura, "2022-06-15", "Tope gas", "#B7A7E8",
+        fin="2023-03-01", dentro=True,
+    )
+    figura.add_shape(
+        type="rect",
+        x0=pd.Timestamp("2026-02-28"),
+        x1=pd.Timestamp(fecha_final),
+        y0=0, y1=1,
+        xref="x", yref="paper",
+        line=dict(width=0),
+        fillcolor="#F1948A",
+        opacity=0.10,
+        layer="below",
+    )
+    eventos = (
+        ("2020-03-14", "14 mar · Estado alarma COVID", "#F1948A", None),
+        ("2021-01-09", "Filomena", "#79C7E3", None),
+        ("2021-10-01", "Crisis gas<br>UE", "#E8B85B", "2022-01-01"),
+        ("2022-02-24", "Ucrania", "#F1948A", None),
+        ("2022-06-15", "Inicio tope gas", "#B7A7E8", None),
+        ("2023-03-01", "Fin efectivo tope gas", "#B7A7E8", None),
+        ("2025-04-28", "28A - Apagón", "#9CA3AF", None),
+        ("2026-02-28", "28F", "#F1948A", None),
+    )
+    for inicio, etiqueta, color, fin in eventos:
+        _marcar_evento_gas(figura, inicio, etiqueta, color, fin=fin)
+
+
+def _marcar_contexto_2026_gas(figura):
+    """Añade contexto de mercado a la curva diaria de 2026."""
+    _marcar_evento_gas(
+        figura, "2026-01-12", "Tensión<br>invernal<br>del gas", "#79C7E3",
+        fin="2026-02-02", dentro=True,
+    )
+    _marcar_evento_gas(figura, "2026-02-28", "28F · conflicto Irán", "#F1948A")
+    _marcar_evento_gas(
+        figura, "2026-04-08", "Alto el<br>fuego<br>temporal", "#79C7E3",
+        fin="2026-04-23", dentro=True,
+    )
+    _marcar_evento_gas(
+        figura, "2026-06-17", "Acuerdo<br>provisional<br>de paz", "#79C7E3",
+        fin="2026-07-08", dentro=True,
+    )
+    _marcar_evento_gas(
+        figura, "2026-06-17", "Firma acuerdo", "#79C7E3",
+    )
+    _marcar_evento_gas(
+        figura, "2026-07-08", "Ruptura tregua", "#F1948A",
+    )
+    _marcar_evento_gas(
+        figura, "2026-07-27", "Expectativa<br>acuerdo<br>Ormuz", "#79C7E3",
+        fin="2026-08-06", dentro=True,
+    )
+    _marcar_evento_gas(
+        figura, "2026-08-06", "Nueva tensión Ormuz", "#F1948A",
+    )
+
+
+DESCRIPCIONES_EVENTOS_GAS = {
+    "14 mar 2020 · Estado de alarma": (
+        "El 14 de marzo se declaró el estado de alarma en España por la COVID-19. "
+        "Las restricciones frenaron la actividad y la demanda energética. "
+        "El gas ya cotizaba bajo y siguió débil durante la primavera. "
+        "La recuperación de actividad en la segunda mitad de 2020 ayuda a "
+        "entender el comienzo de la subida posterior."
+    ),
+    "9 ene 2021 · Filomena": (
+        "Filomena dejó nieve y temperaturas muy bajas en España a principios "
+        "de enero. El frío pudo elevar la demanda de calefacción y crear "
+        "tensión puntual en el mercado. En la gráfica es un episodio breve: "
+        "la tendencia ascendente del gas ya había comenzado durante 2020 "
+        "y continuó después del temporal."
+    ),
+    "Oct–dic 2021 · Crisis gas UE": (
+        "La banda destaca la fase más aguda de una subida iniciada en 2020. "
+        "Europa afrontó el invierno con poco gas almacenado y compitió por "
+        "cargamentos de GNL en un mercado mundial ajustado. También pesó la "
+        "incertidumbre sobre el suministro ruso. MIBGAS D+1 alcanzó "
+        "183 €/MWh el 21 de diciembre."
+    ),
+    "24 feb 2022 · Ucrania": (
+        "Rusia inició la invasión de Ucrania el 24 de febrero. La dependencia "
+        "europea del gas ruso convirtió el suministro en una preocupación "
+        "central para el mercado. Los precios incorporaron ese riesgo, "
+        "aunque cada oscilación diaria también dependió de la demanda, "
+        "los almacenamientos y la disponibilidad de GNL."
+    ),
+    "15 jun 2022 · Inicio tope gas": (
+        "Comenzó el mecanismo ibérico aplicado a la electricidad producida "
+        "con gas. La línea marca su puesta en marcha y el inicio de la banda "
+        "regulatoria. Conviene distinguirlo del precio de MIBGAS D+1 que "
+        "muestra este gráfico: el mecanismo no fijaba un precio máximo "
+        "para todo el gas negociado."
+    ),
+    "2022–23 · Banda tope gas": (
+        "La franja va del 15 de junio de 2022 al 1 de marzo de 2023, "
+        "fecha señalada aquí como fin efectivo. Sirve para comparar la "
+        "evolución del gas con el periodo de aplicación práctica del "
+        "mecanismo ibérico en el mercado eléctrico. No representa un "
+        "límite directo al precio de MIBGAS D+1."
+    ),
+    "1 mar 2023 · Fin tope gas": (
+        "Esta línea señala el fin efectivo del ajuste que hemos elegido "
+        "para la gráfica. El último uso práctico relevante había sido en "
+        "febrero de 2023. La fecha permite cerrar visualmente la banda, "
+        "pero no debe confundirse con la fecha de finalización legal "
+        "del mecanismo ibérico."
+    ),
+    "28 abr 2025 · Apagón": (
+        "El 28A se produjo el gran apagón eléctrico en España. Lo marcamos "
+        "como referencia del sistema energético y para facilitar la "
+        "lectura temporal de la serie. El precio del gas responde a un "
+        "mercado más amplio; que un movimiento coincida con esta fecha "
+        "no demuestra que el apagón lo causara."
+    ),
+    "12 ene–2 feb 2026 · Tensión invernal": (
+        "Entre mediados de enero y el 2 de febrero, el gas subió y después "
+        "retrocedió. La banda identifica esa fase invernal anterior al 28F. "
+        "El frío, la demanda y las expectativas de suministro son factores "
+        "a considerar; no la presentamos como consecuencia de un único "
+        "acontecimiento geopolítico."
+    ),
+    "28 feb 2026 · Conflicto Irán": (
+        "El 28F marca el comienzo del conflicto con Irán y un cambio en "
+        "el riesgo percibido para el gas y el GNL. El transporte por Ormuz "
+        "y la oferta del Golfo pasan a ser claves para Europa. La línea "
+        "sirve de referencia temporal: no atribuye automáticamente "
+        "todos los movimientos posteriores del precio a la guerra."
+    ),
+    "28F–actualidad · Banda histórica": (
+        "La banda tenue va del 28 de febrero hasta el último dato "
+        "disponible del histórico. Permite reconocer de un vistazo el "
+        "periodo posterior al inicio del conflicto y compararlo con los "
+        "años anteriores. Es una ayuda visual de contexto, no una "
+        "afirmación de causalidad para toda la franja."
+    ),
+    "8–22 abr 2026 · Alto el fuego": (
+        "La banda recoge el alto el fuego temporal de abril. Un posible "
+        "alivio de las tensiones de suministro puede influir en las "
+        "expectativas del mercado. Aun así, el precio diario siguió "
+        "sujeto a otros factores de oferta y demanda. Por eso se marca "
+        "un periodo y no una caída causada por un solo día."
+    ),
+    "17 jun 2026 · Firma acuerdo": (
+        "La línea señala la firma del acuerdo provisional de paz entre "
+        "Estados Unidos e Irán. El anuncio abrió expectativas de una "
+        "normalización gradual del tránsito por Ormuz. Es el punto "
+        "inicial de la banda de acuerdo provisional; la recuperación "
+        "efectiva de los flujos de GNL seguía siendo incierta."
+    ),
+    "17 jun–8 jul 2026 · Acuerdo de paz": (
+        "La banda comienza con la firma del acuerdo provisional y llega "
+        "hasta el 8 de julio. Representa una fase de expectativas de "
+        "distensión y posible mejora del tránsito energético. La tregua "
+        "no garantizaba una recuperación inmediata del suministro, y "
+        "la gráfica muestra movimientos diarios en ambos sentidos."
+    ),
+    "8 jul 2026 · Ruptura tregua": (
+        "La ruptura de la tregua volvió a elevar el riesgo de "
+        "interrupciones en Ormuz y en los flujos energéticos de la "
+        "región. La línea se sitúa junto al comienzo de una nueva "
+        "escalada del precio del gas. Señala un contexto relevante, "
+        "sin atribuirle por sí sola toda la subida posterior."
+    ),
+    "27 jul–5 ago 2026 · Expectativa Ormuz": (
+        "A finales de julio volvió a hablarse de un posible acuerdo "
+        "sobre el tránsito por Ormuz. La banda coincide con una breve "
+        "desescalada de precios que llega a primeros de agosto. "
+        "La expectativa no equivalía a un acuerdo cerrado ni "
+        "aseguraba la normalización inmediata de los suministros."
+    ),
+    "6 ago 2026 · Nueva tensión Ormuz": (
+        "El 6 de agosto se marca el retorno de la tensión en torno "
+        "al estrecho de Ormuz. El riesgo para el tráfico de GNL y "
+        "la necesidad europea de seguir comprando gas antes del "
+        "invierno coincidieron con una subida persistente. La línea "
+        "indica el inicio de esa fase, no una explicación única."
+    ),
+}
 
 
 
@@ -119,8 +346,6 @@ gas_media_2026 = df_medias.loc[
 gas_media_2026 = float(gas_media_2026.iloc[0]) if not gas_media_2026.empty else None
 print("GAS media 2026:", gas_media_2026)
 
-graf_da_corrido = graficar_da_corrido(df_mg_da)
-graf_da_2026_acumulado = graficar_da_2026_acumulado(df_mg_da)
 graf_da_comparado = graficar_da_comparado(df_mg_da)
 
 
@@ -191,23 +416,98 @@ seccion_gas = st.segmented_control(
 
 if seccion_gas == 'Históricos':
     with st.container():
-        col1,col2 = st.columns([.9,.1]) 
+        col1, col2 = st.columns([.82, .18])
         with col2:
-            for año_media in (2024, 2025, 2026):
-                media = df_medias.loc[
-                    df_medias["año_entrega"] == año_media,
-                    "precio_str",
-                ]
-                if not media.empty:
-                    st.metric(
-                        f"Precio medio gas {año_media} (€/MWh)",
-                        media.iloc[0],
-                    )
+            st.plotly_chart(
+                graficar_ranking_medias_anuales_mibgas(
+                    df_mg_da_historico, compacto=True
+                ),
+                use_container_width=True,
+            )
+            mostrar_degradado = st.checkbox(
+                "Degradado por precio", value=True,
+                key="gas_historicos_degradado",
+            )
+            escala_gas = "umbrales"
+            if mostrar_degradado:
+                escala_elegida = st.selectbox(
+                    "Escala de colores",
+                    ("Umbrales 20–100", "Escala anterior"),
+                    key="gas_historicos_escala",
+                )
+                escala_gas = (
+                    "umbrales" if escala_elegida == "Umbrales 20–100"
+                    else "anterior"
+                )
+            mostrar_eventos = st.checkbox(
+                "Mostrar eventos", key="gas_historicos_eventos"
+            )
+            if mostrar_eventos:
+                st.caption("Hitos de contexto: la coincidencia temporal no implica causalidad.")
         with col1:
+            graf_da_corrido = graficar_da_corrido(
+                df_mg_da_historico, degradado=mostrar_degradado,
+                escala=escala_gas,
+            )
+            if mostrar_eventos:
+                _marcar_contexto_historico_gas(
+                    graf_da_corrido, df_mg_da_historico["fecha_entrega"].max()
+                )
             st.write(graf_da_corrido)
-            st.write(graf_da_comparado)
-            st.write(graf_mibgas_mensual_historico)
+
+        col1_graf2, col2_metricas = st.columns([.82, .18])
+        with col1_graf2:
+            precio_maximo_historico = pd.to_numeric(
+                df_mg_da_historico.loc[
+                    df_mg_da_historico["fecha_entrega"].dt.year >= 2018,
+                    "precio_gas",
+                ],
+                errors="coerce",
+            ).max()
+            graf_da_2026_acumulado = graficar_da_2026_acumulado(
+                df_mg_da,
+                degradado=mostrar_degradado,
+                precio_maximo_escala=precio_maximo_historico,
+                escala=escala_gas,
+            )
+            if mostrar_eventos:
+                _marcar_contexto_2026_gas(graf_da_2026_acumulado)
             st.write(graf_da_2026_acumulado)
+        with col2_metricas:
+            datos_2026 = df_mg_da.loc[
+                df_mg_da["fecha_entrega"].dt.year == 2026,
+                ["fecha_entrega", "precio_gas"],
+            ].dropna(subset=["precio_gas"]).sort_values("fecha_entrega")
+            if not datos_2026.empty:
+                ultimo_dato = datos_2026.iloc[-1]
+                col_media, col_ultimo = st.columns(2)
+                with col_media:
+                    st.metric(
+                        f"Media anual {ultimo_dato['fecha_entrega'].year}",
+                        f"{datos_2026['precio_gas'].mean():.2f}".replace(".", ","),
+                    )
+                with col_ultimo:
+                    st.metric(
+                        "Precio último día",
+                        f"{ultimo_dato['precio_gas']:.2f}".replace(".", ","),
+                    )
+                st.caption(
+                    f"Último dato: {ultimo_dato['fecha_entrega']:%d/%m/%Y} - Unidades en €/MWh"
+                )
+            if mostrar_eventos:
+                evento_seleccionado = st.selectbox(
+                    "Eventos y bandas",
+                    tuple(DESCRIPCIONES_EVENTOS_GAS),
+                    key="gas_evento_descripcion",
+                )
+                st.markdown(
+                    '<div style="background:rgba(70,140,200,0.14);'
+                    'border:1px solid rgba(130,180,230,0.28);'
+                    'border-radius:10px;padding:12px 14px;line-height:1.5">'
+                    f'{escape(DESCRIPCIONES_EVENTOS_GAS[evento_seleccionado])}'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
 
 
 if seccion_gas == 'OMIE vs MIBGAS':
@@ -368,6 +668,7 @@ if seccion_gas == 'Comparador':
             df_mg_da_historico
         )
         st.plotly_chart(graf_ranking_mibgas, use_container_width=True)
+    st.plotly_chart(graf_mibgas_mensual_historico, use_container_width=True)
 
 
 if seccion_gas == 'Futuros':
