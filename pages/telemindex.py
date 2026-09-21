@@ -45,7 +45,12 @@ from componentes_ofertas_fijas import (
     render_simulador_horquilla_ssaa,
 )
 from componentes_curva import render_origen_curva
+from componentes_margen_facturado import (
+    render_impacto_margen,
+    render_precios_facturados,
+)
 from componentes_indexados import render_formulario_formula_indexada
+from backend_margen_facturado import estimar_margen_facturado
 from backend_simulindex import (
     construir_prevision_indexados_2026,
     obtener_hist_mensual,
@@ -393,14 +398,15 @@ tab1, tab2, tab_curva, tab3, tab4 = st.tabs(
 )
 with tab_curva:
     curva_col1, curva_col2, curva_col3 = st.columns(
-        [.14, .58, .28], gap="small"
+        [.17, .55, .28], gap="small"
     )
     with curva_col1:
-        with st.expander("Opciones de curva", expanded=True):
+        st.subheader("Personaliza", divider="rainbow")
+        with st.expander("Opciones de curva", expanded=False):
             contenedor_origen_curva = st.container(border=True)
             contenedor_acciones_curva = st.container(border=True)
-        with st.expander("Parámetros de fórmula", expanded=True):
-            contenedor_formula_curva = st.container(border=True)
+        with st.expander("Parámetros de fórmula", expanded=False):
+            contenedor_formula_curva = st.container(border=False)
 
     estado_normalizacion_curva = render_origen_curva(
         contenedor_origen_curva,
@@ -408,6 +414,7 @@ with tab_curva:
         clave="telemindex_curva",
         titulo_compacto=True,
         mostrar_resumen=False,
+        mostrar_aviso_resolucion=False,
     )
     if estado_normalizacion_curva["normalizacion_solicitada"]:
         st.session_state["_telemindex_curva_sin_normalizar"] = (
@@ -1082,19 +1089,104 @@ with tab_curva:
                         height=38 + 35 * len(desglose_ssaa_curva_mostrar),
                     )
 
-            with st.expander("Consumo mensual", expanded=True):
+            with st.expander("Consumo mensual", expanded=False):
                 st.plotly_chart(
                     graficar_mensual_apilado(df_curva_uso),
                     use_container_width=True,
                     key="telemindex_curva_consumo_mensual",
                 )
 
-            with st.expander("Perfil de consumo vs coste", expanded=True):
+            with st.expander("Perfil de consumo vs coste", expanded=False):
                 st.plotly_chart(
                     construir_grafico_perfil_consumo_coste(df_curva_uso),
                     use_container_width=True,
                     key="telemindex_curva_perfil_consumo_coste",
                 )
+            st.subheader("¿Qué margen han cargado?", divider="rainbow")
+            firma_facturada = (
+                atr_curva,
+                str(st.session_state.get("rango_curvadecarga")),
+                st.session_state.get("curva_reactiva_version"),
+                len(df_curva_uso),
+                round(float(resumen_curva.loc["Consumo (kWh)", "TOTAL"]), 3),
+            )
+            precios_facturados = render_precios_facturados(
+                resumen_curva.loc["Consumo (kWh)"],
+                atr_curva,
+                firma_facturada,
+                "telemindex_curva_facturada",
+            )
+            if precios_facturados:
+                try:
+                    margen_facturado = estimar_margen_facturado(
+                        df_curva_uso,
+                        atr_curva,
+                        obtener_formula_compartida(),
+                        precios_facturados,
+                    )
+                except (ValueError, KeyError) as exc:
+                    st.warning(f"No se puede estimar el margen: {exc}")
+                else:
+                    render_impacto_margen(margen_facturado)
+                    with st.expander("Detalle del margen por periodo", expanded=False):
+                        detalle_calculo = margen_facturado["detalle"]
+                        detalle = detalle_calculo[
+                            [
+                                "Periodo",
+                                "Consumo (kWh)",
+                                "Precio facturado (€/kWh)",
+                                "Precio calculado (€/kWh)",
+                                "Margen adicional (€/MWh)",
+                                "Diferencia vs fórmula (€)",
+                            ]
+                        ].copy()
+                        consumo_total = margen_facturado["consumo_kwh"]
+                        detalle = pd.concat(
+                            [
+                                detalle,
+                                pd.DataFrame([{
+                                    "Periodo": "<strong>TOTAL</strong>",
+                                    "Consumo (kWh)": consumo_total,
+                                    "Precio facturado (€/kWh)": (
+                                        margen_facturado[
+                                            "precio_facturado_medio_eur_kwh"
+                                        ]
+                                    ),
+                                    "Precio calculado (€/kWh)": (
+                                        detalle_calculo["Coste fórmula (€)"].sum()
+                                        / consumo_total
+                                    ),
+                                    "Margen adicional (€/MWh)": (
+                                        margen_facturado["margen_adicional_eur_mwh"]
+                                    ),
+                                    "Diferencia vs fórmula (€)": (
+                                        margen_facturado[
+                                            "diferencia_coste_vs_formula_eur"
+                                        ]
+                                    ),
+                                }]),
+                            ],
+                            ignore_index=True,
+                        )
+                        for columna in detalle.columns[1:]:
+                            decimales = 6 if "€/kWh" in columna else 2
+                            detalle[columna] = detalle[columna].map(
+                                lambda valor, n=decimales: formato_numero_es(valor, n)
+                            )
+                        detalle.columns = [
+                            "Periodo",
+                            "Consumo<br>(kWh)",
+                            "Precio facturado<br>(€/kWh)",
+                            "Precio calculado<br>(€/kWh)",
+                            "Margen adicional<br>(€/MWh)",
+                            "Diferencia vs fórmula<br>(€)",
+                        ]
+                        st.markdown(
+                            '<div style="overflow-x:auto">'
+                            + detalle.to_html(index=False, escape=False, border=0)
+                            + "</div>",
+                            unsafe_allow_html=True,
+                        )
         else:
             if st.session_state.get("_telemindex_curva_sin_normalizar", False):
                 st.info("Corrige la carga y pulsa «Normalizar curva de carga».")

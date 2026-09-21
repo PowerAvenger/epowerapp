@@ -324,13 +324,14 @@ def _mostrar_zonas(resultado, contenedor):
         )
 
 
-def _publicar(resultado, contenedor):
+def _publicar(resultado, contenedor, mostrar_aviso_resolucion=True):
     publicar_curva_sesion(st.session_state, resultado)
     contenedor.success(
         f"Curva activa actualizada: {len(resultado.df_norm):,} registros."
         .replace(",", ".")
     )
-    render_aviso_resolucion_curva(resultado.frecuencia, contenedor)
+    if mostrar_aviso_resolucion:
+        render_aviso_resolucion_curva(resultado.frecuencia, contenedor)
     _mostrar_zonas(resultado, contenedor)
 
 
@@ -451,6 +452,7 @@ def render_resumen_grafico_curva(df_curva, clave="curva_comun", contenedor=None)
 def render_origen_curva(
     contenedor, acciones, clave="curva_comun", titulo_compacto=False,
     resumen=None, mostrar_resumen=True, atr_fijo=None, permitir_qh=True,
+    mostrar_aviso_resolucion=True,
 ):
     """Renderiza los tres orígenes y publica una sola curva para toda la app."""
     if atr_fijo is not None and atr_fijo not in OPCIONES_ATR_CURVA:
@@ -477,7 +479,8 @@ def render_origen_curva(
                 )
             else:
                 st.success(mensaje_curva)
-            render_aviso_resolucion_curva(actual.get("frecuencia"), st)
+            if mostrar_aviso_resolucion:
+                render_aviso_resolucion_curva(actual.get("frecuencia"), st)
             zonas_actuales = actual.get("zonas_compatibles") or []
             if len(zonas_actuales) == 1:
                 st.info(
@@ -764,7 +767,10 @@ def render_origen_curva(
                         raise ValueError(
                             "La curva contiene periodos ajenos a la tarifa 2.0."
                         )
-                _publicar(resultado, st)
+                _publicar(
+                    resultado, st,
+                    mostrar_aviso_resolucion=mostrar_aviso_resolucion,
+                )
                 curva_publicada = True
             except Exception as exc:
                 st.error(f"No se pudo obtener y normalizar la curva: {exc}")

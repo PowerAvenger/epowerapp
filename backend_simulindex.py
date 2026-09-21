@@ -78,7 +78,7 @@ def acceder_google_sheets(spreadsheet_id): #sheet_name=None
     df = pd.DataFrame(data)
     return worksheet, df
 
-@st.cache_data()
+@st.cache_data(show_spinner=False)
 def obtener_historicos_meff():
     #ID hoja de registro de usuarios
     SPREADSHEET_ID = st.secrets['SHEET_MEFF_ID']

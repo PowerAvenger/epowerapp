@@ -27,7 +27,7 @@ COLORES_MIX_GENERACION = {
 }
 
 # LECTURA DE LOS JSON CON LOS DATOS DE ESTRUCTURA DE LA GENERACIÓN Y POTENCIA INSTALADA
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def leer_json(file_id, widget):
     url = f"https://drive.google.com/uc?export=download&id={file_id}"
     response = requests.get(url)
@@ -299,7 +299,7 @@ def graficar_mix_comparativo(
     
      
 # TABLA CON DATOS DIARIOS DE CADA TECNOLOGÍA
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def tablas_diario(df_in_gen, df_in_pot, horas_eqmax):
     #montamos un dataframe de entrada con los datos de gen y pot. DIARIO
     meses_gen = (

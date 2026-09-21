@@ -85,13 +85,12 @@ with st.spinner("Preparando mercado de gas..."):
         datos_mibgas_da["fecha_entrega"].dt.year == año_dashboard
     ].copy()
 
-with st.spinner("Preparando precios de indexado..."):
-    init_app_index()
-    datos_indexado = st.session_state.df_sheets.copy()
-    datos_indexado["fecha"] = pd.to_datetime(datos_indexado["fecha"])
-    datos_indexado_año = datos_indexado[
-        datos_indexado["fecha"].dt.year == año_dashboard
-    ].copy()
+init_app_index()
+datos_indexado = st.session_state.df_sheets.copy()
+datos_indexado["fecha"] = pd.to_datetime(datos_indexado["fecha"])
+datos_indexado_año = datos_indexado[
+    datos_indexado["fecha"].dt.year == año_dashboard
+].copy()
 
 with st.spinner("Preparando demanda peninsular..."):
     datos_demanda_año, ultima_fecha_demanda = obtener_demanda_anual_dashboard(
@@ -285,7 +284,7 @@ with col1:
             and ultima_fecha < pd.Timestamp(año_dashboard, 12, 31)
             and año_dashboard == fecha_hoy.year
         ):
-            with st.spinner("Calculando previsión OMIE hasta el 31 de diciembre..."):
+            with st.spinner("Cargando futuros OMIP..."):
                 try:
                     prevision_omie_anual = obtener_prevision_omie_anual(datos_spot)
                 except Exception as error_prevision:
@@ -335,8 +334,8 @@ with col1:
                     font=dict(color="yellow", size=15),
                 )
         figura_spot.update_layout(
-            height=500,
-            margin=dict(l=45, r=20, t=30, b=50),
+            height=450,
+            margin=dict(l=45, r=20, t=20, b=40),
             title=dict(
                 text="Evolución diaria del SPOT y media acumulada anual",
                 x=0.5,
@@ -348,13 +347,13 @@ with col1:
             legend=dict(
                 orientation="h",
                 yanchor="top",
-                y=0.88,
+                y=0.91,
                 xanchor="center",
                 x=0.5,
                 title_text=None,
                 font=dict(size=14),
             ),
-            yaxis=dict(domain=[0.0, 0.74]),
+            yaxis=dict(domain=[0.0, 0.83]),
         )
         st.plotly_chart(figura_spot, use_container_width=True)
 
@@ -472,8 +471,8 @@ with col1:
                     font=dict(color="gold", size=15),
                 )
         figura_gas.update_layout(
-            height=500,
-            margin=dict(l=45, r=20, t=30, b=50),
+            height=450,
+            margin=dict(l=45, r=20, t=20, b=40),
             title=dict(
                 text="Evolución diaria del gas MIBGAS D+1 y media acumulada anual",
                 x=0.5,
@@ -485,13 +484,13 @@ with col1:
             legend=dict(
                 orientation="h",
                 yanchor="top",
-                y=0.88,
+                y=0.91,
                 xanchor="center",
                 x=0.5,
                 title_text=None,
                 font=dict(size=14),
             ),
-            yaxis=dict(domain=[0.0, 0.74]),
+            yaxis=dict(domain=[0.0, 0.83]),
         )
         st.plotly_chart(figura_gas, use_container_width=True)
 
@@ -542,8 +541,8 @@ with col2:
             leyenda_horizontal=True,
         )
         figura_indexado.update_layout(
-            height=500,
-            margin=dict(l=45, r=20, t=30, b=50),
+            height=450,
+            margin=dict(l=45, r=20, t=20, b=40),
             title=dict(
                 text="Precios horarios medios anuales según peaje",
                 x=0.5,
@@ -555,13 +554,13 @@ with col2:
             legend=dict(
                 orientation="h",
                 yanchor="top",
-                y=0.88,
+                y=0.91,
                 xanchor="center",
                 x=0.5,
                 title_text=None,
                 font=dict(size=14),
             ),
-            yaxis=dict(domain=[0.0, 0.74]),
+            yaxis=dict(domain=[0.0, 0.83]),
         )
         st.plotly_chart(figura_indexado, use_container_width=True)
 
@@ -594,8 +593,8 @@ with col2:
             mes=None,
         )
         figura_indexado_acumulada.update_layout(
-            height=500,
-            margin=dict(l=45, r=20, t=30, b=50),
+            height=450,
+            margin=dict(l=45, r=20, t=20, b=40),
             title=dict(
                 text="Media acumulada diaria anual según peaje",
                 x=0.5,
@@ -607,13 +606,13 @@ with col2:
             legend=dict(
                 orientation="h",
                 yanchor="top",
-                y=0.88,
+                y=0.91,
                 xanchor="center",
                 x=0.5,
                 title_text=None,
                 font=dict(size=14),
             ),
-            yaxis=dict(domain=[0.0, 0.74]),
+            yaxis=dict(domain=[0.0, 0.83]),
         )
         figura_indexado_acumulada.update_xaxes(
             dtick="M1",
@@ -688,8 +687,8 @@ with col3:
             año_dashboard,
         )
         figura_demanda.update_layout(
-            height=500,
-            margin=dict(l=45, r=20, t=30, b=50),
+            height=450,
+            margin=dict(l=45, r=20, t=20, b=40),
             title=dict(
                 text="Demanda diaria y media acumulada anual",
                 x=0.5,
@@ -701,13 +700,13 @@ with col3:
             legend=dict(
                 orientation="h",
                 yanchor="top",
-                y=0.88,
+                y=0.91,
                 xanchor="center",
                 x=0.5,
                 title_text=None,
                 font=dict(size=14),
             ),
-            yaxis=dict(domain=[0.0, 0.74]),
+            yaxis=dict(domain=[0.0, 0.83]),
         )
         st.plotly_chart(figura_demanda, use_container_width=True)
 
@@ -744,8 +743,8 @@ with col3:
             COLORES_MIX_GENERACION,
         )
         figura_mix.update_layout(
-            height=500,
-            margin=dict(l=45, r=20, t=30, b=50),
+            height=450,
+            margin=dict(l=45, r=20, t=20, b=40),
             title=dict(
                 text="Mix de generación anual (%)",
                 x=0.5,
@@ -757,7 +756,7 @@ with col3:
             legend=dict(
                 orientation="v",
                 yanchor="middle",
-                y=0.37,
+                y=0.415,
                 xanchor="left",
                 x=0.69,
                 title_text=None,
@@ -765,13 +764,39 @@ with col3:
             ),
         )
         figura_mix.update_traces(
-            domain=dict(x=[0.0, 0.66], y=[0.0, 0.74]),
+            domain=dict(x=[0.0, 0.66], y=[0.0, 0.83]),
             selector=dict(type="pie"),
         )
         st.plotly_chart(figura_mix, use_container_width=True)
 
 
 # COMPARATIVA ANUAL
+def configurar_figura_comparativa_anual(figura, titulo):
+    """Replica el patrón visual validado del resto de indicadores."""
+    figura.update_layout(
+        height=450,
+        margin=dict(l=45, r=20, t=20, b=40),
+        title=dict(
+            text=titulo,
+            x=0.5,
+            xanchor="center",
+            y=0.98,
+            yanchor="top",
+            font=dict(size=22),
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=0.91,
+            xanchor="center",
+            x=0.5,
+            title_text=None,
+            font=dict(size=14),
+        ),
+        yaxis=dict(domain=[0.0, 0.83]),
+    )
+    return figura
+
 comp_col1, comp_col2, comp_col3 = tab_comparativa.columns(3)
 
 datos_spot_comparativa = datos_spot[
@@ -848,23 +873,11 @@ with comp_col1:
     for traza in figura_spot_comparativa.data:
         ancho = 2.2 if str(traza.name).startswith("SPOT ") else 1.6
         traza.update(line=dict(width=ancho))
-    figura_spot_comparativa.update_layout(
-        height=500,
-        title=dict(
-            text="Media acumulada anual del SPOT",
-            x=0.5,
-            xanchor="center",
-            font=dict(size=22),
-        ),
-        legend=dict(
-            orientation="h",
-            y=1.03,
-            yanchor="bottom",
-            x=0.5,
-            xanchor="center",
-        ),
-        yaxis_title="€/MWh",
+    configurar_figura_comparativa_anual(
+        figura_spot_comparativa,
+        "Media acumulada anual del SPOT",
     )
+    figura_spot_comparativa.update_yaxes(title_text="€/MWh")
     st.plotly_chart(figura_spot_comparativa, use_container_width=True)
 
     _, figura_spot_horaria = graficar_comparativa_spot_horaria_mensual(
@@ -932,24 +945,9 @@ with comp_col1:
             delta=f"Hora {hora_maxima:02d}",
             delta_color="off",
         )
-    figura_spot_horaria.update_layout(
-        height=500,
-        title=dict(
-            text="Perfil horario medio anual del SPOT",
-            x=0.5,
-            xanchor="center",
-            font=dict(size=22),
-        ),
-        legend=dict(
-            orientation="h",
-            yanchor="top",
-            y=0.88,
-            xanchor="center",
-            x=0.5,
-            title_text=None,
-            font=dict(size=14),
-        ),
-        yaxis=dict(domain=[0.0, 0.74]),
+    configurar_figura_comparativa_anual(
+        figura_spot_horaria,
+        "Perfil horario medio anual del SPOT",
     )
     st.plotly_chart(figura_spot_horaria, use_container_width=True)
 
@@ -1017,24 +1015,11 @@ with comp_col2:
         convertir_a_cent_kwh=False,
         mes_num=1,
     )
-    figura_indexado_comparativa.update_layout(
-        height=500,
-        title=dict(
-            text="Diferencia anual real de precios (%)",
-            x=0.5,
-            xanchor="center",
-            font=dict(size=22),
-        ),
-        legend=dict(
-            orientation="h",
-            y=1.03,
-            yanchor="bottom",
-            x=0.5,
-            xanchor="center",
-            title_text=None,
-        ),
-        yaxis_title="Diferencia %",
+    configurar_figura_comparativa_anual(
+        figura_indexado_comparativa,
+        "Diferencia anual real de precios (%)",
     )
+    figura_indexado_comparativa.update_yaxes(title_text="Diferencia %")
     st.plotly_chart(figura_indexado_comparativa, use_container_width=True)
 
     datos_gas_comparativa = datos_mibgas_da[
@@ -1106,23 +1091,11 @@ with comp_col2:
     for traza in figura_gas_comparativa.data:
         ancho = 2.2 if str(traza.name).startswith("MIBGAS ") else 1.6
         traza.update(line=dict(width=ancho))
-    figura_gas_comparativa.update_layout(
-        height=500,
-        title=dict(
-            text="Media acumulada anual MIBGAS D+1",
-            x=0.5,
-            xanchor="center",
-            font=dict(size=22),
-        ),
-        legend=dict(
-            orientation="h",
-            y=1.03,
-            yanchor="bottom",
-            x=0.5,
-            xanchor="center",
-        ),
-        yaxis_title="€/MWh",
+    configurar_figura_comparativa_anual(
+        figura_gas_comparativa,
+        "Media acumulada anual MIBGAS D+1",
     )
+    figura_gas_comparativa.update_yaxes(title_text="€/MWh")
     st.plotly_chart(figura_gas_comparativa, use_container_width=True)
 
 with comp_col3:
@@ -1191,23 +1164,11 @@ with comp_col3:
         "Demanda",
         incluir_diario=False,
     )
-    figura_demanda_comparativa.update_layout(
-        height=500,
-        title=dict(
-            text="Demanda media acumulada anual comparada",
-            x=0.5,
-            xanchor="center",
-            font=dict(size=22),
-        ),
-        legend=dict(
-            orientation="h",
-            y=1.03,
-            yanchor="bottom",
-            x=0.5,
-            xanchor="center",
-        ),
-        yaxis_title="GW",
+    configurar_figura_comparativa_anual(
+        figura_demanda_comparativa,
+        "Demanda media acumulada anual comparada",
     )
+    figura_demanda_comparativa.update_yaxes(title_text="GW")
     st.plotly_chart(figura_demanda_comparativa, use_container_width=True)
 
     generacion_actual = preparar_mix_generacion_anual(
@@ -1267,14 +1228,9 @@ with comp_col3:
             unidad="GWh",
             colores_tecnologia=COLORES_MIX_GENERACION,
         )
-        figura_generacion_comparativa.update_layout(
-            height=500,
-            title=dict(
-                text="Generación anual comparada (GWh)",
-                x=0.5,
-                xanchor="center",
-                font=dict(size=22),
-            ),
+        configurar_figura_comparativa_anual(
+            figura_generacion_comparativa,
+            "Generación anual comparada (GWh)",
         )
         st.plotly_chart(
             figura_generacion_comparativa,

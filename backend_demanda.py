@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta
 import calendar
 from backend_comun import aplicar_estilo
 
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def download_esios (id, fecha_ini, fecha_fin, agrupacion, tipo_agregacion):
     columnas_salida = ["datetime", "value", "short_name", "name"]
     if pd.to_datetime(fecha_ini) > pd.to_datetime(fecha_fin):
@@ -57,6 +57,7 @@ def download_esios (id, fecha_ini, fecha_fin, agrupacion, tipo_agregacion):
     return df_in
 
 
+@st.cache_data(show_spinner=False)
 def obtener_demanda_mensual_dashboard(año, mes):
     """Prepara demanda diaria real y prevista para un mes del dashboard.
 

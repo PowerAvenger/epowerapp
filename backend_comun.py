@@ -664,7 +664,7 @@ def cargar_precios_snp_csv():
     return df[columnas].reset_index(drop=True)
 
 #CARGAMOS MIBGAS DESDE SHEET DE DRIVE
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def carga_mibgas(): #sheet_name=None
     SPREADSHEET_ID = st.secrets['SHEET_MIBGAS_ID']
     sheet = st.session_state.client.open_by_key(SPREADSHEET_ID)

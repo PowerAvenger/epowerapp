@@ -1,4 +1,5 @@
 from datetime import date
+from contextlib import nullcontext
 
 import pandas as pd
 import streamlit as st
@@ -54,7 +55,7 @@ if (
 generar_menu()
 
 fecha_hoy = date.today()
-ALTURA_GRAFICOS = 500
+ALTURA_GRAFICOS = 450
 TAMAÑO_TITULOS_GRAFICOS = 22
 TAMAÑO_LEYENDAS_GRAFICOS = 14
 
@@ -63,17 +64,17 @@ def configurar_figura_dashboard(figura, titulo=None):
     """Aplica una geometría común a todas las figuras del dashboard."""
     cambios = {
         "height": ALTURA_GRAFICOS,
-        "margin": dict(l=45, r=20, t=30, b=50),
+        "margin": dict(l=45, r=20, t=20, b=40),
         "legend": dict(
             orientation="h",
             yanchor="top",
-            y=0.88,
+            y=0.91,
             xanchor="center",
             x=0.5,
             title_text=None,
             font=dict(size=TAMAÑO_LEYENDAS_GRAFICOS),
         ),
-        "yaxis": dict(domain=[0.0, 0.74]),
+        "yaxis": dict(domain=[0.0, 0.83]),
     }
     if titulo is not None:
         cambios["title"] = dict(
@@ -95,6 +96,14 @@ def configurar_figura_dashboard(figura, titulo=None):
             font=dict(size=TAMAÑO_TITULOS_GRAFICOS),
         )
     figura.update_layout(**cambios)
+    return figura
+
+
+def añadir_periodo_al_titulo(figura, periodo):
+    """Añade el mes y año seleccionados al título existente."""
+    titulo = figura.layout.title.text
+    if titulo:
+        figura.update_layout(title_text=f"{titulo} · {periodo}")
     return figura
 
 
@@ -126,6 +135,7 @@ mes_dashboard = st.sidebar.selectbox(
     format_func=lambda numero: meses[numero].capitalize(),
     key="indicadores_mes",
 )
+periodo_dashboard = f"{meses[mes_dashboard][:3]}{str(año_dashboard)[-2:]}"
 
 st.sidebar.header("Escala CV")
 componente = st.sidebar.radio(
@@ -154,7 +164,15 @@ unidad_mix_comparativo = st.sidebar.selectbox(
 
 st.subheader(f"Evolución del mes de {meses[mes_dashboard]}.")
 
-with st.spinner("Cargando datos de mercado..."):
+contexto_mercado = (
+    nullcontext()
+    if (
+        st.session_state.get("_mercado_datos_spot") is not None
+        and st.session_state.get("_mercado_datos_ssaa") is not None
+    )
+    else st.spinner("Cargando datos de mercado...")
+)
+with contexto_mercado:
     datos, _, fecha_fin = obtener_datos_mercado(componente)
     datos_spot_comparativa, _, fecha_fin_spot = obtener_datos_mercado("SPOT")
 
@@ -162,16 +180,22 @@ datos_mes = datos[
     (datos["año"] == año_dashboard) & (datos["mes"] == mes_dashboard)
 ].copy()
 
-with st.spinner("Preparando precios de indexado..."):
-    init_app()
-    init_app_index()
-    datos_indexado = st.session_state.df_sheets.copy()
-    datos_indexado["fecha"] = pd.to_datetime(datos_indexado["fecha"])
-    datos_indexado_mes = datos_indexado[
-        (datos_indexado["fecha"].dt.year == año_dashboard)
-        & (datos_indexado["fecha"].dt.month == mes_dashboard)
-    ].copy()
-with st.spinner("Preparando demanda peninsular..."):
+init_app()
+init_app_index()
+datos_indexado = st.session_state.df_sheets
+fechas_indexado = pd.to_datetime(datos_indexado["fecha"], errors="coerce")
+datos_indexado_mes = datos_indexado[
+    (fechas_indexado.dt.year == año_dashboard)
+    & (fechas_indexado.dt.month == mes_dashboard)
+].copy()
+datos_indexado_mes["fecha"] = fechas_indexado.loc[datos_indexado_mes.index]
+periodo_demanda = (año_dashboard, mes_dashboard)
+contexto_demanda = (
+    nullcontext()
+    if st.session_state.get("_indicadores_mensuales_periodo_demanda") == periodo_demanda
+    else st.spinner("Preparando demanda peninsular...")
+)
+with contexto_demanda:
     datos_demanda, ultimo_real_demanda, hay_prevision_demanda = (
         obtener_demanda_mensual_dashboard(año_dashboard, mes_dashboard)
     )
@@ -189,20 +213,35 @@ with st.spinner("Preparando demanda peninsular..."):
             .dt.tz_localize(None)
         )
         datos_demanda = datos_demanda.dropna(subset=["datetime"])
+    st.session_state._indicadores_mensuales_periodo_demanda = periodo_demanda
 
-with st.spinner("Preparando mercado de gas..."):
-    datos_mibgas = carga_mibgas()
+contexto_mibgas = (
+    nullcontext()
+    if "_indicadores_datos_mibgas" in st.session_state
+    else st.spinner("Preparando mercado de gas...")
+)
+with contexto_mibgas:
+    if "_indicadores_datos_mibgas" not in st.session_state:
+        st.session_state._indicadores_datos_mibgas = carga_mibgas()
+    datos_mibgas = st.session_state._indicadores_datos_mibgas
     datos_mibgas_da = filtrar_por_producto(datos_mibgas, "GDAES_D+1")
     datos_mibgas_mes = datos_mibgas_da[
         (datos_mibgas_da["fecha_entrega"].dt.year == año_dashboard)
         & (datos_mibgas_da["fecha_entrega"].dt.month == mes_dashboard)
     ].copy()
 
-with st.spinner("Preparando mix de generación..."):
-    datos_generacion = leer_json_redata(
-        st.secrets["FILE_ID_GEN"],
-        "estructura-generacion",
-    )
+contexto_generacion = (
+    nullcontext()
+    if "_indicadores_datos_generacion" in st.session_state
+    else st.spinner("Preparando mix de generación...")
+)
+with contexto_generacion:
+    if "_indicadores_datos_generacion" not in st.session_state:
+        st.session_state._indicadores_datos_generacion = leer_json_redata(
+            st.secrets["FILE_ID_GEN"],
+            "estructura-generacion",
+        )
+    datos_generacion = st.session_state._indicadores_datos_generacion
     datos_mix_generacion = preparar_mix_generacion_mensual(
         datos_generacion,
         año=año_dashboard,
@@ -237,6 +276,7 @@ with st.spinner("Preparando mix de generación..."):
         mes=mes_dashboard,
         hasta_dia=dia_limite_mix,
     )
+    st.session_state.indicadores_mensuales_generacion_preparada = True
 
 tab_evolucion, tab_comparativa = st.tabs(
     ["Evolución mensual", "Comparativa mensual"]
@@ -292,7 +332,11 @@ with col1:
             predator_mode=predator_mode,
             año=año_dashboard,
         )
-        figura = configurar_figura_dashboard(figura)
+        figura = configurar_figura_dashboard(
+            figura,
+            f"Evolución diaria del {componente}",
+        )
+        figura = añadir_periodo_al_titulo(figura, periodo_dashboard)
         st.plotly_chart(figura, use_container_width=True)
 
     if datos_mibgas_mes.empty:
@@ -327,6 +371,9 @@ with col1:
         figura_gas = configurar_figura_dashboard(
             figura_gas,
             "Evolución diaria del gas MIBGAS D+1",
+        )
+        figura_gas = añadir_periodo_al_titulo(
+            figura_gas, periodo_dashboard
         )
         st.plotly_chart(figura_gas, use_container_width=True)
 
@@ -379,6 +426,9 @@ with col2:
             figura_indexado,
             "Precios horarios medios según peaje",
         )
+        figura_indexado = añadir_periodo_al_titulo(
+            figura_indexado, periodo_dashboard
+        )
         st.plotly_chart(figura_indexado, use_container_width=True)
 
         st.caption(
@@ -411,6 +461,9 @@ with col2:
         figura_indexado_acumulada = configurar_figura_dashboard(
             figura_indexado_acumulada,
             "Media acumulada diaria según peaje",
+        )
+        figura_indexado_acumulada = añadir_periodo_al_titulo(
+            figura_indexado_acumulada, periodo_dashboard
         )
         st.plotly_chart(figura_indexado_acumulada, use_container_width=True)
 
@@ -481,6 +534,9 @@ with col3:
             figura_demanda,
             "Demanda diaria y media acumulada",
         )
+        figura_demanda = añadir_periodo_al_titulo(
+            figura_demanda, periodo_dashboard
+        )
         st.plotly_chart(figura_demanda, use_container_width=True)
 
     if datos_mix_generacion.empty:
@@ -520,15 +576,18 @@ with col3:
             figura_mix,
             "Mix de generación (%)",
         )
+        figura_mix = añadir_periodo_al_titulo(
+            figura_mix, periodo_dashboard
+        )
         figura_mix.update_traces(
-            domain=dict(x=[0.0, 0.66], y=[0.0, 0.74]),
+            domain=dict(x=[0.0, 0.66], y=[0.0, 0.83]),
             selector=dict(type="pie"),
         )
         figura_mix.update_layout(
             legend=dict(
                 orientation="v",
                 yanchor="middle",
-                y=0.37,
+                y=0.415,
                 xanchor="left",
                 x=0.69,
                 title_text=None,

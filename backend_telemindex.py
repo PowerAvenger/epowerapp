@@ -170,13 +170,13 @@ def filtrar_datos(
         lista_meses = df_filtrado_año['mes_nombre'].unique().tolist()
         print('Filtrado por mes')
     else:
-        #forzamos de nuevo la columna fecha a date para evitar error en el filtrado, ya que dia seleccionado debe ser un date
-        #st.session_state.df_sheets['fecha'] = pd.to_datetime(st.session_state.df_sheets['fecha']).dt.date
-        
         inicio, fin = dias_seleccionados
+        fechas = pd.to_datetime(df_origen['fecha'], errors='coerce')
+        inicio = pd.Timestamp(inicio)
+        fin = pd.Timestamp(fin)
         df_filtrado = df_origen[
-            (df_origen['fecha'] >= inicio) &
-            (df_origen['fecha'] <= fin)
+            (fechas >= inicio) &
+            (fechas <= fin)
         ]
         lista_meses = None
         print('Filtrado por dia')
