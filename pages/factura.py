@@ -491,9 +491,32 @@ def _buscar_dato_informe(texto, patrones):
 def _cliente_nif_desde_factura(texto):
     """Extrae titular y documento fiscal de cabeceras simples o tabulares."""
     patron_nif = (
-        r"(?:[ABCDEFGHJNPQRSUVW]\d{7}[0-9A-J]|"
+        r"(?:ES)?(?:[ABCDEFGHJNPQRSUVW]\d{7}[0-9A-J]|"
         r"\d{8}[A-Z]|[XYZ]\d{7}[A-Z])"
     )
+    cliente_gerencia_titular = re.search(
+        rf"^Titular\s*:\s*(.+?)\s+NIF\s*:[^\n]*\n\s*({patron_nif})\b",
+        texto,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    if cliente_gerencia_titular:
+        return (
+            re.sub(
+                r"\s+", " ", cliente_gerencia_titular.group(1)
+            ).strip(" ,-:"),
+            cliente_gerencia_titular.group(2).upper(),
+        )
+    cliente_gerencia = re.search(
+        rf"^Potencia\s+contratada\s+[\d.,]+\s*€\s+(.+?)\s*$\n"
+        rf"Energ[ií]a\s+consumida[^\n]*?CIF/NIF\s*:\s*({patron_nif})\b",
+        texto,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    if cliente_gerencia:
+        return (
+            re.sub(r"\s+", " ", cliente_gerencia.group(1)).strip(" ,-:"),
+            cliente_gerencia.group(2).upper(),
+        )
     cliente_endesa = re.search(
         rf"^Titular\s+del\s+contrato\s*:\s*(.+?)\s+"
         rf"N[uú]mero\s+de\s+contador\s*:[^\n]*\n"
