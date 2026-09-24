@@ -1768,6 +1768,70 @@ def _localize_madrid(dt: pd.Series) -> pd.Series:
     # No tocar DST ni tz
     return dt
 
+
+def _desplegar_curva_matricial(
+    df: pd.DataFrame,
+) -> tuple[pd.DataFrame, bool]:
+    """Convierte ``fecha + H01…H24/H25`` al formato horario vertical."""
+    columnas_hora = {}
+    for columna in df.columns:
+        coincidencia = re.fullmatch(
+            r"h\s*0?([1-9]|1\d|2[0-5])", _clean(columna)
+        )
+        if coincidencia:
+            columnas_hora[int(coincidencia.group(1))] = columna
+
+    if not all(hora in columnas_hora for hora in range(1, 25)):
+        return df, False
+
+    columna_fecha = next(
+        (
+            columna for columna in df.columns
+            if _clean(columna) in {"fecha", "date", "data", "dia"}
+        ),
+        None,
+    )
+    if columna_fecha is None:
+        return df, False
+
+    fechas = _parse_date_ddmmyyyy(df[columna_fecha]).dt.normalize()
+    bloques = []
+    for hora in range(1, 25):
+        bloques.append(pd.DataFrame({
+            "Fecha": df[columna_fecha],
+            "Hora": str(hora),
+            "Consumo (kWh)": df[columnas_hora[hora]],
+            "_fila_matriz": range(len(df)),
+            "_orden_matriz": float(hora),
+        }))
+
+    # H25 representa la segunda ocurrencia de la hora de cambio de octubre.
+    # Muchos formatos rellenan esta columna con cero durante todo el año, por
+    # lo que solo se incorpora en el último domingo de octubre.
+    if 25 in columnas_hora:
+        dia_largo = (
+            fechas.dt.month.eq(10)
+            & fechas.dt.day.ge(25)
+            & fechas.dt.dayofweek.eq(6)
+        )
+        if dia_largo.any():
+            bloques.append(pd.DataFrame({
+                "Fecha": df.loc[dia_largo, columna_fecha],
+                "Hora": "3",
+                "Consumo (kWh)": df.loc[dia_largo, columnas_hora[25]],
+                "_fila_matriz": df.index[dia_largo],
+                "_orden_matriz": 3.5,
+            }))
+
+    desplegada = pd.concat(bloques, ignore_index=True)
+    desplegada = (
+        desplegada.sort_values(["_fila_matriz", "_orden_matriz"])
+        .drop(columns=["_fila_matriz", "_orden_matriz"])
+        .reset_index(drop=True)
+    )
+    desplegada["Consumo (kWh)"] = desplegada["Consumo (kWh)"].astype(str)
+    return desplegada, True
+
 # ------------------------------------
 # FUNCIÓN PARA NORMALIZAR CURVA
 # ------------------------------------
@@ -1786,6 +1850,7 @@ def normalize_curve_simple(
     #   Detección automática de formato de fecha (día primero o año primero)."""
     
     df, header_row = _read_any(uploaded, preferred_sheet=excel_sheet)
+    df, _formato_matricial = _desplegar_curva_matricial(df)
     c_dt, c_date, c_time, c_quarter, c_kwh, c_per, c_ind, c_cap, c_ver, c_gen = _guess_cols(df)
 
     if not (c_dt or (c_date and c_time)):

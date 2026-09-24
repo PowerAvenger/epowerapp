@@ -36,6 +36,34 @@ from servicio_curva import (
 
 
 class CurvasComunesTest(unittest.TestCase):
+    def test_normaliza_curva_matricial_h01_h25(self):
+        columnas = ["fecha", *[f"H{hora:02d}" for hora in range(1, 26)]]
+        filas = [
+            ["25/06/2026", *range(1, 25), 0],
+            ["26/06/2026", *range(25, 49), 0],
+        ]
+        contenido = ";".join(columnas) + "\n"
+        contenido += "\n".join(
+            ";".join(map(str, fila)) for fila in filas
+        )
+        archivo = io.BytesIO(contenido.encode("utf-8"))
+        archivo.name = "curva_matricial.csv"
+
+        _, normalizada, _, periodos_origen, _, frecuencia = (
+            normalize_curve_simple(archivo)
+        )
+
+        self.assertEqual(frecuencia, "H")
+        self.assertFalse(periodos_origen)
+        self.assertEqual(len(normalizada), 48)
+        self.assertEqual(
+            normalizada["fecha_hora"].min(), pd.Timestamp("2026-06-25 00:00")
+        )
+        self.assertEqual(
+            normalizada["fecha_hora"].max(), pd.Timestamp("2026-06-26 23:00")
+        )
+        self.assertEqual(normalizada["consumo_kWh"].sum(), sum(range(1, 49)))
+
     def test_aviso_resolucion_cuartohoraria(self):
         nivel, mensaje = aviso_resolucion_curva("qh")
 
