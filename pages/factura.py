@@ -4990,6 +4990,12 @@ with tab_verificacion:
                     type="primary",
                     use_container_width=True,
                     key=f"guardar_verificacion_bbdd_{huella[:8]}",
+                    disabled=not st.session_state.get("es_admin", False),
+                    help=(
+                        None
+                        if st.session_state.get("es_admin", False)
+                        else "Disponible únicamente con acceso administrativo."
+                    ),
                 ):
                     try:
                         pct_verificacion = (
@@ -6153,6 +6159,12 @@ with tab_ahorro_factura:
                 type="primary",
                 use_container_width=True,
                 key=f"guardar_comparativa_bbdd_{huella[:8]}",
+                disabled=not st.session_state.get("es_admin", False),
+                help=(
+                    None
+                    if st.session_state.get("es_admin", False)
+                    else "Disponible únicamente con acceso administrativo."
+                ),
             ):
                 try:
                     componentes_historial = _componentes_historial(

@@ -32,14 +32,17 @@ def generar_menu():
         st.page_link('pages/opt2_rdl.py', label = 'Optimización RDL 7/2026', icon = "🎯")
         st.page_link('pages/telemindex.py', label = 'Telemindex: Histórico de indexados', icon = "📈")
         st.page_link('pages/simulindex.py', label = 'Simulindex: Futuros de indexados', icon = "🔮")
-        try:
-            st.page_link(
-                'pages/historico_analisis.py',
-                label='Histórico de análisis',
-                icon='📚',
-            )
-        except st.errors.StreamlitAPIException:
-            st.caption('📚 Histórico de análisis · reinicia la app para activarlo')
+        if st.session_state.get('es_admin', False):
+            try:
+                st.page_link(
+                    'pages/historico_analisis.py',
+                    label='Histórico de análisis',
+                    icon='📚',
+                )
+            except st.errors.StreamlitAPIException:
+                st.caption(
+                    '📚 Histórico de análisis · reinicia la app para activarlo'
+                )
         try:
             st.page_link(
                 'pages/comparador_luz.py',

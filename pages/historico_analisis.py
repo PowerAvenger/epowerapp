@@ -1,21 +1,44 @@
 from __future__ import annotations
 
+import logging
+
+import streamlit as st
+
+if not st.session_state.get("usuario_autenticado", False):
+    st.switch_page("epowerapp.py")
+
+if not st.session_state.get("es_admin", False):
+    st.title("📚 Histórico de análisis")
+    st.warning(
+        "Esta sección contiene expedientes guardados y está disponible "
+        "únicamente con acceso administrativo."
+    )
+    st.page_link("pages/factura.py", label="Volver a Análisis de facturas", icon="🧾")
+    st.stop()
+
 import json
 import sqlite3
 
-import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-import streamlit as st
+try:
+    import pandas as pd
+    import plotly.express as px
+    import plotly.graph_objects as go
 
-from data_beta.db import DEFAULT_DB_PATH, initialize_database
-from formato_es import formato_euros, formato_euros_con_signo, formato_kwh
-from utilidades import generar_menu
+    from data_beta.db import DEFAULT_DB_PATH, initialize_database
+    from formato_es import formato_euros, formato_euros_con_signo, formato_kwh
+    from utilidades import generar_menu
+except Exception:
+    logging.exception("No se han podido cargar las dependencias del histórico")
+    st.title("📚 Histórico de análisis")
+    st.error("No se ha podido abrir el histórico en este momento.")
+    st.info(
+        "Recarga la página. Si el problema continúa, revisa los registros de "
+        "la aplicación. El resto de módulos puede seguir utilizándose."
+    )
+    st.stop()
 
 
 generar_menu()
-if not st.session_state.get("usuario_autenticado", False):
-    st.switch_page("epowerapp.py")
 
 st.title("📚 Histórico de verificaciones y comparativas")
 st.caption(
@@ -25,7 +48,13 @@ st.caption(
 if not DEFAULT_DB_PATH.exists():
     st.info("La base local todavía no se ha creado en este equipo.")
     st.stop()
-initialize_database(DEFAULT_DB_PATH)
+try:
+    initialize_database(DEFAULT_DB_PATH)
+except (OSError, sqlite3.Error):
+    logging.exception("No se ha podido inicializar la BBDD del histórico")
+    st.error("No se ha podido abrir la base de datos del histórico.")
+    st.info("Recarga la página o revisa los registros de la aplicación.")
+    st.stop()
 
 
 def consultar(sql: str, parametros: tuple = ()) -> pd.DataFrame:
@@ -44,17 +73,23 @@ def cargar_snapshot(analisis_id: int) -> dict:
     return json.loads(fila[0])
 
 
-expedientes = consultar(
-    """
-    SELECT a.id, a.tipo, s.cups20 AS cups, a.numero_factura,
-           a.fecha_factura, a.ciclo_inicio, a.ciclo_fin, a.estado,
-           a.total_facturado_eur, a.total_referencia_eur,
-           a.diferencia_eur, a.diferencia_pct, a.version_calculo, a.creado_en
-    FROM analisis_factura a
-    JOIN suministros s ON s.id = a.suministro_id
-    ORDER BY a.ciclo_fin, a.id
-    """
-)
+try:
+    expedientes = consultar(
+        """
+        SELECT a.id, a.tipo, s.cups20 AS cups, a.numero_factura,
+               a.fecha_factura, a.ciclo_inicio, a.ciclo_fin, a.estado,
+               a.total_facturado_eur, a.total_referencia_eur,
+               a.diferencia_eur, a.diferencia_pct, a.version_calculo, a.creado_en
+        FROM analisis_factura a
+        JOIN suministros s ON s.id = a.suministro_id
+        ORDER BY a.ciclo_fin, a.id
+        """
+    )
+except (OSError, sqlite3.Error, ValueError):
+    logging.exception("No se han podido consultar los expedientes del histórico")
+    st.error("No se han podido consultar los expedientes guardados.")
+    st.info("Recarga la página o revisa los registros de la aplicación.")
+    st.stop()
 if expedientes.empty:
     st.info(
         "Todavía no hay resultados guardados. Guarda una verificación o una "
