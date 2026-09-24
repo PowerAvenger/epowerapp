@@ -71,6 +71,10 @@ from backend_verificacion_consumos import (
     reconstruir_total_beta,
     tabla_conciliacion_consumos,
 )
+from backend_indexado import (
+    FormulaIndexada,
+    construir_desglose_precio_indexado,
+)
 from utilidades import (
     actualizar_df_index_por_zona,
     generar_menu,
@@ -490,6 +494,17 @@ def _buscar_dato_informe(texto, patrones):
 
 def _cliente_nif_desde_factura(texto):
     """Extrae titular y documento fiscal de cabeceras simples o tabulares."""
+    def _cliente_valido(valor):
+        """Descarta contactos y etiquetas que no identifican al titular."""
+        if not valor:
+            return False
+        normalizado = re.sub(r"\s+", " ", valor).strip(" ,-:")
+        return bool(normalizado) and not re.search(
+            r"@|\b(?:www\.|https?://|atenci[oó]n\s+al\s+cliente|aver[ií]as)\b",
+            normalizado,
+            re.IGNORECASE,
+        )
+
     patron_nif = (
         r"(?:ES)?(?:[ABCDEFGHJNPQRSUVW]\d{7}[0-9A-J]|"
         r"\d{8}[A-Z]|[XYZ]\d{7}[A-Z])"
@@ -579,7 +594,7 @@ def _cliente_nif_desde_factura(texto):
         if coincidencia:
             cliente = re.sub(r"\s+", " ", coincidencia.group(1)).strip(" ,-:")
             nif = coincidencia.group(2).strip().upper()
-            if cliente:
+            if _cliente_valido(cliente):
                 return cliente, nif
 
     # Cabecera seguida de una fila de datos, sin repetir las etiquetas.
@@ -607,7 +622,7 @@ def _cliente_nif_desde_factura(texto):
                     linea[:posicion_nif.start()].strip(),
                     flags=re.IGNORECASE,
                 ).strip(" ,-:|")
-                if cliente_contexto and not re.fullmatch(
+                if _cliente_valido(cliente_contexto) and not re.fullmatch(
                     r"(?:NIF|CIF|DNI|DNI/NIF/NIE)",
                     cliente_contexto,
                     re.IGNORECASE,
@@ -615,16 +630,18 @@ def _cliente_nif_desde_factura(texto):
                     return cliente_contexto, nif_contexto
 
     cliente = _buscar_dato_informe(texto, [
-        r"^Titular\s*:?\s*([^\n]+)$",
+        r"^Titular\b(?:\s*:\s*|\s+)([^\n]+)$",
         r"^(?:Nombre(?:\s+y\s+apellidos)?|Raz[oó]n\s+social|"
         r"Denominaci[oó]n\s+social)\s*:?\s*([^\n]+)$",
-        r"^Cliente\s*:?\s*([^\n]+)$",
+        r"^Cliente\b(?:\s*:\s*|\s+)([^\n]+)$",
         r"^Nombre\s+del\s+cliente\s*:?\s*([^\n]+)$",
     ])
     nif = _buscar_dato_informe(texto, [
         rf"^(?:DNI/NIF/NIE|CIF/NIF|NIF|CIF)\s*:?\s*({patron_nif})\b",
         rf"\b(?:DNI/NIF/NIE|CIF/NIF|NIF|CIF)\s*:?\s*({patron_nif})\b",
     ])
+    if not _cliente_valido(cliente):
+        cliente = ""
     return cliente, nif
 
 
@@ -750,6 +767,64 @@ def _firma_formula_indexado():
         st.session_state.get("cfg_fnee_pos", "perdidas"),
         st.session_state.get("cf_pct", 0.0),
         st.session_state.get("zona_periodos_index", "peninsula"),
+    )
+
+
+def _formula_indexado_activa():
+    """Reconstruye la fórmula aplicada a la verificación de la factura."""
+    return FormulaIndexada(
+        desvios_apant=float(st.session_state.get("desvios_apant", 0.0)),
+        margen=float(st.session_state.get("margen_telemindex", 0.0)),
+        margen_pos=st.session_state.get("cfg_margen_pos", "neto"),
+        otros_costes=float(st.session_state.get("otros_costes_indexado", 0.0)),
+        otros_costes_pos=st.session_state.get(
+            "cfg_otros_costes_pos", "neto"
+        ),
+        incluir_fnee=bool(st.session_state.get("cfg_fnee", False)),
+        fnee_pos=st.session_state.get("cfg_fnee_pos", "perdidas"),
+        cf_pct=float(st.session_state.get("cf_pct", 0.0)),
+    )
+
+
+def _cruzar_curva_componentes_indexados(curva_periodo, precios_index):
+    """Cruza la curva con todos los componentes horarios usados en el cálculo."""
+    curva = curva_periodo[[
+        "fecha_hora", "periodo", "consumo_neto_kWh"
+    ]].copy()
+    curva["fecha_hora"] = pd.to_datetime(curva["fecha_hora"], errors="coerce")
+    curva = curva.dropna(subset=["fecha_hora"])
+    curva["fecha_hora"] = curva["fecha_hora"].dt.floor("h")
+    curva = (
+        curva.groupby("fecha_hora", as_index=False)
+        .agg({"periodo": "first", "consumo_neto_kWh": "sum"})
+    )
+    curva["_fecha"] = curva["fecha_hora"].dt.date
+    curva["_hora"] = curva["fecha_hora"].dt.hour
+
+    precios = precios_index.copy()
+    precios["_fecha"] = pd.to_datetime(
+        precios["fecha"], errors="coerce"
+    ).dt.date
+    precios["_hora"] = pd.to_numeric(precios["hora"], errors="coerce")
+    precios = precios.dropna(subset=["_fecha", "_hora"])
+    if (
+        not precios.empty
+        and precios["_hora"].min() >= 1
+        and precios["_hora"].max() == 24
+    ):
+        precios["_hora"] = precios["_hora"] - 1
+    columnas_numericas = [
+        columna for columna in precios.select_dtypes(include="number").columns
+        if columna != "_hora"
+    ]
+    precios = precios.groupby(
+        ["_fecha", "_hora"], as_index=False
+    )[columnas_numericas].mean()
+    return curva.merge(
+        precios,
+        on=["_fecha", "_hora"],
+        how="left",
+        validate="many_to_one",
     )
 
 
@@ -1272,6 +1347,10 @@ revision_manual_factura = None
 revision_manual_real = None
 resultado = None
 figura_componentes = None
+resultado_medida = None
+complementos_datadis_resultado = None
+tabla_total_beta = None
+tabla_componentes_ahorro = None
 
 with col_entrada:
     st.subheader("Suelta aquí tu factura", divider="rainbow")
@@ -2700,7 +2779,6 @@ if contenido is not None:
                 st.json(factura.como_dict())
                 st.text_area("Texto extraído", texto, height=240)
 
-
 with tab_verificacion:
     if factura is None:
         st.info("Carga una factura válida para preparar la verificación con medida.")
@@ -2727,8 +2805,6 @@ with tab_verificacion:
         resultado_medida_sesion = st.session_state.get(
             "factura_verificacion_consumos"
         )
-        resultado_medida = None
-        complementos_datadis_resultado = None
         if (
             resultado_medida_sesion
             and resultado_medida_sesion.get("huella") == huella
@@ -4495,6 +4571,59 @@ with tab_verificacion:
                     hide_index=True,
                     use_container_width=True,
                 )
+                if tipo_energia_verificacion == "Indexado":
+                    coste_consumo.markdown("#### Desglose justificativo")
+                    try:
+                        curva_componentes = _cruzar_curva_componentes_indexados(
+                            resultado_medida.curva_periodo,
+                            st.session_state.df_sheets,
+                        )
+                        desglose_indexado = construir_desglose_precio_indexado(
+                            curva_componentes,
+                            _atr_indexado(factura.atr),
+                            _formula_indexado_activa(),
+                            columna_consumo="consumo_neto_kWh",
+                        )
+                        desglose_indexado["Impacto total (€)"] = (
+                            pd.to_numeric(
+                                desglose_indexado["Total"], errors="coerce"
+                            )
+                            * consumo_total_medida
+                            / 1000
+                        )
+                        desglose_mostrar = desglose_indexado.copy()
+                        columnas_precio = [
+                            columna for columna in desglose_mostrar.columns
+                            if columna not in {"Componente", "Impacto total (€)"}
+                        ]
+                        for columna in columnas_precio:
+                            desglose_mostrar[columna] = desglose_mostrar[
+                                columna
+                            ].map(
+                                lambda valor: formato_eur_kwh(
+                                    valor / 1000, 6, False
+                                )
+                            )
+                        desglose_mostrar["Impacto total (€)"] = (
+                            desglose_mostrar["Impacto total (€)"].map(
+                                lambda valor: formato_euros(valor, 2, False)
+                            )
+                        )
+                        coste_consumo.caption(
+                            "Componentes ponderados con la curva en €/kWh. "
+                            "La fila Precio final concilia con el coste "
+                            "verificado de energía."
+                        )
+                        coste_consumo.dataframe(
+                            desglose_mostrar,
+                            hide_index=True,
+                            use_container_width=True,
+                            height=38 + 35 * len(desglose_mostrar),
+                        )
+                    except (KeyError, TypeError, ValueError) as exc:
+                        coste_consumo.warning(
+                            f"No se puede construir el desglose: {exc}"
+                        )
                 detalle_potencia_beta, coste_potencia_beta = (
                     calcular_potencia_confirmada(potencia_confirmada)
                 )
@@ -6607,9 +6736,9 @@ with tab_informe:
             )
         else:
             informes_disponibles = []
-            if resultado_medida is not None and "tabla_total_beta" in locals():
+            if resultado_medida is not None and tabla_total_beta is not None:
                 informes_disponibles.append("Informe de verificación")
-            if "tabla_componentes_ahorro" in locals():
+            if tabla_componentes_ahorro is not None:
                 informes_disponibles.append("Informe comparativa de ahorro · Beta")
             if resultado is not None:
                 informes_disponibles.append("Informe comercial de propuesta")

@@ -2355,7 +2355,7 @@ def _verificar_impuestos(factura: FacturaLeida, texto: str) -> None:
 
     coincidencia_iva_tipo_repetido = re.search(
         r"^IVA\s+([\d.,]+)\s*%\s+[\d.,]+\s*%\s+s/\s*"
-        r"([\d.,]+)\s*€\s+([\d.,]+)\s*€?\s*$",
+        r"([\d.,]+)\s*€\s+([\d.,]+)\s*€",
         texto,
         re.IGNORECASE | re.MULTILINE,
     )
@@ -5686,6 +5686,8 @@ def _generico(texto: str) -> FacturaLeida:
         r"(\d{1,2}\s+de\s+[a-záéíóúüñ]+\s+de\s+\d{4})",
     ])
     iva = buscar_numero(texto, [
+        r"^IVA\s+[\d.,]+\s*%\s+[\d.,]+\s*%\s+s/\s*"
+        r"[\d.,]+\s*€\s+([\d.,]+)\s*€",
         r"^Base\s+Imponible\s+\d+\s+[\d.,]+\s+"
         r"\d+(?:[.,]\d+)?\s+([\d.]+\s*,\s*\d{2})\s+[\d.,]+\s*$",
         r"^IVA\s+normal\s+[\d.,]+\s*%\s+s/\s*[\d.,]+[^\n]*?"
