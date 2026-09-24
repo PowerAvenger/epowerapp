@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from backend_ofertas_fijas import periodos_aplicables_atr
-from formato_es import formato_eur_mwh, formato_euros, formato_pct
+from formato_es import formato_eur_mwh, formato_euros, formato_numero_es, formato_pct
 from componentes_ofertas_fijas import (
     normalizar_excel_ofertas,
     preparar_tarifas_extraidas,
@@ -31,7 +31,9 @@ def _guardar_precios(clave, firma_curva, atr, consumos, precios, origen):
     st.session_state[f"{clave}_origen_guardado"] = origen
 
 
-def render_precios_facturados(consumos, atr, firma_curva, clave):
+def render_precios_facturados(
+    consumos, atr, firma_curva, clave, descripcion_periodo=None
+):
     """Admite entrada manual, Excel o imagen sin alterar el catálogo de ofertas."""
     clave_precios = f"{clave}_precios"
     if st.session_state.get(f"{clave}_firma") != firma_curva:
@@ -46,10 +48,10 @@ def render_precios_facturados(consumos, atr, firma_curva, clave):
         else "Introducir precios medios facturados"
     )
     with st.expander(etiqueta, expanded=False):
-        st.caption(
+        st.caption(descripcion_periodo or (
             "Precios del término de energía en €/kWh, sin impuestos ni potencia, "
             "para el mismo periodo de la curva."
-        )
+        ))
         origen = st.radio(
             "Origen de los precios",
             ("Manual", "Excel", "IA"),
@@ -77,7 +79,6 @@ def render_precios_facturados(consumos, atr, firma_curva, clave):
                     _guardar_precios(
                         clave, firma_curva, atr, consumos, precios, "Manual"
                     )
-                    st.rerun()
                 except ValueError as error:
                     st.error(str(error))
 
@@ -109,7 +110,6 @@ def render_precios_facturados(consumos, atr, firma_curva, clave):
                             clave, firma_curva, atr, consumos,
                             tabla.iloc[indice].to_dict(), f"Excel · {nombres[indice]}",
                         )
-                        st.rerun()
                 except (ValueError, OSError, ImportError) as error:
                     st.error(str(error))
 
@@ -175,7 +175,6 @@ def render_precios_facturados(consumos, atr, firma_curva, clave):
                             clave, firma_curva, atr, consumos,
                             editada.iloc[0].to_dict(), "IA revisada",
                         )
-                        st.rerun()
                     except ValueError as error:
                         st.error(str(error))
             elif not api_key:
@@ -196,7 +195,7 @@ def render_precios_facturados(consumos, atr, firma_curva, clave):
     return st.session_state.get(clave_precios)
 
 
-def render_impacto_margen(resultado):
+def render_impacto_margen(resultado, texto_metodo=None):
     """Presenta la diferencia facturada como una comparación visual compacta."""
     detalle = resultado["detalle"]
     coste_calculado = float(detalle["Coste fórmula (€)"].sum())
@@ -245,8 +244,55 @@ def render_impacto_margen(resultado):
   <div class="tm-pista"><div class="tm-barra" style="width:{ancho_calculado:.2f}%;background:#5daaf7"></div></div>
   <div class="tm-fila"><span>Coste facturado</span><strong>{escape(formato_euros(coste_facturado))}</strong></div>
   <div class="tm-pista"><div class="tm-barra" style="width:{ancho_facturado:.2f}%;background:{color}"></div></div>
-  <div class="tm-pie">Margen implícito total: {escape(formato_eur_mwh(margen_total, 2))} · Incluido en la fórmula: {escape(formato_eur_mwh(margen_formula, 2))}<br>Estimación ponderada por consumo; la diferencia puede incluir conceptos ajenos a la fórmula.</div>
+  <div class="tm-pie">Margen implícito total: {escape(formato_eur_mwh(margen_total, 2))} · Incluido en la fórmula: {escape(formato_eur_mwh(margen_formula, 2))}<br>{escape(texto_metodo or 'Estimación ponderada por consumo; la diferencia puede incluir conceptos ajenos a la fórmula.')}</div>
 </div>
 """,
         unsafe_allow_html=True,
     )
+
+
+def render_detalle_margen(resultado):
+    """Muestra el desglose por periodo de una estimación de margen."""
+    detalle_calculo = resultado["detalle"]
+    detalle = detalle_calculo[[
+        "Periodo", "Consumo (kWh)", "Precio facturado (€/kWh)",
+        "Precio calculado (€/kWh)", "Margen adicional (€/MWh)",
+        "Diferencia vs fórmula (€)",
+    ]].copy()
+    consumo_total = resultado["consumo_kwh"]
+    detalle = pd.concat([
+        detalle,
+        pd.DataFrame([{
+            "Periodo": "<strong>TOTAL</strong>",
+            "Consumo (kWh)": consumo_total,
+            "Precio facturado (€/kWh)": resultado[
+                "precio_facturado_medio_eur_kwh"
+            ],
+            "Precio calculado (€/kWh)": (
+                detalle_calculo["Coste fórmula (€)"].sum() / consumo_total
+            ),
+            "Margen adicional (€/MWh)": resultado[
+                "margen_adicional_eur_mwh"
+            ],
+            "Diferencia vs fórmula (€)": resultado[
+                "diferencia_coste_vs_formula_eur"
+            ],
+        }]),
+    ], ignore_index=True)
+    for columna in detalle.columns[1:]:
+        decimales = 6 if "€/kWh" in columna else 2
+        detalle[columna] = detalle[columna].map(
+            lambda valor, n=decimales: formato_numero_es(valor, n)
+        )
+    detalle.columns = [
+        "Periodo", "Consumo<br>(kWh)", "Precio facturado<br>(€/kWh)",
+        "Precio calculado<br>(€/kWh)", "Margen adicional<br>(€/MWh)",
+        "Diferencia vs fórmula<br>(€)",
+    ]
+    with st.expander("Detalle del margen por periodo", expanded=False):
+        st.markdown(
+            '<div style="overflow-x:auto">'
+            + detalle.to_html(index=False, escape=False, border=0)
+            + "</div>",
+            unsafe_allow_html=True,
+        )

@@ -9,7 +9,6 @@ from backend_simulindex import (obtener_historicos_meff, obtener_meff_anual, obt
                                 obtener_trimestres_futuros,
                                 construir_escenarios_pricing_trimestral,
                                 calcular_cobertura_trimestral_horaria,
-                                construir_forward_mensual_trimestre,
                                 graficar_2026,
                                 graficar_curva_omip_mensual_12m,
                                 construir_media_prevista_2026_diaria, graficar_media_prevista_2026,
@@ -1394,9 +1393,9 @@ with contenedor_pricing:
         formula_pricing = FormulaIndexada(
             desvios_apant=st.session_state.get('desvios_apant', 0.0),
             margen=st.session_state.get('margen_telemindex', 0.0),
-            margen_pos=st.session_state.get('cfg_margen_pos', 'tm'),
+            margen_pos=st.session_state.get('cfg_margen_pos', 'neto'),
             otros_costes=st.session_state.get('otros_costes_indexado', 0.0),
-            otros_costes_pos=st.session_state.get('cfg_otros_costes_pos', 'tm'),
+            otros_costes_pos=st.session_state.get('cfg_otros_costes_pos', 'neto'),
             incluir_fnee=st.session_state.get('cfg_fnee', True),
             fnee_pos=st.session_state.get('cfg_fnee_pos', 'perdidas'),
             cf_pct=st.session_state.get('cf_pct', 0.0),
@@ -1893,9 +1892,9 @@ if seccion_simulindex == 'Combo index-fijo':
         formula_combo = FormulaIndexada(
             desvios_apant=st.session_state.get('desvios_apant', 0.0),
             margen=st.session_state.get('margen_telemindex', 0.0),
-            margen_pos=st.session_state.get('cfg_margen_pos', 'tm'),
+            margen_pos=st.session_state.get('cfg_margen_pos', 'neto'),
             otros_costes=st.session_state.get('otros_costes_indexado', 0.0),
-            otros_costes_pos=st.session_state.get('cfg_otros_costes_pos', 'tm'),
+            otros_costes_pos=st.session_state.get('cfg_otros_costes_pos', 'neto'),
             incluir_fnee=st.session_state.get('cfg_fnee', True),
             fnee_pos=st.session_state.get('cfg_fnee_pos', 'perdidas'),
             cf_pct=st.session_state.get('cf_pct', 0.0),
@@ -3585,10 +3584,108 @@ if seccion_simulindex == 'Comparador':
 # =======================================================================================================================================================================
 if seccion_simulindex == 'Cobertura trimestral':
 
-    df_curva_trim = st.session_state.get('df_curva_sheets')
-    if not isinstance(df_curva_trim, pd.DataFrame) or df_curva_trim.empty:
-        st.warning('Introduce una curva de carga anual')
-        st.stop()
+    c1, c2, c3 = st.columns(3)
+
+    curva_trim_disponible = isinstance(
+        st.session_state.get('df_norm_h'), pd.DataFrame
+    ) and not st.session_state.df_norm_h.empty
+    opciones_origen_trim = ['Curva de carga', 'Consumos mensuales / SIPS']
+    st.session_state.setdefault(
+        'origen_consumos_cobertura_trim',
+        'Curva de carga' if curva_trim_disponible else 'Consumos mensuales / SIPS',
+    )
+    with c1:
+        with st.expander(
+            '📈 Curva de carga y origen de consumos',
+            expanded=not curva_trim_disponible,
+        ):
+            origen_consumos_trim = st.radio(
+                'Origen de consumos para la cobertura',
+                opciones_origen_trim,
+                horizontal=True,
+                key='origen_consumos_cobertura_trim',
+            )
+            if origen_consumos_trim == 'Curva de carga':
+                contenedor_origen_curva_trim = st.container(border=True)
+                contenedor_acciones_curva_trim = st.container(border=True)
+            else:
+                archivo_consumos_trim = st.file_uploader(
+                    'Sube un Excel de consumos mensuales o un SIPS (CSV/Excel)',
+                    type=['xlsx', 'xls', 'csv'],
+                    key='upload_consumos_cobertura_trim',
+                )
+                if archivo_consumos_trim is not None:
+                    firma_consumos_trim = hashlib.sha256(
+                        archivo_consumos_trim.getvalue()
+                    ).hexdigest()
+                    if firma_consumos_trim != st.session_state.get(
+                        'firma_consumos_cobertura_trim'
+                    ):
+                        try:
+                            if (
+                                archivo_consumos_trim.name.lower().endswith('.csv')
+                                or es_sips_excel(archivo_consumos_trim)
+                            ):
+                                sips_trim = _leer_sips_pricing(
+                                    archivo_consumos_trim.name,
+                                    archivo_consumos_trim.getvalue(),
+                                )
+                                consumos_trim_cargados = perfil_anual_meses_naturales(
+                                    sips_trim['consumos']
+                                )
+                                st.session_state.sips_cobertura_trim = sips_trim
+                                st.session_state.atr_cobertura_trim = sips_trim.get('atr')
+                            else:
+                                consumos_trim_cargados = normalizar_tabla_consumos_sips(
+                                    pd.read_excel(archivo_consumos_trim)
+                                )
+                                st.session_state.pop('sips_cobertura_trim', None)
+                                st.session_state.pop('atr_cobertura_trim', None)
+                            st.session_state.df_consumos_cobertura_trim = (
+                                consumos_trim_cargados
+                            )
+                            st.session_state.firma_consumos_cobertura_trim = (
+                                firma_consumos_trim
+                            )
+                            st.success('Consumos mensuales cargados correctamente.')
+                        except Exception as error_consumos_trim:
+                            st.error(
+                                f'No se pudieron leer los consumos: '
+                                f'{error_consumos_trim}'
+                            )
+                if isinstance(
+                    st.session_state.get('df_consumos_cobertura_trim'),
+                    pd.DataFrame,
+                ):
+                    st.caption(
+                        'Hay consumos mensuales cargados. Puedes sustituir el '
+                        'archivo o eliminarlos.'
+                    )
+                    if st.button(
+                        'Eliminar consumos cargados',
+                        key='eliminar_consumos_cobertura_trim',
+                        use_container_width=True,
+                    ):
+                        for clave_trim in (
+                            'df_consumos_cobertura_trim',
+                            'sips_cobertura_trim',
+                            'atr_cobertura_trim',
+                            'firma_consumos_cobertura_trim',
+                            'upload_consumos_cobertura_trim',
+                        ):
+                            st.session_state.pop(clave_trim, None)
+                        st.rerun()
+
+    if origen_consumos_trim == 'Curva de carga':
+        estado_curva_trim = render_origen_curva(
+            contenedor_origen_curva_trim,
+            contenedor_acciones_curva_trim,
+            clave='simulindex_cobertura_trimestral_curva',
+            titulo_compacto=True,
+            mostrar_resumen=False,
+        )
+        if estado_curva_trim['curva_publicada']:
+            st.rerun()
 
     trimestre_num_trim = int(
         st.session_state.trimestre_futuro.split('-')[0].removeprefix('Q')
@@ -3597,41 +3694,102 @@ if seccion_simulindex == 'Cobertura trimestral':
         (trimestre_num_trim - 1) * 3 + 1,
         trimestre_num_trim * 3 + 1,
     )
-    fechas_curva_trim = pd.to_datetime(
-        df_curva_trim['fecha_hora'], errors='coerce'
-    )
-    periodos_mes_curva = fechas_curva_trim.dt.to_period('M')
-    ultimos_doce_meses_curva = sorted(
-        periodos_mes_curva.dropna().unique()
-    )[-12:]
-    mascara_trim = (
-        periodos_mes_curva.isin(ultimos_doce_meses_curva)
-        & fechas_curva_trim.dt.month.isin(meses_trim)
-    )
-    df_uso_trimestral = df_curva_trim.loc[mascara_trim].copy()
+    if origen_consumos_trim == 'Curva de carga':
+        df_curva_trim = st.session_state.get('df_curva_sheets')
+        if not isinstance(df_curva_trim, pd.DataFrame) or df_curva_trim.empty:
+            c2.warning('Introduce y normaliza una curva de carga anual.')
+            st.stop()
+        fechas_curva_trim = pd.to_datetime(
+            df_curva_trim['fecha_hora'], errors='coerce'
+        )
+        periodos_mes_curva = fechas_curva_trim.dt.to_period('M')
+        ultimos_doce_meses_curva = sorted(
+            periodos_mes_curva.dropna().unique()
+        )[-12:]
+        mascara_trim = (
+            periodos_mes_curva.isin(ultimos_doce_meses_curva)
+            & fechas_curva_trim.dt.month.isin(meses_trim)
+        )
+        df_uso_trimestral = df_curva_trim.loc[mascara_trim].copy()
+        atr_fuente_trim = str(st.session_state.get('atr_dfnorm', ''))
+    else:
+        consumos_mensuales_trim = st.session_state.get(
+            'df_consumos_cobertura_trim'
+        )
+        if not isinstance(consumos_mensuales_trim, pd.DataFrame) or consumos_mensuales_trim.empty:
+            c2.warning('Carga consumos mensuales o un SIPS para continuar.')
+            st.stop()
+        atr_detectado_trim = st.session_state.get('atr_cobertura_trim')
+        opciones_atr_trim = ['2.0', '3.0', '6.1', '6.2']
+        if atr_detectado_trim in opciones_atr_trim:
+            st.session_state.atr_manual_cobertura_trim = atr_detectado_trim
+        with c1:
+            atr_fuente_trim = st.selectbox(
+                'ATR para ponderación por consumo',
+                opciones_atr_trim,
+                key='atr_manual_cobertura_trim',
+                disabled=atr_detectado_trim in opciones_atr_trim,
+                format_func=lambda valor: f'{valor}TD',
+            )
+        filas_consumo_trim = []
+        for _, fila_consumo_trim in consumos_mensuales_trim.iterrows():
+            mes_consumo_trim = int(fila_consumo_trim['mes'])
+            if mes_consumo_trim not in meses_trim:
+                continue
+            for periodo_consumo_trim in [f'P{i}' for i in range(1, 7)]:
+                consumo_periodo_trim = pd.to_numeric(
+                    fila_consumo_trim.get(periodo_consumo_trim), errors='coerce'
+                )
+                filas_consumo_trim.append({
+                    'fecha_hora': pd.Timestamp(2025, mes_consumo_trim, 1),
+                    'periodo': periodo_consumo_trim,
+                    'consumo_neto_kWh': (
+                        0.0 if pd.isna(consumo_periodo_trim)
+                        else float(consumo_periodo_trim)
+                    ),
+                })
+        df_uso_trimestral = pd.DataFrame(filas_consumo_trim)
+
     if set(pd.to_datetime(
         df_uso_trimestral['fecha_hora'], errors='coerce'
     ).dt.month.dropna().unique()) != set(meses_trim):
         st.error(
-            'La curva no contiene los tres meses naturales necesarios para '
-            'el trimestre seleccionado.'
+            'El origen seleccionado no contiene los tres meses naturales '
+            'necesarios para el trimestre.'
         )
         st.stop()
-
-    c1, c2, c3 = st.columns(3)
 
     with c1:
         st.subheader(f'Selecciona el trimestre de la cobertura')
         st.selectbox('Selecciona trimestre futuro', options=lista_trimestres_futuros, key='trimestre_futuro')
 
         precio_trim_sel = df_ultimos_precios_trim.loc[df_ultimos_precios_trim['Entrega'] == st.session_state.trimestre_futuro, 'Precio'].iloc[0]
+        precio_trim_sel = float(precio_trim_sel)
+        if 'simul_b_trim' in st.session_state:
+            st.session_state.simul_b_trim = min(
+                max(float(st.session_state.simul_b_trim), 0.0),
+                precio_trim_sel,
+            )
+        if 'simul_c_trim' in st.session_state:
+            st.session_state.simul_c_trim = max(
+                float(st.session_state.simul_c_trim), precio_trim_sel
+            )
 
         st.write(graf_omip_trimestral_select)
 
         st.subheader(f'Parametriza escenarios alternativos')
         c11, c12, c13, c14 = st.columns(4)
-        #with c11:
-            #st.number_input("Margen (€/MWh)", min_value=0.0, max_value=50.0, value=10.0, step=1.1, key = 'margen_simul_trim')         
+        with c11:
+            st.number_input(
+                "Cobertura (%)",
+                min_value=0,
+                max_value=100,
+                value=100,
+                step=5,
+                key="porcentaje_cobertura_trim",
+                disabled=True,
+                help="Primera versión: cobertura simplificada del 100 %.",
+            )
         with c12:
             #st.number_input("OMIE simulado A (€/MWh)", value=55.0, key = 'simul_a_trim')
             #st.markdown('OMIE simulado A (€/MWh)')
@@ -3644,7 +3802,7 @@ if seccion_simulindex == 'Cobertura trimestral':
                     font-weight:600;
                     margin-bottom:5px;
                 ">
-                OMIP escenario A (€/MWh)
+                Cobertura (€/MWh)
                 </div>
                 """,
                 unsafe_allow_html=True
@@ -3668,9 +3826,20 @@ if seccion_simulindex == 'Cobertura trimestral':
             )
             st.session_state.simul_a_trim = precio_trim_sel
         with c13:
-            st.number_input("OMIP escenario B (€/MWh)", value=precio_trim_sel-5, key = 'simul_b_trim')
+            st.number_input(
+                "OMIE previsto inf. (€/MWh)",
+                min_value=0.0,
+                max_value=precio_trim_sel,
+                value=max(0.0, precio_trim_sel - 5.0),
+                key='simul_b_trim',
+            )
         with c14:
-            st.number_input("OMIP escenario C (€/MWh)", value=precio_trim_sel+5,key = 'simul_c_trim')
+            st.number_input(
+                "OMIE previsto sup. (€/MWh)",
+                min_value=precio_trim_sel,
+                value=precio_trim_sel + 5.0,
+                key='simul_c_trim',
+            )
 
 
         
@@ -3696,27 +3865,27 @@ if seccion_simulindex == 'Cobertura trimestral':
         # ----------------------------
         # 6. MOSTRAR TABLA DE CONSUMOS
         # ----------------------------
-        st.subheader(f'Consumos según curva de carga introducida para peaje :orange[{st.session_state.atr_dfnorm}]')
+        st.subheader(
+            f'Consumos utilizados para peaje :orange[{atr_fuente_trim}]'
+        )
         st.dataframe(
             df_consumos_trim_view,
             use_container_width=True
         )
             
-        lista_simul_trim = [st.session_state.simul_a_trim, st.session_state.simul_b_trim, st.session_state.simul_c_trim]
-
-        atr_trim = str(
-            st.session_state.get("atr_dfnorm", "")
-        ).replace(" ", "").upper().removesuffix("TD")
+        atr_trim = str(atr_fuente_trim).replace(
+            " ", ""
+        ).upper().removesuffix("TD")
         config_trim = configuracion_fijos_pricing[atr_trim]
         apuntamientos_spot_trim = (
             tabla_apuntamientos_spot_3p
             if atr_trim == "2.0" else tabla_apuntamientos
         )
         try:
-            escenarios_trim = construir_escenarios_pricing_trimestral(
+            escenario_cobertura_a_trim = construir_escenarios_pricing_trimestral(
                 df_uso_trimestral,
                 st.session_state.trimestre_futuro,
-                lista_simul_trim,
+                [st.session_state.simul_a_trim],
                 atr_trim,
                 apuntamientos_spot_trim,
                 config_trim["ssaa"],
@@ -3728,35 +3897,39 @@ if seccion_simulindex == 'Cobertura trimestral':
                 srad_pricing,
                 fnee_pricing,
                 formula_pricing,
+                aplicar_apuntamiento=False,
+                etiquetas=["A"],
+            )[0]
+            escenario_cobertura_a_trim["label"] = (
+                "Cobertura "
+                f"({st.session_state.simul_a_trim:.1f} €/MWh)"
             )
-            tabla_forward_mensual_trim = construir_forward_mensual_trimestre(
-                df_FTB_mensual,
-                df_FTB_trimestral,
+            resumen_cobertura_a_trim = escenario_cobertura_a_trim["df_resumen"]
+            escenarios_trim = construir_escenarios_pricing_trimestral(
+                df_uso_trimestral,
                 st.session_state.trimestre_futuro,
+                [st.session_state.simul_b_trim, st.session_state.simul_c_trim],
+                atr_trim,
+                apuntamientos_spot_trim,
+                config_trim["ssaa"],
+                df_spot_periodos,
+                config_trim["col_periodo"],
+                tabla_ppc_pricing,
+                tabla_pyc_pricing,
+                osom_12m_pricing,
+                srad_pricing,
+                fnee_pricing,
+                formula_pricing,
+                aplicar_apuntamiento=True,
+                etiquetas=["B", "C"],
             )
-            forward_por_mes_trim = {
-                int(fila_forward_trim["Mes"].month): float(
-                    fila_forward_trim["OMIP (€/MWh)"]
-                )
-                for _, fila_forward_trim in tabla_forward_mensual_trim.iterrows()
-            }
-            escenario_a_forward_mensual_trim = (
-                construir_escenarios_pricing_trimestral(
-                    df_uso_trimestral,
-                    st.session_state.trimestre_futuro,
-                    [forward_por_mes_trim],
-                    atr_trim,
-                    apuntamientos_spot_trim,
-                    config_trim["ssaa"],
-                    df_spot_periodos,
-                    config_trim["col_periodo"],
-                    tabla_ppc_pricing,
-                    tabla_pyc_pricing,
-                    osom_12m_pricing,
-                    srad_pricing,
-                    fnee_pricing,
-                    formula_pricing,
-                )[0]
+            escenarios_trim[0]["label"] = (
+                "OMIE previsto inf. "
+                f"({st.session_state.simul_b_trim:.1f} €/MWh)"
+            )
+            escenarios_trim[1]["label"] = (
+                "OMIE previsto sup. "
+                f"({st.session_state.simul_c_trim:.1f} €/MWh)"
             )
         except (KeyError, ValueError) as error_pricing_trim:
             st.error(
@@ -3765,103 +3938,29 @@ if seccion_simulindex == 'Cobertura trimestral':
             )
             st.stop()
 
-        try:
-            detalle_cobertura_a_trim, resumen_cobertura_a_trim = (
-                calcular_cobertura_trimestral_horaria(
-                    df_uso_trimestral,
-                    st.session_state.simul_a_trim,
-                    atr_trim,
-                    formula_pricing,
-                    config_trim["ssaa"],
-                    srad_pricing,
-                    fnee_pricing,
-                )
-            )
-        except (KeyError, ValueError) as error_cobertura_trim:
-            st.error(
-                "No se pudo calcular la cobertura horaria A: "
-                f"{error_cobertura_trim}"
-            )
-            st.stop()
-
-        st.subheader('Simulación de indexado trimestral')
-        for esc in escenarios_trim:
-            st.markdown(esc["label"])
-
-            df_vista_trim = esc["df_resumen"].loc[
-                ["Coste (€)", "Precio medio (€/kWh)"]
-            ]
-
-            st.dataframe(
-                formatear_df_resumen(df_vista_trim),
-                use_container_width=True
-            )    
-
-        with st.expander(
-            "Prueba escenario A · forward trimestral frente a futuros mensuales",
-            expanded=True,
-        ):
-            tabla_forward_vista_trim = tabla_forward_mensual_trim.copy()
-            tabla_forward_vista_trim["Mes"] = tabla_forward_vista_trim[
-                "Mes"
-            ].dt.strftime("%m/%Y")
-            tabla_forward_vista_trim["Fecha cotización"] = pd.to_datetime(
-                tabla_forward_vista_trim["Fecha cotización"], errors="coerce"
-            ).dt.strftime("%d/%m/%Y")
-            st.dataframe(
-                tabla_forward_vista_trim.style.format({
-                    "OMIP (€/MWh)": lambda valor: formato_numero_es(valor, 2)
-                }),
-                hide_index=True,
-                use_container_width=True,
-            )
-            comparacion_forward_trim = pd.DataFrame({
-                f"Forward plano {st.session_state.trimestre_futuro}": (
-                    escenarios_trim[0]["df_resumen"].loc[
-                        "Precio medio (€/kWh)"
-                    ]
-                ),
-                "Futuros mensuales": (
-                    escenario_a_forward_mensual_trim["df_resumen"].loc[
-                        "Precio medio (€/kWh)"
-                    ]
-                ),
-            }).T
-            comparacion_forward_trim["Coste total (€)"] = [
-                escenarios_trim[0]["df_resumen"].loc["Coste (€)", "TOTAL"],
-                escenario_a_forward_mensual_trim["df_resumen"].loc[
-                    "Coste (€)", "TOTAL"
-                ],
-            ]
-            st.dataframe(
-                comparacion_forward_trim.style.format({
-                    **{
-                        columna: lambda valor: formato_numero_es(valor, 6)
-                        for columna in [f"P{i}" for i in range(1, 7)] + ["TOTAL"]
-                    },
-                    "Coste total (€)": lambda valor: formato_numero_es(valor, 2),
-                }),
-                use_container_width=True,
-            )
-
-        st.subheader('Comparación escenario A: indexado frente a cobertura')
+        st.subheader('Cobertura frente a exposición al mercado')
         st.caption(
-            "Prueba de cobertura del 100 % del consumo: OMIE se sustituye "
-            "hora a hora por el precio A. Los SSAA mantienen su perfil "
-            "horario dentro de cada mes-periodo y su media coincide con el "
-            "objetivo futuro calculado por Pricing."
+            "Cobertura simplificada del 100 %: se aplica el precio OMIP "
+            "plano, sin apuntamiento. Los escenarios OMIE inferior y "
+            "superior permanecen expuestos al mercado y sí utilizan "
+            "apuntamientos. Todos comparten consumos, SSAA, SRAD, FNEE, "
+            "pérdidas y fórmula de Pricing."
         )
         comparacion_a_trim = pd.DataFrame({
-            "Indexado escenario A": escenarios_trim[0]["df_resumen"].loc[
+            "Cobertura": resumen_cobertura_a_trim.loc[
                 "Precio medio (€/kWh)"
             ],
-            "Cobertura escenario A": resumen_cobertura_a_trim.loc[
+            "OMIE previsto inf.": escenarios_trim[0]["df_resumen"].loc[
+                "Precio medio (€/kWh)"
+            ],
+            "OMIE previsto sup.": escenarios_trim[1]["df_resumen"].loc[
                 "Precio medio (€/kWh)"
             ],
         }).T
         comparacion_a_trim["Coste total (€)"] = [
-            escenarios_trim[0]["df_resumen"].loc["Coste (€)", "TOTAL"],
             resumen_cobertura_a_trim.loc["Coste (€)", "TOTAL"],
+            escenarios_trim[0]["df_resumen"].loc["Coste (€)", "TOTAL"],
+            escenarios_trim[1]["df_resumen"].loc["Coste (€)", "TOTAL"],
         ]
         st.dataframe(
             comparacion_a_trim.style.format({
@@ -3874,16 +3973,51 @@ if seccion_simulindex == 'Cobertura trimestral':
             use_container_width=True,
         )
 
+        with st.expander('Detalles de simulación', expanded=False):
+            st.markdown(
+                "**Cobertura · "
+                f"{formato_numero_es(st.session_state.simul_a_trim, 2)} €/MWh**"
+            )
+            st.caption(
+                "Cobertura simplificada del 100 % del consumo. El componente "
+                "de mercado utiliza el precio OMIP plano en todos los periodos, "
+                "sin apuntamiento."
+            )
+            df_vista_cobertura_trim = resumen_cobertura_a_trim.loc[
+                ["Coste (€)", "Precio medio (€/kWh)"]
+            ]
+            st.dataframe(
+                formatear_df_resumen(df_vista_cobertura_trim),
+                use_container_width=True,
+            )
+
+            for esc in escenarios_trim:
+                st.markdown(f"**{esc['label']}**")
+                df_vista_trim = esc["df_resumen"].loc[
+                    ["Coste (€)", "Precio medio (€/kWh)"]
+                ]
+                st.dataframe(
+                    formatear_df_resumen(df_vista_trim),
+                    use_container_width=True,
+                )
+
         consumos_trim = df_consumos_trim.loc[
             "Consumo (kWh)", [f"P{i}" for i in range(1, 7)]
         ]
-        st.session_state.df_ofertas_fijas_simul_trim = (
-            render_bloque_ofertas_fijas(
-                consumos_trim,
-                st.session_state.get("atr_dfnorm", ""),
-                "simulindex_trim_fijos",
+        st.subheader("Ofertas a precio fijo")
+        with st.expander("Configurar y seleccionar ofertas", expanded=False):
+            st.session_state.df_ofertas_fijas_simul_trim = (
+                render_bloque_ofertas_fijas(
+                    consumos_trim,
+                    atr_trim,
+                    "simulindex_trim_fijos",
+                    titulo="",
+                    producto_entrega=(
+                        f"{st.session_state.trimestre_futuro.split('-')[0]}-"
+                        f"{2000 + int(st.session_state.trimestre_futuro.split('-')[1])}"
+                    ),
+                )
             )
-        )
 
 
         with c2:
@@ -3897,7 +4031,7 @@ if seccion_simulindex == 'Cobertura trimestral':
 
             resultados_trim.append({
                 "Oferta": (
-                    "Cobertura escenario A "
+                    "Cobertura "
                     f"({st.session_state.simul_a_trim:.1f} €/MWh)"
                 ),
                 "Tipo": "Cobertura",
@@ -3954,15 +4088,48 @@ if seccion_simulindex == 'Cobertura trimestral':
                 df_resultados_trim["Coste trimestre (€)"] - coste_min
             )
 
-            
-            
-            df_resultados_trim_view = formatear_df_resultados(df_resultados_trim)
-
-            
-
         with c3:
             st.subheader("📊 Comparativa TOTALPOWER")
-            st.dataframe(df_resultados_trim_view, use_container_width=True, hide_index=True)
+            oferta_referencia_trim = st.selectbox(
+                "Oferta de referencia",
+                options=df_resultados_trim["Oferta"].tolist(),
+                key="oferta_referencia_comparativa_trim",
+            )
+            coste_referencia_trim = df_resultados_trim.loc[
+                df_resultados_trim["Oferta"].eq(oferta_referencia_trim),
+                "Coste trimestre (€)",
+            ].iloc[0]
+            df_tabla_resultados_trim = df_resultados_trim.drop(
+                columns=["% sobre la más barata", "Δ vs más barata (€)"]
+            ).copy()
+            df_tabla_resultados_trim["% vs referencia"] = (
+                (
+                    df_tabla_resultados_trim["Coste trimestre (€)"]
+                    - coste_referencia_trim
+                )
+                / coste_referencia_trim
+                * 100
+            )
+            df_tabla_resultados_trim["Δ vs referencia (€)"] = (
+                df_tabla_resultados_trim["Coste trimestre (€)"]
+                - coste_referencia_trim
+            )
+            df_tabla_resultados_trim["_es_referencia"] = (
+                df_tabla_resultados_trim["Oferta"].eq(oferta_referencia_trim)
+            )
+            df_tabla_resultados_trim = (
+                df_tabla_resultados_trim.sort_values(
+                    ["_es_referencia", "Coste trimestre (€)"],
+                    ascending=[False, True],
+                )
+                .drop(columns="_es_referencia")
+                .reset_index(drop=True)
+            )
+            st.dataframe(
+                formatear_df_resultados(df_tabla_resultados_trim),
+                use_container_width=True,
+                hide_index=True,
+            )
 
             df_grafico_trim = df_resultados_trim.copy()
             df_grafico_trim["Oferta gráfico"] = df_grafico_trim["Oferta"].map(
@@ -4070,7 +4237,7 @@ if seccion_simulindex == 'Cobertura trimestral':
         ]
         filas_detalle_informe_trim.append({
             "Oferta": (
-                "Cobertura escenario A "
+                "Cobertura "
                 f"({st.session_state.simul_a_trim:.1f} €/MWh)"
             ),
             "Tipo": "Cobertura",

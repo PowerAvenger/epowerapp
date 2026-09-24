@@ -2388,9 +2388,9 @@ if st.session_state.get("df_norm") is not None:
             formula_referencia = FormulaIndexada(
                 desvios_apant=float(parametros_ref.get("desvios_apant", 0.0)),
                 margen=float(parametros_ref.get("margen_telemindex", 0.0)),
-                margen_pos=parametros_ref.get("cfg_margen_pos", "tm"),
+                margen_pos=parametros_ref.get("cfg_margen_pos", "neto"),
                 otros_costes=float(parametros_ref.get("otros_costes_indexado", 0.0)),
-                otros_costes_pos=parametros_ref.get("cfg_otros_costes_pos", "tm"),
+                otros_costes_pos=parametros_ref.get("cfg_otros_costes_pos", "neto"),
                 incluir_fnee=bool(parametros_ref.get("cfg_fnee", False)),
                 fnee_pos=parametros_ref.get("cfg_fnee_pos", "perdidas"),
                 cf_pct=float(parametros_ref.get("cf_pct", 0.0)),

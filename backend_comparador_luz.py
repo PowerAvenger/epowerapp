@@ -52,6 +52,53 @@ def referenciar_comparativa_costes(
     return salida.sort_values(columna_coste, kind="stable").reset_index(drop=True)
 
 
+def calcular_merma_margen_fijo(
+    ingreso_fijo: float,
+    escenarios: dict[str, pd.DataFrame],
+) -> pd.DataFrame:
+    """Mide cuánto colchón comercial del fijo consume cada escenario."""
+    ingreso_fijo = float(ingreso_fijo)
+    filas = []
+    for nombre, curva in escenarios.items():
+        requeridas = {"coste_total", "coste_margen", "coste_otros"}
+        faltantes = requeridas.difference(curva.columns)
+        if faltantes:
+            raise ValueError(
+                f"El escenario {nombre} no contiene: "
+                + ", ".join(sorted(faltantes)) + "."
+            )
+        importes = curva[list(requeridas)].apply(pd.to_numeric, errors="coerce")
+        if importes.isna().any().any():
+            raise ValueError(f"El escenario {nombre} contiene costes no válidos.")
+
+        coste_total = float(importes["coste_total"].sum())
+        margen = float(importes["coste_margen"].sum())
+        otros = float(importes["coste_otros"].sum())
+        # La merma debe conciliar exactamente con la comparativa principal:
+        # coste del escenario menos ingreso contratado en fijo. Los desvíos
+        # apantallados no se añaden como un tercer colchón, pero tampoco se
+        # descuentan del coste que ya muestra la comparativa.
+        merma = coste_total - ingreso_fijo
+        for lectura, colchon in (
+            ("Solo margen", margen),
+            ("Margen + otros costes", margen + otros),
+        ):
+            coste_sin_colchon = coste_total - colchon
+            filas.append({
+                "Escenario": str(nombre),
+                "Lectura": lectura,
+                "Ingreso fijo (€)": ingreso_fijo,
+                "Colchón inicial (€)": colchon,
+                "Coste sin colchón (€)": coste_sin_colchon,
+                "Resultado (€)": ingreso_fijo - coste_sin_colchon,
+                "Merma (€)": merma,
+                "Colchón consumido (%)": (
+                    merma / colchon * 100 if colchon != 0 else np.nan
+                ),
+            })
+    return pd.DataFrame(filas)
+
+
 def comparar_costes_mensuales(
     curva_indexado: pd.DataFrame,
     curva_seleccion: pd.DataFrame,
@@ -173,7 +220,7 @@ def calcular_ahorro_seleccion_vs_indexados(
 def limite_maximo_consumo_oferta(nombre: str) -> float | None:
     """Extrae límites tipo «hasta 10.000 kWh» o «máx. 100.000 kWh»."""
     coincidencia = re.search(
-        r"(?:HASTA|M[ÁA]X(?:IMO)?\.?)\s*([\d.]+)\s*KWH",
+        r"(?:HASTA|M[ÁA]X(?:IMO)?\.?|<)\s*([\d.]+)\s*KWH",
         str(nombre).upper(),
     )
     if not coincidencia:
@@ -217,7 +264,9 @@ def filtrar_ofertas_elegibles(
         limite = limite_maximo_consumo_oferta(nombre)
         if limite is not None and consumo_anual_kwh > limite:
             motivos[indice].append(f"supera {limite:,.0f} kWh")
-        minimo = re.search(r"M[ÁA]S\s+DE\s+([\d.]+)\s*KWH", texto)
+        minimo = re.search(
+            r"(?:M[ÁA]S\s+DE|>)\s*([\d.]+)\s*KWH", texto
+        )
         if minimo and consumo_anual_kwh <= float(minimo.group(1).replace(".", "")):
             motivos[indice].append("no alcanza el consumo mínimo")
         if "RENOVACIÓN" in texto or "RENOVACION" in texto:

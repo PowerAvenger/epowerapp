@@ -17,12 +17,12 @@ POSICIONES_FORMULA = {"perdidas", "tm", "neto"}
 class FormulaIndexada:
     desvios_apant: float = 0.0
     margen: float = 0.0
-    margen_pos: str = "tm"
+    margen_pos: str = "neto"
     incluir_fnee: bool = False
     fnee_pos: str = "perdidas"
     cf_pct: float = 0.0
     otros_costes: float = 0.0
-    otros_costes_pos: str = "tm"
+    otros_costes_pos: str = "neto"
 
 
 def describir_formula_indexada(

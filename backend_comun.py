@@ -209,9 +209,9 @@ def calcular_precios_atr(df):
     formula = FormulaIndexada(
         desvios_apant=st.session_state.get("desvios_apant", 0.0),
         margen=st.session_state.get("margen_telemindex", 0.0),
-        margen_pos=st.session_state.get("cfg_margen_pos", "tm"),
+        margen_pos=st.session_state.get("cfg_margen_pos", "neto"),
         otros_costes=st.session_state.get("otros_costes_indexado", 0.0),
-        otros_costes_pos=st.session_state.get("cfg_otros_costes_pos", "tm"),
+        otros_costes_pos=st.session_state.get("cfg_otros_costes_pos", "neto"),
         incluir_fnee=st.session_state.get("cfg_fnee", False),
         fnee_pos=st.session_state.get("cfg_fnee_pos", "perdidas"),
         cf_pct=st.session_state.get("cf_pct", 0.0),
@@ -841,6 +841,8 @@ def formatear_df_resultados(df):
         "Precio medio (€/kWh)": lambda x: formato_eur_kwh(x, unidad=False),
         "% sobre la más barata": formato_pct,
         "Δ vs más barata (€)": formato_euros,
+        "% vs referencia": formato_pct,
+        "Δ vs referencia (€)": formato_euros,
     }
     styler = styler.format({
         columna: formato

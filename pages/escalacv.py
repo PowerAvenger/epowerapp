@@ -826,7 +826,7 @@ with tab_diario:
                 formato_numero_es(spread_dia['spread_diario'].iloc[0], 2),
             )
 
-    def _rankings_spot_anuales(datos, año, fecha_seleccionada):
+    def _rankings_anuales(datos, año, fecha_seleccionada):
         """Prepara las horas más caras y las medias diarias del año."""
         if not isinstance(datos, pd.DataFrame) or datos.empty:
             return pd.DataFrame(), pd.DataFrame()
@@ -982,7 +982,7 @@ with tab_diario:
                 ),
                 use_container_width=True,
             )
-        rankings_spot = _rankings_spot_anuales(
+        rankings_spot = _rankings_anuales(
             datos_spot_general, año_fecha_general, fecha_general
         )
         if rankings_spot[0].empty:
@@ -1050,6 +1050,75 @@ with tab_diario:
                 ),
                 use_container_width=True,
             )
+        rankings_ssaa = _rankings_anuales(
+            datos_ssaa_general, año_fecha_general, fecha_general
+        )
+        if rankings_ssaa[0].empty:
+            st.info(
+                f'No hay datos SSAA para elaborar los rankings de '
+                f'{año_fecha_general}.'
+            )
+        else:
+            (
+                horas_caras_ssaa,
+                medias_diarias_ssaa,
+                horas_marcadas_ssaa,
+                dias_marcados_ssaa,
+                horas_top_mes_ssaa,
+                dias_top_mes_ssaa,
+            ) = rankings_ssaa
+            nombres_meses_completos_ssaa = (
+                '', 'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+                'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre',
+                'Diciembre',
+            )
+            nombre_mes_ranking_ssaa = nombres_meses_completos_ssaa[
+                fecha_general.month
+            ]
+            col_ranking_horas_ssaa, col_ranking_dias_ssaa = st.columns(2)
+            with col_ranking_horas_ssaa:
+                st.markdown(
+                    f'**10 horas más caras de {año_fecha_general}**'
+                )
+                st.dataframe(
+                    _resaltar_fecha(
+                        horas_caras_ssaa,
+                        horas_marcadas_ssaa,
+                        'rgba(245, 158, 11, 0.55)',
+                    ),
+                    hide_index=True,
+                    use_container_width=True,
+                    height=35 * (len(horas_caras_ssaa) + 1) + 3,
+                )
+            with col_ranking_dias_ssaa:
+                st.markdown(
+                    f'**10 días más caros de {año_fecha_general}**'
+                )
+                st.dataframe(
+                    _resaltar_fecha(
+                        medias_diarias_ssaa,
+                        dias_marcados_ssaa,
+                        'rgba(239, 68, 68, 0.55)',
+                    ),
+                    hide_index=True,
+                    use_container_width=True,
+                    height=35 * (len(medias_diarias_ssaa) + 1) + 3,
+                )
+            col_resumen_horas_ssaa, col_resumen_dias_ssaa = st.columns(2)
+            with col_resumen_horas_ssaa:
+                _tarjeta_protagonismo_mes(
+                    nombre_mes_ranking_ssaa,
+                    horas_top_mes_ssaa,
+                    'horas',
+                    '#f59e0b',
+                )
+            with col_resumen_dias_ssaa:
+                _tarjeta_protagonismo_mes(
+                    nombre_mes_ranking_ssaa,
+                    dias_top_mes_ssaa,
+                    'días',
+                    '#ef4444',
+                )
     with col_ssaa_met:
         st.subheader('SSAA', divider='rainbow')
         if not ssaa_dia_general.empty:
@@ -1725,6 +1794,10 @@ with tab_volatilidad:
             )
         col1_graf2, col2_graf2 = st.columns([.25, .75])
         with col1_graf2:
+            st.markdown(
+                "<div style='height:72px'></div>",
+                unsafe_allow_html=True,
+            )
             st.info(
                 '**Cómo leer la distribución:** la línea dentro de cada '
                 'caja es la mediana; la caja contiene el 50 % central de los '
@@ -1746,8 +1819,25 @@ with tab_volatilidad:
             volatilidad_boxplot['fecha'].dt.year.dropna().astype(int).unique(),
             reverse=True,
         )
-        col1_graf3, col2_graf3 = st.columns([.12, .88])
+        col1_graf3, col2_graf3, col3_graf3 = st.columns([.18, .07, .75])
         with col1_graf3:
+            st.markdown(
+                "<div style='height:72px'></div>",
+                unsafe_allow_html=True,
+            )
+            st.info(
+                '**Cómo leer la comparativa:** cada punto representa la '
+                'volatilidad intradiaria, calculada como la desviación '
+                'estándar de los precios horarios de esa jornada. '
+                'La caja central del mismo color encierra el 50 % central; '
+                'su línea interior marca la mediana y los trazos verticales '
+                'con remates horizontales representan los bigotes. Las '
+                'cajas y los años se desplazan ligeramente para evitar '
+                'que se tapen. '
+                'Selecciona uno o varios años para comparar su evolución '
+                'a lo largo del calendario.'
+            )
+        with col2_graf3:
             st.markdown('**Años**')
             años_seleccionados = [
                 año
@@ -1758,7 +1848,7 @@ with tab_volatilidad:
                     key=f'volatilidad_comparador_{año}',
                 )
             ]
-        with col2_graf3:
+        with col3_graf3:
             if años_seleccionados:
                 graf_dispersion_diaria = graficar_dispersion_volatilidad_diaria(
                     volatilidad_boxplot,

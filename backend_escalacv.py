@@ -454,10 +454,15 @@ def _colores_anuales_volatilidad(datos):
     """Asigna un color estable a cada año en los gráficos de volatilidad."""
     años = sorted(datos['año'].astype(str).unique())
     paleta = px.colors.qualitative.Plotly
-    return {
+    colores = {
         año: paleta[indice % len(paleta)]
         for indice, año in enumerate(años)
     }
+    if '2022' in colores:
+        colores['2022'] = '#E6B800'
+    if {'2023', '2026'}.issubset(colores):
+        colores['2023'], colores['2026'] = colores['2026'], colores['2023']
+    return colores
 
 
 def graficar_dispersion_volatilidad_diaria(
@@ -493,13 +498,117 @@ def graficar_dispersion_volatilidad_diaria(
         'day': seleccion['fecha'].dt.day,
     })
     colores_año = _colores_anuales_volatilidad(datos)
+    años_ordenados = sorted(años, key=int)
+    posiciones_año = (
+        [0.0]
+        if len(años_ordenados) == 1
+        else np.linspace(-0.32, 0.32, len(años_ordenados))
+    )
+    desplazamientos = dict(zip(
+        años_ordenados,
+        posiciones_año,
+    ))
+    centros_caja = dict(zip(
+        años_ordenados,
+        [0.5] if len(años_ordenados) == 1
+        else np.linspace(0.41, 0.59, len(años_ordenados)),
+    ))
     figura = go.Figure()
+
+    # Traslada al fondo del gráfico la información esencial del boxplot:
+    # caja Q1-Q3, mediana y bigotes de Tukey para cada año seleccionado.
+    for año in años:
+        valores = seleccion.loc[
+            seleccion['año'] == año, 'volatilidad_diaria'
+        ].dropna()
+        if valores.empty:
+            continue
+        q1 = valores.quantile(0.25)
+        mediana = valores.median()
+        q3 = valores.quantile(0.75)
+        iqr = q3 - q1
+        candidatos_bigote = valores[
+            valores.between(q1 - 1.5 * iqr, q3 + 1.5 * iqr)
+        ]
+        bigote_inferior = candidatos_bigote.min()
+        bigote_superior = candidatos_bigote.max()
+        color = colores_año[año]
+        centro = centros_caja[año]
+        ancho_caja = 0.30
+        ancho_remate = ancho_caja / 3
+        x0 = centro - ancho_caja / 2
+        x1 = centro + ancho_caja / 2
+        rojo, verde, azul = (
+            int(color[indice:indice + 2], 16) for indice in (1, 3, 5)
+        )
+        figura.add_shape(
+            type='rect',
+            xref='paper',
+            yref='y',
+            x0=x0,
+            x1=x1,
+            y0=q1,
+            y1=q3,
+            line=dict(color=color, width=2),
+            fillcolor=f'rgba({rojo},{verde},{azul},0.10)',
+            layer='above',
+        )
+        figura.add_shape(
+            type='line',
+            xref='paper',
+            yref='y',
+            x0=x0,
+            x1=x1,
+            y0=mediana,
+            y1=mediana,
+            line=dict(color=color, width=2),
+            layer='above',
+        )
+        figura.add_shape(
+            type='line',
+            xref='paper',
+            yref='y',
+            x0=centro,
+            x1=centro,
+            y0=bigote_inferior,
+            y1=q1,
+            line=dict(color=color, width=2),
+            layer='above',
+        )
+        figura.add_shape(
+            type='line',
+            xref='paper',
+            yref='y',
+            x0=centro,
+            x1=centro,
+            y0=q3,
+            y1=bigote_superior,
+            line=dict(color=color, width=2),
+            layer='above',
+        )
+        for bigote in (bigote_inferior, bigote_superior):
+            figura.add_shape(
+                type='line',
+                xref='paper',
+                yref='y',
+                x0=centro - ancho_remate / 2,
+                x1=centro + ancho_remate / 2,
+                y0=bigote,
+                y1=bigote,
+                line=dict(color=color, width=2),
+                layer='above',
+            )
+
     for año in años:
         datos_año = seleccion[seleccion['año'] == año]
         if datos_año.empty:
             continue
+        fechas_desplazadas = (
+            datos_año['fecha_eje']
+            + pd.Timedelta(days=desplazamientos[año])
+        )
         figura.add_trace(go.Scatter(
-            x=datos_año['fecha_eje'],
+            x=fechas_desplazadas,
             y=datos_año['volatilidad_diaria'],
             customdata=datos_año['fecha'],
             mode='markers',
@@ -512,7 +621,7 @@ def graficar_dispersion_volatilidad_diaria(
         ))
 
     figura.update_layout(
-        title='Dispersión diaria de la volatilidad',
+        title='Volatilidad diaria del precio SPOT',
         xaxis=dict(title='Día del año', tickformat='%d %b', dtick='M1'),
         yaxis=dict(
             title='Desviación estándar diaria (€/MWh)',
@@ -523,7 +632,18 @@ def graficar_dispersion_volatilidad_diaria(
     figura = aplicar_estilo(figura)
     figura.update_xaxes(title_font=dict(size=18), tickfont=dict(size=15))
     figura.update_yaxes(title_font=dict(size=18), tickfont=dict(size=15))
-    figura.update_layout(legend=dict(font=dict(size=16)))
+    figura.update_layout(
+        legend=dict(
+            orientation='h',
+            x=0.5,
+            xanchor='center',
+            y=1.02,
+            yanchor='bottom',
+            font=dict(size=16),
+            title_text='',
+        ),
+        margin=dict(t=125),
+    )
     return figura
 
 from backend_comun import paso_eje_escala_cv, rango_componentes

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from datetime import date, datetime
 from pathlib import Path
@@ -150,11 +151,19 @@ def cargar_catalogo_ofertas(ruta=RUTA_CATALOGO_OFERTAS) -> list[dict]:
     return catalogo
 
 
-def ofertas_catalogo_para_atr(catalogo: list[dict], atr: str) -> pd.DataFrame:
+def ofertas_catalogo_para_atr(
+    catalogo: list[dict],
+    atr: str,
+    producto_entrega: str | None = None,
+) -> pd.DataFrame:
     """Proyecta versiones persistidas al contrato tabular de los comparadores."""
     atr_normalizado = str(atr or "").replace(" ", "").upper().removesuffix("TD")
     filas = []
     for version in catalogo:
+        if producto_entrega is not None and str(
+            version.get("producto_entrega", "")
+        ).strip().upper() != str(producto_entrega).strip().upper():
+            continue
         for tarifa in version.get("tarifas", []):
             atr_tarifa = (
                 str(tarifa.get("atr", "")).replace(" ", "")
@@ -164,14 +173,22 @@ def ofertas_catalogo_para_atr(catalogo: list[dict], atr: str) -> pd.DataFrame:
                 continue
             potencia = tarifa.get("potencia") or version.get("potencia") or {}
             comision = tarifa.get("comision") or version.get("comision") or {}
+            # Si Informa facilita una comisión por energía, esta prevalece
+            # sobre cualquier importe fijo mostrado como estimación.
+            tipo_comision = (
+                "VARIABLE" if comision.get("eur_mwh") is not None
+                else comision.get("tipo")
+            )
             filas.append({
                 "oferta": version.get("nombre", "Oferta guardada"),
                 "ID oferta": version.get("id"),
                 "Vigencia desde": version.get("vigencia_desde"),
                 "Vigencia hasta": version.get("vigencia_hasta"),
+                "Producto entrega": version.get("producto_entrega"),
                 "Fee (€/MWh)": 0.0,
                 "Plataforma": version.get("plataforma"),
-                "Comisión tipo": comision.get("tipo"),
+                "Segmento contrato": version.get("segmento_contrato"),
+                "Comisión tipo": tipo_comision,
                 "Comisión estimada (€)": comision.get("estimada_eur"),
                 "Comisión (€/MWh)": comision.get("eur_mwh"),
                 "Comisión participación (%)": 100.0,
@@ -415,6 +432,7 @@ def guardar_version_oferta(
     tarifas: pd.DataFrame,
     ruta=RUTA_CATALOGO_OFERTAS,
     potencia_tarifas: pd.DataFrame | None = None,
+    producto_entrega: str | None = None,
 ) -> dict:
     """Añade una versión sin sobrescribir las versiones semanales anteriores."""
     nombre = str(nombre).strip()
@@ -478,12 +496,148 @@ def guardar_version_oferta(
         "guardado_en": datetime.now().astimezone().isoformat(timespec="seconds"),
         "tarifas": filas,
     }
+    if producto_entrega:
+        registro["producto_entrega"] = str(producto_entrega).strip().upper()
     ruta = Path(ruta)
     # Solo se escribe el catálogo manual. Los catálogos importados se agregan
     # en lectura y no deben copiarse ni duplicarse aquí.
     catalogo = _leer_catalogo(ruta)
     catalogo.append(registro)
     ruta.parent.mkdir(parents=True, exist_ok=True)
+    temporal = ruta.with_name(f".{ruta.name}.{uuid4().hex}.tmp")
+    temporal.write_text(
+        json.dumps(catalogo, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    os.replace(temporal, ruta)
+    return registro
+
+
+def incorporar_ofertas_informa(
+    ofertas: list[dict],
+    vigencia_desde: date,
+    ruta=RUTA_CATALOGO_OFERTAS,
+) -> dict:
+    """Incorpora atómicamente una captura validada de Informa sin duplicarla."""
+    desde = pd.Timestamp(vigencia_desde).date().isoformat()
+    ruta = Path(ruta)
+    catalogo = _leer_catalogo(ruta)
+    ids_existentes = {registro.get("id") for registro in catalogo}
+    nuevos = []
+    omitidos = 0
+    ahora = datetime.now().astimezone().isoformat(timespec="seconds")
+
+    for oferta in ofertas:
+        huella_datos = {
+            "indice_web": oferta["indice_web"],
+            "nombre": oferta["nombre"],
+            "segmento_contrato": oferta["segmento_contrato"],
+            "atr": normalizar_atr(oferta["atr"]),
+            "vigencia_hasta": oferta.get("vigencia_hasta"),
+            "potencia": oferta["potencia"],
+            "energia": oferta["energia"],
+            "costes_fijos_eur": oferta.get("costes_fijos_eur"),
+            "comision_fija_eur": oferta.get("comision_fija_eur"),
+            "comision_energia_eur_mwh": oferta.get(
+                "comision_energia_eur_mwh"
+            ),
+            "comision_potencia_eur": oferta.get("comision_potencia_eur"),
+        }
+        huella = hashlib.sha256(json.dumps(
+            huella_datos, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()[:20]
+        identificador = f"informa-{huella}"
+        if identificador in ids_existentes:
+            omitidos += 1
+            continue
+
+        comision_fija = oferta.get("comision_fija_eur")
+        comision_mwh = oferta.get("comision_energia_eur_mwh")
+        comision = {
+            "tipo": (
+                "VARIABLE" if comision_mwh is not None
+                else "FIJA" if comision_fija is not None else None
+            ),
+            "estimada_eur": comision_fija,
+            "eur_mwh": comision_mwh,
+            "eur_kwh": (
+                float(comision_mwh) / 1000
+                if comision_mwh is not None else None
+            ),
+            "potencia_eur": oferta.get("comision_potencia_eur"),
+        }
+        energia = oferta["energia"]
+        potencia = oferta["potencia"]
+        registro = {
+            "id": identificador,
+            "nombre": oferta["nombre"],
+            "vigencia_desde": desde,
+            "vigencia_hasta": oferta.get("vigencia_hasta"),
+            "guardado_en": ahora,
+            "fuente": "Captura web Informa Energía",
+            "plataforma": "INFORMA",
+            "indice_web": oferta["indice_web"],
+            "segmento_contrato": oferta["segmento_contrato"],
+            "costes_fijos_eur": oferta.get("costes_fijos_eur"),
+            "comision": comision,
+            "tarifas": [{
+                "atr": normalizar_atr(oferta["atr"]),
+                **{periodo: energia.get(periodo) for periodo in PERIODOS},
+                "potencia": {
+                    "modalidad": "CON MARGEN",
+                    "unidad": UNIDAD_POTENCIA_DIARIA,
+                    **{
+                        periodo: potencia.get(periodo)
+                        for periodo in PERIODOS
+                    },
+                },
+            }],
+        }
+        nuevos.append(registro)
+        ids_existentes.add(identificador)
+
+    if nuevos:
+        catalogo.extend(nuevos)
+        ruta.parent.mkdir(parents=True, exist_ok=True)
+        temporal = ruta.with_name(f".{ruta.name}.{uuid4().hex}.tmp")
+        temporal.write_text(
+            json.dumps(catalogo, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        os.replace(temporal, ruta)
+    return {"incorporadas": len(nuevos), "omitidas": omitidos}
+
+
+def actualizar_vigencia_oferta(
+    id_oferta: str,
+    vigencia_desde: date,
+    vigencia_hasta: date | None,
+    ruta=RUTA_CATALOGO_OFERTAS,
+) -> dict:
+    """Actualiza la vigencia de una versión local mediante escritura atómica."""
+    desde = pd.Timestamp(vigencia_desde).date()
+    hasta = (
+        pd.Timestamp(vigencia_hasta).date()
+        if vigencia_hasta is not None else None
+    )
+    if hasta is not None and hasta < desde:
+        raise ValueError("La fecha fin no puede ser anterior a la fecha inicio.")
+
+    ruta = Path(ruta)
+    catalogo = _leer_catalogo(ruta)
+    coincidencias = [
+        registro for registro in catalogo if registro.get("id") == id_oferta
+    ]
+    if not coincidencias:
+        raise ValueError("La oferta no pertenece al catálogo local editable.")
+    if len(coincidencias) > 1:
+        raise ValueError("El identificador de la oferta está duplicado.")
+
+    registro = coincidencias[0]
+    registro["vigencia_desde"] = desde.isoformat()
+    registro["vigencia_hasta"] = hasta.isoformat() if hasta else None
+    registro["modificado_en"] = datetime.now().astimezone().isoformat(
+        timespec="seconds"
+    )
     temporal = ruta.with_name(f".{ruta.name}.{uuid4().hex}.tmp")
     temporal.write_text(
         json.dumps(catalogo, ensure_ascii=False, indent=2), encoding="utf-8"

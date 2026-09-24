@@ -202,6 +202,8 @@ class FacturaLeida:
     permanencia: bool | None = None
     periodo_inicio: str | None = None
     periodo_fin: str | None = None
+    periodo_consumo_inicio: str | None = None
+    periodo_consumo_fin: str | None = None
     potencia: float = 0.0
     energia: float = 0.0
     excesos_potencia: float = 0.0
@@ -2572,7 +2574,7 @@ def _verificar_impuestos(factura: FacturaLeida, texto: str) -> None:
 
     coincidencia_iva_totalenergies = re.search(
         r"^Impuesto\s+IVA\s+([\d.,]+)\s*%\s+sobre\s+"
-        r"([\d.,]+)\s*€\s+([\d.,]+)\s*€\s*$",
+        r"([\d.,]+)\s*€?\s+([\d.,]+)\s*€\s*$",
         texto,
         re.IGNORECASE | re.MULTILINE,
     )
@@ -3027,6 +3029,9 @@ def _extraer_fecha_vencimiento_contrato(texto: str) -> str | None:
 def _extraer_numero_contrato(texto: str) -> str | None:
     """Extrae el contrato comercial sin confundirlo con el contrato ATR."""
     valor = buscar_texto(texto, [
+        r"Referencia\s+del\s+contrato\s+de\s+suministro"
+        r"(?:\s*\([^\n)]*\))?\s*:\s*"
+        r"([A-Z0-9][A-Z0-9./_-]{2,})",
         r"N[uú]mero\s+de\s+contrato\s+con\s+Bonpreu\s+Esclat\s+Energ[ií]a\s*:\s*(\d+)",
         r"N[uú]mero\s+(?:de\s+)?contrato\s+FORMA\s+(?:DE\s+)?PAGO[^\n]*\n\s*([A-Z0-9][A-Z0-9./_-]{2,})",
         r"(?:N[.\s]*[º°o]\.?|N[uú]mero)\s+(?:de\s+)?contrato\s*[:.]\s*([A-Z0-9][A-Z0-9./_-]{2,})",
@@ -4179,7 +4184,7 @@ def extraer_potencia_totalenergies(texto: str) -> list[PotenciaFacturadaPeriodo]
     bloque = _seccion(
         texto,
         r"T[eé]rmino\s+Potencia\s+Tarifa\s+Acceso",
-        r"T[eé]rmino\s+Cargos\s+Potencia\s+Acceso",
+        r"T[eé]rmino\s+Energ[ií]a\s+Tarifa\s+Acceso",
     )
     filas = _filas_totalenergies(bloque)
     dias = buscar_numero(bloque, [r"\bkW\s+x\s+(\d+)\s+D[ií]as"])
@@ -4200,7 +4205,7 @@ def extraer_energia_totalenergies(texto: str) -> list[EnergiaPeriodo]:
     tarifa = _seccion(
         texto,
         r"T[eé]rmino\s+Energ[ií]a\s+Tarifa\s+Acceso",
-        r"T[eé]rmino\s+Cargos\s+Energ[ií]a\s+Acceso",
+        r"T[eé]rmino\s+Energ[ií]a\s+Variable",
     )
     variable = _seccion(
         texto,
@@ -4217,6 +4222,125 @@ def extraer_energia_totalenergies(texto: str) -> list[EnergiaPeriodo]:
             coste_calculado_eur=round(coste, 2),
         )
         for periodo, (cantidad, precio, coste) in sorted(filas.items())
+    ]
+
+
+def _lecturas_totalenergies(
+    texto: str,
+) -> list[tuple[str, float, float, float]]:
+    """Lee activa, reactiva y maxímetro de la tabla del periodo facturado."""
+    filas = re.findall(
+        r"^P([1-6])\s+"
+        r"[\d.,]+\s+[\d.,]+\s+([\d.,]+)\s+"  # consumo activa
+        r"[\d.,]+\s+[\d.,]+\s+([\d.,]+)\s+"  # consumo reactiva
+        r"[\d.,]+\s+([\d.,]+)\s+[\d.,]+\s*$",  # ajuste, maxímetro, excesos
+        _seccion(
+            texto,
+            r"Informaci[oó]n\s+de\s+consumo\s+el[eé]ctrico",
+            r"Detalle\s+de\s+la\s+factura",
+        ),
+        re.IGNORECASE | re.MULTILINE,
+    )
+    return [
+        (f"P{periodo}", consumo_es(activa), consumo_es(reactiva), numero_es(maximetro))
+        for periodo, activa, reactiva, maximetro in filas
+    ]
+
+
+def _periodo_lecturas_totalenergies(
+    texto: str,
+) -> tuple[str | None, str | None]:
+    """Obtiene el intervalo real de consumo a partir de lecturas anterior/actual."""
+    coincidencia = re.search(
+        r"^Fecha\s+(\d{2}/\d{2}/\d{4})\s+(\d{2}/\d{2}/\d{4})\s+REAL\s+"
+        r"(\d{2}/\d{2}/\d{4})\s+(\d{2}/\d{2}/\d{4})\s+REAL\s*$",
+        _seccion(
+            texto,
+            r"Informaci[oó]n\s+de\s+consumo\s+el[eé]ctrico",
+            r"Detalle\s+de\s+la\s+factura",
+        ),
+        re.IGNORECASE | re.MULTILINE,
+    )
+    if not coincidencia:
+        return None, None
+    anterior_activa, actual_activa, anterior_reactiva, actual_reactiva = (
+        coincidencia.groups()
+    )
+    if (
+        anterior_activa != anterior_reactiva
+        or actual_activa != actual_reactiva
+    ):
+        return None, None
+    inicio = datetime.strptime(anterior_activa, "%d/%m/%Y") + timedelta(days=1)
+    fin = datetime.strptime(actual_activa, "%d/%m/%Y")
+    if inicio > fin:
+        return None, None
+    return inicio.strftime("%d/%m/%Y"), fin.strftime("%d/%m/%Y")
+
+
+def extraer_maximetros_totalenergies(texto: str) -> list[MaximetroPeriodo]:
+    return [
+        MaximetroPeriodo(periodo, maximetro)
+        for periodo, _activa, _reactiva, maximetro in _lecturas_totalenergies(texto)
+    ]
+
+
+def extraer_reactiva_totalenergies(
+    texto: str, importe_facturado: float
+) -> list[ReactivaPeriodo]:
+    from regulacion_reactiva import (
+        exceso_reactiva_inductiva,
+        factor_potencia,
+        precio_reactiva_inductiva,
+    )
+
+    calculos = []
+    for periodo, activa, reactiva, _maximetro in _lecturas_totalenergies(texto):
+        cos_phi = factor_potencia(activa, reactiva)
+        exceso = exceso_reactiva_inductiva(activa, reactiva, periodo)
+        precio = precio_reactiva_inductiva(cos_phi, periodo)
+        calculos.append((
+            periodo, activa, reactiva, exceso, cos_phi, precio,
+            round(exceso * precio, 2),
+        ))
+    if not calculos:
+        return []
+
+    total_calculado = round(sum(item[6] for item in calculos), 2)
+    estado_total = semaforo_desviacion_coste(
+        importe_facturado, total_calculado, "componentes"
+    )
+    facturados = [0.0] * len(calculos)
+    indices_con_coste = [i for i, item in enumerate(calculos) if item[6] > 0]
+    if importe_facturado and total_calculado and indices_con_coste:
+        acumulado = 0.0
+        for indice in indices_con_coste[:-1]:
+            coste = round(
+                importe_facturado * calculos[indice][6] / total_calculado, 2
+            )
+            facturados[indice] = coste
+            acumulado += coste
+        facturados[indices_con_coste[-1]] = round(
+            importe_facturado - acumulado, 2
+        )
+
+    return [
+        ReactivaPeriodo(
+            periodo=periodo,
+            energia_activa_kwh=activa,
+            energia_reactiva_kvarh=reactiva,
+            exceso_facturado_kvarh=None,
+            exceso_calculado_kvarh=round(exceso, 3),
+            cos_phi=round(cos_phi, 4) if cos_phi is not None else None,
+            precio_eur_kvarh=precio,
+            coste_facturado_eur=facturados[indice],
+            coste_calculado_eur=coste_calculado,
+            estado=estado_total,
+            detalle_coste_facturado=False,
+        )
+        for indice, (
+            periodo, activa, reactiva, exceso, cos_phi, precio, coste_calculado
+        ) in enumerate(calculos)
     ]
 
 
@@ -5802,34 +5926,35 @@ def _generico(texto: str) -> FacturaLeida:
 def _totalenergies(texto: str) -> FacturaLeida:
     """Extrae el formato detallado de TotalEnergies España."""
     inicio, fin = buscar_periodo(texto, [
-        r"Periodo\s+de\s+consumo\s+De\s+(\d{2}/\d{2}/\d{4})\s+al\s+"
+        r"Periodo\s+de\s+(?:consumo|facturaci[oó]n)\s*:?\s*De\s+"
+        r"(\d{2}/\d{2}/\d{4})\s+al\s+"
         r"(\d{2}/\d{2}/\d{4})",
     ])
+    inicio_lecturas, fin_lecturas = _periodo_lecturas_totalenergies(texto)
     potencia_periodos = extraer_potencia_totalenergies(texto)
     energia_periodos = extraer_energia_totalenergies(texto)
     potencias = extraer_potencias_contratadas(texto)
     alquiler = buscar_numero(texto, [
         r"^Alquiler\s+Equipo\s+Distribuidora\s+([\d.,]+)\s*€\s*$",
     ])
-    cargos = buscar_numero(texto, [r"^Cargos\s+([\d.,]+)\s*€\s*$"])
     otros = []
-    if cargos:
-        otros.append(OtroConcepto("Cargos regulados", cargos))
     if alquiler:
         otros.append(OtroConcepto("Alquiler equipo de medida", alquiler))
 
-    maximetros = [
-        MaximetroPeriodo(f"P{periodo}", numero_es(valor))
-        for periodo, valor in re.findall(
-            r"\bP([1-6])\s*:\s*([\d.,]+)",
-            _seccion(
-                texto,
-                r"Potencias\s+m[aá]ximas\s+demandadas",
-                r"Informaci[oó]n\s+de\s+consumo\s+el[eé]ctrico",
-            ),
-            re.IGNORECASE,
-        )
-    ]
+    maximetros = extraer_maximetros_totalenergies(texto)
+    if not maximetros:
+        maximetros = [
+            MaximetroPeriodo(f"P{periodo}", numero_es(valor))
+            for periodo, valor in re.findall(
+                r"\bP([1-6])\s*:\s*([\d.,]+)",
+                _seccion(
+                    texto,
+                    r"Potencias\s+m[aá]ximas\s+demandadas",
+                    r"Informaci[oó]n\s+de\s+consumo\s+el[eé]ctrico",
+                ),
+                re.IGNORECASE,
+            )
+        ]
     fecha_txt = buscar_texto(texto, [
         r"Fecha\s+emisi[oó]n\s+factura\s*:\s*"
         r"(\d{1,2}\s+de\s+[a-záéíóúüñ]+\s+de\s+\d{4})",
@@ -5840,6 +5965,9 @@ def _totalenergies(texto: str) -> FacturaLeida:
     numero_factura = buscar_texto(texto, [r"N[º°o]\s*Factura\s+([^\n]+)"])
     if numero_factura and numero_factura.strip().upper() == "NUMERO FACTURA":
         numero_factura = None
+    importe_reactiva = buscar_numero(texto, [
+        r"^T[eé]rmino\s+Reactiva\s+Distribuidora\s+([\d.,]+)\s*€\s*$",
+    ])
     factura = FacturaLeida(
         formato="totalenergies",
         comercializadora="TotalEnergies",
@@ -5849,24 +5977,32 @@ def _totalenergies(texto: str) -> FacturaLeida:
         fecha_factura=_fecha_es_a_ddmmyyyy(fecha_txt),
         periodo_inicio=inicio,
         periodo_fin=fin,
+        periodo_consumo_inicio=inicio_lecturas or inicio,
+        periodo_consumo_fin=fin_lecturas or fin,
         potencia=round(sum(item.coste_facturado_eur for item in potencia_periodos), 2),
         energia=round(sum(item.coste_eur for item in energia_periodos), 2),
+        reactiva=importe_reactiva,
         iee=buscar_numero(texto, [
             r"^M[ií]nimoIE\s+[\d.,]+\s*kWh\s+x\s+[\d.,]+\s*€/kWh\s+"
             r"([\d.,]+)\s*€\s*$",
+            r"^\s*Impuesto\s+Electricidad\s*\n\s*[\d.,]+\s*%\s+sobre\s+"
+            r"[\d.,]+\s*€\s+([\d.,]+)\s*€\s*$",
         ]),
         iva=buscar_numero(texto, [
-            r"^Impuesto\s+IVA\s+[\d.,]+\s*%\s+sobre\s+[\d.,]+\s*€\s+"
+            r"^\s*Impuesto\s+IVA\s+[\d.,]+\s*%\s+sobre\s+[\d.,]+\s*€?\s+"
             r"([\d.,]+)\s*€\s*$",
         ]),
         total=buscar_numero(texto, [
-            r"^TOTAL\s+IMPORTE\s+FACTURA\s+([\d.,]+)\s*€\s*$",
-            r"^Total\s+importe\s+factura\s*:\s*([\d.,]+)\s*€\s*$",
+            r"^\s*TOTAL\s+IMPORTE\s+FACTURA\s+([\d.,]+)\s*€\s*$",
+            r"^\s*Total\s+importe\s+factura\s*:\s*([\d.,]+)\s*€\s*$",
         ]),
         energia_periodos=energia_periodos,
         potencias_contratadas=potencias,
         potencia_periodos=potencia_periodos,
         maximetros=maximetros,
+        reactiva_periodos=extraer_reactiva_totalenergies(
+            texto, importe_reactiva
+        ),
         otros=otros,
     )
     return _completar_advertencias(factura)

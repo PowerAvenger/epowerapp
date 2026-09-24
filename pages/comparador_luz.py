@@ -1,4 +1,6 @@
 import hashlib
+from datetime import date
+
 import pandas as pd
 import plotly.express as px
 import re
@@ -14,8 +16,11 @@ from backend_comparador_luz import (
 )
 from backend_indexado import FormulaIndexada
 from backend_ofertas_fijas import (
+    PERIODOS,
+    actualizar_vigencia_oferta,
     cargar_catalogo_ofertas,
     eliminar_versiones_oferta,
+    incorporar_ofertas_informa,
     ofertas_catalogo_para_atr,
     resolver_potencia_tarifa,
 )
@@ -55,6 +60,61 @@ from utilidades import (
 )
 
 COLOR_INDEXADO_ETIQUETA = '#7E57C2'
+COLOR_OFERTA_ACTUAL = '#C62828'
+
+
+def _html_ofertas_catalogo(tabla):
+    """Genera una tabla HTML horizontal con las ofertas ya filtradas."""
+    columnas = [
+        'Estado', 'Oferta', 'ATR', 'Vigencia desde', 'Vigencia hasta',
+        *[f'Precio Ene {periodo}' for periodo in PERIODOS],
+        *[f'Precio Pot {periodo}' for periodo in PERIODOS],
+    ]
+    exportacion = tabla.reindex(columns=columnas).copy()
+    for columna in ('Vigencia desde', 'Vigencia hasta'):
+        fechas = pd.to_datetime(exportacion[columna], errors='coerce')
+        exportacion[columna] = fechas.dt.strftime('%d/%m/%Y').fillna('')
+    columnas_precios = [
+        columna for columna in columnas if columna.startswith('Precio ')
+    ]
+    for columna in columnas_precios:
+        exportacion[columna] = exportacion[columna].map(
+            lambda valor: '' if pd.isna(valor)
+            else formato_numero_es(float(valor), 6)
+        )
+    tabla_html = exportacion.to_html(
+        index=False,
+        border=0,
+        classes='ofertas',
+        escape=True,
+    )
+    return f'''<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Catálogo de ofertas</title>
+<style>
+body {{ font-family: Arial, sans-serif; margin: 24px; color: #172033; }}
+h1 {{ font-size: 22px; margin: 0 0 16px; }}
+.tabla {{ overflow-x: auto; }}
+table {{ border-collapse: collapse; width: max-content; min-width: 100%; }}
+th, td {{ border: 1px solid #d7dce5; padding: 8px 10px; white-space: nowrap; }}
+th {{ background: #202738; color: white; position: sticky; top: 0; }}
+th:nth-child(2), td:nth-child(2) {{
+    width: 240px;
+    max-width: 240px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}}
+tbody tr:nth-child(even) {{ background: #f4f6f9; }}
+</style>
+</head>
+<body>
+<h1>Ofertas guardadas</h1>
+<div class="tabla">{tabla_html}</div>
+</body>
+</html>'''
 
 
 def _limpiar_sips_comparador_luz():
@@ -73,33 +133,498 @@ def _limpiar_sips_comparador_luz():
             st.session_state.pop(clave, None)
 
 
-def resaltar_ofertas_indexadas(estilo, nombres_indexados):
-    """Aplica la misma identidad visual a los indexados en cualquier tabla."""
+def resaltar_ofertas_indexadas(
+    estilo, nombres_indexados, nombre_oferta_actual=None
+):
+    """Distingue visualmente indexados y la oferta actual del cliente."""
     return estilo.apply(
         lambda columna: [
             (
-                f'background-color: {COLOR_INDEXADO_ETIQUETA}; '
+                'background-color: '
+                + (
+                    COLOR_OFERTA_ACTUAL
+                    if str(valor) == str(nombre_oferta_actual)
+                    else COLOR_INDEXADO_ETIQUETA
+                )
+                + '; '
                 'color: white; font-weight: 600;'
             )
-            if str(valor) in nombres_indexados else ''
+            if (
+                str(valor) in nombres_indexados
+                or (
+                    nombre_oferta_actual is not None
+                    and str(valor) == str(nombre_oferta_actual)
+                )
+            ) else ''
             for valor in columna
         ],
         subset=['Oferta'],
     )
 
+
+def _filas_catalogo_ofertas(catalogo):
+    """Aplana las versiones del catálogo para su revisión administrativa."""
+    filas = []
+    hoy = date.today()
+    for version in catalogo:
+        vigencia_hasta = pd.to_datetime(
+            version.get('vigencia_hasta'), errors='coerce'
+        )
+        if pd.isna(vigencia_hasta):
+            estado = 'Sin fecha fin'
+        elif vigencia_hasta.date() < hoy:
+            estado = 'Caducada'
+        else:
+            estado = 'Vigente'
+        for tarifa in version.get('tarifas', []):
+            potencia = tarifa.get('potencia') or version.get('potencia') or {}
+            comision = tarifa.get('comision') or version.get('comision') or {}
+            fila = {
+                'Estado': estado,
+                'Oferta': version.get('nombre', 'Oferta sin nombre'),
+                'ATR': (
+                    str(tarifa.get('atr', '')).strip().upper()
+                    .replace(' ', '').removesuffix('TD') + ' TD'
+                ),
+                'Plataforma': version.get('plataforma') or 'Manual',
+                'Vigencia desde': version.get('vigencia_desde'),
+                'Vigencia hasta': version.get('vigencia_hasta'),
+                'Modalidad potencia': potencia.get('modalidad'),
+                'Fee / Comisión energía (€/MWh)': comision.get('eur_mwh'),
+                'Comisión fija/estimada (€)': comision.get('estimada_eur'),
+                'Comisión potencia (€)': comision.get('potencia_eur'),
+                'Costes fijos (€)': version.get('costes_fijos_eur'),
+                'ID': version.get('id'),
+            }
+            fila.update({
+                f'Precio Ene {periodo}': tarifa.get(periodo)
+                for periodo in PERIODOS
+            })
+            fila.update({
+                f'Precio Pot {periodo}': potencia.get(periodo)
+                for periodo in PERIODOS
+            })
+            filas.append(fila)
+    return pd.DataFrame(filas)
+
+
+def render_catalogo_ofertas_admin():
+    """Gestiona y prepara actualizaciones del catálogo, solo para admin."""
+    if not st.session_state.get('es_admin', False):
+        st.error('Esta sección requiere acceso de administrador.')
+        return
+
+    # El archivo local es la fuente persistente. Releerlo en cada render evita
+    # que Session State mantenga una captura incompleta después de repararla o
+    # de completar una descarga en otra ejecución.
+    from backend_informa import cargar_ultimo_diagnostico_informa
+
+    ultimo_diagnostico = cargar_ultimo_diagnostico_informa()
+    if ultimo_diagnostico:
+        st.session_state.catalogo_informa_diagnostico = ultimo_diagnostico
+
+    st.subheader('Catálogo de ofertas', divider='rainbow')
+    st.caption(
+        'Consulta las versiones disponibles y prepara nuevas capturas desde '
+        'Informa. Nada se incorpora sin una revisión previa.'
+    )
+
+    try:
+        catalogo = cargar_catalogo_ofertas()
+        tabla = _filas_catalogo_ofertas(catalogo)
+    except ValueError as error:
+        st.error(str(error))
+        return
+
+    total = len(tabla)
+    vigentes = int(tabla['Estado'].eq('Vigente').sum()) if total else 0
+    caducadas = int(tabla['Estado'].eq('Caducada').sum()) if total else 0
+    sin_fecha = int(tabla['Estado'].eq('Sin fecha fin').sum()) if total else 0
+    m_total, m_vigentes, m_caducadas, m_sin_fecha = st.columns(4)
+    m_total.metric('Tarifas', total)
+    m_vigentes.metric('Vigentes', vigentes)
+    m_caducadas.metric('Caducadas', caducadas)
+    m_sin_fecha.metric('Sin fecha fin', sin_fecha)
+
+    with st.expander('Actualizar desde Informa', expanded=False):
+        st.markdown('#### Configuración de captura')
+        c_atr, c_contrato, c_segmento = st.columns(3)
+        with c_atr:
+            if st.session_state.get('catalogo_informa_atr') == '6.2 TD':
+                st.session_state.catalogo_informa_atr = '2.0 TD'
+            atr_captura = st.selectbox(
+                'Peaje de acceso',
+                ['2.0 TD', '3.0 TD', '6.1 TD'],
+                key='catalogo_informa_atr',
+            )
+        captura_pyme = atr_captura in {'3.0 TD', '6.1 TD'}
+        with c_contrato:
+            contrato_captura = st.selectbox(
+                'Tipo de contrato', ['Fijo'], key='catalogo_informa_contrato'
+            )
+        with c_segmento:
+            if captura_pyme:
+                st.session_state.catalogo_informa_segmento = 'PYME'
+            segmento_captura = st.selectbox(
+                'Tipo de oferta',
+                (
+                    ['PYME'] if captura_pyme
+                    else ['Residencial y Pyme', 'Residencial', 'PYME']
+                ),
+                key='catalogo_informa_segmento',
+                disabled=captura_pyme,
+            )
+            if captura_pyme:
+                st.caption(
+                    f'En Informa, las ofertas {atr_captura} son Pyme · Fijo.'
+                )
+        st.info(
+            'La conexión abrirá Informa para iniciar sesión manualmente. '
+            'Después mostrará una vista previa; no escribirá directamente '
+            'en el catálogo.'
+        )
+        if st.button(
+            'Preparar captura de Informa',
+            type='primary',
+            use_container_width=True,
+            key='catalogo_informa_preparar',
+        ):
+            st.session_state.catalogo_informa_configuracion = {
+                'atr': atr_captura,
+                'contrato': contrato_captura,
+                'segmento': segmento_captura,
+            }
+        configuracion = st.session_state.get('catalogo_informa_configuracion')
+        if configuracion:
+            st.success(
+                'Captura preparada: '
+                f"{configuracion['atr']} · {configuracion['contrato']} · "
+                f"{configuracion['segmento']}. El siguiente paso será conectar "
+                'el navegador y obtener la vista previa.'
+            )
+            if st.button(
+                'Comprobar acceso a Informa',
+                use_container_width=True,
+                key='catalogo_informa_diagnosticar',
+            ):
+                credenciales = st.secrets.get('INFORMA_CREDENTIALS', {})
+                email_informa = credenciales.get('email')
+                password_informa = credenciales.get('password')
+                if not email_informa or not password_informa:
+                    st.error(
+                        'Faltan email o password en '
+                        '[INFORMA_CREDENTIALS] de secrets.toml.'
+                    )
+                else:
+                    try:
+                        from backend_informa import diagnosticar_acceso_informa
+
+                        with st.spinner(
+                            'Abriendo Chrome y comprobando el acceso a Informa...'
+                        ):
+                            diagnostico = diagnosticar_acceso_informa(
+                                email_informa,
+                                password_informa,
+                                atr=configuracion['atr'],
+                                contrato=configuracion['contrato'],
+                                segmento=configuracion['segmento'],
+                            )
+                        st.session_state.catalogo_informa_diagnostico = diagnostico
+                        st.success(
+                            'Acceso correcto. Se ha localizado la interfaz de '
+                            'ofertas sin modificar el catálogo.'
+                        )
+                    except (RuntimeError, ValueError) as error:
+                        st.error(str(error))
+                    finally:
+                        email_informa = None
+                        password_informa = None
+    diagnostico = st.session_state.get('catalogo_informa_diagnostico')
+    if diagnostico:
+        with st.expander(
+            'Diagnóstico de la interfaz de Informa', expanded=False
+        ):
+            st.json(diagnostico)
+        from backend_informa import parsear_tarjetas_informa
+
+        atr_diagnostico = diagnostico.get('navegacion', {}).get('familia_atr', '')
+        ofertas_extraidas = parsear_tarjetas_informa(
+            diagnostico.get('tarjetas', []), atr_diagnostico
+        )
+        ofertas_validas = [
+            oferta for oferta in ofertas_extraidas if 'error' not in oferta
+        ]
+        errores_extraccion = [
+            oferta for oferta in ofertas_extraidas if 'error' in oferta
+        ]
+        with st.expander(
+            f'Vista previa extraída ({len(ofertas_validas)} ofertas)',
+            expanded=False,
+        ):
+            if ofertas_validas:
+                filas_vista_previa = []
+                for oferta in ofertas_validas:
+                    filas_vista_previa.append({
+                        'Nº web': oferta['indice_web'],
+                        'Oferta': oferta['nombre'],
+                        'ATR': oferta['atr'] + ' TD',
+                        'Vigencia hasta': oferta['vigencia_hasta'],
+                        **{
+                            f'Precio Ene {periodo}': oferta['energia'].get(periodo)
+                            for periodo in PERIODOS
+                        },
+                        **{
+                            f'Precio Pot {periodo}': oferta['potencia'].get(periodo)
+                            for periodo in PERIODOS
+                        },
+                        'Costes fijos (€)': oferta['costes_fijos_eur'],
+                        'Comisión fija (€)': oferta['comision_fija_eur'],
+                        'Comisión energía (€/MWh)': (
+                            oferta['comision_energia_eur_mwh']
+                        ),
+                        'Comisión potencia (€)': (
+                            oferta['comision_potencia_eur']
+                        ),
+                    })
+                st.dataframe(
+                    pd.DataFrame(filas_vista_previa),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+            else:
+                st.warning('No se ha podido interpretar ninguna tarjeta visible.')
+            if errores_extraccion:
+                st.warning(
+                    f'{len(errores_extraccion)} tarjeta(s) necesitan revisión '
+                    'antes de poder incorporarse.'
+                )
+            if ofertas_validas and not errores_extraccion:
+                st.markdown('#### Incorporar captura al catálogo')
+                vigencia_desde_informa = st.date_input(
+                    'Vigencia desde',
+                    value=date.today(),
+                    key='catalogo_informa_vigencia_desde',
+                )
+                st.caption(
+                    'La incorporación conserva la fecha fin publicada por cada '
+                    'oferta y omite automáticamente registros idénticos.'
+                )
+                if st.button(
+                    f'Incorporar {len(ofertas_validas)} ofertas al catálogo',
+                    type='primary',
+                    use_container_width=True,
+                    key='catalogo_informa_incorporar',
+                ):
+                    try:
+                        resultado_incorporacion = incorporar_ofertas_informa(
+                            ofertas_validas,
+                            vigencia_desde_informa,
+                        )
+                    except (ValueError, OSError) as error:
+                        st.error(f'No se pudieron incorporar las ofertas: {error}')
+                    else:
+                        st.success(
+                            f"Incorporadas: "
+                            f"{resultado_incorporacion['incorporadas']} · "
+                            f"Omitidas por duplicadas: "
+                            f"{resultado_incorporacion['omitidas']}."
+                        )
+                        st.session_state.pop(
+                            'catalogo_informa_diagnostico', None
+                        )
+                        st.rerun()
+
+    contenedor_ofertas_guardadas = st.expander(
+        'Ofertas guardadas',
+        expanded=False,
+    )
+    if tabla.empty:
+        contenedor_ofertas_guardadas.info(
+            'Todavía no hay ofertas guardadas en el catálogo.'
+        )
+        return
+    f_atr, f_plataforma, f_estado = contenedor_ofertas_guardadas.columns(3)
+    with f_atr:
+        atrs = sorted(tabla['ATR'].dropna().unique().tolist())
+        filtro_atr = st.multiselect('ATR', atrs, key='catalogo_filtro_atr')
+    with f_plataforma:
+        plataformas = sorted(tabla['Plataforma'].dropna().unique().tolist())
+        filtro_plataforma = st.multiselect(
+            'Plataforma', plataformas, key='catalogo_filtro_plataforma'
+        )
+    with f_estado:
+        estados = ['Vigente', 'Caducada', 'Sin fecha fin']
+        filtro_estado = st.multiselect(
+            'Estado', estados, default=estados, key='catalogo_filtro_estado'
+        )
+    filtrada = tabla.copy()
+    if filtro_atr:
+        filtrada = filtrada.loc[filtrada['ATR'].isin(filtro_atr)]
+    if filtro_plataforma:
+        filtrada = filtrada.loc[
+            filtrada['Plataforma'].isin(filtro_plataforma)
+        ]
+    if filtro_estado:
+        filtrada = filtrada.loc[filtrada['Estado'].isin(filtro_estado)]
+    else:
+        filtrada = filtrada.iloc[0:0]
+    contenedor_ofertas_guardadas.dataframe(
+        filtrada,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            'Oferta': st.column_config.TextColumn(width='medium'),
+            'Vigencia desde': st.column_config.DateColumn(format='DD/MM/YYYY'),
+            'Vigencia hasta': st.column_config.DateColumn(format='DD/MM/YYYY'),
+            'Fee / Comisión energía (€/MWh)': st.column_config.NumberColumn(
+                format='%.6f'
+            ),
+            'Comisión fija/estimada (€)': st.column_config.NumberColumn(
+                format='%.2f'
+            ),
+            'Comisión potencia (€)': st.column_config.NumberColumn(
+                format='%.6f'
+            ),
+            'Costes fijos (€)': st.column_config.NumberColumn(format='%.2f'),
+            **{
+                f'Precio Ene {periodo}': st.column_config.NumberColumn(
+                    format='%.6f'
+                )
+                for periodo in PERIODOS
+            },
+            **{
+                f'Precio Pot {periodo}': st.column_config.NumberColumn(
+                    format='%.6f'
+                )
+                for periodo in PERIODOS
+            },
+        },
+    )
+    html_ofertas = _html_ofertas_catalogo(filtrada)
+    plataformas_exportadas = sorted(
+        filtrada['Plataforma'].dropna().astype(str).str.strip().unique()
+    )
+    atr_exportados = sorted(
+        filtrada['ATR'].dropna().astype(str).str.replace(' ', '').unique()
+    )
+    plataforma_archivo = (
+        plataformas_exportadas[0].upper()
+        if len(plataformas_exportadas) == 1 else 'VARIAS'
+    )
+    atr_archivo = atr_exportados[0] if len(atr_exportados) == 1 else 'VARIOS'
+    plataforma_archivo = re.sub(
+        r'[^A-Z0-9._-]+', '-', plataforma_archivo
+    ).strip('-')
+    atr_archivo = re.sub(r'[^A-Za-z0-9._-]+', '-', atr_archivo).strip('-')
+    contenedor_ofertas_guardadas.download_button(
+        'Exportar selección a HTML',
+        data=html_ofertas.encode('utf-8'),
+        file_name=(
+            f'Ofertas_{plataforma_archivo}_{atr_archivo}_'
+            f'{date.today().isoformat()}.html'
+        ),
+        mime='text/html',
+        disabled=filtrada.empty,
+        use_container_width=True,
+        key='catalogo_exportar_ofertas_html',
+    )
+
+    with st.expander('Editar oferta guardada', expanded=False):
+        if filtrada.empty:
+            st.info('No hay ofertas disponibles con los filtros actuales.')
+        else:
+            opciones_edicion = {}
+            for _, fila in filtrada.iterrows():
+                etiqueta = (
+                    f"{fila['Oferta']} · {fila['ATR']} · "
+                    f"{fila['Plataforma']} · {str(fila['ID'])[:8]}"
+                )
+                opciones_edicion[etiqueta] = fila
+            etiqueta_seleccionada = st.selectbox(
+                'Oferta que quieres modificar',
+                list(opciones_edicion),
+                key='catalogo_oferta_editar',
+            )
+            seleccionada = opciones_edicion[etiqueta_seleccionada]
+            fecha_desde = pd.to_datetime(
+                seleccionada['Vigencia desde'], errors='coerce'
+            )
+            fecha_hasta = pd.to_datetime(
+                seleccionada['Vigencia hasta'], errors='coerce'
+            )
+            sin_fecha_fin_inicial = pd.isna(fecha_hasta)
+            with st.form('catalogo_formulario_vigencia'):
+                nueva_desde = st.date_input(
+                    'Vigencia desde',
+                    value=(
+                        date.today() if pd.isna(fecha_desde)
+                        else fecha_desde.date()
+                    ),
+                )
+                sin_fecha_fin = st.checkbox(
+                    'Activa sin fecha fin', value=sin_fecha_fin_inicial
+                )
+                nueva_hasta = st.date_input(
+                    'Vigencia hasta',
+                    value=(
+                        date.today() if pd.isna(fecha_hasta)
+                        else fecha_hasta.date()
+                    ),
+                    disabled=sin_fecha_fin,
+                )
+                guardar_vigencia = st.form_submit_button(
+                    'Guardar cambios de vigencia', type='primary'
+                )
+            if guardar_vigencia:
+                try:
+                    actualizar_vigencia_oferta(
+                        seleccionada['ID'],
+                        nueva_desde,
+                        None if sin_fecha_fin else nueva_hasta,
+                    )
+                except ValueError as error:
+                    st.error(str(error))
+                else:
+                    st.success('Vigencia actualizada correctamente.')
+                    st.rerun()
+
 if not st.session_state.get('usuario_autenticado', False) and not st.session_state.get('usuario_free', False):
     st.switch_page('epowerapp.py')
 generar_menu(); init_app()
-zona_previa = st.session_state.get('zona_periodos_index', 'peninsula')
-st.session_state.zona_periodos_index = 'peninsula'; init_app_index()
-st.session_state.zona_periodos_index = zona_previa
 st.sidebar.header('⚖️ Comparador luz ⚖️'); st.title('Comparador luz')
-tab_energia, tab_potencia_energia, tab_resultados = st.tabs([
-    'Ofertas', 'Resultados', 'Comparativa'
-])
-with tab_energia:
+if st.session_state.get('es_admin', False):
+    opciones_vista = ['Catálogo de ofertas', 'Parametriza']
+else:
+    opciones_vista = ['Parametriza']
+opciones_vista.extend(['Resultados', 'Comparativa'])
+if st.session_state.get('comparador_luz_vista') == 'Ofertas':
+    del st.session_state.comparador_luz_vista
+if (
+    'comparador_luz_vista' in st.session_state
+    and st.session_state.comparador_luz_vista not in opciones_vista
+):
+    st.session_state.comparador_luz_vista = 'Parametriza'
+vista_comparador = st.segmented_control(
+    'Sección del comparador',
+    opciones_vista,
+    default='Parametriza',
+    key='comparador_luz_vista',
+    label_visibility='collapsed',
+)
+
+if vista_comparador == 'Catálogo de ofertas':
+    render_catalogo_ofertas_admin()
+    st.stop()
+
+# Los contenedores conservan la distribución anterior. Al final de la
+# ejecución se vacían los que no correspondan a la vista seleccionada. Esto
+# permite migrar la página monolítica sin alterar sus cálculos ni sus widgets.
+contenedor_vista_ofertas = st.empty()
+contenedor_vista_resultados = st.empty()
+contenedor_vista_comparativa = st.empty()
+with contenedor_vista_ofertas.container():
     col1, col2, col3 = st.columns(3)
-with tab_potencia_energia:
+with contenedor_vista_resultados.container():
     col_resultados_principal, col_resultados_energia, col_resultados_potencia = st.columns(3)
     with col_resultados_principal:
         contenedor_resultado_comparativa = st.container()
@@ -107,8 +632,16 @@ with tab_potencia_energia:
     with col_resultados_potencia:
         contenedor_precios_potencia = st.container()
         contenedor_controles_resultado = st.container()
-with tab_resultados:
+with contenedor_vista_comparativa.container():
     col_resultados_1, col_resultados_2, col_resultados_3 = st.columns(3)
+
+# El motor indexado es costoso y no es necesario para cargar o seleccionar
+# ofertas. Solo se inicializa al entrar en Resultados o Comparativa.
+if vista_comparador != 'Parametriza':
+    zona_previa = st.session_state.get('zona_periodos_index', 'peninsula')
+    st.session_state.zona_periodos_index = 'peninsula'
+    init_app_index()
+    st.session_state.zona_periodos_index = zona_previa
 
 curva_sesion = st.session_state.get('df_curva_sheets')
 potencias_contratadas = pd.Series(index=[f'P{i}' for i in range(1, 7)], dtype=float)
@@ -118,6 +651,19 @@ potencias_sips_guardadas = st.session_state.get('comparador_luz_potencias_sips')
 metadatos_sips = st.session_state.get('comparador_luz_metadatos_sips', {})
 hay_curva = isinstance(curva_sesion, pd.DataFrame) and not curva_sesion.empty
 opciones = ['Curva + datos potencia', 'Archivo SIPS']
+origen_guardado = st.session_state.get(
+    'comparador_luz_origen_datos', 'Curva + datos potencia'
+)
+if origen_guardado not in opciones:
+    origen_guardado = 'Curva + datos potencia'
+
+
+def _guardar_origen_datos_comparador():
+    valor = st.session_state.get('comparador_luz_origen_datos_widget')
+    if valor in opciones:
+        st.session_state.comparador_luz_origen_datos = valor
+
+
 with col1:
     st.subheader('Origen de datos', divider='rainbow')
     expander_origen_datos = st.expander(
@@ -130,7 +676,11 @@ with expander_origen_datos:
     origen = st.radio(
         'Selecciona el origen', opciones, horizontal=True,
         label_visibility='collapsed',
+        index=opciones.index(origen_guardado),
+        key='comparador_luz_origen_datos_widget',
+        on_change=_guardar_origen_datos_comparador,
     )
+    st.session_state.comparador_luz_origen_datos = origen
     archivo = None
     if origen == 'Curva + datos potencia':
         contenedor_curva_comparador = st.container()
@@ -390,7 +940,7 @@ with col2:
     omies = render_escenarios_omie(
         forward_actual, 'comparador_luz_escenarios'
     )
-    with st.expander('Futuros OMIP rolling 12 meses', expanded=True):
+    with st.expander('Futuros OMIP rolling 12 meses', expanded=False):
         prevision_omip_12m = st.session_state.get('prevision_omip_12m')
         if prevision_omip_12m is None:
             st.caption('Carga los escenarios OMIE previstos para ver la curva.')
@@ -411,10 +961,11 @@ with col2:
     fnee = otros_escenarios['fnee']
     render_formula_indexada('comparador_luz')
 
-formula = FormulaIndexada(desvios_apant=st.session_state.get('desvios_apant', 0.0), margen=st.session_state.get('margen_telemindex', 0.0), margen_pos=st.session_state.get('cfg_margen_pos', 'tm'), otros_costes=st.session_state.get('otros_costes_indexado', 0.0), otros_costes_pos=st.session_state.get('cfg_otros_costes_pos', 'tm'), incluir_fnee=st.session_state.get('cfg_fnee', True), fnee_pos=st.session_state.get('cfg_fnee_pos', 'perdidas'), cf_pct=st.session_state.get('cf_pct', 0.0))
+formula = FormulaIndexada(desvios_apant=st.session_state.get('desvios_apant', 0.0), margen=st.session_state.get('margen_telemindex', 0.0), margen_pos=st.session_state.get('cfg_margen_pos', 'neto'), otros_costes=st.session_state.get('otros_costes_indexado', 0.0), otros_costes_pos=st.session_state.get('cfg_otros_costes_pos', 'neto'), incluir_fnee=st.session_state.get('cfg_fnee', True), fnee_pos=st.session_state.get('cfg_fnee_pos', 'perdidas'), cf_pct=st.session_state.get('cf_pct', 0.0))
 referencia = st.session_state.get('df_sheets'); resultado_index = pd.DataFrame()
 if (
-    atr in atrs_indexados
+    vista_comparador != 'Parametriza'
+    and atr in atrs_indexados
     and isinstance(referencia, pd.DataFrame)
     and not referencia.empty
 ):
@@ -476,6 +1027,10 @@ with col2:
     # Renderiza carga y listado de ofertas en la tercera columna.
     col3.__enter__()
     st.subheader('Cargar oferta fija', divider='rainbow')
+    expander_carga_oferta = st.expander(
+        'Configurar oferta fija', expanded=False
+    )
+    expander_carga_oferta.__enter__()
     periodos_oferta, periodos_sin_consumo = periodos_con_consumo(consumos, atr)
     if periodos_sin_consumo:
         st.caption(
@@ -530,11 +1085,69 @@ with col2:
                 oferta_nueva[columna_usuario] = pd.NA
         if 'Fee (€/MWh)' not in oferta_nueva:
             oferta_nueva['Fee (€/MWh)'] = 0.0
+        if 'Oferta actual cliente' not in oferta_nueva:
+            oferta_nueva['Oferta actual cliente'] = False
+        if oferta_nueva['Oferta actual cliente'].fillna(False).astype(bool).any():
+            ofertas_usuario_previas = st.session_state.get(
+                'comparador_luz_ofertas_usuario', pd.DataFrame()
+            )
+            if isinstance(ofertas_usuario_previas, pd.DataFrame):
+                ofertas_usuario_previas = ofertas_usuario_previas.copy()
+                ofertas_usuario_previas['Oferta actual cliente'] = False
+                st.session_state.comparador_luz_ofertas_usuario = (
+                    ofertas_usuario_previas
+                )
+            st.session_state.comparador_luz_oferta_actual_cliente = str(
+                oferta_nueva.loc[
+                    oferta_nueva['Oferta actual cliente'].fillna(False), 'oferta'
+                ].iloc[0]
+            )
         st.session_state.comparador_luz_ofertas_usuario = combinar_ofertas(
             st.session_state.get('comparador_luz_ofertas_usuario'), oferta_nueva
         )
+    expander_carga_oferta.__exit__(None, None, None)
 
     st.subheader('Ofertas disponibles', divider='rainbow')
+    ocultar_ofertas_caducadas = st.checkbox(
+        'No mostrar ofertas caducadas',
+        value=True,
+        key='comparador_luz_ocultar_ofertas_caducadas',
+    )
+    preferencia_solo_un_anio = bool(st.session_state.get(
+        'comparador_luz_solo_ofertas_un_anio_preferencia', False
+    ))
+
+    def _guardar_preferencia_solo_un_anio():
+        st.session_state.comparador_luz_solo_ofertas_un_anio_preferencia = bool(
+            st.session_state.get('comparador_luz_solo_ofertas_un_anio', False)
+        )
+
+    solo_ofertas_un_anio = st.checkbox(
+        'Comparar solo ofertas de 1 año',
+        value=preferencia_solo_un_anio,
+        key='comparador_luz_solo_ofertas_un_anio',
+        on_change=_guardar_preferencia_solo_un_anio,
+        help=(
+            'Excluye ofertas identificadas como 2, 3, 5, 7 o 10 años. '
+            'Se mantienen los indexados y las ofertas sin duración indicada.'
+        ),
+    )
+    st.session_state.comparador_luz_solo_ofertas_un_anio_preferencia = bool(
+        solo_ofertas_un_anio
+    )
+    segmento_ofertas_20 = 'Residencial'
+    if str(atr).replace(' ', '').upper().removesuffix('TD') == '2.0':
+        opciones_segmento_20 = ['Residencial', 'Pyme']
+        if st.session_state.get(
+            'comparador_luz_segmento_ofertas_20'
+        ) not in [None, *opciones_segmento_20]:
+            del st.session_state.comparador_luz_segmento_ofertas_20
+        segmento_ofertas_20 = st.segmented_control(
+            'Tipo de cliente 2.0',
+            opciones_segmento_20,
+            default='Residencial',
+            key='comparador_luz_segmento_ofertas_20',
+        )
     mensaje_borrado = st.session_state.pop(
         'comparador_luz_mensaje_borrado', None
     )
@@ -545,10 +1158,43 @@ with col2:
         ofertas_catalogo_para_atr(cargar_catalogo_ofertas(), atr),
         st.session_state.get('comparador_luz_ofertas_usuario'),
     )
+    if ocultar_ofertas_caducadas and not ofertas.empty:
+        vigencia_hasta_ofertas = pd.to_datetime(
+            ofertas.get('Vigencia hasta'), errors='coerce'
+        )
+        ofertas = ofertas.loc[
+            vigencia_hasta_ofertas.isna()
+            | (vigencia_hasta_ofertas.dt.date >= date.today())
+        ].reset_index(drop=True)
+    if not ofertas.empty and str(atr).replace(
+        ' ', ''
+    ).upper().removesuffix('TD') == '2.0':
+        segmentos = ofertas.get(
+            'Segmento contrato', pd.Series('', index=ofertas.index)
+        ).fillna('').astype(str)
+        segmentos_normalizados = segmentos.str.casefold()
+        termino_segmento = segmento_ofertas_20.casefold()
+        coincide_segmento = segmentos_normalizados.str.contains(
+            termino_segmento, regex=False
+        )
+        # Las ofertas sin segmento (p. ej. manuales) se conservan; el filtro
+        # se aplica a las fichas de Informa que sí lo declaran.
+        ofertas = ofertas.loc[
+            segmentos.str.strip().eq('')
+            | coincide_segmento
+        ].reset_index(drop=True)
+    ofertas, ofertas_excluidas = filtrar_ofertas_elegibles(
+        ofertas,
+        float(consumos.sum()),
+        potencias_contratadas,
+        cups=cups_comparacion,
+    )
     if ofertas.empty: st.info(f'No hay ofertas disponibles para {atr}TD.')
     else:
         if 'ID oferta' not in ofertas:
             ofertas['ID oferta'] = pd.NA
+        if 'Oferta actual cliente' not in ofertas:
+            ofertas['Oferta actual cliente'] = False
         revision_editor_ofertas = st.session_state.get(
             'comparador_luz_revision_editor_ofertas', 0
         )
@@ -591,7 +1237,8 @@ with col2:
         )
         columnas_potencia_oferta = ['Potencia modalidad', *[f'Potencia {p}' for p in periodos]]
         columnas_internas_oferta = [
-            'ID oferta', *columnas_potencia_oferta, 'Plataforma', 'Comisión tipo',
+            'ID oferta', *columnas_potencia_oferta, 'Plataforma',
+            'Segmento contrato', 'Comisión tipo',
             'Comisión estimada (€)', 'Comisión (€/MWh)',
             'Comisión participación (%)',
         ]
@@ -609,7 +1256,10 @@ with col2:
         ofertas_editadas = st.data_editor(
             ofertas_vista_editor,
             hide_index=True, num_rows='fixed', use_container_width=True,
-            disabled=['oferta', 'Vigencia desde', 'Vigencia hasta', *periodos],
+            disabled=[
+                'oferta', 'Oferta actual cliente',
+                'Vigencia desde', 'Vigencia hasta', *periodos,
+            ],
             column_config={
                 'Comparar': st.column_config.CheckboxColumn(
                     'Comparar',
@@ -723,10 +1373,6 @@ with col2:
         ofertas = ofertas_editadas.loc[
             ofertas_editadas['Comparar'].fillna(False).astype(bool)
         ].drop(columns=['Comparar', 'Eliminar'])
-        ofertas, ofertas_excluidas = filtrar_ofertas_elegibles(
-            ofertas, float(consumos.sum()), potencias_contratadas,
-            cups=cups_comparacion,
-        )
         if not ofertas_excluidas.empty:
             st.caption(
                 f'{len(ofertas_excluidas)} oferta(s) excluida(s) '
@@ -740,11 +1386,33 @@ with col2:
 
     col3.__exit__(None, None, None)
 
+# La vista inicial termina aquí: no calcula resultados, costes de potencia ni
+# gráficos hasta que el usuario los solicita mediante el control segmentado.
+if vista_comparador == 'Parametriza':
+    contenedor_vista_resultados.empty()
+    contenedor_vista_comparativa.empty()
+    st.stop()
+
+# Parametriza se construye antes porque aporta los datos que consumen las otras
+# vistas. Ocultarla justo al terminar ese bloque evita que permanezca visible
+# mientras se recalculan los resultados (por ejemplo, al cambiar la oferta de
+# referencia). Antes se vaciaba al final de toda la página y producía un
+# destello perceptible de la pantalla anterior.
+contenedor_vista_ofertas.empty()
+
 partes = ([resultado_index] if not resultado_index.empty else [])
 if not ofertas.empty: partes.append(comparar_ofertas_fijas(consumos, ofertas))
 with col_resultados_energia:
     st.subheader('Resultado comparativa SÓLO ENERGÍA', divider='rainbow')
     resultado = pd.concat(partes, ignore_index=True).sort_values('Coste energía (€)') if partes else pd.DataFrame()
+    nombre_oferta_actual = st.session_state.get(
+        'comparador_luz_oferta_actual_cliente'
+    )
+    if not resultado.empty and nombre_oferta_actual:
+        resultado.loc[
+            resultado['Oferta'].astype(str).eq(str(nombre_oferta_actual)),
+            'Tipo',
+        ] = 'Actual cliente'
     if resultado.empty: st.info('No hay escenarios u ofertas compatibles que comparar.')
     else:
         nombres_indexados_energia = set(
@@ -766,6 +1434,7 @@ with col_resultados_energia:
                 columna_precio_energia: lambda x: formato_numero_es(x, 6),
             }),
             nombres_indexados_energia,
+            nombre_oferta_actual,
         )
         st.dataframe(
             estilo_resultado_energia,
@@ -782,6 +1451,7 @@ with col_resultados_energia:
             color_discrete_map={
                 'Indexado': COLOR_INDEXADO_ETIQUETA,
                 'Fijo': '#0B74C9',
+                'Actual cliente': COLOR_OFERTA_ACTUAL,
             },
         )
         grafico.update_traces(
@@ -863,16 +1533,6 @@ with col_resultados_principal:
         resultado_total = resultado_total.sort_values(
             'Coste total (€)', ascending=True
         ).reset_index(drop=True)
-        with contenedor_controles_resultado:
-            solo_ofertas_un_anio = st.checkbox(
-                'Comparar solo ofertas de 1 año',
-                value=False,
-                key='comparador_luz_solo_ofertas_un_anio',
-                help=(
-                    'Excluye ofertas identificadas como 2, 3, 5, 7 o 10 años. '
-                    'Se mantienen los indexados y las ofertas sin duración indicada.'
-                ),
-            )
         if solo_ofertas_un_anio:
             duracion_superior = resultado_total['Oferta'].astype(str).str.contains(
                 r'\b(?:2|3|5|7|10)\s*AÑOS?\b', case=False, regex=True
@@ -1055,11 +1715,17 @@ with col_resultados_principal:
                 grafico_comisiones = aplicar_estilo(grafico_comisiones)
                 etiquetas_comisiones = []
                 for nombre_oferta in orden_comisiones:
-                    if nombre_oferta in nombres_indexados or nombre_oferta in nombres_fijos_propios:
+                    es_actual = str(nombre_oferta) == str(nombre_oferta_actual)
+                    if (
+                        nombre_oferta in nombres_indexados
+                        or nombre_oferta in nombres_fijos_propios
+                        or es_actual
+                    ):
                         etiquetas_comisiones.append('')
                         color_fondo = (
-                            COLOR_INDEXADO_ETIQUETA if nombre_oferta in nombres_indexados
-                            else '#1565C0'
+                            COLOR_OFERTA_ACTUAL if es_actual
+                            else COLOR_INDEXADO_ETIQUETA
+                            if nombre_oferta in nombres_indexados else '#1565C0'
                         )
                         grafico_comisiones.add_annotation(
                             x=0, xref='paper', xshift=-7,
@@ -1151,7 +1817,8 @@ with col_resultados_principal:
         for nombre_oferta in orden_ofertas:
             es_indexado = nombre_oferta in nombres_indexados
             es_manual = nombre_oferta in nombres_fijos_propios
-            if es_indexado or es_manual:
+            es_actual = str(nombre_oferta) == str(nombre_oferta_actual)
+            if es_indexado or es_manual or es_actual:
                 etiquetas_eje.append('')
                 grafico_total.add_annotation(
                     x=0, xref='paper', xshift=-10,
@@ -1159,7 +1826,10 @@ with col_resultados_principal:
                     text=nombre_oferta,
                     showarrow=False,
                     xanchor='right', yanchor='middle',
-                    bgcolor=COLOR_INDEXADO_ETIQUETA if es_indexado else '#1565C0',
+                    bgcolor=(
+                        COLOR_OFERTA_ACTUAL if es_actual
+                        else COLOR_INDEXADO_ETIQUETA if es_indexado else '#1565C0'
+                    ),
                     borderpad=4,
                     font=dict(color='white', size=14),
                 )
@@ -1235,6 +1905,7 @@ with col_resultados_principal:
             estilo_costes_anuales = resaltar_ofertas_indexadas(
                 tabla_costes_anuales.style,
                 nombres_indexados,
+                nombre_oferta_actual,
             )
             st.dataframe(
                 estilo_costes_anuales,
@@ -1412,3 +2083,11 @@ with col_resultados_principal:
                     'Un valor positivo indica ahorro de la oferta seleccionada; '
                     'un valor negativo indica sobrecoste.'
                 )
+
+# Muestra una sola vista. Los contenedores se vacían al final para que la
+# selección se comporte como navegación condicional y no como pestañas.
+contenedor_vista_ofertas.empty()
+if vista_comparador == 'Resultados':
+    contenedor_vista_comparativa.empty()
+else:
+    contenedor_vista_resultados.empty()

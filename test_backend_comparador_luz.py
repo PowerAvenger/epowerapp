@@ -1,6 +1,7 @@
 import unittest
 import pandas as pd
 from backend_comparador_luz import (
+    calcular_merma_margen_fijo,
     calcular_ahorro_seleccion_vs_indexados,
     calcular_escenarios_indexados_mensuales,
     comparar_costes_mensuales,
@@ -8,6 +9,7 @@ from backend_comparador_luz import (
     comparar_ofertas_fijas,
     construir_curva_coste_oferta_fija,
     consumos_por_periodo,
+    filtrar_ofertas_elegibles,
     referenciar_comparativa_costes,
 )
 from backend_ofertas_fijas import ofertas_catalogo_para_atr
@@ -16,6 +18,40 @@ from backend_pricing_indexados import calcular_escenarios_pricing_mensuales
 
 
 class ComparadorLuzTest(unittest.TestCase):
+    def test_calcula_merma_con_margen_y_otros_costes(self):
+        escenarios = {
+            "Indexado": pd.DataFrame({
+                "coste_total": [120.0], "coste_margen": [10.0],
+                "coste_otros": [5.0],
+            })
+        }
+
+        salida = calcular_merma_margen_fijo(100.0, escenarios)
+
+        self.assertEqual(salida.iloc[0]["Resultado (€)"], -10.0)
+        self.assertEqual(salida.iloc[0]["Merma (€)"], 20.0)
+        self.assertEqual(salida.iloc[0]["Colchón consumido (%)"], 200.0)
+        self.assertEqual(salida.iloc[1]["Resultado (€)"], -5.0)
+        self.assertAlmostEqual(
+            salida.iloc[1]["Colchón consumido (%)"], 133.3333333333
+        )
+
+    def test_filtra_tramos_de_consumo_escritos_con_simbolos(self):
+        ofertas = pd.DataFrame({
+            'oferta': [
+                'TOTAL | A TU AIRE | < 4.000 KWh | RESIDENCIAL',
+                'TOTAL | A TU AIRE | > 4.000 KWh | RESIDENCIAL',
+            ],
+        })
+
+        compatibles, excluidas = filtrar_ofertas_elegibles(ofertas, 4175)
+
+        self.assertEqual(compatibles['oferta'].tolist(), [
+            'TOTAL | A TU AIRE | > 4.000 KWh | RESIDENCIAL'
+        ])
+        self.assertEqual(len(excluidas), 1)
+        self.assertIn('supera 4,000 kWh', excluidas.iloc[0]['Motivo exclusión'])
+
     def test_comparativa_mensual_admite_cualquier_referencia(self):
         referencia = pd.DataFrame({
             "fecha": ["2026-01-01", "2026-02-01"],

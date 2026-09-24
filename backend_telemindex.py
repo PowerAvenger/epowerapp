@@ -1958,6 +1958,74 @@ def evol_diario(df, df_prevision_2026=None):
 
     return df_diario, fig
 
+
+def calcular_impacto_anual_previsto(
+    df,
+    df_prevision_2026,
+    anio_base=2025,
+    anio_previsto=2026,
+):
+    """Convierte el diferencial anual previsto por ATR en impacto económico."""
+    consumos_tipo = {
+        "precio_2.0": ("2.0 TD", 1_000.0),
+        "precio_3.0": ("3.0 TD", 100_000.0),
+        "precio_6.1": ("6.1 TD", 1_000_000.0),
+    }
+    datos = df.copy()
+    datos["fecha"] = pd.to_datetime(datos["fecha"], errors="coerce").dt.floor("D")
+    diario = (
+        datos.dropna(subset=["fecha"])
+        .groupby("fecha", as_index=False)[list(consumos_tipo)]
+        .mean()
+        .sort_values("fecha")
+    )
+    # Los históricos llegan en €/MWh y la previsión mensual en c€/kWh.
+    diario[list(consumos_tipo)] = diario[list(consumos_tipo)] / 10
+    base = diario[diario["fecha"].dt.year.eq(anio_base)]
+    real_previsto = diario[diario["fecha"].dt.year.eq(anio_previsto)]
+    if base.empty or real_previsto.empty:
+        return pd.DataFrame()
+
+    ultima_real = real_previsto["fecha"].max()
+    prevision = df_prevision_2026.copy()
+    prevision["fecha"] = pd.to_datetime(prevision["fecha"], errors="coerce")
+    filas = []
+    for columna, (atr, consumo_kwh) in consumos_tipo.items():
+        tramos = []
+        for _, fila in prevision.iterrows():
+            inicio_mes = pd.Timestamp(fila["fecha"]).normalize()
+            fin_mes = inicio_mes + pd.offsets.MonthEnd(0)
+            inicio = max(inicio_mes, ultima_real + pd.Timedelta(days=1))
+            if inicio <= fin_mes and pd.notna(fila.get(columna)):
+                tramos.append(pd.DataFrame({
+                    "fecha": pd.date_range(inicio, fin_mes, freq="D"),
+                    columna: float(fila[columna]),
+                }))
+        serie_2026 = real_previsto[["fecha", columna]].dropna()
+        if tramos:
+            serie_2026 = pd.concat(
+                [serie_2026, *tramos], ignore_index=True
+            ).sort_values("fecha").drop_duplicates("fecha", keep="first")
+        precio_base = float(base[columna].mean())
+        precio_previsto = float(serie_2026[columna].mean())
+        delta_precio = precio_previsto - precio_base
+        coste_base = precio_base / 100 * consumo_kwh
+        coste_previsto = precio_previsto / 100 * consumo_kwh
+        filas.append({
+            "ATR": atr,
+            "Consumo tipo (kWh)": consumo_kwh,
+            f"Precio {anio_base} (c€/kWh)": precio_base,
+            f"Precio previsto {anio_previsto} (c€/kWh)": precio_previsto,
+            "Diferencial (c€/kWh)": delta_precio,
+            f"Coste {anio_base} (€)": coste_base,
+            f"Coste previsto {anio_previsto} (€)": coste_previsto,
+            "Impacto (€)": coste_previsto - coste_base,
+            "Impacto (%)": (
+                delta_precio / precio_base * 100 if precio_base else np.nan
+            ),
+        })
+    return pd.DataFrame(filas)
+
 def evol_diario_old(df):
 
     dffd = df.copy()

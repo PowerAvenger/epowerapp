@@ -34,6 +34,11 @@ MODULOS = [
     ("Interpolados qh REE", None, "Cuando la interpolación REE apenas tiene impacto", None, "images/interpolados.jpg", "https://interpolados-epowerapp.streamlit.app/"),
 ]
 
+MODULOS.insert(
+    7,
+    ("PPA", "pages/ppa.py", "Compara un PPA de carga base", "⚡", "images/telemindex.jpg", None),
+)
+
 RAIZ_APP = Path(__file__).resolve().parents[1]
 if (
     (RAIZ_APP / ".local_data" / "epower_beta.sqlite3").exists()

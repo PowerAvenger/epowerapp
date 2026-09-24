@@ -3,11 +3,36 @@ import unittest
 import pandas as pd
 
 from backend_simulindex import construir_prevision_indexados_2026
-from backend_telemindex import evol_diario
+from backend_telemindex import calcular_impacto_anual_previsto, evol_diario
 from backend_previsiones import construir_curva_telemindex_con_omip_m
 
 
 class PrevisionEvolTelemindexTest(unittest.TestCase):
+    def test_impacto_anual_aplica_consumos_tipo_por_atr(self):
+        reales = pd.DataFrame({
+            "fecha": pd.to_datetime(["2025-01-01", "2026-01-01"]),
+            "precio_2.0": [100.0, 110.0],
+            "precio_3.0": [100.0, 110.0],
+            "precio_6.1": [100.0, 110.0],
+        })
+        prevista = pd.DataFrame({
+            "fecha": pd.to_datetime(["2026-02-01"]),
+            "precio_2.0": [11.0],
+            "precio_3.0": [11.0],
+            "precio_6.1": [11.0],
+        })
+
+        impacto = calcular_impacto_anual_previsto(reales, prevista)
+
+        self.assertEqual(
+            impacto["Consumo tipo (kWh)"].tolist(),
+            [1_000.0, 100_000.0, 1_000_000.0],
+        )
+        self.assertAlmostEqual(impacto.iloc[0]["Impacto (€)"], 10.0)
+        self.assertAlmostEqual(impacto.iloc[1]["Impacto (€)"], 1_000.0)
+        self.assertAlmostEqual(impacto.iloc[2]["Impacto (€)"], 10_000.0)
+        self.assertAlmostEqual(impacto.iloc[0]["Impacto (%)"], 10.0)
+
     def test_curva_telemindex_incluye_media_ultimas_tres_cotizaciones_omip_m(self):
         curva = pd.DataFrame({
             "mes": [9, 10],

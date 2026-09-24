@@ -440,6 +440,13 @@ def render_oferta_manual(
         )
     with st.form(f"{clave}_form"):
         nombre = st.text_input("Nombre de la oferta", value="Oferta manual")
+        es_oferta_actual = st.checkbox(
+            "Oferta actual del cliente",
+            help=(
+                "La identifica como referencia actual del cliente para "
+                "distinguirla en tablas y gráficos."
+            ),
+        )
         st.markdown("##### Energía (€/kWh)")
         columnas = st.columns(len(periodos_energia))
         precios = {}
@@ -483,6 +490,7 @@ def render_oferta_manual(
     if guardar:
         try:
             oferta = construir_oferta(nombre, precios, periodos_energia)
+            oferta["Oferta actual cliente"] = bool(es_oferta_actual)
             if incluir_potencia:
                 if modalidad_potencia == "CON MARGEN":
                     invalidos_potencia = [
@@ -680,6 +688,7 @@ def render_bloque_ofertas_fijas(
     titulo: str = "Ofertas a precio fijo",
     periodos_afectados=None,
     titulo_selector_expander: str | None = None,
+    producto_entrega: str | None = None,
 ) -> pd.DataFrame:
     """Renderiza el bloque completo de ofertas y devuelve las activas con fee."""
     import streamlit as st
@@ -691,7 +700,8 @@ def render_bloque_ofertas_fijas(
     clave_usuario = f"{clave}_ofertas_usuario"
     clave_eliminadas = f"{clave}_ofertas_eliminadas"
     clave_editor = f"{clave}_editor_ofertas"
-    st.subheader(titulo)
+    if titulo:
+        st.subheader(titulo)
 
     aplicables = periodos_aplicables_atr(atr)
     if periodos_afectados is None:
@@ -739,7 +749,9 @@ def render_bloque_ofertas_fijas(
     except ValueError as error:
         catalogo = []
         st.warning(str(error))
-    ofertas_catalogo = ofertas_catalogo_para_atr(catalogo, atr)
+    ofertas_catalogo = ofertas_catalogo_para_atr(
+        catalogo, atr, producto_entrega=producto_entrega
+    )
     ofertas = combinar_ofertas(
         ofertas_catalogo, st.session_state.get(clave_usuario)
     )

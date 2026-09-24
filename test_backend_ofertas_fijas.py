@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 
 from backend_ofertas_fijas import (
+    actualizar_vigencia_oferta,
     cargar_catalogo_ofertas,
     catalogo_a_dataframe,
     copiar_oferta_con_horquilla_ssaa,
@@ -83,6 +84,50 @@ class CatalogoOfertasFijasTest(unittest.TestCase):
         self.assertEqual(salida.loc[0, "ID oferta"], "v1")
         self.assertEqual(salida.loc[0, "oferta"], "Oferta común")
 
+    def test_filtra_catalogo_por_producto_de_entrega(self):
+        catalogo = [
+            {
+                "id": "q4",
+                "nombre": "Oferta trimestral",
+                "producto_entrega": "Q4-2026",
+                "tarifas": [{"atr": "6.1", **{
+                    f"P{i}": 0.1 for i in range(1, 7)
+                }}],
+            },
+            {
+                "id": "12m",
+                "nombre": "Oferta anual",
+                "tarifas": [{"atr": "6.1", **{
+                    f"P{i}": 0.2 for i in range(1, 7)
+                }}],
+            },
+        ]
+
+        salida = ofertas_catalogo_para_atr(
+            catalogo, "6.1", producto_entrega="Q4-2026"
+        )
+
+        self.assertEqual(salida["ID oferta"].tolist(), ["q4"])
+        self.assertEqual(salida.loc[0, "Producto entrega"], "Q4-2026")
+
+    def test_comision_por_energia_prevalece_sobre_estimacion_fija(self):
+        catalogo = [{
+            "id": "informa-mixta",
+            "nombre": "Oferta con comisión mixta",
+            "comision": {
+                "tipo": "FIJA", "estimada_eur": 125.0, "eur_mwh": 4.5,
+            },
+            "tarifas": [{
+                "atr": "2.0", "P1": .2, "P2": .15, "P3": .1,
+            }],
+        }]
+
+        salida = ofertas_catalogo_para_atr(catalogo, "2.0")
+
+        self.assertEqual(salida.loc[0, "Comisión tipo"], "VARIABLE")
+        self.assertEqual(salida.loc[0, "Comisión (€/MWh)"], 4.5)
+        self.assertEqual(salida.loc[0, "Comisión estimada (€)"], 125.0)
+
     def test_conserva_versiones_y_todos_los_atr(self):
         tarifas = pd.DataFrame([
             {'ATR': '2.0', 'P1': .25, 'P2': .17, 'P3': .14,
@@ -120,6 +165,33 @@ class CatalogoOfertasFijasTest(unittest.TestCase):
 
             self.assertIsNone(registro['vigencia_hasta'])
             self.assertIsNone(cargar_catalogo_ofertas(ruta)[0]['vigencia_hasta'])
+
+    def test_actualiza_vigencia_sin_alterar_la_oferta(self):
+        tarifas = pd.DataFrame([{
+            'ATR': '2.0', 'P1': .25, 'P2': .17, 'P3': .14,
+            'P4': None, 'P5': None, 'P6': None,
+        }])
+        with tempfile.TemporaryDirectory() as carpeta:
+            ruta = Path(carpeta) / 'ofertas.json'
+            original = guardar_version_oferta(
+                'Editable', date(2026, 9, 1), date(2026, 9, 30),
+                tarifas, ruta,
+            )
+            actualizado = actualizar_vigencia_oferta(
+                original['id'], date(2026, 9, 2), None, ruta
+            )
+            catalogo = cargar_catalogo_ofertas(ruta)
+
+            self.assertEqual(actualizado['vigencia_desde'], '2026-09-02')
+            self.assertIsNone(actualizado['vigencia_hasta'])
+            self.assertEqual(catalogo[0]['nombre'], 'Editable')
+            self.assertEqual(catalogo[0]['tarifas'], original['tarifas'])
+
+    def test_rechaza_vigencia_fin_anterior_al_inicio(self):
+        with self.assertRaisesRegex(ValueError, 'fecha fin'):
+            actualizar_vigencia_oferta(
+                'cualquiera', date(2026, 9, 2), date(2026, 9, 1)
+            )
 
     def test_20_no_exige_p4_p5_p6_al_guardar(self):
         tarifas = pd.DataFrame([{

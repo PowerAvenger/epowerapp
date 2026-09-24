@@ -15,7 +15,12 @@ import streamlit as st
 from jinja2 import Environment, FileSystemLoader
 
 from backend_comun import aplicar_estilo
-from backend_contractual import cargar_acceso_medida_cups, cargar_condiciones_cups
+from backend_contractual import (
+    cargar_acceso_medida_cups,
+    cargar_condiciones_cups,
+    preparar_indexado_contractual,
+    referencias_del_mismo_registro,
+)
 from data_beta.contract_editor import numero_contractual
 from data_beta.analysis_history import guardar_analisis
 from backend_curvadecarga import (
@@ -313,7 +318,21 @@ def _comparativa_referencia_potencia(
             "Coste referencia (€)": coste_referencia,
             "Facturado − referencia (€)": coste_facturado - coste_referencia,
         })
-    _, coste_potencia_ref = calcular_potencia_confirmada(referencia_items)
+    potencias_sin_cambio = all(
+        abs(
+            float(fila["Potencia facturada (kW)"])
+            - float(fila["Potencia referencia (kW)"])
+        ) < 1e-6
+        for fila in filas_potencia
+    )
+    if potencias_sin_cambio:
+        coste_potencia_ref = float(factura.potencia)
+        for fila in filas_potencia:
+            fila["Coste referencia (€)"] = fila["Coste facturado (€)"]
+            fila["Facturado − referencia (€)"] = 0.0
+            fila["Origen TP"] = "Factura · misma potencia"
+    else:
+        _, coste_potencia_ref = calcular_potencia_confirmada(referencia_items)
 
     detalles_excesos = []
     coste_excesos_ref = 0.0
@@ -341,12 +360,45 @@ def _comparativa_referencia_potencia(
         detalle.insert(0, "Tramo", f"{inicio}–{fin}")
         detalles_excesos.append(detalle)
         coste_excesos_ref += coste
+    if potencias_sin_cambio:
+        coste_excesos_ref = float(factura.excesos_potencia or 0.0)
     return {
         "potencia_referencia": round(float(coste_potencia_ref), 2),
         "excesos_referencia": round(float(coste_excesos_ref), 2),
+        "potencias_sin_cambio": potencias_sin_cambio,
         "detalle_potencia": pd.DataFrame(filas_potencia),
         "detalle_excesos": pd.concat(detalles_excesos, ignore_index=True),
     }
+
+
+def _energia_referencia_contractual(
+    factura, resultado_medida, contexto_contractual, atr
+):
+    """Valora la curva con la alternativa energética de la condición BBDD."""
+    inicio = pd.Timestamp(contexto_contractual["inicio"]).normalize()
+    fin = pd.Timestamp(contexto_contractual["fin"]).normalize()
+    condiciones_ref = referencias_del_mismo_registro(
+        contexto_contractual["condiciones"], atr, inicio, fin
+    )
+    init_app()
+    init_app_index()
+    actualizar_df_index_por_zona(forzar=True)
+    precios_ref = preparar_indexado_contractual(
+        st.session_state.df_sheets.copy(), condiciones_ref, atr
+    )
+    columna_contractual = "precio_indexado_contrato_eur_mwh"
+    if precios_ref[columna_contractual].isna().all():
+        raise ValueError(
+            "La condición no genera precios indexados de referencia."
+        )
+    precios_ref[f"precio_{atr}"] = precios_ref[columna_contractual]
+    detalle, coste = calcular_energia_indexada(
+        resultado_medida.curva_periodo,
+        precios_ref,
+        atr,
+        resultado_medida.frecuencia,
+    )
+    return detalle, float(coste)
 
 
 def _semaforo_energia_real_sesion(factura, huella):
@@ -470,13 +522,13 @@ def _cliente_nif_desde_factura(texto):
     patrones_conjuntos = [
         rf"(?:NOMBRE(?:\s+Y\s+APELLIDOS)?\s*/?\s*RAZ[ÓO]N\s+SOCIAL|"
         rf"RAZ[ÓO]N\s+SOCIAL|DENOMINACI[ÓO]N\s+SOCIAL|TITULAR)"
-        rf"\s+(?:NIF|CIF|DNI/NIF/NIE)[^\n]*\n\s*([^\n]+?)\s+({patron_nif})\b",
+        rf"\s+(?:DNI/NIF/NIE|CIF/NIF|NIF|CIF)[^\n]*\n\s*([^\n]+?)\s+({patron_nif})\b",
         rf"(?:DATOS\s+(?:DEL\s+)?(?:CLIENTE|TITULAR))[\s\S]{{0,260}}?"
         rf"(?:NOMBRE(?:\s+Y\s+APELLIDOS)?|RAZ[ÓO]N\s+SOCIAL|"
         rf"DENOMINACI[ÓO]N\s+SOCIAL|TITULAR)\s*:?\s*([^\n]+?)\s+"
-        rf"(?:NIF|CIF|DNI/NIF/NIE)\s*:?\s*({patron_nif})\b",
+        rf"(?:DNI/NIF/NIE|CIF/NIF|NIF|CIF)\s*:?\s*({patron_nif})\b",
         rf"(?:CLIENTE|TITULAR)\s*:?\s*([^\n]+?)\s+"
-        rf"(?:NIF|CIF|DNI/NIF/NIE)\s*:?\s*({patron_nif})\b",
+        rf"(?:DNI/NIF/NIE|CIF/NIF|NIF|CIF)\s*:?\s*({patron_nif})\b",
     ]
     for patron in patrones_conjuntos:
         coincidencia = re.search(patron, texto, re.IGNORECASE | re.MULTILINE)
@@ -526,8 +578,8 @@ def _cliente_nif_desde_factura(texto):
         r"^Nombre\s+del\s+cliente\s*:?\s*([^\n]+)$",
     ])
     nif = _buscar_dato_informe(texto, [
-        rf"^(?:DNI/NIF/NIE|NIF|CIF)\s*:?\s*({patron_nif})\b",
-        rf"\b(?:DNI/NIF/NIE|NIF|CIF)\s*:?\s*({patron_nif})\b",
+        rf"^(?:DNI/NIF/NIE|CIF/NIF|NIF|CIF)\s*:?\s*({patron_nif})\b",
+        rf"\b(?:DNI/NIF/NIE|CIF/NIF|NIF|CIF)\s*:?\s*({patron_nif})\b",
     ])
     return cliente, nif
 
@@ -647,9 +699,9 @@ def _firma_formula_indexado():
         "ponderacion_periodos_v2",
         st.session_state.get("desvios_apant", 0.0),
         st.session_state.get("margen_telemindex", 0.0),
-        st.session_state.get("cfg_margen_pos", "tm"),
+        st.session_state.get("cfg_margen_pos", "neto"),
         st.session_state.get("otros_costes_indexado", 0.0),
-        st.session_state.get("cfg_otros_costes_pos", "tm"),
+        st.session_state.get("cfg_otros_costes_pos", "neto"),
         st.session_state.get("cfg_fnee", True),
         st.session_state.get("cfg_fnee_pos", "perdidas"),
         st.session_state.get("cf_pct", 0.0),
@@ -1237,11 +1289,18 @@ if contenido is not None:
         )
 
         with col_entrada:
-            st.success(
+            informacion_resumen = st.expander("ℹ️ Información", expanded=True)
+            avisos_resumen = st.expander("⚠️ Avisos", expanded=False)
+            advertencias_resumen = st.expander("🚨 Advertencias", expanded=False)
+            tarjetas_resumen = informacion_resumen.container()
+            mensajes_informacion = informacion_resumen.container()
+
+        with col_entrada:
+            mensajes_informacion.success(
                 f"Formato: {factura.comercializadora} · {numero_paginas} página(s)"
             )
-            st.info(generar_resumen(factura))
-            st.caption(
+            mensajes_informacion.info(generar_resumen(factura))
+            mensajes_informacion.caption(
                 "🛠️ Uso interno · Control de extracción: "
                 f"componentes {formato_euros(factura.suma_componentes)} · "
                 f"diferencia con total PDF {formato_euros(factura.diferencia)}."
@@ -1251,31 +1310,31 @@ if contenido is not None:
                 for item in factura.potencia_periodos
             )
             if factura.sobrecoste_potencia > 0:
-                st.warning(
+                advertencias_resumen.warning(
                     "⚠️ Sobrecoste neto en el término de potencia: "
                     f"{formato_euros(factura.sobrecoste_potencia)} "
                     f"({formato_pct(factura.porcentaje_sobrecoste_potencia, 1)} "
                     "del término facturado)."
                 )
             elif factura.sobrecoste_potencia < 0:
-                st.success(
+                mensajes_informacion.success(
                     "✅ El término de potencia presenta un ahorro neto frente a BOE de "
                     f"{formato_euros(abs(factura.sobrecoste_potencia))} "
                     f"({formato_pct(abs(factura.porcentaje_sobrecoste_potencia), 1)} "
                     "del término facturado)."
                 )
             elif potencia_verificada:
-                st.success("✅ Término de potencia sin sobrecoste sobre BOE.")
+                mensajes_informacion.success("✅ Término de potencia sin sobrecoste sobre BOE.")
             else:
-                st.info("ℹ️ Término de potencia no verificable con los datos extraídos.")
+                avisos_resumen.info("ℹ️ Término de potencia no verificable con los datos extraídos.")
 
             if factura.excesos_potencia:
-                st.warning(
+                advertencias_resumen.warning(
                     "⚠️ La factura incluye excesos de potencia: "
                     f"{formato_euros(factura.excesos_potencia)}."
                 )
             else:
-                st.info(
+                mensajes_informacion.info(
                     "ℹ️ La factura no incluye excesos de potencia."
                     + (
                         " Para este suministro 2.0TD se asume control por ICP, "
@@ -1286,12 +1345,12 @@ if contenido is not None:
 
             if not es_20td:
                 if factura.reactiva:
-                    st.error(
+                    advertencias_resumen.error(
                         "🔴 La factura incluye penalización por energía reactiva: "
                         f"{formato_euros(factura.reactiva)}."
                     )
                 else:
-                    st.success(
+                    mensajes_informacion.success(
                         "✅ La factura no incluye penalización por energía reactiva."
                     )
 
@@ -1303,7 +1362,7 @@ if contenido is not None:
                 total_servicios = round(sum(
                     item.importe for item in servicios_adicionales
                 ), 2)
-                st.error(
+                advertencias_resumen.error(
                     "🔴 Servicios adicionales contratados: "
                     + ", ".join(item.concepto for item in servicios_adicionales)
                     + ". Importe antes de impuestos: "
@@ -1316,7 +1375,7 @@ if contenido is not None:
                 for item in factura.otros
             )
             if not factura_alquiler_medida:
-                st.info(
+                mensajes_informacion.info(
                     "ℹ️ No se ha detectado alquiler de equipos de medida en la factura. "
                     "La telemedida puede facturarse por otra vía."
                 )
@@ -1332,7 +1391,7 @@ if contenido is not None:
                     limite_aviso = hoy + pd.DateOffset(months=2)
                     if vencimiento_fecha < hoy:
                         dias_caducado = (hoy - vencimiento_fecha).days
-                        st.markdown(
+                        advertencias_resumen.markdown(
                             "<div style='background:#6f1d2c;color:#fff;"
                             "border-left:5px solid #3f0d18;border-radius:8px;"
                             "padding:12px 14px;margin:8px 0;'>"
@@ -1344,30 +1403,20 @@ if contenido is not None:
                         )
                     elif vencimiento_fecha <= limite_aviso:
                         dias_restantes = (vencimiento_fecha - hoy).days
-                        st.warning(
+                        avisos_resumen.warning(
                             "⚠️ Vencimiento contractual próximo: "
                             f"{factura.fecha_vencimiento_contrato} "
                             f"({dias_restantes} días restantes)."
                         )
 
             if factura.permanencia is False:
-                st.success(
+                mensajes_informacion.success(
                     "✅ La factura indica que el contrato no tiene permanencia."
                 )
             elif factura.permanencia is True:
-                st.warning(
+                advertencias_resumen.warning(
                     "⚠️ La factura indica que el contrato tiene permanencia."
                 )
-
-            col_total_factura, col_resultado_factura = st.columns(2)
-            col_total_factura.metric("Total factura", formato_euros(factura.total))
-            if reconstruccion_total_completa:
-                col_resultado_factura.metric(
-                    "Resultado verificación",
-                    "✅" if verificacion_total_ok else "❌",
-                )
-            else:
-                col_resultado_factura.metric("Resultado verificación", "?")
 
             factura_numero = escape(str(factura.numero_factura or "No detectada"))
             fecha_factura = escape(str(factura.fecha_factura or "No detectada"))
@@ -1392,8 +1441,10 @@ if contenido is not None:
             cliente_factura, nif_factura = _cliente_nif_desde_factura(texto)
             cliente_html = escape(cliente_factura or "No detectado")
             nif_html = escape(nif_factura or "No detectado")
-            col_total_factura.markdown(
-                f"""
+            with tarjetas_resumen:
+                tarjeta_factura, tarjeta_suministro = st.columns(2)
+                tarjeta_factura.markdown(
+                    f"""
                 <div style="background:rgba(236,72,153,.10); border-left:4px solid #ec4899;
                             border-radius:8px; padding:12px 14px; margin:8px 0;
                             min-height:155px; box-sizing:border-box;">
@@ -1406,10 +1457,10 @@ if contenido is not None:
                     </div>
                 </div>
                 """,
-                unsafe_allow_html=True,
-            )
-            col_resultado_factura.markdown(
-                f"""
+                    unsafe_allow_html=True,
+                )
+                tarjeta_suministro.markdown(
+                    f"""
                 <div style="background:rgba(249,115,22,.11); border-left:4px solid #f97316;
                             border-radius:8px; padding:12px 14px; margin:8px 0;
                             min-height:155px; box-sizing:border-box;">
@@ -1422,11 +1473,11 @@ if contenido is not None:
                     </div>
                 </div>
                 """,
-                unsafe_allow_html=True,
-            )
-            col_datos_factura, col_datos_contrato = st.columns(2)
-            col_datos_factura.markdown(
-                f"""
+                    unsafe_allow_html=True,
+                )
+                tarjeta_cliente, tarjeta_contrato = st.columns(2)
+                tarjeta_cliente.markdown(
+                    f"""
                 <div style="background:rgba(139,92,246,.10); border-left:4px solid #8b5cf6;
                             border-radius:8px; padding:12px 14px; margin:8px 0;
                             min-height:180px; box-sizing:border-box;">
@@ -1438,10 +1489,10 @@ if contenido is not None:
                     </div>
                 </div>
                 """,
-                unsafe_allow_html=True,
-            )
-            col_datos_contrato.markdown(
-                f"""
+                    unsafe_allow_html=True,
+                )
+                tarjeta_contrato.markdown(
+                    f"""
                 <div style="background:rgba(14,165,233,.10); border-left:4px solid #0ea5e9;
                             border-radius:8px; padding:12px 14px; margin:8px 0;
                             min-height:180px; box-sizing:border-box;">
@@ -1454,23 +1505,30 @@ if contenido is not None:
                     </div>
                 </div>
                 """,
-                unsafe_allow_html=True,
-            )
-            if not reconstruccion_total_completa:
-                col_resultado_factura.markdown(
-                    "<style>"
-                    ":is([data-testid='column'],[data-testid='stColumn']):has("
-                    ".metric-no-verificable-marker) "
-                    "[data-testid='stMetricValue'],"
-                    ":is([data-testid='column'],[data-testid='stColumn']):has("
-                    ".metric-no-verificable-marker) "
-                    "[data-testid='stMetricValue'] * "
-                    "{color:#f59e0b !important;}"
-                    "</style>"
-                    "<span class='metric-no-verificable-marker' "
-                    "style='display:none'></span>",
                     unsafe_allow_html=True,
                 )
+                periodo_consumo_inicio = (
+                    factura.periodo_consumo_inicio or factura.periodo_inicio
+                )
+                periodo_consumo_fin = (
+                    factura.periodo_consumo_fin or factura.periodo_fin
+                )
+                if (
+                    periodo_consumo_inicio
+                    and periodo_consumo_fin
+                    and (
+                        periodo_consumo_inicio != factura.periodo_inicio
+                        or periodo_consumo_fin != factura.periodo_fin
+                    )
+                ):
+                    avisos_resumen.warning(
+                        "⚠️ El ciclo de facturación no coincide con el periodo real "
+                        "de consumo obtenido de las lecturas. "
+                        f"Facturación: {factura.periodo_inicio} – {factura.periodo_fin}. "
+                        f"Consumo: {periodo_consumo_inicio} – {periodo_consumo_fin}. "
+                        "Los análisis de energía deben usar el periodo de consumo; "
+                        "los días de potencia se conservan según las líneas facturadas."
+                    )
         componentes = componentes_grafico(factura, texto)
         semaforo_energia_real = _semaforo_energia_real_sesion(factura, huella)
         for componente in componentes:
@@ -1771,28 +1829,31 @@ if contenido is not None:
                     "🟢 ⚠️ Desvío favorable · 🟡 Sin datos suficientes · "
                     "🔵 No facturado"
                 )
-                st.subheader("Peso de los componentes", divider="rainbow")
-                df_peso_componentes = pd.DataFrame(
-                    componentes_peso_grafico(factura)
-                )
-                if not df_peso_componentes.empty:
-                    figura = px.pie(
-                        df_peso_componentes,
-                        names="Componente",
-                        values="Importe (€)",
-                        hole=0.42,
+                with st.expander(
+                    "⚖️ Peso de los componentes",
+                    expanded=False,
+                ):
+                    df_peso_componentes = pd.DataFrame(
+                        componentes_peso_grafico(factura)
                     )
-                    figura.update_traces(textinfo="percent+label")
-                    st.plotly_chart(figura, use_container_width=True)
-                    if any(item.importe < 0 for item in factura.otros):
-                        st.caption(
-                            "Los abonos se imputan visualmente primero a Energía y "
-                            "después a Potencia; la tabla conserva los importes reales."
+                    if not df_peso_componentes.empty:
+                        figura = px.pie(
+                            df_peso_componentes,
+                            names="Componente",
+                            values="Importe (€)",
+                            hole=0.42,
                         )
-                else:
-                    st.info(
-                        "No hay importe neto positivo que representar en el gráfico."
-                    )
+                        figura.update_traces(textinfo="percent+label")
+                        st.plotly_chart(figura, use_container_width=True)
+                        if any(item.importe < 0 for item in factura.otros):
+                            st.caption(
+                                "Los abonos se imputan visualmente primero a Energía y "
+                                "después a Potencia; la tabla conserva los importes reales."
+                            )
+                    else:
+                        st.info(
+                            "No hay importe neto positivo que representar en el gráfico."
+                        )
 
             if MOSTRAR_TABLA_MAXIMETROS and factura.maximetros:
                 st.subheader("Maxímetros", divider="rainbow")
@@ -2129,6 +2190,42 @@ if contenido is not None:
                             "Coste de la energía",
                             formato_euros(factura.energia),
                         )
+
+                inicio_fee = factura.periodo_consumo_inicio or factura.periodo_inicio
+                fin_fee = factura.periodo_consumo_fin or factura.periodo_fin
+                atr_fee = (factura.atr or "").upper().replace("TD", "").strip()
+                precios_fee = {
+                    item.periodo: (
+                        item.coste_eur / item.consumo_kwh
+                        if item.consumo_kwh else 0.0
+                    )
+                    for item in factura.energia_periodos
+                }
+                consumos_fee = {
+                    item.periodo: item.consumo_kwh
+                    for item in factura.energia_periodos
+                }
+                if inicio_fee and fin_fee and atr_fee in {"2.0", "3.0", "6.1"}:
+                    with desplegable_consumo:
+                        st.caption(
+                            "La estimación sin curva usará el periodo real de "
+                            "consumo y los precios facturados por periodo."
+                        )
+                        if st.button(
+                            "Estimar fee en Telemindex",
+                            key=f"factura_estimar_fee_{huella}",
+                            type="primary",
+                            use_container_width=True,
+                        ):
+                            st.session_state["telemindex_fee_desde_factura"] = {
+                                "inicio": inicio_fee,
+                                "fin": fin_fee,
+                                "atr": atr_fee,
+                                "precios": precios_fee,
+                                "consumos": consumos_fee,
+                                "factura": factura.numero_factura,
+                            }
+                            st.switch_page("pages/telemindex.py")
 
             desplegable_excesos = st.expander(
                 etiqueta_expander("Excesos", "Verificación de excesos")
@@ -3401,7 +3498,7 @@ with tab_verificacion:
                         "cálculo energético por tramos."
                     )
             else:
-                st.info(
+                mensajes_informacion.info(
                     "Verificación manual: no se han podido aplicar condiciones "
                     f"de BBDD. {contexto_contractual.get('mensaje', '')}"
                 )
@@ -5067,7 +5164,28 @@ with tab_ahorro_factura:
                 factura, medida_ahorro, contexto_ahorro,
                 _atr_indexado(factura.atr),
             )
+            _, energia_referencia = (
+                _energia_referencia_contractual(
+                    factura,
+                    medida_ahorro,
+                    contexto_ahorro,
+                    _atr_indexado(factura.atr),
+                )
+            )
             exceso_facturado = float(factura.excesos_potencia or 0.0)
+            regularizaciones_integradas = sum(
+                float(item.importe)
+                for item in factura.otros
+                if re.search(
+                    r"\b(?:FNEE|SSAA)\b",
+                    str(item.concepto or ""),
+                    re.IGNORECASE,
+                )
+            )
+            otros_referencia = max(
+                float(factura.total_otros) - regularizaciones_integradas,
+                0.0,
+            )
             verificacion_iee_ahorro = factura.verificacion_iee
             verificacion_iva_ahorro = factura.verificacion_iva
             reconstruccion_ref = reconstruir_total_beta(
@@ -5075,12 +5193,18 @@ with tab_ahorro_factura:
                 potencia_facturada=factura.potencia,
                 potencia_verificada=comparativa_ref["potencia_referencia"],
                 energia_facturada=factura.energia,
-                energia_verificada=factura.energia,
-                otros_facturados={"excesos": exceso_facturado},
-                otros_confirmados={
-                    "excesos": comparativa_ref["excesos_referencia"]
+                energia_verificada=energia_referencia,
+                otros_facturados={
+                    "excesos": exceso_facturado,
+                    "regularizaciones_indexado": regularizaciones_integradas,
                 },
-                claves_otros_base_iee=("excesos",),
+                otros_confirmados={
+                    "excesos": comparativa_ref["excesos_referencia"],
+                    "regularizaciones_indexado": 0.0,
+                },
+                claves_otros_base_iee=(
+                    "excesos", "regularizaciones_indexado",
+                ),
                 iee_facturado=factura.iee,
                 iva_facturado=factura.iva,
                 base_iee_factura=(
@@ -5221,8 +5345,10 @@ with tab_ahorro_factura:
 
             valores_referencia = {
                 "Potencia": comparativa_ref["potencia_referencia"],
+                "Energía": energia_referencia,
                 "Excesos": comparativa_ref["excesos_referencia"],
                 "Excesos de potencia": comparativa_ref["excesos_referencia"],
+                "Otros": otros_referencia,
                 "IEE": reconstruccion_ref["iee_verificado"],
                 "IVA": reconstruccion_ref["iva_verificado"],
             }
@@ -5672,10 +5798,18 @@ with tab_ahorro_factura:
                     else "#9ca3af"
                 )
                 st.markdown("#### Cálculo justificativo de la referencia")
-                st.caption(
-                    "Los excesos se recalculan sobre la curva utilizando "
-                    "exclusivamente P1 REF…P6 REF."
-                )
+                if comparativa_ref["potencias_sin_cambio"]:
+                    st.info(
+                        "Las potencias de referencia coinciden con las "
+                        "contratadas en la factura. Se conserva el importe "
+                        "facturado de excesos y no se sustituye por el cálculo "
+                        "teórico sobre la curva."
+                    )
+                else:
+                    st.caption(
+                        "Los excesos se recalculan sobre la curva utilizando "
+                        "exclusivamente P1 REF…P6 REF."
+                    )
                 detalle_excesos_referencia = comparativa_ref[
                     "detalle_excesos"
                 ].rename(columns={
@@ -7664,7 +7798,7 @@ with tab_informe:
                             {
                                 "nombre": "Posición del margen",
                                 "valor": escape(str(st.session_state.get(
-                                    "cfg_margen_pos", "tm"
+                                    "cfg_margen_pos", "neto"
                                 ))),
                             },
                             {
@@ -7676,7 +7810,7 @@ with tab_informe:
                             {
                                 "nombre": "Posición de otros costes",
                                 "valor": escape(str(st.session_state.get(
-                                    "cfg_otros_costes_pos", "tm"
+                                    "cfg_otros_costes_pos", "neto"
                                 ))),
                             },
                             {

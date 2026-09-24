@@ -57,6 +57,7 @@ def generar_menu():
         st.page_link('pages/demanda.py', label = 'Demanda', icon = "🏭")
         st.page_link('pages/redata_potgen.py', label = 'Tecnologías de generación', icon = "⚡️")
         st.page_link('pages/marginales.py', label = 'Marginales', icon = "🔀")
+        st.page_link('pages/ppa.py', label='PPA', icon='⚡')
         raiz_app = Path(__file__).resolve().parent
         if (
             (raiz_app / '.local_data' / 'epower_beta.sqlite3').exists()
@@ -291,9 +292,9 @@ def _init_app_index():
         "desvios_apant": 0.0,
         # "cfg_srad": True,
         "margen_telemindex": 0.0,
-        "cfg_margen_pos": "tm",
+        "cfg_margen_pos": "neto",
         "otros_costes_indexado": 0.0,
-        "cfg_otros_costes_pos": "tm",
+        "cfg_otros_costes_pos": "neto",
         "cfg_fnee": True,
         "cfg_fnee_pos": "perdidas",
         "cf_pct": 0.0,
@@ -417,9 +418,9 @@ def init_app_index_old():
             "desvios_apant": 0.0,
             #"cfg_srad": True,
             "margen_telemindex": 0.0,
-            "cfg_margen_pos": "tm",
+            "cfg_margen_pos": "neto",
             "otros_costes_indexado": 0.0,
-            "cfg_otros_costes_pos": "tm",
+            "cfg_otros_costes_pos": "neto",
             "cfg_fnee": True,
             "cfg_fnee_pos": "perdidas",
             "cf_pct": 0.0
@@ -656,7 +657,7 @@ def mostrar_parametros_formula_indexado(
                 st.selectbox,
                 "Ubicación margen",
                 ["perdidas", "tm", "neto"],
-                key="cfg_margen_pos", default="tm",
+                key="cfg_margen_pos", default="neto",
             )
 
         fila2_col1, fila2_col2, fila2_col3 = st.columns(3)
@@ -692,7 +693,7 @@ def mostrar_parametros_formula_indexado(
             widget(
                 st.selectbox, "Ubicación otros costes",
                 ["perdidas", "tm", "neto"],
-                key="cfg_otros_costes_pos", default="tm",
+                key="cfg_otros_costes_pos", default="neto",
             )
         return valores
 
@@ -719,7 +720,7 @@ def mostrar_parametros_formula_indexado(
         "Ubicación margen",
         ["perdidas", "tm", "neto"],
         key="cfg_margen_pos",
-        default="tm",
+        default="neto",
     )
     widget(
         st.number_input, "Otros costes (€/MWh)",
@@ -729,7 +730,7 @@ def mostrar_parametros_formula_indexado(
     widget(
         st.selectbox, "Ubicación otros costes",
         ["perdidas", "tm", "neto"],
-        key="cfg_otros_costes_pos", default="tm",
+        key="cfg_otros_costes_pos", default="neto",
     )
     widget(
         st.checkbox,

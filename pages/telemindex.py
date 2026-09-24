@@ -15,6 +15,7 @@ from backend_telemindex import (
     tabla_apuntamiento_precio_final,
     evol_mensual, evol_precios_diarios, graficar_diferencial_precios_mensuales, tabla_evol_mes_por_años,
     preparar_comparativa_mensual_indexados,
+    calcular_impacto_anual_previsto,
     evol_diario,
     construir_df_curva_sheets, añadir_costes_curva,
     calcular_verificacion_ssaa,
@@ -30,6 +31,7 @@ from backend_curvadecarga import (
     graficar_queso_periodos,
 )
 from backend_comparador_luz import (
+    calcular_merma_margen_fijo,
     comparar_costes_mensuales_referenciados,
     comparar_ofertas_fijas,
     construir_curva_coste_oferta_fija,
@@ -46,6 +48,7 @@ from componentes_ofertas_fijas import (
 )
 from componentes_curva import render_origen_curva
 from componentes_margen_facturado import (
+    render_detalle_margen,
     render_impacto_margen,
     render_precios_facturados,
 )
@@ -106,9 +109,9 @@ CLAVES_FILTRO_HISTORICO = {
 DEFAULTS_FORMULA_HISTORICO = {
     "desvios_apant": 0.0,
     "margen_telemindex": 0.0,
-    "cfg_margen_pos": "tm",
+    "cfg_margen_pos": "neto",
     "otros_costes_indexado": 0.0,
-    "cfg_otros_costes_pos": "tm",
+    "cfg_otros_costes_pos": "neto",
     "cfg_fnee": True,
     "cfg_fnee_pos": "perdidas",
     "cf_pct": 0.0,
@@ -155,6 +158,26 @@ def inicializar_estado_historico():
             st.session_state.setdefault(clave, valor)
 
 
+def aplicar_fee_desde_factura():
+    """Precarga Históricos con periodo, ATR y precios enviados por Facturas."""
+    datos = st.session_state.get("telemindex_fee_desde_factura")
+    if not isinstance(datos, dict):
+        return
+    try:
+        inicio = pd.to_datetime(datos["inicio"], dayfirst=True).date()
+        fin = pd.to_datetime(datos["fin"], dayfirst=True).date()
+    except (KeyError, TypeError, ValueError):
+        st.session_state.pop("telemindex_fee_desde_factura", None)
+        return
+    st.session_state[CLAVES_FILTRO_HISTORICO["rango"]] = (
+        "Selecciona un rango de fechas"
+    )
+    st.session_state[CLAVES_FILTRO_HISTORICO["dias"]] = (inicio, fin)
+    atr = str(datos.get("atr", "")).strip()
+    if atr in {"2.0", "3.0", "6.1"}:
+        st.session_state["telemindex_historico_atr_margen_facturado"] = atr
+
+
 def obtener_formula_historico():
     """Construye la fórmula exclusiva del tab Históricos."""
 
@@ -178,9 +201,9 @@ def obtener_formula_compartida():
     return FormulaIndexada(
         desvios_apant=float(estado.get("desvios_apant", 0.0)),
         margen=float(estado.get("margen_telemindex", 0.0)),
-        margen_pos=estado.get("cfg_margen_pos", "tm"),
+        margen_pos=estado.get("cfg_margen_pos", "neto"),
         otros_costes=float(estado.get("otros_costes_indexado", 0.0)),
-        otros_costes_pos=estado.get("cfg_otros_costes_pos", "tm"),
+        otros_costes_pos=estado.get("cfg_otros_costes_pos", "neto"),
         incluir_fnee=bool(estado.get("cfg_fnee", False)),
         fnee_pos=estado.get("cfg_fnee_pos", "perdidas"),
         cf_pct=float(estado.get("cf_pct", 0.0)),
@@ -204,8 +227,7 @@ def mostrar_controles_telemindex(lista_meses, fecha_ultima_filtrado):
         f"Última fecha C2 liquicomun: {st.session_state.ultima_fecha_csv.strftime('%d.%m.%Y')}"
     )
 
-    st.subheader('Opciones', divider='rainbow')
-    with st.container(border=True):
+    with st.expander('Opciones', expanded=False):
         persist_widget(
             st.radio,
             "Seleccionar rango temporal",
@@ -272,8 +294,7 @@ def mostrar_controles_telemindex(lista_meses, fecha_ultima_filtrado):
                 "Configura `CSV_SNP` para habilitar Baleares, Canarias, Ceuta y Melilla."
             )
 
-    st.subheader('Parámetros de fórmula', divider='rainbow')
-    with st.container(border=True):
+    with st.expander('Parámetros de fórmula', expanded=False):
         render_formulario_formula_indexada(
             clave="telemindex_historico",
             claves_estado=CLAVES_FORMULA_HISTORICO,
@@ -313,6 +334,7 @@ init_app()
 
 init_app_index()
 inicializar_estado_historico()
+aplicar_fee_desde_factura()
 formula_historico = obtener_formula_historico()
 
 # La vista compartida permanece intacta para Curva, Simulindex y el resto.
@@ -1260,9 +1282,9 @@ if False:
     formula_desglose = FormulaIndexada(
         desvios_apant=st.session_state.get("desvios_apant", 0.0),
         margen=st.session_state.get("margen_telemindex", 0.0),
-        margen_pos=st.session_state.get("cfg_margen_pos", "tm"),
+        margen_pos=st.session_state.get("cfg_margen_pos", "neto"),
         otros_costes=st.session_state.get("otros_costes_indexado", 0.0),
-        otros_costes_pos=st.session_state.get("cfg_otros_costes_pos", "tm"),
+        otros_costes_pos=st.session_state.get("cfg_otros_costes_pos", "neto"),
         incluir_fnee=st.session_state.get("cfg_fnee", False),
         fnee_pos=st.session_state.get("cfg_fnee_pos", "perdidas"),
         cf_pct=st.session_state.get("cf_pct", 0.0),
@@ -1458,6 +1480,168 @@ with tab1:
                 with st.expander("Apuntamiento precio final"):
                     mostrar_tabla_apuntamiento(df_tabla_apuntamiento_precio)
 
+                st.subheader("¿Qué margen han cargado?", divider="rainbow")
+                atr_margen_historico = st.selectbox(
+                    "ATR de referencia",
+                    ("2.0", "3.0", "6.1"),
+                    format_func=lambda atr: f"{atr} TD",
+                    key="telemindex_historico_atr_margen_facturado",
+                    help=(
+                        "La comparación usa los precios medios aritméticos "
+                        "del ATR seleccionado en la tabla superior."
+                    ),
+                )
+                columna_periodo_historico = (
+                    "dh_3p" if atr_margen_historico == "2.0" else "dh_6p"
+                )
+                curva_aritmetica = df_historico.copy()
+                curva_aritmetica["periodo"] = (
+                    curva_aritmetica[columna_periodo_historico]
+                    .astype(str).str.strip().str.upper()
+                )
+                periodos_validos_historico = periodos_no_aplicables_atr(
+                    atr_margen_historico
+                )
+                periodos_validos_historico = [
+                    f"P{i}" for i in range(1, 7)
+                    if f"P{i}" not in periodos_validos_historico
+                ]
+                curva_aritmetica = curva_aritmetica.loc[
+                    curva_aritmetica["periodo"].isin(periodos_validos_historico)
+                ].copy()
+                if not curva_aritmetica.empty:
+                    fee_desde_factura = st.session_state.get(
+                        "telemindex_fee_desde_factura"
+                    )
+                    contexto_consumos_factura = (
+                        atr_margen_historico,
+                        texto_periodo_historico,
+                        zona_historico,
+                    )
+                    consumos_factura = (
+                        fee_desde_factura.get("consumos")
+                        if isinstance(fee_desde_factura, dict)
+                        and str(fee_desde_factura.get("atr", ""))
+                        == atr_margen_historico
+                        else st.session_state.get(
+                            "telemindex_historico_facturada_consumos"
+                        )
+                        if st.session_state.get(
+                            "telemindex_historico_facturada_consumos_contexto"
+                        ) == contexto_consumos_factura
+                        else {}
+                    )
+                    consumos_factura = (
+                        consumos_factura
+                        if isinstance(consumos_factura, dict) else {}
+                    )
+                    def consumo_facturado_periodo(periodo):
+                        valor = pd.to_numeric(
+                            consumos_factura.get(periodo, 0), errors="coerce"
+                        )
+                        return max(float(valor), 0.0) if pd.notna(valor) else 0.0
+
+                    consumos_validos = {
+                        periodo: consumo_facturado_periodo(periodo)
+                        for periodo in periodos_validos_historico
+                    }
+                    total_consumo_factura = sum(consumos_validos.values())
+                    usa_reparto_factura = total_consumo_factura > 0
+                    if usa_reparto_factura:
+                        horas_por_periodo = (
+                            curva_aritmetica["periodo"].value_counts()
+                        )
+                        curva_aritmetica["consumo_neto_kWh"] = (
+                            curva_aritmetica["periodo"].map(consumos_validos)
+                            .div(curva_aritmetica["periodo"].map(horas_por_periodo))
+                            .fillna(0.0)
+                        )
+                    else:
+                        curva_aritmetica["consumo_neto_kWh"] = (
+                            1_000.0 / len(curva_aritmetica)
+                        )
+                    consumos_aritmeticos = (
+                        curva_aritmetica.groupby("periodo")["consumo_neto_kWh"]
+                        .sum().reindex([f"P{i}" for i in range(1, 7)], fill_value=0.0)
+                    )
+                    firma_historica_facturada = (
+                        atr_margen_historico,
+                        texto_periodo_historico,
+                        zona_historico,
+                        len(curva_aritmetica),
+                    )
+                    if (
+                        isinstance(fee_desde_factura, dict)
+                        and str(fee_desde_factura.get("atr", ""))
+                        == atr_margen_historico
+                    ):
+                        precios_precargados = fee_desde_factura.get("precios")
+                        if isinstance(precios_precargados, dict):
+                            st.session_state[
+                                "telemindex_historico_facturada_consumos"
+                            ] = consumos_factura
+                            st.session_state[
+                                "telemindex_historico_facturada_consumos_contexto"
+                            ] = contexto_consumos_factura
+                            st.session_state[
+                                "telemindex_historico_facturada_origen"
+                            ] = "Manual"
+                            for periodo, precio in precios_precargados.items():
+                                st.session_state[
+                                    f"telemindex_historico_facturada_manual_{periodo}"
+                                ] = float(precio)
+                            st.session_state[
+                                "telemindex_historico_facturada_precios"
+                            ] = precios_precargados
+                            st.session_state[
+                                "telemindex_historico_facturada_firma"
+                            ] = firma_historica_facturada
+                            st.session_state[
+                                "telemindex_historico_facturada_origen_guardado"
+                            ] = (
+                                "Factura "
+                                + str(fee_desde_factura.get("factura") or "")
+                            ).strip()
+                            st.session_state.pop(
+                                "telemindex_fee_desde_factura", None
+                            )
+                    precios_historicos_facturados = render_precios_facturados(
+                        consumos_aritmeticos,
+                        atr_margen_historico,
+                        firma_historica_facturada,
+                        "telemindex_historico_facturada",
+                        descripcion_periodo=(
+                            "Precios medios facturados del término de energía "
+                            "en €/kWh, sin impuestos ni potencia. Se comparan "
+                            "con las medias aritméticas del periodo seleccionado."
+                        ),
+                    )
+                    if precios_historicos_facturados:
+                        try:
+                            margen_historico = estimar_margen_facturado(
+                                curva_aritmetica,
+                                atr_margen_historico,
+                                formula_historico,
+                                precios_historicos_facturados,
+                            )
+                        except (ValueError, KeyError) as exc:
+                            st.warning(f"No se puede estimar el margen: {exc}")
+                        else:
+                            render_impacto_margen(
+                                margen_historico,
+                                texto_metodo=(
+                                    "Estimación sobre medias aritméticas, con una "
+                                    "base real de "
+                                    f"{formato_kwh(total_consumo_factura, 2, True)} "
+                                    "distribuida según los consumos P1–P6 de la factura."
+                                    if usa_reparto_factura else
+                                    "Estimación sobre medias aritméticas, con una "
+                                    "base normalizada de 1.000 kWh repartida "
+                                    "uniformemente entre las horas del periodo."
+                                ),
+                            )
+                            render_detalle_margen(margen_historico)
+
         with col1:
             mostrar_controles_telemindex(lista_meses, fecha_ultima_filtrado)
 
@@ -1465,6 +1649,83 @@ with tab1:
 with tab2:
     # gráfico de evolución de los precios medios mensuales
     st.subheader("Comparativa anual de los precios medios de indexado, por peaje de acceso (media acumulada)", divider='rainbow')
+    if (
+        not error_prevision_indexados
+        and not df_prevision_indexados_2026.empty
+    ):
+        impacto_anual = calcular_impacto_anual_previsto(
+            st.session_state.df_sheets,
+            df_prevision_indexados_2026,
+            anio_base=2025,
+            anio_previsto=2026,
+        )
+        if not impacto_anual.empty:
+            columnas_impacto = st.columns(3)
+            etiquetas_consumo = {
+                "2.0 TD": "1.000 kWh",
+                "3.0 TD": "100.000 kWh",
+                "6.1 TD": "1 GWh",
+            }
+            for columna_ui, (_, fila) in zip(
+                columnas_impacto, impacto_anual.iterrows()
+            ):
+                atr_impacto = str(fila["ATR"])
+                impacto_euros = float(fila["Impacto (€)"])
+                impacto_pct = float(fila["Impacto (%)"])
+                es_sobrecoste = impacto_euros > 0
+                es_ahorro = impacto_euros < 0
+                concepto = (
+                    "sobrecoste" if es_sobrecoste else
+                    "ahorro" if es_ahorro else "mismo coste"
+                )
+                color_impacto = (
+                    "#f44747" if es_sobrecoste else
+                    "#22c55e" if es_ahorro else "#9ca3af"
+                )
+                fondo_impacto = (
+                    "rgba(244,71,71,.10)" if es_sobrecoste else
+                    "rgba(34,197,94,.10)" if es_ahorro else
+                    "rgba(156,163,175,.10)"
+                )
+                signo_pct = "+" if impacto_pct > 0 else ""
+                icono_sobrecoste = (
+                    "<span style='display:inline-block;"
+                    "transform:translateX(-.2rem) scaleY(.62);"
+                    "margin-right:.55rem;'>▲</span>"
+                    if es_sobrecoste else ""
+                )
+                columna_ui.markdown(
+                    f"""
+                    <div style="min-height:170px;padding:18px 18px;
+                        border:1px solid {color_impacto}88;
+                        border-left:6px solid {color_impacto};
+                        border-radius:14px;background:{fondo_impacto};
+                        display:flex;flex-direction:column;
+                        justify-content:center;text-align:center;
+                        box-shadow:0 5px 14px rgba(0,0,0,.12);">
+                      <div style="font-size:1.25rem;font-weight:800;
+                          letter-spacing:.08em;color:#9ca3af;margin-bottom:.55rem;">
+                        IMPACTO PREVISTO 2026 · ATR {atr_impacto}
+                      </div>
+                      <div style="font-size:.94rem;line-height:1.45;">
+                        Para un suministro de
+                        <strong style="font-size:1.18rem;color:#d6b85a;">
+                          {etiquetas_consumo[atr_impacto]} anuales
+                        </strong>
+                        en indexado, en 2026 el término de energía supondrá,
+                        respecto a 2025, un {concepto} de
+                      </div>
+                      <div style="font-size:2.15rem;font-weight:900;
+                          color:{color_impacto};margin-top:.4rem;line-height:1.1;">
+                        {icono_sobrecoste}{formato_euros(abs(impacto_euros), 2)}
+                        <span style="font-size:1.35rem;">
+                          ({signo_pct}{formato_pct(impacto_pct, 1)})
+                        </span>
+                      </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
     st.plotly_chart(graf_precios_diarios, use_container_width=True)
     if error_prevision_indexados:
         st.caption(
@@ -2130,10 +2391,105 @@ with tab3:
                 )
                 st.plotly_chart(fig_cascada, use_container_width=True)
             
+            ofertas_fijas_merma = [
+                oferta for oferta in curvas_comparativa
+                if tipos_comparativa.get(oferta) == "Fijo"
+            ]
+            if ofertas_fijas_merma:
+                with st.expander(
+                    "🩸 Merma de margen del contrato fijo", expanded=False
+                ):
+                    fijo_merma = st.selectbox(
+                        "Contrato fijo analizado",
+                        ofertas_fijas_merma,
+                        key="telemindex_fijo_merma",
+                    )
+                    ingreso_fijo = float(
+                        curvas_comparativa[fijo_merma]["coste_total"].sum()
+                    )
+                    tabla_merma = calcular_merma_margen_fijo(
+                        ingreso_fijo,
+                        {
+                            "Cobertura": curvas_comparativa["Cobertura"],
+                            "Indexado 100 %": curvas_comparativa["Indexado"],
+                        },
+                    )
+                    merma_cobertura = float(
+                        tabla_merma.loc[
+                            tabla_merma["Escenario"].eq("Cobertura"), "Merma (€)"
+                        ].iloc[0]
+                    )
+                    merma_indexado = float(
+                        tabla_merma.loc[
+                            tabla_merma["Escenario"].eq("Indexado 100 %"), "Merma (€)"
+                        ].iloc[0]
+                    )
+                    st.metric(
+                        "Coste adicional de no haber cubierto",
+                        formato_euros(
+                            merma_indexado - merma_cobertura, 2, False
+                        ),
+                        help=(
+                            "Diferencia entre comprar finalmente a indexado y "
+                            "haber ejecutado la cobertura."
+                        ),
+                    )
+                    st.caption(
+                        "La merma es la diferencia directa entre el coste de cada "
+                        "escenario y el ingreso contratado en fijo. En «Solo margen» "
+                        "se mide cuánto margen queda después de absorberla; en "
+                        "«Margen + otros costes» se amplía el colchón con ambos "
+                        "componentes. Los desvíos apantallados no se añaden como "
+                        "colchón adicional."
+                    )
+                    for lectura in ("Solo margen", "Margen + otros costes"):
+                        st.markdown(f"**{lectura}**")
+                        datos_lectura = tabla_merma.loc[
+                            tabla_merma["Lectura"].eq(lectura)
+                        ]
+                        columnas_metricas = st.columns(2)
+                        for columna, (_, fila) in zip(
+                            columnas_metricas, datos_lectura.iterrows()
+                        ):
+                            resultado = float(fila["Resultado (€)"])
+                            consumido = float(fila["Colchón consumido (%)"])
+                            estado = (
+                                "margen restante" if resultado >= 0
+                                else "déficit tras agotar el colchón"
+                            )
+                            columna.metric(
+                                str(fila["Escenario"]),
+                                formato_euros(resultado, 2, False),
+                                delta=(
+                                    f"{formato_pct(consumido, 1)} consumido"
+                                    if pd.notna(consumido) else "Sin colchón"
+                                ),
+                                delta_color="inverse",
+                                help=(
+                                    f"Resultado: {estado}. Colchón inicial: "
+                                    f"{formato_euros(fila['Colchón inicial (€)'], 2)}. "
+                                    f"Merma frente al fijo: "
+                                    f"{formato_euros(fila['Merma (€)'], 2)}."
+                                ),
+                            )
 
+                    tabla_merma_view = tabla_merma[[
+                        "Escenario", "Lectura", "Colchón inicial (€)",
+                        "Coste sin colchón (€)", "Resultado (€)",
+                        "Merma (€)", "Colchón consumido (%)",
+                    ]].copy()
+                    st.dataframe(
+                        tabla_merma_view.style.format({
+                            "Colchón inicial (€)": lambda x: formato_euros(x, 2, False),
+                            "Coste sin colchón (€)": lambda x: formato_euros(x, 2, False),
+                            "Resultado (€)": lambda x: formato_euros(x, 2, False),
+                            "Merma (€)": lambda x: formato_euros(x, 2, False),
+                            "Colchón consumido (%)": lambda x: formato_pct(x, 1),
+                        }),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
 
-
-       
 
 with tab4:
     st.subheader("Verificación de la regularización de SSAA", divider="rainbow")

@@ -980,6 +980,8 @@ def construir_escenarios_pricing_trimestral(
     srad,
     fnee,
     formula,
+    aplicar_apuntamiento=True,
+    etiquetas=None,
 ):
     """Cotiza un trimestre con el motor analítico de Pricing.
 
@@ -1035,7 +1037,14 @@ def construir_escenarios_pricing_trimestral(
     consumos_mes_periodo = consumos.groupby(["Mes", "periodo"])["Consumo"].sum()
 
     resultados = []
-    for etiqueta, forward in zip(["A", "B", "C"], forwards):
+    etiquetas = list(etiquetas or ["A", "B", "C"])
+    if isinstance(aplicar_apuntamiento, bool):
+        aplicar_apuntamiento = [aplicar_apuntamiento] * len(forwards)
+    else:
+        aplicar_apuntamiento = list(aplicar_apuntamiento)
+    for etiqueta, forward, usar_apuntamiento in zip(
+        etiquetas, forwards, aplicar_apuntamiento
+    ):
         filas = []
         for mes in meses_objetivo:
             if isinstance(forward, (dict, pd.Series)):
@@ -1055,7 +1064,11 @@ def construir_escenarios_pricing_trimestral(
                     "Mes": mes,
                     "Periodo": periodo,
                     "Horas": horas.loc[clave],
-                    "spot": float(apuntamientos_spot.loc[indice_spot, periodo]) * float(forward_mes),
+                    "spot": (
+                        float(apuntamientos_spot.loc[indice_spot, periodo])
+                        * float(forward_mes)
+                        if usar_apuntamiento else float(forward_mes)
+                    ),
                     "ssaa": float(ssaa_previstos.loc[indice_ssaa, periodo]) + float(srad),
                     "osom": float(osom),
                     "fnee": float(fnee),
@@ -1169,7 +1182,9 @@ def calcular_cobertura_trimestral_horaria(
     srad_forward,
     fnee_forward,
 ):
-    """Valora una cobertura total sustituyendo SPOT sobre la curva horaria.
+    """Metodología avanzada conservada para una futura gestión del riesgo.
+
+    Valora una cobertura total sustituyendo SPOT sobre la curva horaria.
 
     Los SSAA conservan su forma horaria dentro de cada bloque mes-periodo,
     pero su media coincide exactamente con el objetivo producido por Pricing.

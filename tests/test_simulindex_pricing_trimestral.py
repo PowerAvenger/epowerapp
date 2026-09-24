@@ -109,6 +109,40 @@ class PricingTrimestralTest(unittest.TestCase):
             escenarios[2]["df_resumen"].loc["Coste (€)", "TOTAL"],
         )
 
+    def test_cobertura_pricing_no_aplica_apuntamiento(self):
+        periodos = [f"P{i}" for i in range(1, 7)]
+        consumos = pd.DataFrame({
+            "fecha_hora": pd.to_datetime(["2026-10-01"]),
+            "periodo": ["P1"],
+            "consumo_neto_kWh": [100.0],
+        })
+        componentes = pd.DataFrame([
+            {
+                "mes_pricing": pd.Period(f"2025-{mes:02d}", freq="M"),
+                "dh_6p": periodo,
+                "perd_3.0": 0.0,
+            }
+            for mes in range(1, 13) for periodo in periodos
+        ])
+        indice = [f"2025-{mes:02d}" for mes in range(1, 13)]
+        apuntamientos = pd.DataFrame(2.0, index=indice, columns=periodos)
+        ssaa = pd.DataFrame(0.0, index=indice, columns=periodos)
+        tabla_atr = pd.DataFrame(
+            0.0, index=["2.0TD", "3.0TD", "6.1TD", "6.2TD"], columns=periodos
+        )
+
+        cobertura = construir_escenarios_pricing_trimestral(
+            consumos, "Q4-26", [50.0], "3.0", apuntamientos, ssaa,
+            componentes, "dh_6p", tabla_atr, tabla_atr, 0.0, 0.0, 0.0,
+            FormulaIndexada(), aplicar_apuntamiento=False, etiquetas=["A"],
+        )[0]
+
+        self.assertTrue(cobertura["detalle"]["spot"].eq(50.0).all())
+        self.assertAlmostEqual(
+            cobertura["df_resumen"].loc["Precio medio (€/kWh)", "TOTAL"],
+            0.05075,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
