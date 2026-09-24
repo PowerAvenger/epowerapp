@@ -494,6 +494,27 @@ def _cliente_nif_desde_factura(texto):
         r"(?:ES)?(?:[ABCDEFGHJNPQRSUVW]\d{7}[0-9A-J]|"
         r"\d{8}[A-Z]|[XYZ]\d{7}[A-Z])"
     )
+    cliente_adx = re.search(
+        rf"Raz[oó]n\s+Social\s*:\s*([^\n]+)[\s\S]{{0,500}}?"
+        rf"CIF/NIF\s+Titular\s*:\s*({patron_nif})\b",
+        texto,
+        re.IGNORECASE,
+    )
+    if cliente_adx:
+        return (
+            re.sub(r"\s+", " ", cliente_adx.group(1)).strip(" ,-:"),
+            cliente_adx.group(2).upper(),
+        )
+    cliente_atlas = re.search(
+        rf"^Titular\s+(.+?)\s+suministro[^\n]*\n\s*({patron_nif})\b",
+        texto,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    if cliente_atlas:
+        return (
+            re.sub(r"\s+", " ", cliente_atlas.group(1)).strip(" ,-:"),
+            cliente_atlas.group(2).upper(),
+        )
     cliente_gerencia_titular = re.search(
         rf"^Titular\s*:\s*(.+?)\s+NIF\s*:[^\n]*\n\s*({patron_nif})\b",
         texto,
@@ -1266,8 +1287,6 @@ with col_entrada:
 
     contenido = st.session_state.get("factura_pdf_bytes")
     if contenido is not None:
-        nombre_factura = st.session_state.get("factura_pdf_nombre", "Factura PDF")
-        st.caption(f"En memoria durante esta sesión: {nombre_factura}")
         st.button(
             "Quitar factura",
             on_click=limpiar_factura_sesion,
@@ -1304,6 +1323,11 @@ if contenido is not None:
             factura.total,
             factura.total_calculado_segun_factura,
             "total_factura",
+        )
+        verificacion_total_favorable = (
+            reconstruccion_total_completa
+            and not verificacion_total_ok
+            and factura.diferencia_total_calculado < 0
         )
         cups_mostrado = (
             factura.cups[:20]
@@ -1588,15 +1612,19 @@ if contenido is not None:
                     )
                     resultado_icono = "✓" if verificacion_total_ok else "✕"
                     resultado_color = (
-                        "#00c853" if verificacion_total_ok else "#ef4444"
+                        "#00c853"
+                        if verificacion_total_ok or verificacion_total_favorable
+                        else "#ef4444"
                     )
                     resultado_fondo = (
                         "rgba(0,200,83,.12)"
-                        if verificacion_total_ok else "rgba(239,68,68,.12)"
+                        if verificacion_total_ok or verificacion_total_favorable
+                        else "rgba(239,68,68,.12)"
                     )
                     resultado_borde = (
                         "rgba(0,200,83,.55)"
-                        if verificacion_total_ok else "rgba(239,68,68,.55)"
+                        if verificacion_total_ok or verificacion_total_favorable
+                        else "rgba(239,68,68,.55)"
                     )
                 else:
                     resultado_texto = "NO VERIFICABLE"
