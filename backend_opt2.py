@@ -1161,7 +1161,17 @@ def funcion_objetivo(pot_opt, df_in, tarifa, pyc_tp, tepp, meses, pot_con):
 
 def ajustar_potencias(pot_opt_ini, fijar_P6=False, pot_con=None):
     pot_keys = list(pot_opt_ini.keys())
-    pot_vals = [math.ceil(v) for v in pot_opt_ini.values()]
+    # SLSQP puede devolver valores apenas superiores a un entero por el error
+    # de coma flotante (p. ej. 1300.0000000001). Aplicar ceil directamente
+    # convertiría ese residuo numérico en 1301 kW.
+    def redondear_hacia_arriba(valor):
+        valor = float(valor)
+        entero_cercano = round(valor)
+        if math.isclose(valor, entero_cercano, rel_tol=0.0, abs_tol=1e-7):
+            return entero_cercano
+        return math.ceil(valor)
+
+    pot_vals = [redondear_hacia_arriba(v) for v in pot_opt_ini.values()]
 
     if fijar_P6 and pot_con is not None:
         p6_fijo = pot_con['P6']

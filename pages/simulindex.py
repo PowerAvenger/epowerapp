@@ -4165,7 +4165,7 @@ if seccion_simulindex == 'Cobertura trimestral':
                 color_discrete_map={
                     "Indexado": "#00A878",
                     "Fijo": "#1C83E1",
-                    "Cobertura": "#E4579A",
+                    "Cobertura": "#FF8C00",
                 },
             )
 
@@ -4173,7 +4173,7 @@ if seccion_simulindex == 'Cobertura trimestral':
                 color_base = {
                     "Indexado": "#00A878",
                     "Fijo": "#1C83E1",
-                    "Cobertura": "#E4579A",
+                    "Cobertura": "#FF8C00",
                 }.get(trace.name, "#64748B")
                 trace.marker.color = [
                     "#FF8C00" if etiqueta == "Index Esc. A" else color_base

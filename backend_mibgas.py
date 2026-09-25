@@ -1835,7 +1835,7 @@ def graf_simul_spot(
     fig.update_traces(
         name="Valores mensuales",
         showlegend=True,
-        marker=dict(symbol="square", color="orange"),
+        marker=dict(symbol="square", color="rgba(34, 197, 94, 0.55)"),
         hovertemplate=(
             "<b>Valores mensuales</b><br>"
             "Mes = %{customdata[0]}<br>"
@@ -1914,17 +1914,17 @@ def graf_simul_spot(
             x=[gas_media_2026],
             y=[omie_media_2026],
             mode="markers+text",
-            name="Media 2026",
+            name="Actual 2026",
             marker=dict(
                 symbol="diamond",
                 size=18,
-                color="yellow",
-                line=dict(width=3, color="white")
+                color="#22C55E",
+                line=dict(width=3, color="#86EFAC")
             ),
-            text=["Media 2026"],
+            text=["Actual 2026"],
             textposition="top center",
             hovertemplate=(
-                "<b>Media real 2026</b><br>"
+                "<b>Actual 2026</b><br>"
                 "MIBGAS medio 2026 = %{x:.2f} €/MWh<br>"
                 "OMIE medio 2026 = %{y:.2f} €/MWh"
                 "<extra></extra>"
@@ -1939,9 +1939,55 @@ def graf_simul_spot(
         y=y_fit,
         mode="lines",
         name="Ajuste suave",
-        line=dict(color="lime", width=2, dash="dot"),
+        line=dict(color="lightblue", width=2, dash="dot"),
         hoverinfo="skip"
     ))
+
+    # Ajuste sin forma de S: un polinomio cuadratico ponderado que excluye
+    # 2021 y da prioridad a los valores recientes 2024, 2025 y Actual 2026.
+    puntos_curva_actual = df_validacion.loc[
+        df_validacion["año"].ne(2021), ["año", "precio_gas", "omie"]
+    ].copy()
+    if omie_media_2026 is not None and gas_media_2026 is not None:
+        puntos_curva_actual = pd.concat(
+            [
+                puntos_curva_actual,
+                pd.DataFrame({
+                    "año": [2026],
+                    "precio_gas": [gas_media_2026],
+                    "omie": [omie_media_2026],
+                }),
+            ],
+            ignore_index=True,
+        )
+    puntos_curva_actual = puntos_curva_actual.apply(
+        pd.to_numeric, errors="coerce"
+    ).dropna()
+    if len(puntos_curva_actual) >= 2:
+        pesos_por_año = {2024: 6.0, 2025: 8.0, 2026: 10.0}
+        pesos_curva_actual = puntos_curva_actual["año"].map(
+            pesos_por_año
+        ).fillna(1.0)
+        grado_curva_actual = min(2, len(puntos_curva_actual) - 1)
+        coeficientes_curva_actual = np.polyfit(
+            puntos_curva_actual["precio_gas"],
+            puntos_curva_actual["omie"],
+            grado_curva_actual,
+            w=pesos_curva_actual,
+        )
+        x_curva_actual = np.linspace(
+            puntos_curva_actual["precio_gas"].min(),
+            max(60.0, puntos_curva_actual["precio_gas"].max()),
+            300,
+        )
+        fig.add_trace(go.Scatter(
+            x=x_curva_actual,
+            y=np.polyval(coeficientes_curva_actual, x_curva_actual),
+            mode="lines",
+            name="Ajuste anual + Actual 2026",
+            line=dict(color="#22C55E", width=2, dash="dot"),
+            hoverinfo="skip",
+        ))
 
     # =====================================================
     # PUNTO PREVISTO HINGE EN MIBGAS
@@ -1956,7 +2002,7 @@ def graf_simul_spot(
         marker=dict(
             color="rgba(255,255,255,0)",
             size=20,
-            line=dict(width=5, color="lightgreen")
+            line=dict(width=5, color="yellow")
         ),
         hovertemplate=(
             "<b>Simulación OMIE</b><br>"
@@ -1973,7 +2019,7 @@ def graf_simul_spot(
         y0=0,
         x1=mibgas,
         y1=omie_hinge,
-        line=dict(color="lightgreen", width=1, dash="dash"),
+        line=dict(color="yellow", width=1, dash="dash"),
     )
 
     # =====================================================
@@ -1997,7 +2043,7 @@ def graf_simul_spot(
             name="Simulación GAS",
             marker=dict(
                 color="rgba(255,255,255,0)",
-                size=22,
+                size=20,
                 line=dict(width=5, color="magenta")
             ),
             hovertemplate=(
@@ -2008,11 +2054,9 @@ def graf_simul_spot(
             )
         ))
 
-        xmin = min(df["precio_gas"].min(), df_validacion["precio_gas"].min())
-
         fig.add_shape(
             type="line",
-            x0=xmin,
+            x0=25,
             y0=omie_obj,
             x1=mibgas_obj,
             y1=omie_obj,
@@ -2027,17 +2071,17 @@ def graf_simul_spot(
             x=[gas_previsto],
             y=[omie_previsto],
             mode="markers+text",
-            name="Punto futuro",
+            name="Futuro 2026",
             marker=dict(
                 symbol="square",
                 size=18,
-                color="orange",
-                line=dict(width=3, color="white")
+                color="#D97706",
+                line=dict(width=3, color="#FDBA74")
             ),
-            text=["Punto futuro"],
+            text=["Futuro 2026"],
             textposition="top center",
             hovertemplate=(
-                "<b>Punto según valores futuros</b><br>"
+                "<b>Futuro 2026</b><br>"
                 "MIBGAS previsto = %{x:.2f} €/MWh<br>"
                 "OMIE previsto = %{y:.2f} €/MWh"
                 "<extra></extra>"
@@ -2047,12 +2091,23 @@ def graf_simul_spot(
     # =====================================================
     # LAYOUT
     # =====================================================
+    limites_x = [60.0, float(mibgas)]
+    limites_x.extend(df["precio_gas"].dropna().astype(float).tolist())
+    limites_x.extend(
+        df_validacion["precio_gas"].dropna().astype(float).tolist()
+    )
+    for valor_x_opcional in (gas_media_2026, gas_previsto, mibgas_obj):
+        if valor_x_opcional is not None:
+            limites_x.append(float(valor_x_opcional))
+    maximo_x = max(limites_x)
+
     fig.update_layout(
         title_font_size=28,
         title={"x": 0.5, "xanchor": "center"},
         xaxis_title="Precio MIBGAS (€/MWh)",
         yaxis_title="Precio OMIE (€/MWh)",
         xaxis=dict(
+            range=[25, maximo_x * 1.03],
             title_font=dict(size=20),
             tickfont=dict(size=18)
         ),

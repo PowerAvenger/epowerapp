@@ -278,9 +278,6 @@ if "df_sheets" not in st.session_state:
 st.sidebar.header('⚡ Gas & Furious ⚡')
 zona_mensajes = st.sidebar.empty()
 
-if 'mibgas_simul' not in st.session_state:
-    st.session_state.mibgas_simul = 40
-
 df_mibgas_completo = carga_mibgas()
 # Gas & Furious mantiene el horizonte operativo original (2024 en adelante),
 # aunque el Sheets compartido conserve el histórico completo desde 2018.
@@ -353,9 +350,24 @@ graf_da_comparado = graficar_da_comparado(df_mg_da)
 df_spot_mensual = obtener_spot_mensual(st.session_state.df_sheets)
 print (df_spot_mensual)
 
-df_total_data = df_mg_da.merge(
-    df_spot_mensual, on='fecha_entrega', how='left'
-)
+# El SPOT mensual se etiqueta con el fin de mes. En el mes en curso esa
+# fecha todavia no existe en la serie diaria de MIBGAS, por lo que un cruce
+# por fecha exacta descartaba visualmente el punto mensual (p. ej. Sep-26).
+# Cruzamos las dos series ya agregadas por periodo mensual. Asi se conserva
+# exactamente un punto por cada mes comun, incluido el mes en curso.
+df_mibgas_simulador = df_mibgas_mensual.copy()
+df_spot_simulador = df_spot_mensual.copy()
+df_mibgas_simulador['_periodo_mes'] = pd.to_datetime(
+    df_mibgas_simulador['fecha_entrega']
+).dt.to_period('M')
+df_spot_simulador['_periodo_mes'] = pd.to_datetime(
+    df_spot_simulador['fecha_entrega']
+).dt.to_period('M')
+df_total_data = df_mibgas_simulador.merge(
+    df_spot_simulador[['_periodo_mes', 'spot']],
+    on='_periodo_mes',
+    how='left',
+).drop(columns='_periodo_mes')
 
 df_mensual = construir_df_mensual(df_total_data)
 
@@ -385,15 +397,6 @@ df_validacion = pd.DataFrame({
 })
 
 colores_precios = {'precio_gas': 'goldenrod', '': 'darkred', 'precio_6.1': '#1C83E1'}
-graf_hist, simul_spot, simul_gas = graf_simul_spot(
-    df_mensual,
-    df_validacion,
-    st.session_state.mibgas_simul,
-    omie_media_2026=omie_media_2026,
-    gas_media_2026=gas_media_2026,
-    omie_previsto=st.session_state.get("precio_omie_previsto"),
-    gas_previsto=precio_medio_mibgas_2026,
-)
 
 
 
@@ -723,12 +726,30 @@ if seccion_gas == 'Simulador':
     with col1:
         st.success('Bienvenido a la simulación baratera del precio medio OMIE anual a partir de MIBGAS')
 
-        st.info('Puntos de simulación sobre curva')
+        st.info('🟡 Punto de simulación sobre curva azul')
 
         # Fila 1: simulación directa MIBGAS -> OMIE.
         col11, col12 = st.columns(2)
         with col11:
-            st.number_input('Introduce el valor previsto MIBGAS 2026', min_value=26, max_value=70, key='mibgas_simul')
+            mibgas_simul_input = st.number_input(
+                'Introduce el valor previsto MIBGAS 2026',
+                min_value=26,
+                max_value=70,
+                value=40,
+                key='mibgas_simul',
+            )
+
+        # Se genera despues del widget para que el punto de simulacion use
+        # siempre el mismo valor MIBGAS que se muestra en el input.
+        graf_hist, simul_spot, simul_gas = graf_simul_spot(
+            df_mensual,
+            df_validacion,
+            float(mibgas_simul_input),
+            omie_media_2026=omie_media_2026,
+            gas_media_2026=gas_media_2026,
+            omie_previsto=st.session_state.get("precio_omie_previsto"),
+            gas_previsto=precio_medio_mibgas_2026,
+        )
         with col12:
             st.metric('Valor de OMIE 2026 esperado', simul_spot)
 
@@ -750,7 +771,7 @@ if seccion_gas == 'Simulador':
                     guardar_prevision_omie_en_sesion(prevision_omie)
                 st.rerun()
 
-        st.info('Punto según valores actuales OMIE/MIBGAS')
+        st.info(':green[◆] Punto según valores actuales OMIE/MIBGAS')
 
         # Fila 3: valores medios observados en el año en curso.
         col31, col32 = st.columns(2)
@@ -759,7 +780,7 @@ if seccion_gas == 'Simulador':
         with col32:
             st.metric("Precio medio gas 2026 (€/MWh)", df_medias.loc[df_medias["año_entrega"] == 2026, "precio_str"].values[0])
 
-        st.info('Punto según valores futuros')
+        st.info('🟧 Punto según valores futuros')
 
         # Fila 4: previsiones anuales procedentes de Simulindex y MIBGAS.
         col41, col42 = st.columns(2)

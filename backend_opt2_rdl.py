@@ -637,6 +637,15 @@ def calcular_optimizacion_rdl(
             if col in df_show.columns:
                 df_show[col] = df_show[col].apply(_formato_es)
 
+    # La tabla comparativa es una copia de presentación: las potencias se
+    # muestran como enteros con separador de miles español (p. ej. 1.300).
+    # El DataFrame numérico original se conserva para cálculos y gráficos.
+    for col in PERIODOS:
+        if col in df_final_mostrar.columns:
+            df_final_mostrar[col] = df_final_mostrar[col].apply(
+                lambda valor: formato_numero_es(valor, 0)
+            )
+
     gc.collect()
 
     return {
